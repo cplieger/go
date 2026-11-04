@@ -1,6 +1,6 @@
 # Orphaned temp files and the writability probe
 
-This page explains when an filesafe write leaves a temp file behind, how to reclaim it, and how to check that a directory takes writes. It is for a developer wiring startup checks and cleanup into a service.
+This page explains when a filesafe write leaves a temp file behind, how to reclaim it, and how to check that a directory takes writes. It is for a developer wiring startup checks and cleanup into a service.
 
 ## When a temp file is left behind
 

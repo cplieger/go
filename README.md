@@ -41,6 +41,12 @@ Nothing here imports a cplieger repository outside this one. The other libraries
 | [`filesafe`](filesafe) | Writes files from Go so that a crash or a power loss leaves the complete old content or the complete new content, never a partial file. |
 | [`keylock`](keylock) | Gives your Go code one lock per key, so work on one file, user or record waits for itself while work on other keys runs. |
 
+### Code generation
+
+| Module | What it does |
+| --- | --- |
+| [`wiregen`](wiregen) | Generates TypeScript types, validating JSON decoders, a typed HTTP client and an OpenAPI 3.1 document from your Go structs and endpoint table, so your TypeScript front end checks every payload your Go server sends. |
+
 ## Disclaimer
 
 This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
