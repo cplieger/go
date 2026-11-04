@@ -579,12 +579,16 @@ func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 // proportional to the metric count, so the PER-METRIC rate must stay bounded. A
 // rise from 260 to 380 allocations is a 1.46 ratio and stays silent, yet every
 // consumer with a hundred series pays it on every scrape. The rate is a slope
-// between two registry sizes, cancelling the fixed cost; only intervals of at
-// least minAllocSpan are gated, since /proc reads add noise. Gating every wide
-// interval makes it a linearity check: a per-metric re-scan breaches at 100->1000.
+// between two registry sizes, cancelling the fixed cost, over every interval of
+// at least minAllocSpan, which also makes it a linearity check: a per-metric
+// re-scan breaches at 100->1000.
 func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
-	// minAllocSpan is the smallest interval whose slope is gated (see above).
-	const minAllocSpan = 90
+	// minAllocSpan is the smallest interval whose slope is gated. Under -race,
+	// sync.Pool drops a quarter of its Puts at random, so fmt's printer pool
+	// misses on some of the encoder's Fprintf calls and a scrape's total varies
+	// by tens of allocations (about 45 at 100 histogram families, 90 at 1000):
+	// up to 0.45 per metric over a 99-metric span, about 0.1 over 900.
+	const minAllocSpan = 900
 
 	// The 1000-label-set shape crosses cardinalityWarnThreshold as it is
 	// built; capture the warning so it stays out of the test output. The
@@ -605,14 +609,12 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 		sizes []int
 		build func(n int) *Registry
 		// max is the per-unit ceiling for a plain build, maxRace for a -race
-		// build (the detector's instrumentation defeats some escape analysis
-		// here and costs a third more). Both are the highest rate MEASURED
-		// over four plain and three -race runs plus half an allocation, which
-		// is the rule that makes the contract do its job: one added allocation
-		// per unit breaches the bound, while drift of less than half an
-		// allocation — a toolchain bump moving fmt's internals, say — does
-		// not. A red result from such a bump is a re-measurement, not a
-		// mystery: every rate the sweep computes is logged, gated or not.
+		// build (the detector defeats some escape analysis and costs 10 to 30%
+		// more). Each is the highest gated rate over six runs plus half an
+		// allocation, rounded to a tenth: one added allocation per unit breaches
+		// it, while drift under half an allocation, such as a toolchain bump
+		// moving fmt's internals, does not. Such a red is a re-measurement, and
+		// every rate the sweep computes is logged.
 		max     float64
 		maxRace float64
 	}{
@@ -630,8 +632,8 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				}
 				return r
 			},
-			max:     7.6,
-			maxRace: 9.8,
+			max:     7.5,
+			maxRace: 9.7,
 		},
 		{
 			name:  "label_sets_on_one_labeled_counter",
@@ -648,13 +650,13 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				return r
 			},
 			max:     7.5,
-			maxRace: 8.4,
+			maxRace: 8.3,
 		},
 		{
 			name:  "histograms_of_8_bounds",
 			unit:  "histogram family (11 samples)",
 			units: "histogram families",
-			sizes: []int{1, 10, 100},
+			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				for i := range n {
@@ -664,14 +666,14 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				}
 				return r
 			},
-			max:     65.6,
+			max:     65.5,
 			maxRace: 75.8,
 		},
 		{
 			name:  "label_sets_on_one_labeled_histogram",
 			unit:  "label set (11 samples)",
 			units: "label sets",
-			sizes: []int{1, 10, 100},
+			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				lh := NewLabeledHistogram("scrape_lh", "allocation contract", []string{"a"}, WithBuckets(histBounds))
@@ -681,8 +683,8 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				}
 				return r
 			},
-			max:     65.6,
-			maxRace: 74.1,
+			max:     65.5,
+			maxRace: 73.8,
 		},
 	}
 
