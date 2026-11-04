@@ -1,0 +1,133 @@
+package filesafe
+
+import (
+	"errors"
+	"fmt"
+	"os"
+)
+
+var (
+	// ErrEmptyPath is returned when a path argument is empty.
+	ErrEmptyPath = errors.New("filesafe: empty path")
+	// ErrUnsafePath is returned when a path fails the local safety check.
+	ErrUnsafePath = errors.New("filesafe: unsafe path")
+	// ErrFileTooLarge is returned when a file exceeds the ReadBounded /
+	// ReadBoundedFile size limit, or content exceeds a WithMaxBytes write cap
+	// (there it may arrive wrapped, sometimes inside a *WriteError; match with
+	// errors.Is).
+	ErrFileTooLarge = errors.New("filesafe: file too large")
+	// ErrSymlinkTarget is returned when the target path is a symlink, which
+	// every write entry point, OpenRegular and OpenRegularInRootNoFollow refuse.
+	ErrSymlinkTarget = errors.New("filesafe: target is a symlink")
+	// ErrRaced is returned by OpenRegularInRootNoFollow when the name changed
+	// identity between the check that refused a symlink and the open that
+	// followed it, so the refusal could not be shown to cover the descriptor
+	// handed back. A retry is the sane response, unlike ErrSymlinkTarget, which
+	// is a permanent verdict about what is at the name. Match with errors.Is.
+	ErrRaced = errors.New("filesafe: path changed between the check and the open")
+	// ErrNotRegular is returned when a name resolves to something other than a
+	// regular file. ReadBoundedInRoot refuses to read it, RemoveFileInRoot
+	// refuses to unlink it, and every write entry point refuses to publish over
+	// it. Match with errors.Is; for the mode itself, errors.As a
+	// *NotRegularError rather than parsing the message.
+	ErrNotRegular = errors.New("filesafe: not a regular file")
+	// ErrNotDirectory is returned by EnsurePrivateDir when the name is occupied
+	// by something other than a directory. Match with errors.Is.
+	ErrNotDirectory = errors.New("filesafe: not a directory")
+	// ErrNotOwned is returned by EnsurePrivateDir when the directory's owner is
+	// not the effective uid, or ownership could not be determined. Match with
+	// errors.Is.
+	ErrNotOwned = errors.New("filesafe: directory not owned by the effective uid")
+	// ErrModeTooOpen is returned by EnsurePrivateDir when a pre-existing
+	// directory grants group or other access; it is deliberately not repaired
+	// unless WithRepairOwnedDir is set. Match with errors.Is.
+	ErrModeTooOpen = errors.New("filesafe: directory mode grants group or other access")
+	// ErrModeNotStored is returned by EnforceMode when the mode read back from
+	// the handle after chmod does not match what was requested — a mount
+	// property, not a permission error. Match with errors.Is.
+	ErrModeNotStored = errors.New("filesafe: filesystem did not store the requested mode")
+	// ErrAborted is returned by PendingFile.Commit when the pending file was
+	// already aborted by a prior Cleanup.
+	ErrAborted = errors.New("filesafe: pending file aborted")
+)
+
+// WritePhase identifies which step of an atomic write failed. Each value
+// appears only on a WriteError. A parent-directory fsync failure is not in
+// this enum; it is surfaced via Result.Durable instead.
+type WritePhase int
+
+const (
+	// PhaseTempCreate indicates failure opening the destination for writing:
+	// opening the target's parent directory (the absolute-path entry points
+	// open it as an *os.Root) or creating the temp file inside it.
+	PhaseTempCreate WritePhase = iota + 1
+	// PhaseTempWrite indicates failure writing to the temp file.
+	PhaseTempWrite
+	// PhaseTempChmod indicates failure enforcing WithMode's mode on the temp
+	// file; it occurs only under WithMode.
+	PhaseTempChmod
+	// PhaseTempSync indicates failure syncing the temp file.
+	PhaseTempSync
+	// PhaseTempClose indicates failure closing the temp file.
+	PhaseTempClose
+	// PhaseRename indicates failure renaming temp to the final path.
+	PhaseRename
+)
+
+func (p WritePhase) String() string {
+	switch p {
+	case PhaseTempCreate:
+		return "create temp file"
+	case PhaseTempWrite:
+		return "write temp file"
+	case PhaseTempChmod:
+		return "chmod temp file"
+	case PhaseTempSync:
+		return "sync temp file"
+	case PhaseTempClose:
+		return "close temp file"
+	case PhaseRename:
+		return "rename to final path"
+	default:
+		return "unknown phase"
+	}
+}
+
+// WriteError wraps a hard atomic-write failure with the phase that failed.
+// A WriteError always means the data did NOT reach its final path.
+type WriteError struct {
+	Err   error
+	Phase WritePhase
+}
+
+func (e *WriteError) Error() string { return "filesafe: " + e.Phase.String() + ": " + e.Err.Error() }
+func (e *WriteError) Unwrap() error { return e.Err }
+
+// NotRegularError reports that a name resolved to something other than a
+// regular file, and carries the mode that decided it.
+//
+// The mode is a DIAGNOSTIC a caller reports, and reading it out of a message
+// string is not something a caller should have to do. Every producer here
+// returns one, so a caller resolving a name once never has to stat the path a
+// second time just to describe a refusal. It unwraps to ErrNotRegular, so
+// errors.Is keeps matching for callers that only need the verdict.
+type NotRegularError struct {
+	// Name is the path or root-relative name as the caller supplied it, cleaned.
+	Name string
+	// Mode is the full FileMode of what was actually there. Type() names the
+	// kind; the permission bits are kept because a caller reporting an
+	// unexpected object usually wants both.
+	Mode os.FileMode
+}
+
+func (e *NotRegularError) Error() string {
+	return fmt.Sprintf("%s: %s (type %s)", ErrNotRegular.Error(), e.Name, e.Mode.Type())
+}
+
+func (e *NotRegularError) Unwrap() error { return ErrNotRegular }
+
+// notRegular is the one producer, so the three refusal sites cannot drift in
+// what they report.
+func notRegular(name string, mode os.FileMode) error {
+	return &NotRegularError{Name: name, Mode: mode}
+}
