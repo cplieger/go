@@ -5,6 +5,8 @@ coverage/
 .vitest-cache/
 reports/
 .stryker-tmp/
+# Stryker's in-place vitest runner writes per-worker setup files into the package dir.
+stryker-setup-*.js
 .agents/
 
 # Go build and test output

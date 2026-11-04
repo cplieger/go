@@ -6,6 +6,8 @@ These are the general-purpose Go libraries the cplieger projects build on, one G
 go get github.com/cplieger/go/<module>@latest
 ```
 
+A module with a TypeScript half keeps it in `<module>/web` and publishes it to npm and JSR as `@cplieger/<module>`, at the module's version.
+
 Nothing here imports a cplieger repository outside this one. The other libraries move here from their own repositories, each with its first development release.
 
 ## Modules
@@ -20,6 +22,7 @@ Nothing here imports a cplieger repository outside this one. The other libraries
 | [`jsonx`](jsonx) | Decodes the integer fields of someone else's JSON in Go, whether a value arrives as `14`, `"14"`, `null`, `"unknown"` or `9.0`, under one policy you choose, and caps how many elements an untrusted JSON body may decode before it allocates them. |
 | [`xmlx`](xmlx) | Caps the memory and work an untrusted XML document can cost your Go program, before and during an `encoding/xml` decode. |
 | [`pathinside`](pathinside) | Catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`. |
+| [`keyenc`](keyenc) | Joins untrusted strings into one cache, dedupe or map key with no separator collisions, and builds the same key byte for byte in Go and TypeScript. |
 
 ### HTTP
 
