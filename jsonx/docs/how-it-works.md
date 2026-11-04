@@ -10,7 +10,7 @@ This page describes the two steps of every decode, for a developer who writes a 
 
 | Field | Meaning |
 | --- | --- |
-| `Shape` | The kind of token. `Null`, `Empty`, `EmptyString`, `MalformedString`, `NonNumericString`, `Number`, `NumericString` or `Other` |
+| `Shape` | The kind of token. `ShapeNull`, `ShapeEmpty`, `ShapeEmptyString`, `ShapeMalformedString`, `ShapeNonNumericString`, `ShapeNumber`, `ShapeNumericString` or `ShapeOther` |
 | `Value` | The exact integer. It is nonzero only for a numeric shape whose value is integral and fits `int64` |
 | `FloatForm` | The literal used a decimal point or an exponent, such as `"9.0"`, `1e3` or `1.5`. The value may still be integral |
 | `Fractional` | The value is not integral, such as `1.5` or `1e-999`. `Value` stays 0 |
@@ -18,11 +18,11 @@ This page describes the two steps of every decode, for a developer who writes a 
 | `Overflow` | The magnitude does not fit `int64`. `Value` stays 0 |
 | `Padded` | The string content carried ASCII whitespace around it, such as `" 12 "` |
 
-`WasString()` reports whether the value arrived quoted, in any string shape. `Other` is the zero value of `Shape` and covers objects, arrays, booleans and invalid tokens, so an unset shape reads as the least trusted one.
+`WasString()` reports whether the value arrived quoted, in any string shape. `ShapeOther` is the zero value of `Shape` and covers objects, arrays, booleans and invalid tokens, so an unset shape reads as the least trusted one.
 
 ## The order the rules run in
 
-1. A value that is not a number goes by its `Shape` to one policy field. `Empty` goes to `EmptyInput`, `Null` to `Null`, `EmptyString` to `EmptyString`, `MalformedString` to `MalformedString`, `NonNumericString` to `NonNumericString` and `Other` to `OtherShape`. Each of these is `Zero` or `Reject`.
+1. A value that is not a number goes by its `Shape` to one policy field. `ShapeEmpty` goes to `EmptyInput`, `ShapeNull` to `Null`, `ShapeEmptyString` to `EmptyString`, `ShapeMalformedString` to `MalformedString`, `ShapeNonNumericString` to `NonNumericString` and `ShapeOther` to `OtherShape`. Each of these is `Zero` or `Reject`.
 2. A number then passes `PaddedString`, `FloatForm` and `Fractional`, in that order.
 3. Last comes the range check against `MinValue` and `MaxValue`. A value outside it, or one that overflows `int64`, goes to `OutOfRange`.
 
@@ -58,7 +58,7 @@ jsonx accepts only decimal number forms, a tighter grammar than `strconv` parsin
 
 - A quoted hex float (`"0x1p2"`), an `"Inf"` or `"NaN"` word, and digit separators (`"1_000"`) are non-numeric strings, although `strconv.ParseFloat` accepts them.
 - Only ASCII JSON whitespace counts as padding. A token padded with a Unicode space such as a no-break space stays a non-numeric string.
-- A quoted number may have leading zeros (`"007"`) and a leading `+` (`"+5"`). A bare token must follow the JSON number grammar exactly, so a bare `007` is an `Other` shape.
+- A quoted number may have leading zeros (`"007"`) and a leading `+` (`"+5"`). A bare token must follow the JSON number grammar exactly, so a bare `007` is `ShapeOther`.
 - Integer literals parse with `strconv.ParseInt` across the whole `int64` range, never through `float64`, whose rounding corrupts ids above 2^53.
 - Float-form literals such as `"9.0"` and `1e3` never pass through `float64` either. Integrality, range and the exact value come from the decimal digits.
 

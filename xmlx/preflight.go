@@ -16,37 +16,14 @@ var (
 	directiveOpen = []byte("<!")
 )
 
-// Preflight walks the raw bytes of an XML document and rejects one that is
-// already outside lim, BEFORE any decoder allocates a token from it. It is a
-// single allocation-free pass: one sequential scan, no buffering, no copies.
-//
-// It rejects an overlong raw text or CDATA run, an overlong markup token, a start
-// tag carrying more than lim.MaxTagAttrs XML attributes, more than
-// lim.MaxElements elements, element nesting whose PEAK exceeds lim.MaxDepth (a
-// self-closing element counts as one level), and any XML directive (see the
-// package doc). Each rejection is a *LimitError naming the bound and the byte
-// offset where it was detected, and every one wraps ErrLimit.
-//
-// Preflight is a bounds check, not a validator. It reads the document's surface
-// structure only, enough to know where one token ends and the next begins, so a
-// malformed body that stays within the bounds passes through for the decoder to
-// reject with its own parse error. The converse does not hold: malformed input
-// can also trip a bound (a run of `=` bytes reads as attributes; a truncated
-// `<!` opener is refused with the directive class), so a rejection does not prove
-// the document was oversized, only that it was outside the contract.
-//
-// # Decoder configuration
-//
-// The bounds model the DEFAULT decoder: Strict enabled, AutoClose empty, no
-// caller-supplied Entity map, no CharsetReader. Each of those knobs changes what
-// the bytes mean. With Strict disabled a bare attribute name becomes an attribute
-// this scan does not count; an Entity map can expand a short reference into an
-// arbitrarily long value after the raw bound has passed; a CharsetReader
-// transforms the very bytes that were scanned. A caller that sets any of them
-// keeps the token and depth bounds but should treat the attribute and text bounds
-// as advisory.
-//
-// body is not modified or retained.
+// Preflight scans body once, allocation-free, and rejects a document outside
+// lim, or carrying an XML directive, before any decoder allocates a token from
+// it. Each rejection is a *LimitError naming the bound and byte offset, and
+// wraps ErrLimit. It is a bounds check, not a validator; the bounds assume the
+// default decoder (docs/non-goals.md "Decoder settings other than the
+// defaults"). It takes body as []byte, not an io.Reader like jsonx.Preflight,
+// because encoding/xml's tokenizer is the cost being bounded. body is not
+// modified or retained.
 func Preflight(body []byte, lim Limits) error {
 	if err := lim.validate(); err != nil {
 		return err

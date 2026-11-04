@@ -44,5 +44,6 @@ The bounds model the default decoder: `Strict` enabled, no `AutoClose`, no calle
 
 - With `Strict` disabled, a bare attribute name becomes an attribute the lexical count cannot see.
 - An `Entity` map can expand a short reference after the raw bound has passed.
+- A `CharsetReader` transforms the bytes after `Preflight` has scanned them.
 
-Either change keeps the token, depth and element bounds, and makes the attribute and text bounds advisory.
+Each of these changes keeps the token, depth and element bounds, and makes the attribute and text bounds advisory.
