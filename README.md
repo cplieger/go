@@ -6,7 +6,25 @@ These are the general-purpose Go libraries the cplieger projects build on, one G
 go get github.com/cplieger/go/<module>@latest
 ```
 
-This repository is being set up. The modules arrive with their first development releases.
+Nothing here imports a cplieger repository outside this one. The other libraries move here from their own repositories, each with its first development release.
+
+## Modules
+
+### Untrusted input
+
+| Module | What it does |
+| --- | --- |
+| [`textsafe`](textsafe) | Keeps untrusted text from forging your Go log lines, starting terminal escapes or reordering what a reader sees in a JSON document or report. |
+| [`urlform`](urlform) | Tells your Go code which host a browser opens for an untrusted URL, or that it cannot vouch for one, before you publish or match the link. |
+| [`jsonx`](jsonx) | Decodes the integer fields of someone else's JSON in Go, whether a value arrives as `14`, `"14"`, `null`, `"unknown"` or `9.0`, under one policy you choose. |
+| [`xmlx`](xmlx) | Caps the memory and work an untrusted XML document can cost your Go program, before and during an `encoding/xml` decode. |
+| [`pathinside`](pathinside) | Catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`. |
+
+### Service runtime
+
+| Module | What it does |
+| --- | --- |
+| [`keylock`](keylock) | Gives your Go code one lock per key, so work on one file, user or record waits for itself while work on other keys runs. |
 
 ## Disclaimer
 
