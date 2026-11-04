@@ -1,0 +1,331 @@
+package ssrf
+
+import (
+	"errors"
+	"net/http"
+	"net/url"
+	"testing"
+)
+
+func newTestReq(t *testing.T, rawURL string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext(%q): %v", rawURL, err)
+	}
+	return req
+}
+
+func TestSafeRedirectPolicy_blocks_private_redirect(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	req := newTestReq(t, "https://192.168.1.20/internal")
+	err := policy(req, nil)
+	if err == nil {
+		t.Error("SafeRedirectPolicy() = nil, want error for private redirect")
+	}
+}
+
+func TestSafeRedirectPolicy_blocks_http_downgrade(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	req := newTestReq(t, "http://example.com/file.txt")
+	err := policy(req, nil)
+	if err == nil {
+		t.Error("SafeRedirectPolicy() = nil, want error for http scheme downgrade")
+	}
+}
+
+func TestSafeRedirectPolicy_allows_public_redirect(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	req := newTestReq(t, "https://cdn.example.com/file.txt")
+	err := policy(req, nil)
+	if err != nil {
+		t.Errorf("SafeRedirectPolicy() = %v, want nil for public redirect", err)
+	}
+}
+
+func TestSafeRedirectPolicy_stops_after_10_redirects(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	req := newTestReq(t, "https://example.com/file")
+	via := make([]*http.Request, 10)
+	err := policy(req, via)
+	if err == nil {
+		t.Error("SafeRedirectPolicy() = nil, want error after 10 redirects")
+	}
+}
+
+// The hop-cap denial must report KindTooManyRedirects, not a blanket
+// KindNonPublicIP — "stopped after N redirects" is not an IP condition.
+func TestSafeRedirectPolicy_hop_cap_kind(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	req := newTestReq(t, "https://example.com/file")
+	via := make([]*http.Request, maxRedirects)
+	err := policy(req, via)
+
+	ssrfErr, ok := errors.AsType[*Error](err)
+	if !ok {
+		t.Fatalf("SafeRedirectPolicy() error = %v, want *ssrf.Error", err)
+	}
+	if ssrfErr.Kind != KindTooManyRedirects {
+		t.Errorf("hop-cap denial Kind = %v, want KindTooManyRedirects", ssrfErr.Kind)
+	}
+}
+
+// A redirect blocked because the target URL failed validation must propagate
+// the inner Kind (e.g. KindBadScheme for an http downgrade) so callers
+// inspecting errors.As(&ssrf.Error).Kind see the real reason.
+func TestSafeRedirectPolicy_propagates_inner_kind(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	cases := []struct {
+		name string
+		url  string
+		want ErrorKind
+	}{
+		{"http downgrade", "http://example.com/file.txt", KindBadScheme},
+		{"private IP", "https://192.168.1.20/internal", KindNonPublicIP},
+		{"bare hostname", "https://internal/file", KindBareHostname},
+		{"localhost", "https://localhost/file", KindLocalhost},
+		{"empty host", "https:///file", KindEmptyHost},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := newTestReq(t, tc.url)
+			err := policy(req, nil)
+			ssrfErr, ok := errors.AsType[*Error](err)
+			if !ok {
+				t.Fatalf("SafeRedirectPolicy(%q) error = %v, want *ssrf.Error", tc.url, err)
+			}
+			if ssrfErr.Kind != tc.want {
+				t.Errorf("SafeRedirectPolicy(%q) Kind = %v, want %v", tc.url, ssrfErr.Kind, tc.want)
+			}
+		})
+	}
+}
+
+func TestSafeRedirectPolicy_error_states_inner_reason_once(t *testing.T) {
+	t.Parallel()
+	err := SafeRedirectPolicy(nil)(newTestReq(t, "http://127.0.0.1/x"), nil)
+	const want = `redirect blocked (SSRF): URL scheme must be https, got "http"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("SafeRedirectPolicy refusal error = %v, want %q", err, want)
+	}
+}
+
+// Even when a caller supplies a custom next, the 10-redirect cap must
+// still apply — next could be a trivial passthrough that has no cap.
+func TestSafeRedirectPolicy_caps_redirects_with_custom_next(t *testing.T) {
+	t.Parallel()
+	called := false
+	next := func(_ *http.Request, _ []*http.Request) error {
+		called = true
+		return nil
+	}
+	policy := SafeRedirectPolicy(next)
+	req := newTestReq(t, "https://example.com/file")
+	via := make([]*http.Request, 10)
+	err := policy(req, via)
+	if err == nil {
+		t.Error("SafeRedirectPolicy() with custom next = nil, want error at 10-redirect cap")
+	}
+	if called {
+		t.Error("SafeRedirectPolicy() called next past the 10-redirect cap")
+	}
+}
+
+func TestSafeRedirectPolicy_delegates_to_next(t *testing.T) {
+	t.Parallel()
+	called := false
+	next := func(_ *http.Request, _ []*http.Request) error {
+		called = true
+		return nil
+	}
+	policy := SafeRedirectPolicy(next)
+	req := newTestReq(t, "https://example.com/file")
+	err := policy(req, nil)
+	if err != nil {
+		t.Errorf("SafeRedirectPolicy() = %v, want nil", err)
+	}
+	if !called {
+		t.Error("SafeRedirectPolicy() did not call next function")
+	}
+}
+
+func TestSafeRedirectPolicy_propagates_next_error(t *testing.T) {
+	t.Parallel()
+	nextErr := errors.New("custom redirect policy error")
+	next := func(_ *http.Request, _ []*http.Request) error {
+		return nextErr
+	}
+	policy := SafeRedirectPolicy(next)
+	req := newTestReq(t, "https://example.com/file")
+	err := policy(req, nil)
+	if !errors.Is(err, nextErr) {
+		t.Errorf("SafeRedirectPolicy() = %v, want %v", err, nextErr)
+	}
+}
+
+func TestSafeRedirectPolicy_nil_next_under_limit_allows(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	req := newTestReq(t, "https://example.com/file")
+	via := make([]*http.Request, 5) // under 10
+	err := policy(req, via)
+	if err != nil {
+		t.Errorf("SafeRedirectPolicy(nil) with %d redirects = %v, want nil", len(via), err)
+	}
+}
+
+func TestURLPolicyRedirectPolicy_blocks_disallowed(t *testing.T) {
+	t.Parallel()
+	policy := NewURLPolicy("https").RedirectPolicy(nil)
+	req := newTestReq(t, "http://example.com/f")
+	err := policy(req, nil)
+	if err == nil {
+		t.Error("redirect to http should be blocked")
+	}
+}
+
+func TestURLPolicyRedirectPolicy_allows_configured(t *testing.T) {
+	t.Parallel()
+	policy := NewURLPolicy("https", "http").RedirectPolicy(nil)
+	req := newTestReq(t, "http://example.com/f")
+	err := policy(req, nil)
+	if err != nil {
+		t.Errorf("redirect to http should be allowed, got: %v", err)
+	}
+}
+
+func TestURLPolicyRedirectPolicy_caps_and_delegates(t *testing.T) {
+	t.Parallel()
+	called := false
+	next := func(_ *http.Request, _ []*http.Request) error {
+		called = true
+		return nil
+	}
+	policy := URLPolicy{}.RedirectPolicy(next)
+
+	req := newTestReq(t, "https://example.com/file")
+	via := make([]*http.Request, 10)
+	if err := policy(req, via); err == nil {
+		t.Error("URLPolicy.RedirectPolicy() = nil, want error at 10-redirect cap")
+	}
+	if called {
+		t.Error("next called past the 10-redirect cap")
+	}
+
+	// Under the cap, a valid https public target delegates to next.
+	if err := policy(req, nil); err != nil {
+		t.Errorf("URLPolicy.RedirectPolicy() = %v, want nil under cap", err)
+	}
+	if !called {
+		t.Error("URLPolicy.RedirectPolicy() did not delegate to next under cap")
+	}
+}
+
+// NewURLPolicy with no schemes must return the HTTPS-only default, not an
+// empty fail-open (or fail-closed) scheme set.
+func TestNewURLPolicy_empty_is_https_default(t *testing.T) {
+	t.Parallel()
+	policy := NewURLPolicy().RedirectPolicy(nil)
+	req := newTestReq(t, "http://example.com/evil")
+	if err := policy(req, nil); err == nil {
+		t.Error("NewURLPolicy() should retain the HTTPS-only default, blocking http")
+	}
+	req2 := newTestReq(t, "https://example.com/ok")
+	if err := policy(req2, nil); err != nil {
+		t.Errorf("HTTPS to public domain should pass, got: %v", err)
+	}
+}
+
+// The zero-value URLPolicy must default to HTTPS-only (block http, allow
+// https), and a nil next must be tolerated.
+func TestURLPolicy_zero_value_is_https_default(t *testing.T) {
+	t.Parallel()
+	policy := URLPolicy{}.RedirectPolicy(nil)
+	req := newTestReq(t, "http://example.com/evil")
+	if err := policy(req, nil); err == nil {
+		t.Error("zero-value URLPolicy should default to HTTPS-only, blocking http")
+	}
+	req2 := newTestReq(t, "https://example.com/ok")
+	if err := policy(req2, nil); err != nil {
+		t.Errorf("HTTPS to public domain should pass, got: %v", err)
+	}
+}
+
+// The redirect policy judges the *url.URL net/http is about to dial, so a
+// caller-constructed URL reaches the scheme check with whatever bytes it holds
+// — url.Parse can never produce a non-ASCII scheme, but a struct literal can.
+// Folding that scheme over Unicode would let U+212A KELVIN SIGN launder into an
+// allowed scheme containing "k": strings.ToLower("\u212Aafka") is exactly
+// "kafka". Folding over ASCII refuses it.
+func TestURLPolicyRedirectPolicy_schemeDoesNotLaunderThroughCaseFolding(t *testing.T) {
+	t.Parallel()
+	policy := NewURLPolicy("kafka").RedirectPolicy(nil)
+	cases := []struct {
+		name   string
+		scheme string
+		want   ErrorKind // 0 means "must be allowed"
+	}{
+		{"exact", "kafka", 0},
+		{"ASCII uppercase folds", "KAFKA", 0},
+		{"ASCII mixed case folds", "KaFkA", 0},
+		{"kelvin sign does not fold", "\u212Aafka", KindBadScheme},
+		{"kelvin sign mid-token does not fold", "kaf\u212Aa", KindBadScheme},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := &http.Request{URL: &url.URL{Scheme: tc.scheme, Host: "example.com", Path: "/x"}}
+			err := policy(req, nil)
+			if tc.want == 0 {
+				if err != nil {
+					t.Fatalf("scheme %q = %v, want allowed", tc.scheme, err)
+				}
+				return
+			}
+			se, ok := errors.AsType[*Error](err)
+			if !ok {
+				t.Fatalf("scheme %q error = %v, want *ssrf.Error", tc.scheme, err)
+			}
+			if se.Kind != tc.want {
+				t.Errorf("scheme %q Kind = %d, want %d", tc.scheme, se.Kind, tc.want)
+			}
+		})
+	}
+}
+
+// A caller-constructed URL is classified from its fields, so a non-public Host
+// is refused even when no round-trip through the URL's text takes place.
+func TestURLPolicyRedirectPolicy_classifiesCallerBuiltURLFields(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	cases := []struct {
+		name string
+		url  *url.URL
+		want ErrorKind
+	}{
+		{"private host", &url.URL{Scheme: "https", Host: "192.168.1.20", Path: "/internal"}, KindNonPublicIP},
+		{"localhost", &url.URL{Scheme: "https", Host: "localhost", Path: "/x"}, KindLocalhost},
+		{"bare hostname", &url.URL{Scheme: "https", Host: "internal", Path: "/x"}, KindBareHostname},
+		{"empty host", &url.URL{Scheme: "https", Path: "/x"}, KindEmptyHost},
+		{"scheme downgrade", &url.URL{Scheme: "http", Host: "example.com", Path: "/x"}, KindBadScheme},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			se, ok := errors.AsType[*Error](policy(&http.Request{URL: tc.url}, nil))
+			if !ok {
+				t.Fatalf("policy(%v) did not return an *ssrf.Error", tc.url)
+			}
+			if se.Kind != tc.want {
+				t.Errorf("policy(%v) Kind = %d, want %d", tc.url, se.Kind, tc.want)
+			}
+		})
+	}
+}

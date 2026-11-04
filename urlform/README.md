@@ -17,7 +17,7 @@ urlform is built for Go programs that show untrusted URLs to people as links, or
 - It never accepts or refuses a URL. Your code sets the policy.
 - 29 test cases pin the browser readings, 17 of them from the browsers' shared [web-platform-tests](https://github.com/web-platform-tests/wpt).
 
-Consider [whatwg-url](https://github.com/nlnwa/whatwg-url) if you need a complete [WHATWG URL](https://url.spec.whatwg.org/) parser in Go, with canonicalization profiles. urlform does not check a URL your own program fetches. For that, consider [ssrf](https://github.com/cplieger/ssrf) by the same author, which refuses private addresses and checks every address at connect time.
+Consider [whatwg-url](https://github.com/nlnwa/whatwg-url) if you need a complete [WHATWG URL](https://url.spec.whatwg.org/) parser in Go, with canonicalization profiles. urlform does not check a URL your own program fetches. For that, consider [ssrf](https://github.com/cplieger/go/tree/main/ssrf) by the same author, which refuses private addresses and checks every address at connect time.
 
 ## Install
 

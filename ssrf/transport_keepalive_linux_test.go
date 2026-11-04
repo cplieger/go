@@ -1,0 +1,122 @@
+//go:build linux
+
+package ssrf
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"strconv"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// tcpKeepIdleSeconds reads the kernel TCP keep-alive idle period (seconds)
+// configured on an established client connection. On Linux a net.Dialer with
+// KeepAlive=d sets TCP_KEEPIDLE to d truncated to whole seconds; with
+// KeepAlive==0 Go falls back to its 15s default.
+func tcpKeepIdleSeconds(t *testing.T, c net.Conn) int {
+	t.Helper()
+	tc, ok := c.(*net.TCPConn)
+	if !ok {
+		t.Fatalf("conn type = %T, want *net.TCPConn", c)
+	}
+	raw, err := tc.SyscallConn()
+	if err != nil {
+		t.Fatalf("SyscallConn() error = %v", err)
+	}
+	var idle int
+	var getErr error
+	if ctrlErr := raw.Control(func(fd uintptr) {
+		idle, getErr = syscall.GetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE)
+	}); ctrlErr != nil {
+		t.Fatalf("RawConn.Control() error = %v", ctrlErr)
+	}
+	if getErr != nil {
+		t.Fatalf("getsockopt(TCP_KEEPIDLE) error = %v", getErr)
+	}
+	return idle
+}
+
+// TestSafeTransport_defaultDialerKeepAlive pins the KeepAlive value of the
+// DEFAULT net.Dialer that SafeTransport builds when no WithDialer option is
+// supplied (ssrf.go: `KeepAlive: 30 * time.Second`).
+//
+// That dialer is sealed inside the safeDialContext closure and is not a field
+// on the returned *http.Transport, so its value is observed the only way it is
+// observable in-process: by dialing a loopback listener through the transport's
+// own DialContext (default dialer, fake resolver -> 127.0.0.1, allow-all policy,
+// all ports) and reading the resulting socket's TCP_KEEPIDLE.
+//
+// Kills the ARITHMETIC_BASE mutant on the `*` in `30 * time.Second`: the
+// original yields TCP_KEEPIDLE == 30; the mutated `30 / time.Second` == 0
+// yields Go's 15s default, so the exact-30 assertion below distinguishes
+// original from mutant.
+func TestSafeTransport_defaultDialerKeepAlive(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	// Accept (and retain) server-side conns so the loopback handshake reliably
+	// completes; close them on cleanup. The accept goroutine exits when the
+	// listener is closed.
+	var mu sync.Mutex
+	var accepted []net.Conn
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			mu.Lock()
+			accepted = append(accepted, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		mu.Lock()
+		for _, c := range accepted {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	})
+
+	_, portStr, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q) error = %v", ln.Addr().String(), err)
+	}
+
+	// No WithDialer => SafeTransport uses its DEFAULT dialer (the line under
+	// test). Fake resolver pins every host to loopback; the allow-all policy and
+	// the listener's own port open the dial path to it. The port is passed once
+	// the listener HAS one, which is the same move a caller makes for any peer
+	// on an ephemeral port -- there is no all-ports setting to reach for.
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		t.Fatalf("ParseUint(%q) error = %v", portStr, err)
+	}
+	allowAll := func(netip.Addr) bool { return true }
+	r := &mockResolver{ips: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+	tr := SafeTransport(WithResolver(r), WithAddressPolicy(allowAll), WithAllowedPorts(uint16(port)))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	conn, err := tr.DialContext(ctx, "tcp", net.JoinHostPort("keepalive.invalid", portStr))
+	if err != nil {
+		t.Fatalf("SafeTransport().DialContext(loopback) error = %v, want a successful dial", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const want = 30 // seconds == 30 * time.Second
+	if got := tcpKeepIdleSeconds(t, conn); got != want {
+		t.Errorf("SafeTransport default dialer TCP_KEEPIDLE = %d, want %d "+
+			"(KeepAlive: 30*time.Second; a shrunk `30/time.Second`==0 yields the 15s Go default)", got, want)
+	}
+}
