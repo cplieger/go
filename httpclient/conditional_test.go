@@ -194,46 +194,46 @@ func TestDoConditionalStatusMapping(t *testing.T) {
 		transient bool
 	}{
 		{
-			name: "503 maps to transient HTTPStatusError", status: http.StatusServiceUnavailable,
+			name: "503 maps to transient StatusError", status: http.StatusServiceUnavailable,
 			check: func(t *testing.T, err error) {
 				t.Helper()
-				var se *HTTPStatusError
+				var se *StatusError
 				if !errors.As(err, &se) || se.Code != http.StatusServiceUnavailable {
-					t.Errorf("err = %v, want *HTTPStatusError{503}", err)
+					t.Errorf("err = %v, want *StatusError{503}", err)
 				}
 			},
 			transient: true,
 		},
 		{
-			name: "429 maps to RateLimitError", status: http.StatusTooManyRequests,
+			name: "429 maps to ErrRateLimited", status: http.StatusTooManyRequests,
 			check: func(t *testing.T, err error) {
 				t.Helper()
-				if _, ok := errors.AsType[*RateLimitError](err); !ok {
-					t.Errorf("err = %v, want *RateLimitError", err)
+				if !errors.Is(err, ErrRateLimited) {
+					t.Errorf("err = %v, want ErrRateLimited", err)
 				}
 			},
 		},
 		{
-			name: "401 maps to AuthError", status: http.StatusUnauthorized,
+			name: "401 maps to ErrUnauthorized", status: http.StatusUnauthorized,
 			check: func(t *testing.T, err error) {
 				t.Helper()
-				if _, ok := errors.AsType[*AuthError](err); !ok {
-					t.Errorf("err = %v, want *AuthError", err)
+				if !errors.Is(err, ErrUnauthorized) {
+					t.Errorf("err = %v, want ErrUnauthorized", err)
 				}
 			},
 		},
 		{
-			// v4: a 3xx now flows through CheckHTTPStatus (which no longer
+			// v4: a 3xx now flows through CheckStatus (which no longer
 			// treats it as success) instead of falling through to the
 			// unexpected-status fallback. A client that refuses redirects
 			// surfaces one here; net/http also hands back a Location-less 3xx
 			// verbatim, which is what this server sends.
-			name: "302 maps to HTTPStatusError", status: http.StatusFound,
+			name: "302 maps to StatusError", status: http.StatusFound,
 			check: func(t *testing.T, err error) {
 				t.Helper()
-				var se *HTTPStatusError
+				var se *StatusError
 				if !errors.As(err, &se) || se.Code != http.StatusFound {
-					t.Errorf("err = %v, want *HTTPStatusError{302}", err)
+					t.Errorf("err = %v, want *StatusError{302}", err)
 				}
 			},
 		},
@@ -246,7 +246,7 @@ func TestDoConditionalStatusMapping(t *testing.T) {
 				}
 				// The fallback is still reachable in v4, just narrower: a 2xx
 				// that is neither the 200 nor the 304 handled above.
-				if _, ok := errors.AsType[*HTTPStatusError](err); ok {
+				if _, ok := errors.AsType[*StatusError](err); ok {
 					t.Errorf("err = %T, want the plain unexpected-status error, not a status mapping", err)
 				}
 			},

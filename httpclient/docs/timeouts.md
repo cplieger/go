@@ -44,7 +44,7 @@ Some cases cannot be told apart. The `net` package maps every expired context on
 
 ## Timeouts under the retrying transport
 
-Under `NewRetryRoundTripper` or `NewRetryClient`, the retry loop runs inside `client.Do`. There, `http.Client.Timeout` is no longer per-attempt. It caps the whole retry sequence, and a slow attempt that trips it cancels the remaining retries, which is why `NewRetryClient` sets none.
+Under `NewRetryRoundTripper` or `NewRetry`, the retry loop runs inside `client.Do`. There, `http.Client.Timeout` is no longer per-attempt. It caps the whole retry sequence, and a slow attempt that trips it cancels the remaining retries, which is why `NewRetry` sets none.
 
 Put the per-attempt bound on the base transport, as `ResponseHeaderTimeout` on a `CloneDefaultTransport()`, which is retried. Put the total on the request context or `TransportConfig.MaxElapsedTime`.
 

@@ -289,25 +289,26 @@ func dialablePort(port string) bool {
 
 // TestIsRetryableStatus_cross_classifier_invariants_property pins, for any
 // code, that the status classifiers agree: one retry verdict across the status
-// error and the transport default, one server band across HTTPStatusError and
-// StatusError, nothing CheckHTTPStatus calls success retried, and 408 and 429
-// the only retried client errors.
+// error (less 429, which Do leaves to its rate-limit options) and the transport
+// default, every other retried code an ErrServerError, nothing CheckStatus
+// calls success retried, and 408 and 429 the only retried client errors.
 func TestIsRetryableStatus_cross_classifier_invariants_property(t *testing.T) {
 	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		code := rapid.IntRange(0, 999).Draw(t, "status")
 		retryable := IsRetryableStatus(code)
-		if retryable && CheckHTTPStatus(&http.Response{StatusCode: code, Header: http.Header{}}) == nil {
-			t.Fatalf("IsRetryableStatus(%d) = true but CheckHTTPStatus calls it success: a delivered 2xx must never be repeated", code)
+		if retryable && CheckStatus(&http.Response{StatusCode: code, Header: http.Header{}}) == nil {
+			t.Fatalf("IsRetryableStatus(%d) = true but CheckStatus calls it success: a delivered 2xx must never be repeated", code)
 		}
-		if got := (&HTTPStatusError{Code: code}).IsTransient(); got != retryable {
-			t.Fatalf("HTTPStatusError{%d}.IsTransient() = %v, IsRetryableStatus = %v", code, got, retryable)
+		if got, want := (&StatusError{Code: code}).IsTransient(), retryable && code != http.StatusTooManyRequests; got != want {
+			t.Fatalf("StatusError{%d}.IsTransient() = %v, want %v (IsRetryableStatus = %v)", code, got, want, retryable)
 		}
 		if got, _ := defaultCheckRetry(t.Context(), &http.Response{StatusCode: code}, nil); got != retryable {
 			t.Fatalf("defaultCheckRetry(HTTP %d) = %v, IsRetryableStatus = %v", code, got, retryable)
 		}
-		if got, want := errors.Is(&StatusError{Code: code}, ErrServerError), (&HTTPStatusError{Code: code}).IsServerError(); got != want {
-			t.Fatalf("errors.Is(StatusError{%d}, ErrServerError) = %v, HTTPStatusError.IsServerError = %v", code, got, want)
+		if retryable && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests &&
+			!errors.Is(&StatusError{Code: code}, ErrServerError) {
+			t.Fatalf("IsRetryableStatus(%d) = true but it is not an ErrServerError", code)
 		}
 		if retryable && code >= 400 && code < 500 &&
 			code != http.StatusRequestTimeout && code != http.StatusTooManyRequests {

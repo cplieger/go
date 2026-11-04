@@ -14,7 +14,7 @@ import (
 )
 
 // Cause names why a request failed below HTTP. Status answers are
-// [CheckHTTPStatus]'s; a Cause names only what happened to the connection or
+// [CheckStatus]'s; a Cause names only what happened to the connection or
 // the body. It encodes as text by its name, so a JSON log field or stored
 // state carries "refused", never the number.
 type Cause uint8

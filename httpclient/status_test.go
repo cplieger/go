@@ -15,142 +15,168 @@ import (
 	"github.com/cplieger/go/httpclient"
 )
 
-func TestCheckHTTPStatus(t *testing.T) {
+// TestStatusError_entry_points pins the one error both status doors return:
+// its code, its URL, its raw Retry-After, which sentinels it matches and
+// whether IsTransient retries it, for every status band.
+func TestStatusError_entry_points(t *testing.T) {
+	t.Parallel()
+	const reqURL = "http://example.com/items?key=k"
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sentinels := []struct {
+		name string
+		err  error
+	}{
+		{"ErrUnauthorized", httpclient.ErrUnauthorized},
+		{"ErrForbidden", httpclient.ErrForbidden},
+		{"ErrRateLimited", httpclient.ErrRateLimited},
+		{"ErrServerError", httpclient.ErrServerError},
+	}
+	tests := []struct {
+		name           string
+		retryAfter     string
+		want           error
+		code           int
+		wantRetryAfter time.Duration
+		wantTransient  bool
+	}{
+		{name: "101 switching protocols", code: 101},
+		{name: "301 redirect", code: 301},
+		{name: "304 not modified", code: 304},
+		{name: "400 bad request", code: 400},
+		{name: "401 unauthorized", code: 401, want: httpclient.ErrUnauthorized},
+		{name: "403 forbidden", code: 403, want: httpclient.ErrForbidden},
+		{name: "404 not found", code: 404},
+		{name: "408 request timeout", code: 408, wantTransient: true},
+		{name: "429 rate limited", code: 429, want: httpclient.ErrRateLimited},
+		{name: "429 with Retry-After", code: 429, retryAfter: "30", want: httpclient.ErrRateLimited, wantRetryAfter: 30 * time.Second},
+		{name: "429 with Retry-After past the cap", code: 429, retryAfter: "3600", want: httpclient.ErrRateLimited, wantRetryAfter: time.Hour},
+		{name: "499 top of 4xx", code: 499},
+		{name: "500 internal error", code: 500, want: httpclient.ErrServerError, wantTransient: true},
+		{name: "501 not implemented", code: 501, want: httpclient.ErrServerError},
+		{name: "503 with Retry-After", code: 503, retryAfter: "7", want: httpclient.ErrServerError, wantRetryAfter: 7 * time.Second, wantTransient: true},
+		{name: "511 network auth", code: 511, want: httpclient.ErrServerError},
+		{name: "599 top of 5xx", code: 599, want: httpclient.ErrServerError, wantTransient: true},
+		{name: "600 past the status range", code: 600, want: httpclient.ErrServerError},
+	}
+	newResp := func(code int, retryAfter string) *http.Response {
+		h := http.Header{}
+		if retryAfter != "" {
+			h.Set("Retry-After", retryAfter)
+		}
+		return &http.Response{StatusCode: code, Header: h, Body: io.NopCloser(strings.NewReader("body"))}
+	}
+	doors := []struct {
+		call    func(code int, retryAfter string) error
+		name    string
+		wantURL string
+	}{
+		{name: "CheckStatus", call: func(code int, retryAfter string) error {
+			resp := newResp(code, retryAfter)
+			defer resp.Body.Close()
+			return httpclient.CheckStatus(resp)
+		}},
+		{name: "GetBytes", wantURL: reqURL, call: func(code int, retryAfter string) error {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return newResp(code, retryAfter), nil
+			})}
+			_, err := httpclient.GetBytes(t.Context(), client, reqURL,
+				httpclient.WithMaxAttempts(1), httpclient.WithLogger(quiet))
+			return err
+		}},
+	}
+	for _, door := range doors {
+		for _, tt := range tests {
+			t.Run(door.name+" "+tt.name, func(t *testing.T) {
+				t.Parallel()
+				err := door.call(tt.code, tt.retryAfter)
+				se, ok := errors.AsType[*httpclient.StatusError](err)
+				if !ok {
+					t.Fatalf("%s(%d) = %T %v, want a *StatusError in the chain", door.name, tt.code, err, err)
+				}
+				if se.Code != tt.code {
+					t.Errorf("Code = %d, want %d", se.Code, tt.code)
+				}
+				if se.URL != door.wantURL {
+					t.Errorf("URL = %q, want %q", se.URL, door.wantURL)
+				}
+				if se.RetryAfter != tt.wantRetryAfter {
+					t.Errorf("RetryAfter = %v, want %v", se.RetryAfter, tt.wantRetryAfter)
+				}
+				for _, s := range sentinels {
+					if got, want := errors.Is(err, s.err), s.err == tt.want; got != want {
+						t.Errorf("errors.Is(err, %s) = %v, want %v", s.name, got, want)
+					}
+				}
+				if got := httpclient.IsTransient(err); got != tt.wantTransient {
+					t.Errorf("IsTransient = %v, want %v", got, tt.wantTransient)
+				}
+			})
+		}
+	}
+}
+
+// TestCheckStatus_success_band pins the 2xx-only success window at both edges.
+func TestCheckStatus_success_band(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		statusCode int
-		wantNil    bool
-		wantAuth   bool
-		wantRate   bool
-		wantStatus bool
+		name    string
+		code    int
+		wantNil bool
 	}{
-		{"200 OK", 200, true, false, false, false},
-		{"201 Created", 201, true, false, false, false},
-		{"204 No Content", 204, true, false, false, false},
-		{"299 boundary top of 2xx", 299, true, false, false, false},
-		// v4: success is 2xx ONLY. A 3xx (surfaced by a non-following redirect
-		// policy) is an error, no longer a success.
-		{"300 boundary first non-success", 300, false, false, false, true},
-		{"301 Moved Permanently", 301, false, false, false, true},
-		{"302 Found", 302, false, false, false, true},
-		{"304 Not Modified", 304, false, false, false, true},
-		{"307 Temporary Redirect", 307, false, false, false, true},
-		{"399 boundary below 400", 399, false, false, false, true},
-		{"400 Bad Request", 400, false, false, false, true},
-		{"401 Unauthorized", 401, false, true, false, false},
-		{"403 Forbidden", 403, false, true, false, false},
-		{"429 Too Many Requests", 429, false, false, true, false},
-		{"500 Internal Server Error", 500, false, false, false, true},
-		{"502 Bad Gateway", 502, false, false, false, true},
-		{"503 Service Unavailable", 503, false, false, false, true},
-		{"504 Gateway Timeout", 504, false, false, false, true},
+		{"100 Continue", http.StatusContinue, false},
+		{"101 Switching Protocols", http.StatusSwitchingProtocols, false},
+		{"199 below 2xx", 199, false},
+		{"200 OK", 200, true},
+		{"201 Created", 201, true},
+		{"204 No Content", 204, true},
+		{"299 top of 2xx", 299, true},
+		{"300 first non-success", 300, false},
+		{"307 Temporary Redirect", 307, false},
+		{"399 below 400", 399, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			resp := &http.Response{StatusCode: tt.statusCode, Header: http.Header{}}
-			err := httpclient.CheckHTTPStatus(resp)
+			err := httpclient.CheckStatus(&http.Response{StatusCode: tt.code, Header: http.Header{}})
 			if tt.wantNil {
 				if err != nil {
-					t.Errorf("CheckHTTPStatus(%d) = %v, want nil", tt.statusCode, err)
+					t.Errorf("CheckStatus(%d) = %v, want nil", tt.code, err)
 				}
 				return
 			}
-			if err == nil {
-				t.Fatalf("CheckHTTPStatus(%d) = nil, want error", tt.statusCode)
-			}
-			var authErr *httpclient.AuthError
-			var rateErr *httpclient.RateLimitError
-			var statusErr *httpclient.HTTPStatusError
-			if tt.wantAuth && !errors.As(err, &authErr) {
-				t.Errorf("CheckHTTPStatus(%d) = %T, want *AuthError", tt.statusCode, err)
-			}
-			if tt.wantRate && !errors.As(err, &rateErr) {
-				t.Errorf("CheckHTTPStatus(%d) = %T, want *RateLimitError", tt.statusCode, err)
-			}
-			if tt.wantStatus && !errors.As(err, &statusErr) {
-				t.Errorf("CheckHTTPStatus(%d) = %T, want *HTTPStatusError", tt.statusCode, err)
+			if se, ok := errors.AsType[*httpclient.StatusError](err); !ok || se.Code != tt.code {
+				t.Errorf("CheckStatus(%d) = %v, want *StatusError{Code: %d}", tt.code, err, tt.code)
 			}
 		})
 	}
 }
 
-func TestCheckHTTPStatus_429_parses_retry_after(t *testing.T) {
-	t.Parallel()
-	h := http.Header{}
-	h.Set("Retry-After", "30")
-	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Header: h}
-	err := httpclient.CheckHTTPStatus(resp)
-	var rl *httpclient.RateLimitError
-	if !errors.As(err, &rl) {
-		t.Fatalf("expected *RateLimitError, got %T", err)
-	}
-	if rl.RetryAfter != 30*time.Second {
-		t.Errorf("RetryAfter = %v, want 30s", rl.RetryAfter)
-	}
-}
-
-func TestCheckHTTPStatus_429_parses_http_date(t *testing.T) {
+func TestCheckStatus_429_parses_http_date(t *testing.T) {
 	t.Parallel()
 	future := time.Now().Add(45 * time.Second).UTC().Format(http.TimeFormat)
 	h := http.Header{}
 	h.Set("Retry-After", future)
 	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Header: h}
-	err := httpclient.CheckHTTPStatus(resp)
-	var rl *httpclient.RateLimitError
-	if !errors.As(err, &rl) {
-		t.Fatalf("expected *RateLimitError, got %T", err)
+	se, ok := errors.AsType[*httpclient.StatusError](httpclient.CheckStatus(resp))
+	if !ok {
+		t.Fatal("CheckStatus(429) returned no *StatusError")
 	}
-	if rl.RetryAfter < 30*time.Second || rl.RetryAfter > 60*time.Second {
-		t.Errorf("RetryAfter = %v, want ~45s", rl.RetryAfter)
-	}
-}
-
-// TestCheckHTTPStatus_non_2xx_is_error_even_below_200 pins the other edge of
-// the v4 strict window. Before v4 the classifier returned nil for every status
-// below 400, and this test asserted the reverse of what it asserts now ("sub-200
-// is not an error"). The window is now "nil means this response carries the
-// successful result", and a 1xx does not: net/http resolves a 100-continue
-// internally, so the only 1xx a caller can observe is a protocol switch (101),
-// which is not a completed REST response. Flipping it also lets GetBytes and a
-// caller's own strict band check delegate to this function wholesale instead of
-// keeping a hand-rolled `< 200 ||  >= 300` guard beside it.
-func TestCheckHTTPStatus_non_2xx_is_error_even_below_200(t *testing.T) {
-	t.Parallel()
-	for _, code := range []int{http.StatusContinue, http.StatusSwitchingProtocols, 199} {
-		err := httpclient.CheckHTTPStatus(&http.Response{StatusCode: code, Header: http.Header{}})
-		var se *httpclient.HTTPStatusError
-		if !errors.As(err, &se) || se.Code != code {
-			t.Errorf("CheckHTTPStatus(%d) = %v, want *HTTPStatusError{%d} (success is 2xx only)", code, err, code)
-		}
+	if se.RetryAfter < 30*time.Second || se.RetryAfter > 60*time.Second {
+		t.Errorf("RetryAfter = %v, want ~45s", se.RetryAfter)
 	}
 }
 
-// TestCheckHTTPStatus_3xx_classification pins the type choice for the v4
-// breaking change: a surfaced redirect is a *HTTPStatusError, so it reads
-// correctly through every existing classifier — not transient, neither a
-// server nor a client error — and passes through LogSafeError
-// untouched, since it embeds no URL to redact.
-func TestCheckHTTPStatus_3xx_classification(t *testing.T) {
+// TestCheckStatus_3xx_classification pins that a surfaced redirect is not
+// retried, matches no sentinel and carries no URL for LogSafeError to strip.
+func TestCheckStatus_3xx_classification(t *testing.T) {
 	t.Parallel()
 	for _, code := range []int{300, 301, 302, 303, 304, 307, 308, 399} {
-		err := httpclient.CheckHTTPStatus(&http.Response{StatusCode: code, Header: http.Header{}})
-		var se *httpclient.HTTPStatusError
-		if !errors.As(err, &se) {
-			t.Fatalf("CheckHTTPStatus(%d) = %T, want *HTTPStatusError", code, err)
-		}
-		if se.Code != code {
-			t.Errorf("CheckHTTPStatus(%d).Code = %d, want %d", code, se.Code, code)
-		}
+		err := httpclient.CheckStatus(&http.Response{StatusCode: code, Header: http.Header{}})
 		if httpclient.IsTransient(err) {
 			t.Errorf("IsTransient(HTTP %d) = true, want false (a redirect is not a retryable server failure)", code)
 		}
-		if se.IsServerError() {
-			t.Errorf("HTTPStatusError{%d}.IsServerError() = true, want false", code)
-		}
-		if se.IsClientError() {
-			t.Errorf("HTTPStatusError{%d}.IsClientError() = true, want false", code)
+		if errors.Is(err, httpclient.ErrServerError) {
+			t.Errorf("errors.Is(HTTP %d, ErrServerError) = true, want false", code)
 		}
 		if got := httpclient.LogSafeError(err); got != err {
 			t.Errorf("LogSafeError(HTTP %d) = %v, want the error unchanged", code, got)
@@ -245,52 +271,20 @@ func TestIsRetryableStatus_agrees_with_the_GetBytes_loop(t *testing.T) {
 }
 
 func TestStatusError_Error(t *testing.T) {
-	err := &httpclient.StatusError{Code: 503, URL: "http://example.com/x"}
-	want := "HTTP 503 from http://example.com/x"
-	if got := err.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-}
-
-func TestStatusError_IsRateLimited(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		code int
-		want bool
+		name string
+		url  string
+		want string
 	}{
-		{429, true},
-		{500, false},
-		{503, false},
-		{400, false},
+		{"with URL, query redacted", "http://example.com/x?key=k", "HTTP 503 from http://example.com/x?key=REDACTED"},
+		{"without URL", "", "HTTP 503"},
 	}
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%d", tt.code), func(t *testing.T) {
-			err := &httpclient.StatusError{Code: tt.code}
-			if got := errors.Is(err, httpclient.ErrRateLimited); got != tt.want {
-				t.Errorf("errors.Is(%d, ErrRateLimited) = %v, want %v", tt.code, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestStatusError_IsServerError(t *testing.T) {
-	tests := []struct {
-		code int
-		want bool
-	}{
-		{500, true},
-		{502, true},
-		{503, true},
-		{599, true},
-		{600, true},
-		{429, false},
-		{400, false},
-		{499, false},
-	}
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%d", tt.code), func(t *testing.T) {
-			err := &httpclient.StatusError{Code: tt.code}
-			if got := errors.Is(err, httpclient.ErrServerError); got != tt.want {
-				t.Errorf("errors.Is(%d, ErrServerError) = %v, want %v", tt.code, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := (&httpclient.StatusError{Code: 503, URL: tt.url}).Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
 			}
 		})
 	}
