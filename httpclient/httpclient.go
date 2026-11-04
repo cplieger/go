@@ -791,13 +791,12 @@ func ReadLimitedBody(body io.ReadCloser, limit int64) ([]byte, error) {
 
 // redirectCfg holds internal configuration for the redirect policy.
 type redirectCfg struct {
-	allowedHosts         []string
-	allowedSuffixes      []string
-	maxHops              int
-	sameHost             bool
-	sameOrigin           bool
-	allowSchemeDowngrade bool
-	preserveMethod       bool
+	allowedHosts    []string
+	allowedSuffixes []string
+	maxHops         int
+	sameHost        bool
+	sameOrigin      bool
+	preserveMethod  bool
 }
 
 // RedirectOption configures a redirect policy created by RedirectPolicyFunc.
@@ -827,8 +826,8 @@ func WithMaxHops(n int) RedirectOption {
 // request's host, as [WithSameOrigin] compares hosts, beside any allowlist
 // entries. It follows that host on any port and an http->https upgrade there,
 // so a custom auth header can reach another service on the host;
-// [WithSameOrigin] keeps it on one origin. An https->http hop stays
-// under [WithAllowSchemeDowngrade]. Later options win, so a later
+// [WithSameOrigin] keeps it on one origin. An https->http hop is still
+// refused. Later options win, so a later
 // WithSameHost(false) turns the permission back off.
 func WithSameHost(same bool) RedirectOption {
 	return func(c *redirectCfg) { c.sameHost = same }
@@ -844,17 +843,6 @@ func WithSameHost(same bool) RedirectOption {
 // the downgrade rule judge other hosts, and a refusal is [RedirectOtherOrigin].
 func WithSameOrigin(same bool) RedirectOption {
 	return func(c *redirectCfg) { c.sameOrigin = same }
-}
-
-// WithAllowSchemeDowngrade permits a redirect that downgrades the scheme
-// (https on the original request -> http on the target). The default (false)
-// refuses such a downgrade so a credential carried in a custom request header
-// (which Go forwards across a redirect, stripping only Authorization/Cookie) is
-// never sent over a cleartext hop. A scheme upgrade (http->https) is always
-// allowed regardless of this setting. The downgrade is judged against the
-// ORIGINAL request's scheme (via[0]).
-func WithAllowSchemeDowngrade(allow bool) RedirectOption {
-	return func(c *redirectCfg) { c.allowSchemeDowngrade = allow }
 }
 
 // WithPreserveMethod refuses, when true, a hop that would change the request
@@ -911,7 +899,7 @@ const (
 
 // RedirectRefusedError is a shipped redirect policy's hard refusal of one hop:
 // the hop cap, target permission and downgrade checks of a [RedirectPolicyFunc]
-// policy, [DefaultRedirectPolicy] and [DockerGitHubRedirectPolicy] answer one,
+// policy and [DefaultRedirectPolicy] answer one,
 // so a caller tells them apart with [errors.As] and Reason alone.
 // [RefuseAllRedirects] and a [WithPreserveMethod] refusal answer
 // [http.ErrUseLastResponse] instead. An [http.Client] returns it inside a
@@ -1043,8 +1031,9 @@ func originKeyOf(u *url.URL) (originKey, bool) {
 // RedirectPolicyFunc returns a CheckRedirect function configured with the given
 // options. A redirect is followed only to an allowed target (a WithAllowedHosts
 // entry, a WithAllowedSuffixes match, the original host under WithSameHost, the
-// original origin under WithSameOrigin) and, unless WithAllowSchemeDowngrade is
-// set, never https->http. With none of those permissions every redirect is
+// original origin under WithSameOrigin) and never https->http, so a custom
+// auth header, which Go forwards across a redirect, never rides a cleartext
+// hop. With none of those permissions every redirect is
 // refused. The hop cap is WithMaxHops. Every hard refusal is a
 // [*RedirectRefusedError]; WithPreserveMethod(true) instead answers
 // http.ErrUseLastResponse for a hop that would change the method.
@@ -1070,7 +1059,6 @@ func RedirectPolicyFunc(opts ...RedirectOption) func(*http.Request, []*http.Requ
 		maxHops:        maxHops,
 		sameHost:       cfg.sameHost,
 		sameOrigin:     cfg.sameOrigin,
-		allowDowngrade: cfg.allowSchemeDowngrade,
 		preserveMethod: cfg.preserveMethod,
 	}
 	return rp.check
@@ -1085,14 +1073,13 @@ type resolvedRedirect struct {
 	maxHops        int
 	sameHost       bool
 	sameOrigin     bool
-	allowDowngrade bool
 	preserveMethod bool
 }
 
 // check implements the CheckRedirect contract for a resolved policy: it caps
 // hops, refuses a target that is neither allowlisted nor (with sameHost or
 // sameOrigin) the original request's host or origin, refuses a scheme
-// downgrade unless allowed, and (with preserveMethod) refuses a
+// downgrade, and (with preserveMethod) refuses a
 // method-changing hop.
 func (rp *resolvedRedirect) check(req *http.Request, via []*http.Request) error {
 	// net/http calls CheckRedirect with every request sent so far in via, so
@@ -1110,7 +1097,7 @@ func (rp *resolvedRedirect) check(req *http.Request, via []*http.Request) error 
 	if !rp.targetAllowed(req.URL, origURL) {
 		return refuseHop(req.URL, RedirectOtherOrigin)
 	}
-	if !rp.allowDowngrade && origURL != nil && isSchemeDowngrade(origURL.Scheme, req.URL.Scheme) {
+	if origURL != nil && isSchemeDowngrade(origURL.Scheme, req.URL.Scheme) {
 		return refuseHop(req.URL, RedirectDowngrade)
 	}
 	// Ordered last on purpose: the refusals above are the stronger security
@@ -1224,40 +1211,12 @@ var defaultRedirectPolicy = RedirectPolicyFunc(WithSameHost(true))
 // It delegates to RedirectPolicyFunc(WithSameHost(true)), with one addition: a
 // call with an empty via chain (which net/http never produces — via always
 // carries at least the original request) is allowed rather than refused. Use
-// RedirectPolicyFunc for a custom allowlist, a higher hop cap (WithMaxHops), or
-// to permit downgrades (WithAllowSchemeDowngrade).
+// RedirectPolicyFunc for a custom allowlist or a higher hop cap (WithMaxHops).
 func DefaultRedirectPolicy(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
 	}
 	return defaultRedirectPolicy(req, via)
-}
-
-// DockerGitHubRedirectPolicy is an OPTIONAL example redirect policy allowing
-// docker.com and github.com hosts. Like every shipped policy it refuses an
-// https->http scheme downgrade (judged against the original request's scheme,
-// see WithAllowSchemeDowngrade), so a custom auth header never rides a
-// cleartext hop even to an allowlisted host. Use it by assigning to
-// Client.CheckRedirect or pass RedirectOption values to RedirectPolicyFunc for
-// other allowlists.
-func DockerGitHubRedirectPolicy(req *http.Request, via []*http.Request) error {
-	if len(via) > redirectCap {
-		return refuseHop(req.URL, RedirectTooMany)
-	}
-	if to, ok := originKeyOf(req.URL); !ok || !isDockerGitHubHost(to.host) {
-		return refuseHop(req.URL, RedirectOtherOrigin)
-	}
-	if len(via) > 0 && via[0].URL != nil && isSchemeDowngrade(via[0].URL.Scheme, req.URL.Scheme) {
-		return refuseHop(req.URL, RedirectDowngrade)
-	}
-	return nil
-}
-
-func isDockerGitHubHost(k hostKey) bool {
-	return k.name == "github.com" ||
-		strings.HasSuffix(k.name, ".docker.com") ||
-		strings.HasSuffix(k.name, ".github.com") ||
-		strings.HasSuffix(k.name, ".githubusercontent.com")
 }
 
 // RefuseAllRedirects is a CheckRedirect policy that follows no redirect: the
@@ -1274,14 +1233,13 @@ func RefuseAllRedirects(*http.Request, []*http.Request) error {
 
 // CheckRedirect is the http.Client.CheckRedirect function shape. It is a type
 // alias, so values are assignable in both directions; every shipped policy
-// (DefaultRedirectPolicy, RefuseAllRedirects, DockerGitHubRedirectPolicy, and
-// anything built with RedirectPolicyFunc) is a CheckRedirect.
+// (DefaultRedirectPolicy, RefuseAllRedirects and anything built with
+// RedirectPolicyFunc) is a CheckRedirect.
 type CheckRedirect = func(req *http.Request, via []*http.Request) error
 
 // New returns an *http.Client with the given timeout and the
-// DefaultRedirectPolicy (same-host only). For custom redirect allowlists,
-// configure CheckRedirect with RedirectPolicyFunc or assign
-// DockerGitHubRedirectPolicy.
+// DefaultRedirectPolicy (same-host only). For a custom redirect allowlist,
+// configure CheckRedirect with RedirectPolicyFunc.
 func New(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:       timeout,

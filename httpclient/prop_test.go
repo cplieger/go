@@ -383,12 +383,11 @@ func FuzzRedactURL(f *testing.F) {
 	})
 }
 
-// FuzzSameHostRedirect exercises the WithSameHost + WithAllowSchemeDowngrade
-// invariants against specSameHost: with downgrades refused (the default), a
-// redirect is accepted iff its target host equals the origin host AND it is
-// not an https->http downgrade; with downgrades allowed, only the same-host
-// check gates acceptance. FuzzRedirectPolicyFunc seeds an empty origin
-// scheme, so it never drives the scheme-downgrade branch this covers.
+// FuzzSameHostRedirect exercises the WithSameHost invariant against
+// specSameHost: a redirect is accepted iff its target host equals the origin
+// host AND it is not an https->http downgrade. FuzzRedirectPolicyFunc seeds
+// an empty origin scheme, so it never drives the scheme-downgrade branch this
+// covers.
 func FuzzSameHostRedirect(f *testing.F) {
 	f.Add("https", "arr.example", "https", "arr.example")            // same origin
 	f.Add("http", "arr.example", "https", "arr.example")             // upgrade
@@ -415,16 +414,9 @@ func FuzzSameHostRedirect(f *testing.F) {
 		sameHost := specSameHost(tgt.Hostname(), orig.Hostname())
 		downgrade := isSchemeDowngrade(orig.Scheme, tgt.Scheme)
 
-		// Default: downgrades refused.
 		gotErr := RedirectPolicyFunc(WithSameHost(true))(&http.Request{URL: tgt}, via)
 		if want := sameHost && !downgrade; want != (gotErr == nil) {
 			t.Fatalf("WithSameHost %s->%s: err=%v (sameHost=%v downgrade=%v, wantAllowed=%v)", orig, tgt, gotErr, sameHost, downgrade, want)
-		}
-
-		// Downgrades allowed: only the host gates acceptance.
-		gotAllow := RedirectPolicyFunc(WithSameHost(true), WithAllowSchemeDowngrade(true))(&http.Request{URL: tgt}, via)
-		if sameHost != (gotAllow == nil) {
-			t.Fatalf("WithSameHost+AllowDowngrade %s->%s: err=%v (sameHost=%v)", orig, tgt, gotAllow, sameHost)
 		}
 	})
 }

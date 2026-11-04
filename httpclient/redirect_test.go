@@ -28,37 +28,6 @@ func redirectVia(n int) []*http.Request {
 	return via
 }
 
-func TestDockerGitHubRedirectPolicy(t *testing.T) {
-	tests := []struct {
-		name    string
-		host    string
-		viaLen  int
-		wantErr bool
-	}{
-		{"hub.docker.com allowed", "hub.docker.com", 0, false},
-		{"subdomain of docker.com allowed", "auth.docker.com", 0, false},
-		{"github.com allowed", "github.com", 0, false},
-		{"subdomain of github.com allowed", "api.github.com", 0, false},
-		{"githubusercontent.com allowed", "raw.githubusercontent.com", 0, false},
-		{"evil.com refused", "evil.com", 0, true},
-		{"localhost refused", "localhost", 0, true},
-		{"127.0.0.1 refused", "127.0.0.1", 0, true},
-		{"too many redirects", "hub.docker.com", 6, true},
-		{"5 redirects still ok", "hub.docker.com", 5, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := httpclient.DockerGitHubRedirectPolicy(redirectReq(tt.host), redirectVia(tt.viaLen))
-			if tt.wantErr && err == nil {
-				t.Errorf("DockerGitHubRedirectPolicy(%q, via=%d) = nil, want error", tt.host, tt.viaLen)
-			}
-			if !tt.wantErr && err != nil {
-				t.Errorf("DockerGitHubRedirectPolicy(%q, via=%d) = %v, want nil", tt.host, tt.viaLen, err)
-			}
-		})
-	}
-}
-
 func TestRedirectPolicyFunc(t *testing.T) {
 	policy := httpclient.RedirectPolicyFunc(
 		httpclient.WithAllowedHosts("example.com"),
@@ -191,11 +160,6 @@ func TestRedirect_case_insensitive_host_matching(t *testing.T) {
 	// RFC 3986 6.2.2.1 host comparison is case-insensitive; url.Parse preserves
 	// host case, so these uppercase/mixed-case targets drive the asciiLower fold
 	// the (all-lowercase) other redirect tests never reach.
-	for _, host := range []string{"HUB.DOCKER.COM", "API.GITHUB.COM", "Raw.GitHubUserContent.com"} {
-		if err := httpclient.DockerGitHubRedirectPolicy(redirectReq(host), redirectVia(0)); err != nil {
-			t.Errorf("DockerGitHubRedirectPolicy(%q) = %v, want nil (case-insensitive match)", host, err)
-		}
-	}
 	policy := httpclient.RedirectPolicyFunc(
 		httpclient.WithAllowedHosts("example.com"),
 		httpclient.WithAllowedSuffixes(".example.org"),
@@ -205,29 +169,6 @@ func TestRedirect_case_insensitive_host_matching(t *testing.T) {
 	}
 	if err := policy(redirectReq("Sub.Example.ORG"), nil); err != nil {
 		t.Errorf("RedirectPolicyFunc suffix mixed-case Sub.Example.ORG = %v, want nil", err)
-	}
-}
-
-// TestDockerGitHubRedirectPolicy_substring_and_bare_domain_refused pins the
-// dot-anchoring of the allowlist suffixes: a host that only CONTAINS an allowed
-// domain as a substring, a bare allowed domain, or an allowed domain used as a
-// left label must all be refused. DockerGitHubRedirectPolicy matches its
-// domains with its own strings.HasSuffix checks, not the fuzzed suffix
-// matcher, so without these a regression dropping a leading dot
-// (".docker.com" -> "docker.com") would let maliciousdocker.com through and
-// no other DockerGitHubRedirectPolicy case would fail.
-func TestDockerGitHubRedirectPolicy_substring_and_bare_domain_refused(t *testing.T) {
-	for _, host := range []string{
-		"maliciousdocker.com",
-		"notgithub.com",
-		"evilgithubusercontent.com",
-		"docker.com",
-		"hub.docker.com.attacker.example",
-		"api.github.com.attacker.example",
-	} {
-		if err := httpclient.DockerGitHubRedirectPolicy(redirectReq(host), redirectVia(0)); err == nil {
-			t.Errorf("DockerGitHubRedirectPolicy(%q) = nil, want refused (substring/bare-domain must not match a dot-anchored suffix)", host)
-		}
 	}
 }
 
@@ -320,15 +261,6 @@ func TestRedirectPolicyFunc_sameHost_nil_via_refuses(t *testing.T) {
 	}
 }
 
-// TestRedirectPolicyFunc_allowSchemeDowngrade confirms WithAllowSchemeDowngrade
-// opts back into following a same-host https->http downgrade.
-func TestRedirectPolicyFunc_allowSchemeDowngrade(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithAllowSchemeDowngrade(true))
-	if err := policy(reqTo(t, "http://arr.example/b"), viaWithOrigin(t, "https://arr.example/a")); err != nil {
-		t.Errorf("WithAllowSchemeDowngrade(true): same-host https->http should be allowed, got %v", err)
-	}
-}
-
 // TestRedirectPolicyFunc_downgrade_refused_for_allowlist confirms the
 // scheme-downgrade guard also applies to an allowlisted host, not only the
 // same-host path: a custom auth header must not follow onto a cleartext hop
@@ -361,37 +293,6 @@ func TestDefaultRedirectPolicy_scheme(t *testing.T) {
 func TestDefaultRedirectPolicy_nil_origin_url_refuses(t *testing.T) {
 	if err := httpclient.DefaultRedirectPolicy(reqTo(t, "https://example.com/x"), redirectVia(1)); err == nil {
 		t.Error("DefaultRedirectPolicy with nil origin URL = nil, want refusal (no origin to match against)")
-	}
-}
-
-// TestDockerGitHubRedirectPolicy_scheme_downgrade_refused pins the downgrade
-// guard on the example allowlist policy: an https->http redirect is refused
-// even when the target host is allowlisted, an http->https upgrade and a
-// same-scheme hop stay allowed, and a via entry carrying no URL (as the
-// hand-built table tests construct) skips the guard rather than tripping it.
-func TestDockerGitHubRedirectPolicy_scheme_downgrade_refused(t *testing.T) {
-	tests := []struct {
-		name    string
-		orig    string
-		target  string
-		wantErr bool
-	}{
-		{"downgrade to allowlisted host refused", "https://hub.docker.com/a", "http://hub.docker.com/b", true},
-		{"downgrade across allowlisted hosts refused", "https://github.com/a", "http://api.github.com/b", true},
-		{"http->https upgrade allowed", "http://hub.docker.com/a", "https://hub.docker.com/b", false},
-		{"same scheme allowed", "https://github.com/a", "https://raw.githubusercontent.com/b", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := httpclient.DockerGitHubRedirectPolicy(reqTo(t, tt.target), viaWithOrigin(t, tt.orig))
-			if tt.wantErr != (err != nil) {
-				t.Errorf("policy(%s -> %s) err=%v, wantErr=%v", tt.orig, tt.target, err, tt.wantErr)
-			}
-		})
-	}
-	// A via entry with no URL must not trip the downgrade guard.
-	if err := httpclient.DockerGitHubRedirectPolicy(reqTo(t, "http://hub.docker.com/b"), redirectVia(1)); err != nil {
-		t.Errorf("nil-URL via entry should skip the downgrade guard, got %v", err)
 	}
 }
 
@@ -909,25 +810,18 @@ func TestRedirectRefusalsTyped(t *testing.T) {
 			message: "refusing redirect to http://[fe80::1%25eth1]:8080",
 		},
 		{
-			name:   "DockerGitHubRedirectPolicy other host",
-			policy: httpclient.DockerGitHubRedirectPolicy,
+			name:   "suffix allowlist other host",
+			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
 			target: target, via: viaWithOrigin(t, "https://hub.docker.com/a"),
 			reason: httpclient.RedirectOtherOrigin, origin: "https://evil.example:8443",
 			message: "refusing redirect to https://evil.example:8443",
 		},
 		{
-			name:   "DockerGitHubRedirectPolicy downgrade",
-			policy: httpclient.DockerGitHubRedirectPolicy,
+			name:   "suffix allowlist downgrade",
+			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
 			target: "http://hub.docker.com/b", via: viaWithOrigin(t, "https://hub.docker.com/a"),
 			reason: httpclient.RedirectDowngrade, origin: "http://hub.docker.com",
 			message: "refusing scheme downgrade to http://hub.docker.com",
-		},
-		{
-			name:   "DockerGitHubRedirectPolicy hop cap",
-			policy: httpclient.DockerGitHubRedirectPolicy,
-			target: "https://hub.docker.com/b", via: redirectVia(6),
-			reason: httpclient.RedirectTooMany, origin: "https://hub.docker.com",
-			message: "too many redirects",
 		},
 	}
 	for _, tt := range tests {
@@ -985,8 +879,8 @@ func TestRedirectRefusalsHandBuilt(t *testing.T) {
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
-			name:   "nil target URL under DockerGitHubRedirectPolicy",
-			policy: httpclient.DockerGitHubRedirectPolicy,
+			name:   "nil target URL under a suffix allowlist",
+			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
 			req:    &http.Request{},
 			reason: httpclient.RedirectOtherOrigin,
 		},
@@ -1078,20 +972,6 @@ func TestSameOriginComposition(t *testing.T) {
 			name:   "a downgrade to an allowed host is refused by default",
 			opts:   []httpclient.RedirectOption{httpclient.WithSameOrigin(true), httpclient.WithAllowedHosts("cdn.example")},
 			target: "http://cdn.example/b", reason: httpclient.RedirectDowngrade, origin: "http://cdn.example",
-		},
-		{
-			name: "WithAllowSchemeDowngrade lets an allowed host downgrade",
-			opts: []httpclient.RedirectOption{
-				httpclient.WithSameOrigin(true), httpclient.WithAllowedHosts("cdn.example"), httpclient.WithAllowSchemeDowngrade(true),
-			},
-			target: "http://cdn.example/b",
-		},
-		{
-			name: "WithAllowSchemeDowngrade does not let the original host downgrade",
-			opts: []httpclient.RedirectOption{
-				httpclient.WithSameOrigin(true), httpclient.WithAllowedHosts("cdn.example"), httpclient.WithAllowSchemeDowngrade(true),
-			},
-			target: "http://arr.example:8989/b", reason: httpclient.RedirectOtherOrigin, origin: "http://arr.example:8989",
 		},
 		{
 			name:   "later WithSameOrigin(false) turns the permission off",
@@ -1260,7 +1140,7 @@ func TestRedirectHostIdentity(t *testing.T) {
 			reason: httpclient.RedirectOtherOrigin, origin: "https://arr.example:70000",
 		},
 		{
-			name: "DockerGitHubRedirectPolicy does not match an IP literal's zone", policy: httpclient.DockerGitHubRedirectPolicy,
+			name: "a suffix does not match an IP literal's zone", policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
 			orig: "https://hub.docker.com/a", target: "https://[::1%25.docker.com]/b",
 			reason: httpclient.RedirectOtherOrigin, origin: "https://[::1%25.docker.com]",
 		},
