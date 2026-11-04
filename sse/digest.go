@@ -7,10 +7,10 @@ import (
 	"mime"
 	"net/http"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/textsafe"
 )
 
 // Subject is one application-defined unit of state the digest compares: a
@@ -301,7 +301,7 @@ func validateSubject(s digestSubject) string {
 		return "kind must match [a-z][a-z0-9_]*"
 	case len(s.Ref) > maxRefBytes:
 		return fmt.Sprintf("ref must be at most %d bytes", maxRefBytes)
-	case strings.ContainsFunc(s.Ref, isUnsafeRune):
+	case strings.ContainsFunc(s.Ref, textsafe.IsUnsafeSingleLine):
 		return "ref must not contain control, line separator or bidi characters"
 	case s.Version == "" || len(s.Version) > maxVersionBytes:
 		return fmt.Sprintf("version must be 1 to %d bytes", maxVersionBytes)
@@ -333,20 +333,6 @@ func isPrintableASCII(s string) bool {
 	return true
 }
 
-// isUnsafeRune reports a C0 or C1 control, U+2028/U+2029, or an explicit bidi
-// formatting character (the Trojan Source set, https://trojansource.codes/).
-func isUnsafeRune(r rune) bool {
-	switch {
-	case unicode.IsControl(r), r == 0x2028, r == 0x2029:
-		return true
-	case r == 0x061c, r == 0x200e, r == 0x200f:
-		return true
-	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
-		return true
-	}
-	return false
-}
-
 // sanitizeLogValue bounds a string headed for a log line: at most 128 bytes,
 // cut on a rune boundary, with controls, line separators and bidi characters
 // removed so the value stays on one line and cannot restyle what follows it.
@@ -358,13 +344,13 @@ func sanitizeLogValue(s string) string {
 		}
 		s = s[:cut]
 	}
-	if !strings.ContainsFunc(s, isUnsafeRune) && utf8.ValidString(s) {
+	if !strings.ContainsFunc(s, textsafe.IsUnsafeSingleLine) && utf8.ValidString(s) {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == utf8.RuneError || isUnsafeRune(r) {
+		if r == utf8.RuneError || textsafe.IsUnsafeSingleLine(r) {
 			continue
 		}
 		b.WriteRune(r)
