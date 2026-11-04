@@ -127,4 +127,3 @@ A schema decoder built from these calls returns what `json.Unmarshal` would retu
 - Per-key counts. A rule such as "at most N of key X" stays in your decode function, and `Map` passes each key to it for that. The per-container caps and the budget cover the totals.
 - Byte limits. The caps count elements and entries, not bytes. Keep a byte cap on the body to bound one long string, key or number.
 - Invalid UTF-8. `json.Unmarshal` replaces invalid bytes with the replacement character U+FFFD, and so does jsonx. Check the bytes yourself when you need byte-exact text.
-
