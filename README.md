@@ -6,7 +6,23 @@ These are the general-purpose Go libraries the cplieger projects build on, one G
 go get github.com/cplieger/go/<module>@latest
 ```
 
-This repository is being set up. The modules arrive with their first development releases.
+Nothing here imports a cplieger repository outside this one. The other libraries move here from their own repositories, each with its first development release.
+
+## Modules
+
+### HTTP
+
+| Module | What it does |
+| --- | --- |
+| [`httpclient`](httpclient) | Makes your Go HTTP calls survive flaky servers, with retries, backoff and Retry-After built in. |
+| [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown. |
+
+### Service runtime
+
+| Module | What it does |
+| --- | --- |
+| [`yamlenv`](yamlenv) | Loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. |
+| [`keylock`](keylock) | Gives your Go code one lock per key, so work on one file, user or record waits for itself while work on other keys runs. |
 
 ## Disclaimer
 
