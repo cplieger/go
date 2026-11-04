@@ -375,9 +375,21 @@ type publishResponse struct {
 	Offsets []string `json:"offsets"`
 }
 
+// A control body never sizes an allocation past these: count bounds the
+// offsets slice, and size the payload dataOfFrameSize builds, which leaves room
+// for a frame over sse.MaxFrameBytes so the hub's own refusal stays testable.
+const (
+	maxPublishCount = 1 << 16
+	maxPublishSize  = 2 * sse.MaxFrameBytes
+)
+
 func (f *Fixture) handlePublish(w http.ResponseWriter, r *http.Request) {
 	var req publishRequest
 	if !decodeControl(w, r, &req) {
+		return
+	}
+	if req.Count > maxPublishCount || req.Size > maxPublishSize {
+		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", "publish count or size over the fixture's bound")
 		return
 	}
 	hub := f.Hub()

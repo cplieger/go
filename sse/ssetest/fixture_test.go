@@ -550,3 +550,21 @@ func TestFixture_acknowledgementIsAliveAtTheInstantItLands(t *testing.T) {
 		t.Errorf("transitions around an acknowledgement under a zero alive window = %+v then %+v, want one more alive transition", before, after)
 	}
 }
+
+// TestPublishRefusesUnboundedControl pins the publish handler's bounds: a
+// control body sizes no allocation past them, and the hub sees nothing.
+func TestPublishRefusesUnboundedControl(t *testing.T) {
+	f, url := fixtureServer(t)
+	for _, body := range []string{
+		`{"topic":"t","count":65537}`,
+		`{"topic":"t","count":4611686018427387904}`,
+		`{"topic":"t","size":2097153}`,
+	} {
+		if got := post(t, url+"/control/publish", body, nil, nil); got != http.StatusBadRequest {
+			t.Errorf("POST /control/publish %s = %d, want %d", body, got, http.StatusBadRequest)
+		}
+	}
+	if head := f.Hub().Position().Head; head != 0 {
+		t.Errorf("hub head after refused publishes = %d, want 0", head)
+	}
+}
