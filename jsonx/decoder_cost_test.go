@@ -19,7 +19,7 @@ import (
 //
 // An exact count cannot be asserted: since Go 1.27 encoding/json is backed
 // by a pooled coder, so under -race a single testing.AllocsPerRun sample is
-// nondeterministic. capMinAllocsPerRun below takes the minimum over several
+// nondeterministic. minAllocsPerRun below takes the minimum over several
 // trials as the steady-state cost, and the assertions use a ratio ceiling
 // rather than an equality so a real regression is still caught.
 //
@@ -42,10 +42,10 @@ func hostileArray(n int) []byte {
 	return []byte(b.String())
 }
 
-// capMinAllocsPerRun is testing.AllocsPerRun's steady-state cost: the minimum
+// minAllocsPerRun is testing.AllocsPerRun's steady-state cost: the minimum
 // over several trials, discarding the pooled coder's cold-start samples and
 // any allocation a concurrently running test contributed to the window.
-func capMinAllocsPerRun(runs, trials int, f func()) float64 {
+func minAllocsPerRun(runs, trials int, f func()) float64 {
 	best := testing.AllocsPerRun(runs, f)
 	for range trials - 1 {
 		if got := testing.AllocsPerRun(runs, f); got < best {
@@ -74,8 +74,8 @@ func TestBoundedAllocationDoesNotScaleWithCardinality(t *testing.T) {
 		t.Fatalf("large body: err = %v, want ErrArrayCap (the measurement needs the cap to fire)", err)
 	}
 
-	lo := capMinAllocsPerRun(5, 4, func() { _, _ = budgetWidget(small, 0, cap, 0) })
-	hi := capMinAllocsPerRun(5, 4, func() { _, _ = budgetWidget(large, 0, cap, 0) })
+	lo := minAllocsPerRun(5, 4, func() { _, _ = budgetWidget(small, 0, cap, 0) })
+	hi := minAllocsPerRun(5, 4, func() { _, _ = budgetWidget(large, 0, cap, 0) })
 
 	if ceiling := 1.5 * lo; hi > ceiling {
 		t.Errorf("allocations grew with cardinality: %.0f at 1000 elements (%d bytes) -> %.0f at 1000000 (%d bytes), want no growth (ceiling %.0f)",
@@ -97,8 +97,8 @@ func TestPreflightAllocationBoundedByDepthCeiling(t *testing.T) {
 		t.Fatal("Preflight(4 MiB of open brackets) = nil, want it rejected")
 	}
 
-	lo := capMinAllocsPerRun(3, 4, func() { _ = jsonx.Preflight(bytes.NewReader(small)) })
-	hi := capMinAllocsPerRun(3, 4, func() { _ = jsonx.Preflight(bytes.NewReader(large)) })
+	lo := minAllocsPerRun(3, 4, func() { _ = jsonx.Preflight(bytes.NewReader(small)) })
+	hi := minAllocsPerRun(3, 4, func() { _ = jsonx.Preflight(bytes.NewReader(large)) })
 
 	if ceiling := 1.5 * lo; hi > ceiling {
 		t.Errorf("allocations grew with input length: %.0f at %d bytes -> %.0f at %d bytes, want the cost bounded by MaxDepth (ceiling %.0f)",

@@ -6,3 +6,15 @@ coverage/
 reports/
 .stryker-tmp/
 .agents/
+
+# Go build and test output
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Editors
+.idea/
+.vscode/

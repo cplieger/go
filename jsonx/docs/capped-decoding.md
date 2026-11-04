@@ -1,116 +1,130 @@
-# How jsonx works
+# Capped decoding
 
-This page explains how jsonx bounds a decode, what the bound costs and how each call matches `json.Unmarshal`, for developers checking the guarantees before they rely on them.
+jsonx decodes untrusted JSON in Go and refuses the element that would cross your cap before it is allocated, while matching `json.Unmarshal` on well-formed input.
 
-## Why a byte cap does not bound the decode
+A byte cap on the body does not bound the decode. With `json.Unmarshal`, a 300 KB body of empty objects decodes into about 13 MB before your code can count anything.27.1 or later and is licensed under Apache-2.0.
 
-`json.Unmarshal` builds the whole decoded value before any count check in your code can run. Compact elements make a small body expensive, because `{}` is two bytes on the wire and a whole struct in a slice once decoded.
+## Why use it
 
-`BenchmarkHostileArray` decodes `{"parts":[{},{},...]}` holding 100,000 empty objects, 300,011 bytes in all. One run on Go 1.27.1, linux/amd64, gave these figures:
+jsonx is built for Go code that decodes JSON from a third-party API or service.
 
-| Decode | Bytes allocated | Allocations | Time per decode |
-| --- | --- | --- | --- |
-| `json.Unmarshal` | 12,972,789 | 31 | 9.4 ms |
-| jsonx, array cap of 16 | 1,674 | 22 | 2.2 µs |
+- Each array read through `Array` and map read through `Map` gets its own cap. Both share one element budget, checked before each entry is allocated.
+- On that 300 KB body, jsonx with a cap of 16 allocates under 2 KB and refuses it.
+- A fuzz test checks that each accepted value equals what `json.Unmarshal` returns.
+- `Preflight` rejects repeated object keys before `json.Unmarshal` can replace or merge their values.
+- Cap errors name the container and bound, budget errors name the bound, and none quotes document bytes.
 
-`json.Unmarshal` allocates 43 times the size of the body. The capped walk allocates about 7,700 times less and refuses the body at element 17. Times depend on the machine. To measure it yourself, run this in the repository:
+You write one decode function per type, without code generation.
 
-```sh
-go test -run '^$' -bench HostileArray -benchmem
+Consider [`encoding/json/v2`](https://pkg.go.dev/encoding/json/v2) if you decode with its semantics and duplicate keys are your only concern. It rejects duplicate object names by default. Consider [xmlx](https://github.com/cplieger/go/tree/main/xmlx) if you decode XML, because it bounds the work an untrusted XML document can cost.
+
+## Usage
+
+A schema decoder replaces `json.Unmarshal` with a token walk. This one caps each `items` array at 500 elements and all entries decoded through `Array` or `Map` at 10,000:
+
+```go
+type report struct {
+	Name  string
+	Items []item
+}
+
+type item struct {
+	ID   int
+	Kind string
+}
+
+func decodeReport(r io.Reader) (report, error) {
+	dec := jsonx.NewDecoder(r, 10_000) // 10,000 entries across Array and Map calls
+
+	var rep report
+	err := dec.Object(func(key string) error {
+		switch {
+		case strings.EqualFold(key, "name"):
+			return dec.Decode(&rep.Name)
+		case strings.EqualFold(key, "items"):
+			var err error
+			rep.Items, err = dec.Array(rep.Items, 500, "items", func(it *item) error {
+				return dec.Decode(it)
+			})
+			return err
+		default:
+			return dec.Skip() // unknown field, never built into a Go value
+		}
+	})
+	if err != nil {
+		return report{}, err
+	}
+	return rep, dec.End() // rejects trailing data, as json.Unmarshal does
+}
 ```
 
-The cost of the capped walk does not grow with the element count the body claims. `TestBoundedAllocationDoesNotScaleWithCardinality` rejects a body of 1,000 elements and one of 1,000,000 under the same cap of 16, and asserts that the second costs less than 1.5 times the allocations of the first.
+`Array` refuses the element that would cross either bound, so the slice never grows past what you allowed. Match the bound that fired with `errors.Is`:
 
-## The two bounds
+```go
+if errors.Is(err, jsonx.ErrArrayCap) {
+	// one array went over its own cap, and the error names it
+}
+if errors.Is(err, jsonx.ErrElementBudget) {
+	// the Array and Map calls went over the shared budget
+}
+```
 
-A per-container cap is a schema statement, such as "at most 500 items". The element budget given to `NewDecoder` is a document statement. It stops a body that spreads a hostile total across many small containers, each one under its own cap.
+To keep only part of a large array, walk it element by element instead of through `Array`, which builds every element into one slice:
 
-Every array element decoded through `Array` and every map entry decoded through `Map` counts against the one budget, whichever container it belongs to. Nested or repeated containers therefore cannot multiply a per-container cap. `Decode` and `Skip` are not charged. A value read with `Decode` goes through `json.Decoder.Decode` whole, so decode a nested array or map through `Array` or `Map` when it needs a bound.
+```go
+if ok, err := dec.Open('['); err != nil || !ok {
+	return err
+}
+for dec.More() {
+	var g group
+	if err := dec.Decode(&g); err != nil {
+		return err
+	}
+	// keep what you need, drop the rest
+}
+return dec.Close()
+```
 
-The per-container and budget checks run in a fixed order, before the next entry is allocated:
+Run `Preflight` over the whole body before you decode it to reject a repeated object key:
 
-1. `Array` checks the per-array cap, then charges the budget, then grows the slice and decodes into the new element.
-2. `Map` checks the per-map cap, then charges the budget, then reads the key and the value. The charge comes before the key because the key is itself an allocation from the wire.
+```go
+if err := jsonx.Preflight(bytes.NewReader(body)); err != nil {
+	return err // wraps jsonx.ErrDuplicateKey on a repeated key
+}
+```
 
-A cap of zero or less on `Array` or `Map` turns that container's cap off, and the budget still applies. A budget of zero or less on `NewDecoder` turns the budget off, and the per-container caps still apply. Pass a real budget for untrusted input.
+`Preflight` treats keys that differ only in letter case as repeats, because `json.Unmarshal` can fill one struct field from either. A `Decoder` walk accepts a repeated key and handles it as `json.Unmarshal` does, so `Preflight` is the step that refuses one. [How capped decoding works](capped-decoding-internals.md#duplicate-keys) explains the split.
 
-`Elements` reports how many elements and entries have been charged so far. A caller reading several paginated bodies can use it to carry one budget across several `Decoder` values.
+## API
 
-## Parity with json.Unmarshal
+- `NewDecoder(r, elementBudget)` starts a walk over one JSON value. A budget of zero or less turns the aggregate bound off, so pass a real one. A `Decoder` is not safe for concurrent use.
+- `Array`, `Map` and `Object` decode a slice, a Go map and a struct-shaped object with `json.Unmarshal`'s null, empty and repeated-key handling.
+- `Decode` reads one value through `json.Decoder.Decode`, outside the caps and the budget. Decode a nested array or map through `Array` or `Map` to bound it. `Skip` discards an unknown field without building it.
+- `Open`, `More`, `Key`, `Close`, `End` and `Elements` are the lower-level walk, for shapes the helpers do not cover.
+- `Preflight` rejects a body that repeats an object key.
+- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`. `MaxDepth` is the nesting ceiling of 10000 that `encoding/json` enforces.
 
-The fuzz target `FuzzParityWithUnmarshal` decodes arbitrary bytes through a schema decoder built from these calls and through `json.Unmarshal`. For every body the walk accepts, `json.Unmarshal` must accept it too and return a value equal under `reflect.DeepEqual`, with nil and empty told apart. The walk may be stricter than `json.Unmarshal`, because rejecting what `json.Unmarshal` would build is what the caps are for. It may never be looser.
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/jsonx).
 
-### Objects
+## It matches json.Unmarshal on well-formed input
 
-- `Object` calls your field function once per key, and that function consumes exactly that key's value. It calls `Decode` for a known field, `Skip` for an unknown one, or `Object`, `Array` or `Map` for a container.
-- A JSON null in place of the object is a no-op. The field function is never called and your target stays as it was, so a repeated key such as `"expand": null` cannot wipe a value already decoded.
-- Match keys with `strings.EqualFold` to reproduce the case-insensitive field matching of `json.Unmarshal`.
+A schema decoder built from these calls returns what `json.Unmarshal` would return. You can rely on these rules:
 
-### Arrays
+- A JSON null leaves a struct untouched and sets a slice or a map to nil. An empty array gives an empty slice that is not nil.
+- A repeated key merges into a struct field by field and replaces a map entry with a fresh value.
+- Matching keys with `strings.EqualFold` gives `json.Unmarshal`'s case-insensitive field matching.
+- The decoder runs with `UseNumber`, so skipping a field never rejects a valid number such as `1e1000`. Decoding into an untyped `any` gives a `json.Number`.
+- The walk is never looser than the standard library. A fuzz test asserts that it rejects every body `json.Unmarshal` rejects.
+- `encoding/json` itself bounds nesting at `MaxDepth` for every walk, `Preflight` included.
+- A repeated-key error quotes at most 64 bytes of the key, so a hostile key cannot fill a log line.
 
-- A JSON null gives a nil slice. An empty array `[]` gives an empty slice that is not nil.
-- Pass the value already decoded for an earlier occurrence of the same key as `prior` to get the repeated-key behavior of `json.Unmarshal`. Within the retained capacity, `Array` reuses the earlier elements, so a struct element merges field by field. The result is cut to the length of the new array, and an empty re-occurrence replaces the slice with a fresh one.
+[How capped decoding works](capped-decoding-internals.md) covers each rule and the measured cost.
 
-### Maps
+## Unsupported by design
 
-- A JSON null gives a nil map, which wipes an earlier occurrence of the same key.
-- Each entry decodes into a fresh zero value, so a repeated key replaces the earlier entry instead of merging into it. A null value stores the zero value.
-- An empty object `{}` gives an empty map that is not nil when `prior` is nil, and leaves a non-nil `prior` in place.
-- Keys compare exactly, so `"a"` and `"A"` are two entries.
-- The value function receives the key as well, so a per-key rule needs no second walk.
-- On an error, the returned map holds the entries decoded so far, as a failed `json.Unmarshal` leaves them in your map. The error is the result.
+- An unbounded stream of separate JSON values, such as NDJSON. A `Decoder` reads tokens without holding the whole body, but its caps and budget cover one top-level value, and `End` rejects anything after it. To process a stream, loop over `Decode` yourself.
+- Schema validation. Whether a field is required, or a number is in range, stays your check at your decode site.
+- Per-key counts. A rule such as "at most N of key X" stays in your decode function, and `Map` passes each key to it for that. The per-container caps and the budget cover the totals.
+- Byte limits. The caps count elements and entries, not bytes. Keep a byte cap on the body to bound one long string, key or number.
+- Invalid UTF-8. `json.Unmarshal` replaces invalid bytes with the replacement character U+FFFD, and so does jsonx. Check the bytes yourself when you need byte-exact text.
 
-### Trailing data
-
-`End` rejects anything after the top-level value, as `json.Unmarshal` does. A plain `json.Decoder` leaves trailing data unread and unreported.
-
-### Numbers
-
-The underlying `json.Decoder` always runs with `UseNumber`. Skipping an unknown field therefore never converts its numbers through `float64`, which would reject a valid number such as `1e1000` that `json.Unmarshal` accepts when it skips a field. Decoding into a typed `int`, `string` or `bool` field is unaffected. Decoding into an untyped `any` gives a `json.Number`.
-
-### Invalid UTF-8
-
-`json.Unmarshal` replaces invalid bytes inside strings with U+FFFD instead of failing, and jsonx does the same.
-
-## Duplicate keys
-
-`Preflight` and the `Decoder` handle a repeated key in opposite ways, on purpose.
-
-- `Object`, `Array` and `Map` reproduce the repeated-key behavior of `json.Unmarshal`, because a schema decoder must return what the standard library returns.
-- `Preflight` rejects the body outright with `ErrDuplicateKey`, for a caller that cannot accept the ambiguity. `json.Unmarshal` processes repeated keys in order. Later values replace or merge into earlier values depending on the destination type, so nothing downstream can tell which occurrence a value came from.
-
-`Preflight` conservatively treats keys equal under `strings.EqualFold` as duplicates, such as `"media"` and `"Media"`. This follows the case-insensitive struct-field fallback of `json.Unmarshal` without needing the destination type. Its key folding gives exactly the matches of `strings.EqualFold`.
-
-`Preflight` decodes nothing into a Go value. Run it over the whole body, then hand the same bytes to `json.Unmarshal` or to a `Decoder` walk. It rejects malformed JSON and trailing data before decoding, as `json.Unmarshal` does. A later schema decode can still reject valid JSON whose type or shape does not match your schema. It takes no view of which keys or values are acceptable, only of whether the structure is unambiguous.
-
-The fuzz target `FuzzPreflight` checks three things. Every body `Preflight` accepts is valid JSON for `json.Valid`. Its answer is the same on every run. A body it accepts stays accepted inside a one-element array.
-
-## Errors
-
-Cap and budget errors carry the bound and never document bytes. `ErrArrayCap` and `ErrMapCap` errors also name the container through the `what` argument you pass, and never a map key, because at this boundary the keys are text an attacker shaped.
-
-An `ErrDuplicateKey` error quotes the repeated key, cut to at most 64 bytes on a rune boundary and rendered with `%q`. Control characters and newlines are escaped, so the message stays on one line and is safe to log.
-
-When `Open` or `Key` meets a token of the wrong kind, its error prints that token, which is text from the document. Errors from `encoding/json` itself, such as a syntax error, are returned as they are, or wrapped by `End` when they follow the top-level value.
-
-Match each class with `errors.Is` through the wrapping error.
-
-## Skipping unknown fields
-
-`Skip` reads one whole value, scalar or container, and builds no Go value from it. It still allocates, because `json.Decoder.Token` returns each token as an `any`, so its cost grows with the number of tokens in the skipped value. `BenchmarkSkip` measures 5.02 allocations per skipped element of a two-field object, 5,023 allocations for 1,000 elements.
-
-## Nesting depth
-
-`encoding/json` bounds nesting for every walk in this package, `Preflight` included. Its decoder refuses to read the token that would open container `MaxDepth+1`, and the error reaches you as a `*json.SyntaxError`, which jsonx does not translate. `MaxDepth` is 10000 and exists because the standard library does not export its threshold.
-
-`TestPreflightDepthMatchesUnmarshal` asserts that `Preflight` accepts exactly the depths `json.Unmarshal` accepts. `TestPreflightAllocationBoundedByDepthCeiling` asserts that 4 MiB of open brackets costs `Preflight` less than 1.5 times the allocations of 64 KiB of them.
-
-## The lower-level walk
-
-`Open`, `More`, `Key`, `Close`, `End`, `Decode` and `Skip` let you decode a shape the helpers do not cover, such as an array you read one element at a time and keep only part of.
-
-- `Open` reads a container's opening delimiter. It returns `ok` as false, without an error, for a JSON null, and returns an error for any other token.
-- `json.Delim` is an integer type, so `Open('[')` takes an untyped rune constant, and your code needs no `encoding/json` import of its own.
-- `Close` reads the closing delimiter once `More` reports false. `Key` reads the next object key.
-- Create every `Decoder` with `NewDecoder`. The zero `Decoder` has no underlying `json.Decoder`, so its methods panic.
-- A `Decoder` is not safe for concurrent use.

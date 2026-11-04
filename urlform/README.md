@@ -1,10 +1,10 @@
 # urlform
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/urlform.svg)](https://pkg.go.dev/github.com/cplieger/go/urlform) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=urlform%2Fgo.mod)](https://github.com/cplieger/go/blob/main/urlform/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/urlform/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/urlform.svg)](https://pkg.go.dev/github.com/cplieger/go/urlform) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=urlform%2Fgo.mod)](https://github.com/cplieger/go/blob/main/urlform/go.mod)
 
 urlform tells your Go code which host a browser opens for an untrusted URL, or that it cannot vouch for one, before you publish or match the link.
 
-Go's `net/url` and a browser can read the same URL differently. For example, a browser drops embedded tabs and newlines, reads a backslash as a slash and opens a schemeless `host/x` at `host`. Code that trusts Go can then link to a host it never checked. urlform uses only the standard library, needs Go 1.27.1 or later and is licensed under Apache-2.0.
+Go's `net/url` and a browser can read the same URL differently. For example, a browser drops embedded tabs and newlines, reads a backslash as a slash and opens a schemeless `host/x` at `host`. Code that trusts Go can then link to a host it never checked. urlform uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -17,7 +17,7 @@ urlform is built for Go programs that show untrusted URLs to people as links, or
 - It never accepts or refuses a URL. Your code sets the policy.
 - 29 test cases pin the browser readings, 17 of them from the browsers' shared [web-platform-tests](https://github.com/web-platform-tests/wpt).
 
-Consider [whatwg-url](https://github.com/nlnwa/whatwg-url) if you need a complete [WHATWG URL](https://url.spec.whatwg.org/) parser in Go, with canonicalization profiles. urlform does not check a URL your own program fetches. For that, consider [ssrf](https://github.com/cplieger/go/tree/main/ssrf) by the same author, which refuses private addresses and checks every address at connect time.
+Consider [whatwg-url](https://github.com/nlnwa/whatwg-url) if you need a complete [WHATWG URL](https://url.spec.whatwg.org/) parser in Go, with canonicalization profiles. urlform does not check a URL your own program fetches. For that, consider [ssrf](https://github.com/cplieger/ssrf) by the same author, which refuses private addresses and checks every address at connect time.
 
 ## Install
 

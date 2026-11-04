@@ -1,10 +1,10 @@
 # xmlx
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/xmlx.svg)](https://pkg.go.dev/github.com/cplieger/go/xmlx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=xmlx%2Fgo.mod)](https://github.com/cplieger/go/blob/main/xmlx/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/xmlx/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/xmlx.svg)](https://pkg.go.dev/github.com/cplieger/go/xmlx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=xmlx%2Fgo.mod)](https://github.com/cplieger/go/blob/main/xmlx/go.mod)
 
 xmlx caps the memory and work an untrusted XML document can cost your Go program, before and during an `encoding/xml` decode.
 
-A byte cap on the response body does not bound the decode, because `encoding/xml` builds each token before your code can check it. xmlx adds those bounds and keeps your decoder. It uses only the standard library, needs Go 1.27 or later, is a stable v1 module under semantic versioning and is licensed under Apache-2.0.
+A byte cap on the response body does not bound the decode, because `encoding/xml` builds each token before your code can check it. xmlx adds those bounds and keeps your decoder. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

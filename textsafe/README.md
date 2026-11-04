@@ -1,10 +1,10 @@
 # textsafe
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/textsafe.svg)](https://pkg.go.dev/github.com/cplieger/go/textsafe) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=textsafe%2Fgo.mod)](https://github.com/cplieger/go/blob/main/textsafe/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/runesafe/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/textsafe.svg)](https://pkg.go.dev/github.com/cplieger/go/textsafe) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=textsafe%2Fgo.mod)](https://github.com/cplieger/go/blob/main/textsafe/go.mod)
 
 textsafe keeps untrusted text from forging your Go log lines, starting terminal escapes or reordering what a reader sees in a JSON document or report.
 
-It replaces the `strings.Map` over control characters you would otherwise write at each log call, JSON writer and report renderer with one policy they all share. It uses only the standard library, needs Go 1.27.2 or later and is licensed under Apache-2.0.
+It replaces the `strings.Map` over control characters you would otherwise write at each log call, JSON writer and report renderer with one policy they all share. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

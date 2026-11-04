@@ -1,10 +1,10 @@
 # pathinside
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/pathinside.svg)](https://pkg.go.dev/github.com/cplieger/go/pathinside) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=pathinside%2Fgo.mod)](https://github.com/cplieger/go/blob/main/pathinside/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/pathinside/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/pathinside.svg)](https://pkg.go.dev/github.com/cplieger/go/pathinside) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=pathinside%2Fgo.mod)](https://github.com/cplieger/go/blob/main/pathinside/go.mod)
 
 pathinside catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`.
 
-It replaces the `strings.HasPrefix` or `filepath.Rel` check you would otherwise write before an archive entry, a request path or a file-watcher event reaches the filesystem. It reads names only and never touches the disk. It uses only the standard library, needs Go 1.27.1 or later and is licensed under Apache-2.0.
+It replaces the `strings.HasPrefix` or `filepath.Rel` check you would otherwise write before an archive entry, a request path or a file-watcher event reaches the filesystem. It reads names only and never touches the disk. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

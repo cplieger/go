@@ -1,10 +1,10 @@
 # jsonx
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/jsonx.svg)](https://pkg.go.dev/github.com/cplieger/go/jsonx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=jsonx%2Fgo.mod)](https://github.com/cplieger/go/blob/main/jsonx/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/jsonx/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/jsonx.svg)](https://pkg.go.dev/github.com/cplieger/go/jsonx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=jsonx%2Fgo.mod)](https://github.com/cplieger/go/blob/main/jsonx/go.mod)
 
 jsonx decodes the integer fields of someone else's JSON in Go, whether a value arrives as `14`, `"14"`, `null`, `"unknown"` or `9.0`, under one policy you choose.
 
-It replaces the custom `UnmarshalJSON` method you would otherwise write for each inconsistent field. The policy decides, shape by shape, whether to keep the value, return 0 or return a typed error. It uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the custom `UnmarshalJSON` method you would otherwise write for each inconsistent field. The policy decides, shape by shape, whether to keep the value, return 0 or return a typed error. It uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -121,13 +121,21 @@ What each policy returns:
 | Tolerant strings, arrays and objects | jsonx covers the integer that arrives as a number or a string. Tolerant decoding of other shapes stays in your code. |
 | Replacing `json.Number` | `json.Number` leaves parsing to each reader. jsonx parses once, under a policy. |
 
-## Related projects
+## Capped decoding
 
-[jsonx](https://github.com/cplieger/jsoncap) caps how many elements an untrusted JSON body may decode before it allocates them. It pairs with jsonx, which decides what each integer value becomes.
+A byte cap on the body does not bound the decode: with `json.Unmarshal`, a 300 KB body of empty objects decodes into about 13 MB before your code can count anything. A `Decoder` walks the token stream instead and refuses the element that would cross your cap before it is allocated, while matching `json.Unmarshal` on well-formed input.
+
+- `NewDecoder(r, elementBudget)` starts a walk over one JSON value. `Array`, `Map` and `Object` decode a slice, a Go map and a struct-shaped object with `json.Unmarshal`'s null, empty and repeated-key handling, and `Skip` discards an unknown field without building it.
+- `Preflight` rejects a body that repeats an object key, before `json.Unmarshal` can replace or merge the values.
+- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`, and none quotes document bytes.
+
+[Capped decoding](docs/capped-decoding.md) shows a schema decoder, every call and the rules it shares with `json.Unmarshal`.
 
 ## Documentation
 
 - [How jsonx decodes a value](docs/how-it-works.md) covers the facts, the order the rules run in, the error type, the field types and the number grammar, for a developer writing a custom policy.
+- [Capped decoding](docs/capped-decoding.md) shows a schema decoder, the API and what it leaves out, for a developer decoding a whole untrusted body.
+- [How capped decoding works](docs/capped-decoding-internals.md) shows the measured cost, the order of the checks and every parity rule, for developers checking the guarantees.
 
 ## Contributing
 
