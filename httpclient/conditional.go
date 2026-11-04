@@ -39,7 +39,7 @@ type ConditionalResult struct {
 // from v (replacing any on req) and classifies the response: 304 is
 // NotModified; 200 returns the body (*ResponseTooLargeError over maxBodyBytes,
 // where <= 0 means DefaultMaxBodyBytes) and its validators; a non-2xx is
-// CheckHTTPStatus's error and any other 2xx a plain error. Transport errors
+// CheckStatus's error and any other 2xx a plain error. Transport errors
 // pass through LogSafeError. The caller owns retry (wrap in Do, rebuild req per
 // attempt) and must send zero Validators when its cached body is unusable. A
 // validator failing RFC 9110 field-value grammar or 1 KiB is silently dropped.
@@ -78,10 +78,10 @@ func DoConditional(client *http.Client, req *http.Request, v Validators, maxBody
 		}, nil
 	default:
 		DrainClose(resp.Body)
-		if statusErr := CheckHTTPStatus(resp); statusErr != nil {
+		if statusErr := CheckStatus(resp); statusErr != nil {
 			return ConditionalResult{}, statusErr
 		}
-		// CheckHTTPStatus returns nil only for 2xx, so this covers a 2xx that is
+		// CheckStatus returns nil only for 2xx, so this covers a 2xx that is
 		// neither the 200 nor the 304 above (a 204, 206, 201): no usable
 		// representation for a conditional GET, so a plain non-transient error.
 		return ConditionalResult{}, fmt.Errorf("unexpected status %d on conditional request", resp.StatusCode)

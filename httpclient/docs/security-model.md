@@ -12,7 +12,7 @@ Go strips `Authorization`, `Cookie` and `WWW-Authenticate` on a cross-domain red
 | `RefuseAllRedirects` | nothing. It returns `http.ErrUseLastResponse`, so the client hands back the 3xx with a nil error |
 | `RedirectPolicyFunc(opts...)` | the hosts its options allow |
 
-`RefuseAllRedirects` is the policy for a client that carries a token to an API that issues no redirects. The 3xx it surfaces is an error under `CheckHTTPStatus`.
+`RefuseAllRedirects` is the policy for a client that carries a token to an API that issues no redirects. The 3xx it surfaces is an error under `CheckStatus`.
 
 Every shipped policy refuses an `https` to `http` downgrade, even to an allowed or same-host target, so an auth header never travels over cleartext. The downgrade is judged against the original request's scheme, and no option allows one. An `http` to `https` upgrade still has to pass the same-host or allowlist check.
 
@@ -45,7 +45,7 @@ Every hard refusal from a shipped policy, by the hop cap, the target permission 
 
 net/http turns a POST, PUT, PATCH or DELETE into a GET across a 301, 302 or 303 and drops the body, as RFC 9110 section 15.4 and Go issue 18570 describe. Only 307 and 308 carry the method forward. For an API call whose meaning is its method, that turns a write into a read of a URL you never named.
 
-`WithPreserveMethod(true)` refuses such a hop instead. It returns `http.ErrUseLastResponse`, so you get the 3xx with a nil error, and `CheckHTTPStatus` reports it as an error, the same pairing `RefuseAllRedirects` uses. The request is never re-sent with the original method.
+`WithPreserveMethod(true)` refuses such a hop instead. It returns `http.ErrUseLastResponse`, so you get the 3xx with a nil error, and `CheckStatus` reports it as an error, the same pairing `RefuseAllRedirects` uses. The request is never re-sent with the original method.
 
 The comparison is with the original request. A POST kept by a 307 and then turned into a GET by a 302 is refused at the second hop. A hop chain with no original request fails closed. The hop cap, the allowlist and the downgrade refusal are checked first and return hard errors. The option only narrows a policy, so with no allowlist, no `WithSameHost(true)` and no `WithSameOrigin(true)` it still refuses everything.
 
@@ -64,7 +64,7 @@ tr, err := httpclient.CATransport(pemBytes)
 if err != nil {
     return err
 }
-client := httpclient.NewRetryClient(tr, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{MaxAttempts: 3})
+client := httpclient.NewRetry(tr, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{MaxAttempts: 3})
 ```
 
 `CloneDefaultTransport()` returns a private clone of `http.DefaultTransport` for you to change, for example to set a per-attempt `ResponseHeaderTimeout` or `MaxIdleConnsPerHost`, without changing every other client in the process. Both functions return an error when `http.DefaultTransport` has been replaced by a type other than `*http.Transport`.

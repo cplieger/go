@@ -143,7 +143,7 @@ func StrictAbsentZero() Policy {
 // struct-tag use.
 func ParseInt64(data []byte, p Policy) (int64, error) {
 	facts := Classify(data)
-	if facts.Shape != Number && facts.Shape != NumericString {
+	if facts.Shape != ShapeNumber && facts.Shape != ShapeNumericString {
 		d, r := p.shapeGate(facts.Shape)
 		return resolve(d, r, data, facts)
 	}
@@ -166,17 +166,17 @@ func ParseInt64(data []byte, p Policy) (int64, error) {
 // rejection reason.
 func (p Policy) shapeGate(s Shape) (Disposition, Reason) {
 	switch s {
-	case Empty:
+	case ShapeEmpty:
 		return p.EmptyInput, ReasonEmptyInput
-	case Null:
+	case ShapeNull:
 		return p.Null, ReasonNull
-	case EmptyString:
+	case ShapeEmptyString:
 		return p.EmptyString, ReasonEmptyString
-	case MalformedString:
+	case ShapeMalformedString:
 		return p.MalformedString, ReasonMalformedString
-	case NonNumericString:
+	case ShapeNonNumericString:
 		return p.NonNumericString, ReasonNonNumericString
-	default: // Other (the numeric shapes never reach here)
+	default: // ShapeOther (the numeric shapes never reach here)
 		return p.OtherShape, ReasonOtherShape
 	}
 }

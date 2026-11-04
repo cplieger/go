@@ -12,38 +12,38 @@ import (
 type Shape uint8
 
 const (
-	// Other is any token that is not a JSON number, string, or null: an
+	// ShapeOther is any token that is not a JSON number, string, or null: an
 	// object, an array, a boolean, or a syntactically invalid token (for
 	// example a number with a leading zero, which the JSON grammar
 	// forbids). It is the zero value, so an unset Shape reads as the
 	// least-trusted classification.
-	Other Shape = iota
-	// Null is the JSON null literal.
-	Null
-	// Empty is zero-length input (nothing but JSON whitespace). A real
+	ShapeOther Shape = iota
+	// ShapeNull is the JSON null literal.
+	ShapeNull
+	// ShapeEmpty is zero-length input (nothing but JSON whitespace). A real
 	// encoding/json decode never produces it - decoders hand
 	// UnmarshalJSON exact value bytes - but direct callers emulating the
 	// "absent field" case do.
-	Empty
-	// EmptyString is exactly `""`.
-	EmptyString
-	// MalformedString is a token that starts with '"' but is not a valid
+	ShapeEmpty
+	// ShapeEmptyString is exactly `""`.
+	ShapeEmptyString
+	// ShapeMalformedString is a token that starts with '"' but is not a valid
 	// JSON string (unterminated, invalid escape, or trailing data).
-	MalformedString
-	// NonNumericString is a valid JSON string whose content (after ASCII
+	ShapeMalformedString
+	// ShapeNonNumericString is a valid JSON string whose content (after ASCII
 	// whitespace trimming) is not a decimal number: "unknown", "", "abc",
 	// but also forms this package deliberately rejects even though some
 	// strconv parsers accept them, such as hex floats ("0x1p2"),
 	// "Inf"/"NaN" words, and digit-separator underscores.
-	NonNumericString
-	// Number is a bare, grammar-valid JSON number token.
-	Number
-	// NumericString is a valid JSON string whose content is a decimal
+	ShapeNonNumericString
+	// ShapeNumber is a bare, grammar-valid JSON number token.
+	ShapeNumber
+	// ShapeNumericString is a valid JSON string whose content is a decimal
 	// number. The string grammar is deliberately looser than JSON's own
 	// number grammar - a leading '+' and leading zeros are accepted -
 	// because quoted numbers are exactly where upstream serializers emit
 	// such forms ("007", "+5") and the origin decoders accepted them.
-	NumericString
+	ShapeNumericString
 )
 
 // Facts records what Classify observed about one JSON value: the parsed
@@ -52,7 +52,7 @@ const (
 // is the Policy's decision.
 type Facts struct {
 	// Value is the exactly-parsed integer. It is nonzero only when Shape
-	// is Number or NumericString and the value is integral and fits
+	// is ShapeNumber or ShapeNumericString and the value is integral and fits
 	// int64 (neither Fractional nor Overflow is set).
 	Value int64
 	// Shape is the coarse classification of the token.
@@ -76,8 +76,8 @@ type Facts struct {
 	// Value stays 0.
 	Overflow bool
 	// Padded reports that the string content carried surrounding ASCII
-	// whitespace (" 12 "). Only NumericString and NonNumericString
-	// shapes can be padded.
+	// whitespace (" 12 "). Only ShapeNumericString and
+	// ShapeNonNumericString can be padded.
 	Padded bool
 }
 
@@ -85,7 +85,7 @@ type Facts struct {
 // string in any of its shapes (numeric, non-numeric, empty, malformed).
 func (f Facts) WasString() bool {
 	switch f.Shape {
-	case EmptyString, MalformedString, NonNumericString, NumericString:
+	case ShapeEmptyString, ShapeMalformedString, ShapeNonNumericString, ShapeNumericString:
 		return true
 	default:
 		return false
@@ -106,23 +106,23 @@ const jsonWhitespace = " \t\r\n"
 func Classify(data []byte) Facts {
 	data = bytes.Trim(data, jsonWhitespace)
 	if len(data) == 0 {
-		return Facts{Shape: Empty}
+		return Facts{Shape: ShapeEmpty}
 	}
 	switch {
 	case data[0] == '"':
 		return classifyString(data)
 	case string(data) == "null":
-		return Facts{Shape: Null}
+		return Facts{Shape: ShapeNull}
 	case data[0] == '-' || isDigit(data[0]):
 		// Only a number token can start with '-' or a digit; enforce
 		// the exact JSON number grammar (json.Valid rejects leading
 		// zeros, a lone '-', and trailing data).
 		if !json.Valid(data) {
-			return Facts{Shape: Other}
+			return Facts{Shape: ShapeOther}
 		}
-		return classifyNumber(string(data), Number, false)
+		return classifyNumber(string(data), ShapeNumber, false)
 	default:
-		return Facts{Shape: Other}
+		return Facts{Shape: ShapeOther}
 	}
 }
 
@@ -130,17 +130,17 @@ func Classify(data []byte) Facts {
 func classifyString(data []byte) Facts {
 	var s string
 	if json.Unmarshal(data, &s) != nil {
-		return Facts{Shape: MalformedString}
+		return Facts{Shape: ShapeMalformedString}
 	}
 	if s == "" {
-		return Facts{Shape: EmptyString}
+		return Facts{Shape: ShapeEmptyString}
 	}
 	content := strings.Trim(s, jsonWhitespace)
 	padded := content != s
 	if content == "" || !decimalNumberForm(content) {
-		return Facts{Shape: NonNumericString, Padded: padded}
+		return Facts{Shape: ShapeNonNumericString, Padded: padded}
 	}
-	return classifyNumber(content, NumericString, padded)
+	return classifyNumber(content, ShapeNumericString, padded)
 }
 
 // classifyNumber parses a grammar-validated numeric literal into Facts,

@@ -35,7 +35,7 @@ func ExampleDo() {
 	result, err := httpclient.Do(context.Background(), func(_ context.Context) (string, error) {
 		attempts++
 		if attempts < 2 {
-			return "", &httpclient.HTTPStatusError{Code: 503}
+			return "", &httpclient.StatusError{Code: 503}
 		}
 		return "done", nil
 	}, httpclient.WithMaxAttempts(3), httpclient.WithBaseDelay(time.Millisecond), httpclient.WithLabel("example"))

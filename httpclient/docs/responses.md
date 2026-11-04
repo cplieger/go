@@ -4,32 +4,31 @@ This page is for a developer handling what comes back from a call. It covers how
 
 ## Status checking
 
-`CheckHTTPStatus(resp)` returns nil for a 2xx status, 200 to 299, and an error for every other one.
+`CheckStatus(resp)` returns nil for a 2xx status, 200 to 299, and a `*StatusError` for every other one. `GetBytes` returns the same type for a status it does not retry, and for a retried status it sits inside the exhaustion error.
 
-| Status | Result |
-| --- | --- |
-| 2xx | `nil` |
-| 3xx | `*HTTPStatusError{Code}`, not transient, neither a client nor a server error |
-| 401, 403 | `*AuthError`, whose message carries `(401)` or `(403)` |
-| 429 | `*RateLimitError` with the raw, uncapped `Retry-After` value |
-| other 4xx and 5xx | `*HTTPStatusError{Code}`, transient when `IsRetryableStatus` accepts the code |
-| 1xx | `*HTTPStatusError{Code}`, not a completed response |
+| Status | `errors.Is` matches | `IsTransient` |
+| --- | --- | --- |
+| 1xx, 3xx | no sentinel | false |
+| 401 | `ErrUnauthorized` | false, even under `MarkTransient` |
+| 403 | `ErrForbidden` | false, even under `MarkTransient` |
+| 408 | no sentinel | true |
+| 429 | `ErrRateLimited` | false, even under `MarkTransient`; `Do` retries it only with a rate-limit option |
+| other 4xx | no sentinel | false |
+| 500 to 599 | `ErrServerError` | true when `IsRetryableStatus` accepts the code |
+| 600 or more | `ErrServerError` | false |
 
 A 3xx reaches your code only when the client does not follow redirects. That happens under `RefuseAllRedirects`, or any `CheckRedirect` returning `http.ErrUseLastResponse`, and net/http then returns the 3xx response itself with a nil error. A followed redirect never surfaces a 3xx, so a client on `DefaultRedirectPolicy` or an allowlist sees no difference.
 
 Treating that 3xx as an error matters for a client that carries a token and refuses redirects on purpose. Otherwise the unfollowed redirect would pass as a completed request. If one call site must accept a 3xx, check `resp.StatusCode` there.
 
-A 3xx is an ordinary `*HTTPStatusError`, so the rest of the package handles it unchanged. `IsTransient` reports false, `IsServerError` and `IsClientError` both report false, and `LogSafeError` and the redaction helpers pass it through because it carries no URL. `CheckHTTPStatus` is the only status classifier in the package.
+A 3xx is an ordinary `*StatusError`, so the rest of the package handles it unchanged. `IsTransient` reports false, it matches no sentinel, and `LogSafeError` and the redaction helpers pass it through because it carries no URL. `CheckStatus` is the only status classifier in the package.
 
 ## Error types
 
-- `*AuthError` for 401 and 403. Tell them apart by the `(401)` or `(403)` in its message.
-- `*RateLimitError` for 429. Its `RetryAfter` field is the raw header value, so bound it before sleeping on it. The rate-limit options of `Do` do.
-- `*HTTPStatusError` for every other non-2xx status, with the code in `Code`. It implements `Transient`, true when `IsRetryableStatus(Code)` is: 408 and 500 to 599, except 501, 505, 506, 508, 510 and 511. [Retries](retries.md) gives the reason for each.
-- `*StatusError` is what `GetBytes` returns for a status it does not retry. For a retried status it sits inside the exhaustion error. Its `Error()` text shows the redacted URL. The raw URL stays in the `URL` field for your code to use, so do not log or serialize that field.
+- `*StatusError` for every non-2xx status, with the code in `Code`. It implements `Transient`, true when `IsRetryableStatus(Code)` is and the code is not 429: 408 and 500 to 599, except 501, 505, 506, 508, 510 and 511. [Retries](retries.md) gives the reason for each. Its `RetryAfter` field is the response's raw, uncapped `Retry-After`, so bound it before sleeping on it; the rate-limit options of `Do` do. From `GetBytes` its `URL` field holds the URL you passed and its `Error()` text shows that URL redacted. Do not log or serialize the `URL` field. From `CheckStatus` the field is empty and the text is `HTTP <code>`.
 - `*ResponseTooLargeError` means a body went over its cap. It carries `Limit`, and no body is returned with it.
 - `*PermanentError` wraps an error that must not be retried. It works with `errors.Is`, `errors.As` and `Unwrap`.
-- `ErrRateLimited` and `ErrServerError` are sentinel errors. `ErrServerError` matches a `*StatusError` of 500 or more, the same band as `IsServerError`.
+- `ErrUnauthorized`, `ErrForbidden`, `ErrRateLimited` and `ErrServerError` are the sentinels a `*StatusError` matches with `errors.Is`, for 401, 403, 429 and any status of 500 or more.
 
 ## Why a request failed below HTTP
 
@@ -75,7 +74,7 @@ A failed drain only costs connection reuse. `Drain` logs one Debug line, `failed
 | --- | --- |
 | 304 | `NotModified` is true and `Validators` is zero, so keep the ones you sent |
 | 200 | the body, capped at `maxBodyBytes`, plus the response's fresh validators |
-| any other non-2xx | the `CheckHTTPStatus` error for that status |
+| any other non-2xx | the `CheckStatus` error for that status |
 | any other 2xx, such as 204 or 206 | a plain error, because it carries nothing to cache |
 
 A transport error is reduced with `LogSafeError`, so its text never holds the raw URL. Its cause still classifies as transient when `Do` wraps the call.

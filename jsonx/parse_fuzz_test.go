@@ -42,14 +42,14 @@ var seedCorpus = []string{
 // classification, for any input.
 func checkFactsConsistency(t reporter, data []byte, f jsonx.Facts) {
 	t.Helper()
-	numeric := f.Shape == jsonx.Number || f.Shape == jsonx.NumericString
+	numeric := f.Shape == jsonx.ShapeNumber || f.Shape == jsonx.ShapeNumericString
 	if !numeric && (f.Value != 0 || f.FloatForm || f.Fractional || f.Overflow || f.Negative) {
 		t.Errorf("Classify(%q): non-numeric shape %d carries numeric facts: %+v", data, f.Shape, f)
 	}
 	if f.Fractional && !f.FloatForm {
 		t.Errorf("Classify(%q): Fractional without FloatForm: %+v", data, f)
 	}
-	if f.Padded && f.Shape != jsonx.NumericString && f.Shape != jsonx.NonNumericString {
+	if f.Padded && f.Shape != jsonx.ShapeNumericString && f.Shape != jsonx.ShapeNonNumericString {
 		t.Errorf("Classify(%q): Padded on shape %d: %+v", data, f.Shape, f)
 	}
 	if (f.Overflow || f.Fractional) && f.Value != 0 {
@@ -112,7 +112,7 @@ func checkFloatFormExactness(t reporter, data []byte, f jsonx.Facts) {
 // quoted one.
 func numericLiteral(data []byte, f jsonx.Facts) (string, bool) {
 	trimmed := bytes.Trim(data, " \t\r\n")
-	if f.Shape == jsonx.Number {
+	if f.Shape == jsonx.ShapeNumber {
 		return string(trimmed), true
 	}
 	var s string
@@ -159,7 +159,7 @@ func checkCrossPolicyInvariants(t reporter, data []byte) {
 	av, aerr := jsonx.ParseInt64(data, jsonx.StrictAbsentZero())
 
 	// (1) Tolerant-zero soundness.
-	if terr != nil && facts.Shape != jsonx.MalformedString {
+	if terr != nil && facts.Shape != jsonx.ShapeMalformedString {
 		t.Errorf("TolerantZero(%q) errored on non-malformed input: %v", data, terr)
 	}
 	if terr == nil && (tv < 0 || tv > math.MaxInt32) {
@@ -170,7 +170,7 @@ func checkCrossPolicyInvariants(t reporter, data []byte) {
 	if serr == nil && (aerr != nil || av != sv) {
 		t.Errorf("StrictAbsentZero(%q) = %d, %v diverges from Strict = %d", data, av, aerr, sv)
 	}
-	if aerr == nil && serr != nil && facts.Shape != jsonx.Empty {
+	if aerr == nil && serr != nil && facts.Shape != jsonx.ShapeEmpty {
 		t.Errorf("StrictAbsentZero(%q) accepted beyond Strict on non-empty input", data)
 	}
 

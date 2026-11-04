@@ -18,29 +18,6 @@ import (
 	"time"
 )
 
-// --- Error types (inlined from app-internal packages) ---
-
-// AuthError indicates invalid or expired credentials.
-type AuthError struct{ Msg string }
-
-func (e *AuthError) Error() string { return e.Msg }
-
-// RateLimitError indicates a rate limit was exceeded.
-// RetryAfter, when non-zero, is the RAW, UNCAPPED hint from the upstream's
-// Retry-After header (populated via ParseRetryAfterResponse). The upstream
-// controls this value; a hostile or misconfigured server can supply a very
-// large duration (CWE-400 uncontrolled resource consumption). Callers that
-// sleep on it directly MUST bound it first, e.g. min(err.RetryAfter, cap).
-// Do's rate-limit modes (WithRateLimitRetry, WithRateLimitOnly) already do
-// this (they cap at their maxWait argument). For a pre-capped value use
-// ParseRetryAfter (bounded at RetryAfterCap = 60s).
-type RateLimitError struct {
-	Msg        string
-	RetryAfter time.Duration
-}
-
-func (e *RateLimitError) Error() string { return e.Msg }
-
 // Transient is the interface an error implements to report whether it
 // represents a transient (retryable) failure. It embeds error because every
 // value this interface can ever name IS one: it is read through
@@ -74,55 +51,70 @@ type RetryAfterHint interface {
 	RetryAfterHint() time.Duration
 }
 
-// ErrRateLimited is a sentinel callers use with errors.Is to detect 429 responses.
-var ErrRateLimited = errors.New("rate limited")
-
-// ErrServerError is a sentinel for upstream 5xx responses, and for a status
-// of 600 or more, which RFC 9110 section 15 says to process as a 5xx. Which of
-// them are retried is [IsRetryableStatus]'s rule.
-var ErrServerError = errors.New("server error")
+// Sentinels a *[StatusError] matches with errors.Is, by its Code.
+var (
+	// ErrUnauthorized matches a 401.
+	ErrUnauthorized = errors.New("unauthorized")
+	// ErrForbidden matches a 403.
+	ErrForbidden = errors.New("forbidden")
+	// ErrRateLimited matches a 429.
+	ErrRateLimited = errors.New("rate limited")
+	// ErrServerError matches a 5xx, and a status of 600 or more, which RFC 9110
+	// section 15 says to process as a 5xx. Which of them are retried is
+	// [IsRetryableStatus]'s rule.
+	ErrServerError = errors.New("server error")
+)
 
 // --- HTTP status errors ---
 
-// HTTPStatusError represents a non-2xx HTTP response not covered by AuthError
-// or RateLimitError. It implements [Transient] by [IsRetryableStatus].
-type HTTPStatusError struct {
-	Code int
-}
-
-var _ Transient = (*HTTPStatusError)(nil)
-
-func (e *HTTPStatusError) Error() string { return fmt.Sprintf("HTTP %d", e.Code) }
-
-// IsTransient reports [IsRetryableStatus] for the code.
-func (e *HTTPStatusError) IsTransient() bool { return IsRetryableStatus(e.Code) }
-
-// IsServerError reports whether the status code is 5xx.
-func (e *HTTPStatusError) IsServerError() bool { return e.Code >= 500 }
-
-// IsClientError reports whether the status code is 4xx.
-func (e *HTTPStatusError) IsClientError() bool { return e.Code >= 400 && e.Code < 500 }
-
-// StatusError represents a non-2xx response with URL context. Used by GetBytes.
-// Supports errors.Is matching against ErrRateLimited and ErrServerError.
+// StatusError is the error [CheckStatus] and [GetBytes] return for a non-2xx
+// response. Match a status class with errors.Is against [ErrUnauthorized],
+// [ErrForbidden], [ErrRateLimited] or [ErrServerError], or read Code.
 type StatusError struct {
+	// URL is the URL GetBytes was given, unredacted, so never log it; Error()
+	// renders it redacted. CheckStatus leaves it empty.
 	URL  string
 	Code int
+	// RetryAfter is the response's Retry-After, raw and uncapped, zero when
+	// absent or malformed. The server controls it (CWE-400): bound it before
+	// sleeping on it, as Do's rate-limit options do.
+	RetryAfter time.Duration
 }
 
+var _ Transient = (*StatusError)(nil)
+
 func (e *StatusError) Error() string {
+	if e.URL == "" {
+		return fmt.Sprintf("HTTP %d", e.Code)
+	}
 	return fmt.Sprintf("HTTP %d from %s", e.Code, redactURL(e.URL))
 }
 
-// Is reports whether this StatusError matches ErrRateLimited or ErrServerError.
+// Is matches the sentinel for e's Code.
 func (e *StatusError) Is(target error) bool {
 	switch target {
+	case ErrUnauthorized:
+		return e.Code == http.StatusUnauthorized
+	case ErrForbidden:
+		return e.Code == http.StatusForbidden
 	case ErrRateLimited:
 		return e.Code == http.StatusTooManyRequests
 	case ErrServerError:
 		return e.Code >= 500
 	}
 	return false
+}
+
+// IsTransient reports whether [Do] retries e by default: [IsRetryableStatus]
+// less 429, which only a rate-limit option retries.
+func (e *StatusError) IsTransient() bool {
+	return e.Code != http.StatusTooManyRequests && IsRetryableStatus(e.Code)
+}
+
+// newStatusError builds the *StatusError for resp, a non-2xx response to a
+// request for reqURL.
+func newStatusError(resp *http.Response, reqURL string) *StatusError {
+	return &StatusError{URL: reqURL, Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
 }
 
 // ResponseTooLargeError is returned by GetBytes when the response body exceeds
@@ -191,7 +183,7 @@ func (*transientError) IsTransient() bool { return true }
 // MarkTransient wraps err so [IsTransient] reports true, overriding a
 // non-transient verdict already on it, for a failure your operation knows
 // self-heals where the status rule cannot see it (a server fault inside a 200
-// envelope). [Permanent], an *[AuthError], a *[RateLimitError] and a caller
+// envelope). [Permanent], a *[StatusError] for 401, 403 or 429 and a caller
 // context error still win; for a per-attempt deadline use [AttemptTimeout].
 // Returns nil for nil input.
 func MarkTransient(err error) error {
@@ -434,7 +426,7 @@ func ParseRetryAfter(h string) time.Duration {
 
 // ParseRetryAfterResponse parses the Retry-After header from an *http.Response.
 // Returns zero if absent or unparseable. Does NOT cap — preserves the raw
-// duration so callers (e.g., CheckHTTPStatus) can make their own decisions.
+// duration for [StatusError]'s RetryAfter, so callers make their own decisions.
 // For capped values suitable for retry loops, use ParseRetryAfter.
 func ParseRetryAfterResponse(resp *http.Response) time.Duration {
 	return parseRetryAfterValue(resp.Header.Get("Retry-After"))
@@ -442,24 +434,15 @@ func ParseRetryAfterResponse(resp *http.Response) time.Duration {
 
 // --- Status checking ---
 
-// CheckHTTPStatus returns nil for a 2xx and otherwise a typed error: 401/403
-// → *AuthError, 429 → *RateLimitError, anything else (1xx, 3xx, other 4xx,
-// 5xx) → *HTTPStatusError carrying the code, transient by [IsRetryableStatus].
-// A 3xx reaches it only from a client that does not follow redirects (see
-// [RefuseAllRedirects]) and is reported as a failure, not a completed request.
-func CheckHTTPStatus(resp *http.Response) error {
+// CheckStatus returns nil for a 2xx and otherwise a *[StatusError] with an
+// empty URL, so its text carries no URL into a log. A 3xx reaches it only from
+// a client that does not follow redirects (see [RefuseAllRedirects]) and is
+// reported as a failure, not a completed request.
+func CheckStatus(resp *http.Response) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	switch resp.StatusCode {
-	case http.StatusUnauthorized:
-		return &AuthError{Msg: "invalid API key (401)"}
-	case http.StatusForbidden:
-		return &AuthError{Msg: "access denied (403)"}
-	case http.StatusTooManyRequests:
-		return &RateLimitError{Msg: "rate limited (429)", RetryAfter: ParseRetryAfterResponse(resp)}
-	}
-	return &HTTPStatusError{Code: resp.StatusCode}
+	return newStatusError(resp, "")
 }
 
 // IsRetryableStatus is the one status rule every retry door applies: true for
@@ -467,8 +450,7 @@ func CheckHTTPStatus(resp *http.Response) error {
 // other status. A code of 600 or more is a server error ([ErrServerError]) but
 // not a valid status, so it is not retried. [GetBytes] and the
 // [RetryRoundTripper]'s default policy call it on each response, and
-// [HTTPStatusError.IsTransient] reports it, so [Do] over [CheckHTTPStatus]
-// retries the same set less 429, which arrives as a *[RateLimitError].
+// [StatusError.IsTransient] reports it less 429.
 func IsRetryableStatus(code int) bool {
 	switch code {
 	case http.StatusRequestTimeout, http.StatusTooManyRequests:
@@ -552,8 +534,8 @@ func ContextWithDefaultTimeout(ctx context.Context, def time.Duration) (context.
 
 // IsTransient reports whether err is worth another attempt: a [Transient]
 // that says so, an [AttemptTimeout] mark, or an error whose [CauseOf] is DNS,
-// refused, reset or timeout. A [Permanent] mark, an *[AuthError], a
-// *[RateLimitError] and the caller's own expired or canceled context are never
+// refused, reset or timeout. A [Permanent] mark, a *[StatusError] for 401, 403
+// or 429 and the caller's own expired or canceled context are never
 // transient. The caller's deadline is the sentinel itself in the chain, so an
 // [http.Client.Timeout] or a ResponseHeaderTimeout, which only match it, are
 // per-attempt bounds and retried (see isCallerContextError).
@@ -564,11 +546,13 @@ func IsTransient(err error) bool {
 	if IsPermanent(err) {
 		return false
 	}
-	if _, ok := errors.AsType[*AuthError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*RateLimitError](err); ok {
-		return false
+	// Checked by code rather than through Transient so a MarkTransient wrapper
+	// cannot make a credential or rate-limit answer retryable.
+	if se, ok := errors.AsType[*StatusError](err); ok {
+		switch se.Code {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+			return false
+		}
 	}
 	// Ordered ahead of the context-error rejection on purpose: the mark exists
 	// on errors that DO carry context.DeadlineExceeded (the wrapper keeps the
@@ -726,7 +710,7 @@ func unwrapsTo(err, target error) bool {
 //
 // No diagnosis a caller can act on is lost. Drain runs only where the body is
 // being thrown away, so the response's own outcome is already reported by the
-// path that discarded it (CheckHTTPStatus's typed error, the retry lines,
+// path that discarded it (CheckStatus's error, the retry lines,
 // ReadLimitedBody's error); a drain error is never the only signal of a
 // failure, and no caller can repair a drain. This is the same call the package
 // makes in urlErrorCause, which substitutes a contentless stand-in rather than
@@ -1223,7 +1207,7 @@ func DefaultRedirectPolicy(req *http.Request, via []*http.Request) error {
 // client returns the 3xx response itself with a nil error. Use it for a
 // token-bearing client of an API that never redirects, because net/http
 // forwards custom headers (X-Plex-Token, X-Api-Key) across a redirect and a
-// hostile 302 would leak them. [CheckHTTPStatus] reports the surfaced 3xx as
+// hostile 302 would leak them. [CheckStatus] reports the surfaced 3xx as
 // an error.
 func RefuseAllRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
@@ -1389,9 +1373,7 @@ func redactURL(rawURL string) string {
 	// token is a real credential shape for API endpoints
 	// (https://token@prowlarr/1/api), so Redacted() alone leaks it into every
 	// log line this helper is supposed to make safe (CWE-532) - and callers
-	// cannot tell, because the function's whole promise is log-safety. Consumers
-	// that pre-scrubbed userinfo before constructing a StatusError can delete
-	// that workaround.
+	// cannot tell, because the function's whole promise is log-safety.
 	if u.User != nil {
 		u.User = url.User("REDACTED")
 	}

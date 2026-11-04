@@ -23,7 +23,7 @@ type OnRetry func(attempt int, req *http.Request, resp *http.Response, err error
 // (e.g., re-signing with a fresh token). Mirrors go-retryablehttp PrepareRetry.
 type PrepareRetry func(req *http.Request) error
 
-// TransportConfig configures a RetryRoundTripper (and, through NewRetryClient,
+// TransportConfig configures a RetryRoundTripper (and, through NewRetry,
 // the retrying client). The zero value is ready to use: three total attempts,
 // one-second base delay, the default retry policy, no hooks, no elapsed ceiling, no
 // non-idempotent replay.
@@ -259,16 +259,16 @@ func drainResp(resp *http.Response) {
 	}
 }
 
-// NewRetryClient returns an *http.Client whose Transport is a
+// NewRetry returns an *http.Client whose Transport is a
 // RetryRoundTripper over base (nil means http.DefaultTransport) and whose
 // CheckRedirect is policy. It panics on a nil policy, because nil means
 // net/http's follow-anywhere default; pass DefaultRedirectPolicy,
 // RefuseAllRedirects or a RedirectPolicyFunc. It sets no Client.Timeout, which
 // would cap the whole retry sequence: bound one attempt on the base transport
 // and the total with a context deadline or TransportConfig.MaxElapsedTime.
-func NewRetryClient(base http.RoundTripper, policy CheckRedirect, cfg TransportConfig) *http.Client {
+func NewRetry(base http.RoundTripper, policy CheckRedirect, cfg TransportConfig) *http.Client {
 	if policy == nil {
-		panic("httpclient.NewRetryClient: nil redirect policy (pass DefaultRedirectPolicy, RefuseAllRedirects, or a RedirectPolicyFunc allowlist)")
+		panic("httpclient.NewRetry: nil redirect policy (pass DefaultRedirectPolicy, RefuseAllRedirects, or a RedirectPolicyFunc allowlist)")
 	}
 	return &http.Client{
 		Transport:     NewRetryRoundTripper(base, cfg),
