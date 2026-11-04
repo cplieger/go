@@ -1,0 +1,152 @@
+package trigger
+
+import (
+	"context"
+	"errors"
+	"log"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+)
+
+// testPayload is the parameterized-payload stand-in: arguments that must
+// replay exactly on the daemon side (the renovate shape, minus the environ).
+type testPayload struct {
+	Repos []string `json:"repos,omitempty"`
+}
+
+// maxSunPath is the longest usable unix-socket path: Linux sun_path is
+// 108 bytes including the trailing NUL.
+const maxSunPath = 107
+
+// testSocketPath returns a unix-socket path short enough for sun_path:
+// t.TempDir() embeds the full test name, which overflows the limit under a
+// long TMPDIR and fails bind with EINVAL. The helper honors a configured
+// TMPDIR when the short random directory it yields still fits sun_path
+// (keeping test scratch inside a workspace-scoped root), and falls back to
+// /tmp — where the production sockets live — only when TMPDIR is too deep.
+func testSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "trig-sock-")
+	if err != nil {
+		t.Fatalf("mktemp for socket dir: %v", err)
+	}
+	path := filepath.Join(dir, "s.sock")
+	if len(path) > maxSunPath {
+		// TMPDIR is too deep for sun_path; fall back to /tmp.
+		_ = os.RemoveAll(dir)
+		if dir, err = os.MkdirTemp("/tmp", "trig-sock-"); err != nil {
+			t.Fatalf("mktemp for socket dir: %v", err)
+		}
+		path = filepath.Join(dir, "s.sock")
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return path
+}
+
+// absentSocketPath returns a socket path that does not exist, creating nothing.
+//
+// A test needing an ABSENT socket must not reach for t.TempDir(). Listen swaps
+// the process-wide umask to 0o177, and a directory born inside that window is
+// drw-------, so t.TempDir's numbered subdir then fails with EACCES. The window
+// is opened by TestSubmit_CancellationAbortsTheWait (parallel, and reaches
+// Listen through startTestServer); this test was the only other parallel one
+// creating a directory. Root bypasses the directory permission check, so it
+// reproduces unprivileged only — it reddened a sync PR while main was green.
+// Creating nothing leaves the window nothing to corrupt.
+func absentSocketPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(os.TempDir(), "trig-absent", t.Name()+".sock")
+	if len(path) > maxSunPath {
+		t.Fatalf("absent socket path %q is %d bytes, over sun_path %d", path, len(path), maxSunPath)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("absent socket path %q must not exist: Lstat = %v", path, err)
+	}
+	return path
+}
+
+// startExecutor drains q on a background goroutine, running fn per job (fn
+// owns Start/Finish). Returns a done channel that closes when the queue
+// drains.
+func startExecutor(q *Queue[testPayload], fn func(*Job[testPayload])) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for j := range q.Jobs() {
+			fn(j)
+		}
+	}()
+	return done
+}
+
+// recordHandler is a minimal capturing slog handler (the library must not
+// grow a test dependency for log capture; stdlib-only, matching the parent
+// package's posture).
+type recordHandler struct {
+	mu      *sync.Mutex
+	records *[]slog.Record
+}
+
+func newRecordHandler() recordHandler {
+	return recordHandler{mu: &sync.Mutex{}, records: &[]slog.Record{}}
+}
+
+func (h recordHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h recordHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h recordHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h recordHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]slog.Record(nil), *h.records...)
+}
+
+// captureLogs swaps slog.Default for a capturing handler for the test's
+// duration and restores all three globals slog.SetDefault writes. Tests using
+// it must not run in parallel (process-global default). SetDefault also points
+// the log package at the installed handler and SKIPS that redirect for slog's
+// own default handler, so restoring slog alone leaves log writing into the
+// capture; slog goes back first, because reinstalling a non-default handler
+// re-runs the redirect.
+func captureLogs(t *testing.T) recordHandler {
+	t.Helper()
+	h := newRecordHandler()
+	prev, prevWriter, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+	return h
+}
+
+// TestCaptureLogs_restoresLogPackageGlobals pins the restore this package's log
+// assertions rest on: a leaked redirect silences every later slog call in the
+// binary, because the stock default handler emits through log.Output.
+func TestCaptureLogs_restoresLogPackageGlobals(t *testing.T) {
+	wantWriter, wantFlags := log.Writer(), log.Flags()
+
+	t.Run("capture", func(t *testing.T) {
+		captureLogs(t)
+		if log.Writer() == wantWriter {
+			t.Fatal("slog.SetDefault did not redirect log's writer, so this test cannot observe the restore")
+		}
+	})
+
+	if log.Writer() != wantWriter {
+		t.Error("log.Writer() not restored; later slog calls write into the capturing handler")
+	}
+	if got := log.Flags(); got != wantFlags {
+		t.Errorf("log.Flags() = %d, want %d", got, wantFlags)
+	}
+}
