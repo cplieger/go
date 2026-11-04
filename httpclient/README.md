@@ -15,6 +15,7 @@ httpclient is built for Go code that must keep working when a remote API fails f
 - `GetBytes` removes a URL's username, password and query values from its logs and error messages.
 - The default redirect policy keeps custom auth headers on the host you called. No shipped policy follows an `https` to `http` hop.
 - `GetBytes` fails on a body over its 10 MB default cap instead of cutting it.
+- A revalidating cache keeps answers in memory and serves one only when the server answers `304 Not Modified`, on a `RoundTripper` or for code that reads its own answers.
 
 Consider [cenkalti/backoff](https://github.com/cenkalti/backoff) if you want to choose your own backoff policy, through its `WithBackOff` option. Consider [failsafe-go](https://github.com/failsafe-go/failsafe-go) if you need a circuit breaker, a rate limiter or a bulkhead, policies it wraps around any function.
 
@@ -64,6 +65,12 @@ if err := httpclient.CheckStatus(resp); err != nil {
 
 `GetBytes` returns an error holding the same `*StatusError`, with the URL you passed in its `URL` field. Find it with `errors.As` or match it with `errors.Is`: after retries run out it sits inside the exhaustion error.
 
+Revalidate repeated GETs, so an unchanged answer comes back as a short `304` the cache serves from memory:
+
+```go
+client := &http.Client{Transport: httpclient.NewCacheRoundTripper(nil, httpclient.CacheConfig{}), Timeout: 30 * time.Second}
+```
+
 `ExampleGetBytes` and `ExampleDo` on pkg.go.dev are runnable, and `go test` keeps them true.
 
 ## API
@@ -75,7 +82,8 @@ if err := httpclient.CheckStatus(resp); err != nil {
 - Redirects: `DefaultRedirectPolicy`, `RefuseAllRedirects` and `RedirectPolicyFunc` with its options, and the `RedirectRefusedError` every hard refusal returns.
 - TLS: `CATransport` pins a private CA, `CloneDefaultTransport`, and the `certtest` package for tests.
 - Redaction: `LogSafeError`, `RedactSecret`, `RedactSecretString`, `RedactTransportError`.
-- Bodies and caching: `ReadLimitedBody`, `LimitedBody`, `Drain`, `DrainClose`, `DoConditional`.
+- Bodies: `ReadLimitedBody`, `LimitedBody`, `Drain`, `DrainClose`.
+- Revalidation cache: `NewCacheRoundTripper`, `NewCache` with `Begin`, `CacheGuard`, `CacheConfig`, `HeldField`, `CacheState`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpclient).
 
@@ -107,7 +115,8 @@ httpclient has no circuit breaker, retry budget, alternative jitter strategies, 
 
 - [Retries](docs/retries.md) covers the three ways to retry, their options, backoff, rate limits, exhaustion and logging.
 - [Timeouts and deadlines](docs/timeouts.md) says which timeouts are retried and where to put each bound.
-- [Status codes, errors and bodies](docs/responses.md) lists the status mapping, error types, body caps and conditional GET.
+- [Status codes, errors and bodies](docs/responses.md) lists the status mapping, error types and body caps.
+- [Revalidation cache](docs/caching.md) covers what is kept, when a 304 serves it, the key, the bound and the owner-read API.
 - [Redirects, TLS and redaction](docs/security-model.md) covers redirect policies, the pinned-CA transport and keeping secrets out of logs.
 - [Unsupported by design](docs/non-goals.md) lists the features left out on purpose, with the reasons.
 
