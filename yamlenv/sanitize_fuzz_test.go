@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/cplieger/go/yamlenv"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // FuzzSanitizeDecodeError generalizes the value-independence contract of the

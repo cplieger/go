@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // UnmarshalerError wraps a decode failure that the config type's OWN

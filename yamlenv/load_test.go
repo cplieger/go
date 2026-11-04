@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/yamlenv"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // loadConfig is the config shape most Load tests decode into: a plain string,
