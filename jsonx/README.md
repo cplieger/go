@@ -127,7 +127,7 @@ A byte cap on the body does not bound the decode: with `json.Unmarshal`, a 300 K
 
 - `NewDecoder(r, elementBudget)` starts a walk over one JSON value. `Array`, `Map` and `Object` decode a slice, a Go map and a struct-shaped object with `json.Unmarshal`'s null, empty and repeated-key handling, and `Skip` discards an unknown field without building it.
 - `Preflight` rejects a body that repeats an object key, before `json.Unmarshal` can replace or merge the values.
-- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`, and none quotes document bytes.
+- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`. Cap and budget errors never quote document bytes, and an `ErrDuplicateKey` error quotes at most 64 bytes of the repeated key.
 
 [Capped decoding](docs/capped-decoding.md) shows a schema decoder, every call and the rules it shares with `json.Unmarshal`.
 

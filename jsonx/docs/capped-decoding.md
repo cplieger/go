@@ -2,7 +2,7 @@
 
 jsonx decodes untrusted JSON in Go and refuses the element that would cross your cap before it is allocated, while matching `json.Unmarshal` on well-formed input.
 
-A byte cap on the body does not bound the decode. With `json.Unmarshal`, a 300 KB body of empty objects decodes into about 13 MB before your code can count anything.27.1 or later and is licensed under Apache-2.0.
+A byte cap on the body does not bound the decode. With `json.Unmarshal`, a 300 KB body of empty objects decodes into about 13 MB before your code can count anything.
 
 ## Why use it
 
