@@ -1,0 +1,1204 @@
+package httpserver_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/cplieger/go/httpserver"
+)
+
+func TestNewServer_defaults(t *testing.T) {
+	h := http.NewServeMux()
+	srv := httpserver.New(h)
+
+	if srv.ReadHeaderTimeout != 10*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want 10s", srv.ReadHeaderTimeout)
+	}
+	if srv.IdleTimeout != 120*time.Second {
+		t.Errorf("IdleTimeout = %v, want 120s", srv.IdleTimeout)
+	}
+	if srv.MaxHeaderBytes != 1<<20 {
+		t.Errorf("MaxHeaderBytes = %d, want %d", srv.MaxHeaderBytes, 1<<20)
+	}
+	if srv.ReadTimeout != 0 {
+		t.Errorf("ReadTimeout = %v, want 0 (streaming-safe)", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %v, want 0 (streaming-safe)", srv.WriteTimeout)
+	}
+	if srv.Handler != h {
+		t.Error("Handler was not set to the provided handler")
+	}
+}
+
+func TestNewServer_optionsOverride(t *testing.T) {
+	srv := httpserver.New(nil,
+		httpserver.WithReadTimeout(1*time.Second),
+		httpserver.WithWriteTimeout(2*time.Second),
+		httpserver.WithIdleTimeout(3*time.Second),
+		httpserver.WithReadHeaderTimeout(4*time.Second),
+		httpserver.WithMaxHeaderBytes(512),
+	)
+	if srv.ReadTimeout != 1*time.Second {
+		t.Errorf("ReadTimeout = %v, want 1s", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout != 2*time.Second {
+		t.Errorf("WriteTimeout = %v, want 2s", srv.WriteTimeout)
+	}
+	if srv.IdleTimeout != 3*time.Second {
+		t.Errorf("IdleTimeout = %v, want 3s", srv.IdleTimeout)
+	}
+	if srv.ReadHeaderTimeout != 4*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want 4s", srv.ReadHeaderTimeout)
+	}
+	if srv.MaxHeaderBytes != 512 {
+		t.Errorf("MaxHeaderBytes = %d, want 512", srv.MaxHeaderBytes)
+	}
+}
+
+func TestWithErrorLog_setsServerErrorLog(t *testing.T) {
+	logger := log.New(io.Discard, "", 0)
+	srv := httpserver.New(nil, httpserver.WithErrorLog(logger))
+	if srv.ErrorLog != logger {
+		t.Error("WithErrorLog did not set http.Server.ErrorLog")
+	}
+}
+
+func TestNewServer_nilOptionIgnored(t *testing.T) {
+	srv := httpserver.New(nil, nil) // must not panic
+	if srv == nil {
+		t.Fatal("New returned nil")
+	}
+	if srv.ReadHeaderTimeout != 10*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want default 10s", srv.ReadHeaderTimeout)
+	}
+}
+
+// runAndShutdown starts Run on a fresh loopback listener, confirms it serves a
+// request, cancels the context, and returns Run's result. It fails the test if
+// onShutdown was not called.
+func runAndShutdown(t *testing.T, opts ...httpserver.RunOption) error {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var shutdownCalled atomic.Bool
+	srv := httpserver.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, func(context.Context) { shutdownCalled.Store(true) }, opts...)
+	}()
+
+	addr := ln.Addr().String()
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/")
+	if err != nil {
+		cancel()
+		t.Fatalf("get while serving: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		cancel()
+		t.Fatalf("serving status = %d, want 200", resp.StatusCode)
+	}
+
+	cancel()
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after context cancellation")
+	}
+	if !shutdownCalled.Load() {
+		t.Error("onShutdown was not called during graceful shutdown")
+	}
+	return runErr
+}
+
+func TestRun_gracefulShutdown(t *testing.T) {
+	if err := runAndShutdown(t); err != nil {
+		t.Errorf("Run = %v, want nil on graceful shutdown", err)
+	}
+}
+
+func TestRun_withShutdownGraceOption(t *testing.T) {
+	if err := runAndShutdown(t, httpserver.WithShutdownGrace(2*time.Second)); err != nil {
+		t.Errorf("Run = %v, want nil", err)
+	}
+}
+
+func TestRun_nilOptionIgnored(t *testing.T) {
+	if err := runAndShutdown(t, nil); err != nil {
+		t.Errorf("Run with nil option = %v, want nil", err)
+	}
+}
+
+func TestRun_serveErrorReturned(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	// Close the listener so Serve fails immediately with a non-ErrServerClosed
+	// error; Run must surface it rather than block on the (never-cancelled)
+	// context.
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	srv := httpserver.New(nil)
+
+	runErr := httpserver.Run(context.Background(), srv, ln, nil)
+	if runErr == nil {
+		t.Error("Run = nil, want a serve error from the closed listener")
+	}
+}
+
+// closedListener returns a listener Serve fails on immediately, the cheapest
+// stand-in for a fatal serve error (a dead accept loop).
+func closedListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	return ln
+}
+
+// The default fatal path is unchanged: a serve error returns from Run with
+// NEITHER graceful hook invoked. This is the behavior WithServeExit is opt-in
+// against, so it is pinned rather than assumed.
+func TestRun_fatalServeErrorSkipsGracefulHooksByDefault(t *testing.T) {
+	var preDrainCalled, teardownCalled atomic.Bool
+	runErr := httpserver.Run(t.Context(), httpserver.New(nil), closedListener(t),
+		func(context.Context) { teardownCalled.Store(true) },
+		httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }))
+
+	if runErr == nil {
+		t.Fatal("Run = nil, want a serve error from the closed listener")
+	}
+	if preDrainCalled.Load() {
+		t.Error("pre-drain hook ran on a fatal serve error; it is documented for the graceful path only")
+	}
+	if teardownCalled.Load() {
+		t.Error("onShutdown ran on a fatal serve error; it is documented for the graceful path only")
+	}
+}
+
+// WithServeExit is the opt-in teardown for that path: it runs, it runs before
+// Run returns, and it gets a context bounded by the configured grace.
+func TestRun_serveExitRunsOnFatalServeError(t *testing.T) {
+	const grace = 2 * time.Second
+	var (
+		called            atomic.Bool
+		preDrainCalled    atomic.Bool
+		teardownCalled    atomic.Bool
+		deadline          time.Time
+		hasDeadline       bool
+		ctxLiveInsideHook bool
+	)
+	appCtx := t.Context()
+	start := time.Now()
+	// Run calls the hook inline on its own goroutine — the test's, here — so
+	// these are plain same-goroutine writes.
+	serveExit := func(ctx context.Context) {
+		called.Store(true)
+		deadline, hasDeadline = ctx.Deadline()
+		ctxLiveInsideHook = appCtx.Err() == nil
+	}
+
+	runErr := httpserver.Run(appCtx, httpserver.New(nil), closedListener(t),
+		func(context.Context) { teardownCalled.Store(true) },
+		httpserver.WithShutdownGrace(grace),
+		httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }),
+		httpserver.WithServeExit(serveExit))
+
+	if runErr == nil {
+		t.Fatal("Run = nil, want the serve error; the hook must not swallow it")
+	}
+	if !called.Load() {
+		t.Fatal("serve-exit hook did not run on a fatal serve error")
+	}
+	if !hasDeadline {
+		t.Fatal("serve-exit context has no deadline; it must be bounded by the shutdown grace")
+	}
+	if span := deadline.Sub(start); span <= 0 || span > grace+250*time.Millisecond {
+		t.Errorf("serve-exit deadline is %v out, want ~%v (the configured grace)", span, grace)
+	}
+	// The hook, not the graceful sequence: pre-drain and onShutdown stay
+	// unrun, and the caller's own context is still live (nothing cancelled it),
+	// which is why a teardown that waits on it must cancel it itself.
+	if preDrainCalled.Load() || teardownCalled.Load() {
+		t.Error("graceful hooks ran alongside the serve-exit hook; exactly one path must run")
+	}
+	if !ctxLiveInsideHook {
+		t.Error("the caller's context was cancelled on the fatal path; WithServeExit documents it as still live")
+	}
+}
+
+// Serve also returns on its own when the caller shuts the server down outside
+// Run. That is the other half of the exactly-one-path contract: the graceful
+// sequence never ran, so the serve-exit hook is what tears down.
+func TestRun_serveExitRunsWhenCallerClosesServer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := httpserver.New(okHandler())
+	var called, teardownCalled atomic.Bool
+
+	done := make(chan error, 1)
+	go func() {
+		// context.Background(): nothing ever cancels the run, so only the
+		// caller's own Shutdown can end it.
+		done <- httpserver.Run(context.Background(), srv, ln,
+			func(context.Context) { teardownCalled.Store(true) },
+			httpserver.WithServeExit(func(context.Context) { called.Store(true) }))
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + ln.Addr().String() + "/")
+	if err != nil {
+		t.Fatalf("get while serving: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if err := srv.Shutdown(t.Context()); err != nil {
+		t.Fatalf("caller-driven Shutdown: %v", err)
+	}
+
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Errorf("Run = %v, want nil (ErrServerClosed is a clean stop)", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the caller shut the server down")
+	}
+	if !called.Load() {
+		t.Error("serve-exit hook did not run when Serve returned on its own")
+	}
+	if teardownCalled.Load() {
+		t.Error("onShutdown ran without a graceful stop; only the serve-exit hook covers this path")
+	}
+}
+
+// On the graceful path the serve-exit hook must stay unrun: the drain sequence
+// already carries the teardown, and running both would tear down twice.
+func TestRun_serveExitNotRunOnGracefulPath(t *testing.T) {
+	var serveExitCalled atomic.Bool
+	var preDrainCalled atomic.Bool
+	err := runAndShutdown(t,
+		httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }),
+		httpserver.WithServeExit(func(context.Context) { serveExitCalled.Store(true) }))
+	if err != nil {
+		t.Errorf("Run = %v, want nil on graceful shutdown", err)
+	}
+	if !preDrainCalled.Load() {
+		t.Error("pre-drain hook did not run on the graceful path")
+	}
+	if serveExitCalled.Load() {
+		t.Error("serve-exit hook ran on the graceful path; onShutdown already covers it")
+	}
+}
+
+func TestRun_nilServeExitIgnored(t *testing.T) {
+	// The fatal path with WithServeExit(nil): the nil hook is skipped, not
+	// called, and the serve error still comes back.
+	runErr := httpserver.Run(t.Context(), httpserver.New(nil), closedListener(t), nil,
+		httpserver.WithServeExit(nil))
+	if runErr == nil {
+		t.Error("Run = nil, want the serve error")
+	}
+}
+
+func TestRun_onShutdownNilIsSafe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ln := newPipeListener()
+		srv := httpserver.New(okHandler())
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- httpserver.Run(ctx, srv, ln, nil) }() // nil onShutdown
+
+		// synctest.Wait replaces a 50ms "give Serve a moment" sleep: it returns
+		// once Run's Serve goroutine is durably blocked in Accept, so the server
+		// is provably up rather than probably up.
+		synctest.Wait()
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+	})
+}
+
+// TestRun_slowOnShutdownStillRunsWithinGrace pins that a teardown taking real
+// time still completes, because the grace budget gives it room after Shutdown
+// returns. In synthetic time the teardown's own duration is exact, so the test
+// asserts WHEN Run returned rather than only that the teardown flag was set —
+// a teardown cut short at 0ms would satisfy the old boolean.
+func TestRun_slowOnShutdownStillRunsWithinGrace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ln := newPipeListener()
+		srv := httpserver.New(okHandler())
+
+		const teardown = 150 * time.Millisecond
+		var teardownDone atomic.Bool
+		onShutdown := func(ctx context.Context) {
+			select {
+			case <-time.After(teardown):
+				teardownDone.Store(true)
+			case <-ctx.Done():
+			}
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			done <- httpserver.Run(ctx, srv, ln, onShutdown, httpserver.WithShutdownGrace(2*time.Second))
+		}()
+
+		synctest.Wait()
+		t0 := time.Now()
+		cancel()
+
+		if err := <-done; err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+		if !teardownDone.Load() {
+			t.Error("slow onShutdown did not complete within the shared grace budget")
+		}
+		// The drain of an idle server is instantaneous, so Run's return is the
+		// teardown's own duration and nothing else.
+		if got := time.Since(t0); got != teardown {
+			t.Errorf("Run returned %v after cancellation, want exactly the %v teardown", got, teardown)
+		}
+	})
+}
+
+// TestRun_holdsRequestOpenAcrossShutdown pins the ONE shared grace budget: an
+// in-flight request is drained first, and the teardown deadline still sits
+// exactly grace from when shutdown began rather than grace after the drain
+// finished.
+//
+// It runs inside a synctest bubble over an in-memory listener, which is what
+// makes "exactly" the right word. On a real clock the assertion could only be
+// `span <= grace + 250ms` — a tolerance wide enough that a per-phase timeout
+// pushing the deadline out by 100ms would have passed. In synthetic time the
+// span is an equality, and the two sleeps the test needed (400ms of in-flight
+// handler, 50ms of settling) cost nothing: the test went from 0.53s to 0.00s.
+func TestRun_holdsRequestOpenAcrossShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ln := newPipeListener()
+		const (
+			grace    = 2 * time.Second
+			blockFor = 400 * time.Millisecond
+		)
+		started := make(chan struct{})
+		srv := httpserver.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(started)
+			time.Sleep(blockFor) // remain in-flight so Shutdown must wait for us
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		var (
+			teardownDL    time.Time
+			teardownHasDL bool
+			teardownRan   atomic.Bool
+		)
+		onShutdown := func(ctx context.Context) {
+			teardownDL, teardownHasDL = ctx.Deadline()
+			teardownRan.Store(true)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			done <- httpserver.Run(ctx, srv, ln, onShutdown, httpserver.WithShutdownGrace(grace))
+		}()
+
+		statusCh := make(chan int, 1)
+		go func() {
+			resp, err := ln.client().Get("http://pipe/")
+			if err != nil {
+				statusCh <- 0
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			statusCh <- resp.StatusCode
+		}()
+
+		<-started // the bubble deadlocks rather than hanging if this never fires
+
+		t0 := time.Now()
+		cancel() // request is in-flight; graceful shutdown must let it finish
+
+		if runErr := <-done; runErr != nil {
+			t.Errorf("Run = %v, want nil", runErr)
+		}
+		if code := <-statusCh; code != http.StatusOK {
+			t.Errorf("in-flight request status = %d, want 200 (held open across shutdown)", code)
+		}
+		if !teardownRan.Load() || !teardownHasDL {
+			t.Fatal("onShutdown did not run with a deadline")
+		}
+		// One shared budget: the teardown deadline sits exactly grace from when
+		// shutdown began (t0), even though Shutdown first spent blockFor draining
+		// the in-flight request. A per-phase timeout would put it at
+		// grace+blockFor.
+		if span := teardownDL.Sub(t0); span != grace {
+			t.Errorf("teardown deadline is %v after shutdown start, want exactly %v (shared budget, not %v)",
+				span, grace, grace+blockFor)
+		}
+	})
+}
+
+func TestRun_returnsShutdownDeadlineExceeded(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var released atomic.Bool
+	releaseHandler := func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}
+
+	srv := httpserver.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(func() {
+		releaseHandler()
+		_ = srv.Close()
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(25*time.Millisecond))
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	requestDone := make(chan error, 1)
+	go func() {
+		resp, err := client.Get("http://" + ln.Addr().String() + "/")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		requestDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("handler never became in-flight")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run = nil, want shutdown deadline exceeded when in-flight requests outlive the grace period")
+		}
+		// Both facts hold: the wrapped context.DeadlineExceeded (the pre-existing
+		// contract) and the origin marker that says WHICH deadline it was.
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Run error = %v, want it to wrap context.DeadlineExceeded", err)
+		}
+		if !errors.Is(err, httpserver.ErrShutdownGraceExpired) {
+			t.Errorf("Run error = %v, want it to wrap ErrShutdownGraceExpired", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after shutdown grace expired")
+	}
+
+	releaseHandler()
+	select {
+	case <-requestDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight request did not finish after release")
+	}
+}
+
+func TestRun_preDrainRunsBeforeShutdownDrain(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	// The handler blocks until the pre-drain hook releases it, so the test
+	// discriminates on ordering: pre-drain before Shutdown lets the drain
+	// finish and Run return nil; pre-drain after Shutdown would leave the
+	// request in-flight for the whole grace window and Run would return
+	// context.DeadlineExceeded.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv := httpserver.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	record := func(phase string) {
+		mu.Lock()
+		order = append(order, phase)
+		mu.Unlock()
+	}
+
+	preDrain := func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("pre-drain context has no deadline")
+		}
+		record("pre-drain")
+		close(release)
+	}
+	onShutdown := func(context.Context) { record("teardown") }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, onShutdown,
+			httpserver.WithPreDrain(preDrain), httpserver.WithShutdownGrace(2*time.Second))
+	}()
+
+	statusCh := make(chan int, 1)
+	go func() {
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get("http://" + ln.Addr().String() + "/")
+		if err != nil {
+			statusCh <- 0
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		statusCh <- resp.StatusCode
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("handler never became in-flight")
+	}
+
+	cancel() // request is in-flight; only the pre-drain hook can unblock it
+
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if runErr != nil {
+		t.Errorf("Run = %v, want nil (pre-drain must run before the drain)", runErr)
+	}
+
+	select {
+	case code := <-statusCh:
+		if code != http.StatusOK {
+			t.Errorf("in-flight request status = %d, want 200", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight request never completed")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"pre-drain", "teardown"}; !slices.Equal(order, want) {
+		t.Errorf("phase order = %v, want %v", order, want)
+	}
+}
+
+func TestRun_nilPreDrainIgnored(t *testing.T) {
+	if err := runAndShutdown(t, httpserver.WithPreDrain(nil)); err != nil {
+		t.Errorf("Run with WithPreDrain(nil) = %v, want nil", err)
+	}
+}
+
+// signalOn returns a ConnState hook that sends on the returned channel each
+// time a connection enters state.
+func signalOn(state http.ConnState) (hook func(net.Conn, http.ConnState), entered <-chan struct{}) {
+	ch := make(chan struct{}, 8)
+	return func(_ net.Conn, s http.ConnState) {
+		if s == state {
+			ch <- struct{}{}
+		}
+	}, ch
+}
+
+func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// net/http's Shutdown counts a connection that has sent no request as active
+// for 5 s (https://go.dev/issue/22682); Run must not wait that out.
+func TestRun_closesSilentConnectionAtShutdown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := httpserver.New(http.NotFoundHandler())
+	hook, accepted := signalOn(http.StateNew)
+	srv.ConnState = hook
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(10*time.Second))
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	awaitSignal(t, accepted, "the silent connection to be accepted")
+
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("Run took %v to shut down with one silent connection, want under 1s", elapsed)
+		}
+	case <-time.After(9 * time.Second):
+		t.Fatal("Run did not return within the grace period")
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("read on the silent connection = %v, want io.EOF (closed by the server)", err)
+	}
+}
+
+// lateListener hands Serve one more connection after Close, once release
+// fires, as an accept that raced the listener's close does.
+type lateListener struct {
+	net.Listener
+	late    net.Conn
+	release <-chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+	handed  atomic.Bool
+}
+
+func (l *lateListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err == nil {
+		return conn, nil
+	}
+	select {
+	case <-l.closed:
+	default:
+		return nil, err
+	}
+	if !l.handed.CompareAndSwap(false, true) {
+		return nil, err
+	}
+	<-l.release
+	return l.late, nil
+}
+
+func (l *lateListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return l.Listener.Close()
+}
+
+func TestRun_closesConnectionAcceptedDuringShutdown(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	newHook, accepted := signalOn(http.StateNew)
+	closedHook, closed := signalOn(http.StateClosed)
+	srv := httpserver.New(http.NotFoundHandler())
+	srv.ConnState = func(c net.Conn, s http.ConnState) {
+		newHook(c, s)
+		closedHook(c, s)
+	}
+	serverSide, clientSide := net.Pipe()
+	defer func() { _ = clientSide.Close() }()
+	// The late connection arrives only after the silent one has been closed,
+	// so after shutdown's sweep has run.
+	ln := &lateListener{Listener: inner, late: serverSide, release: closed, closed: make(chan struct{})}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(10*time.Second))
+	}()
+
+	silent, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = silent.Close() }()
+	awaitSignal(t, accepted, "the silent connection to be accepted")
+	if err := clientSide.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("Run took %v to shut down with a connection accepted during shutdown, want under 1s", elapsed)
+		}
+	case <-time.After(9 * time.Second):
+		t.Fatal("Run did not return within the grace period")
+	}
+
+	if _, err := clientSide.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("read on the late connection = %v, want io.EOF (closed by the server)", err)
+	}
+}
+
+func TestRun_chainsCallerConnState(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := httpserver.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	var (
+		mu   sync.Mutex
+		seen = map[string][]http.ConnState{}
+	)
+	idleHook, idle := signalOn(http.StateIdle)
+	newHook, accepted := signalOn(http.StateNew)
+	closedHook, closed := signalOn(http.StateClosed)
+	srv.ConnState = func(c net.Conn, s http.ConnState) {
+		mu.Lock()
+		seen[c.RemoteAddr().String()] = append(seen[c.RemoteAddr().String()], s)
+		mu.Unlock()
+		idleHook(c, s)
+		newHook(c, s)
+		closedHook(c, s)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(2*time.Second))
+	}()
+
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: transport, Timeout: 2 * time.Second}).Get("http://" + ln.Addr().String() + "/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	_ = resp.Body.Close()
+	awaitSignal(t, accepted, "the request connection to be accepted")
+	awaitSignal(t, idle, "the request connection to go idle")
+
+	silent, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = silent.Close() }()
+	awaitSignal(t, accepted, "the silent connection to be accepted")
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	awaitSignal(t, closed, "the first connection to close")
+	awaitSignal(t, closed, "the second connection to close")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got, want := seen[silent.LocalAddr().String()], []http.ConnState{http.StateNew, http.StateClosed}; !slices.Equal(got, want) {
+		t.Errorf("silent connection states = %v, want %v", got, want)
+	}
+	delete(seen, silent.LocalAddr().String())
+	if len(seen) != 1 {
+		t.Fatalf("connections seen besides the silent one = %d, want 1: %v", len(seen), seen)
+	}
+	want := []http.ConnState{http.StateNew, http.StateActive, http.StateIdle, http.StateClosed}
+	for _, got := range seen {
+		if !slices.Equal(got, want) {
+			t.Errorf("request connection states = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestWithSlogErrorLog_bridgesNetHTTPLinesIntoSlog(t *testing.T) {
+	// slog.Default is process-global, so this test must not run in parallel.
+	capture := &captureHandler{}
+	swapDefaultLogger(t, slog.New(capture))
+
+	srv := httpserver.New(nil, httpserver.WithSlogErrorLog(slog.LevelWarn))
+	if srv.ErrorLog == nil {
+		t.Fatal("WithSlogErrorLog did not set http.Server.ErrorLog")
+	}
+	// Stand in for net/http's own connection-level line.
+	srv.ErrorLog.Print("http: Accept error: too many open files; retrying")
+
+	records := capture.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("captured %d records, want 1", len(records))
+	}
+	if records[0].Level != slog.LevelWarn {
+		t.Errorf("level = %v, want %v (the caller's chosen level)", records[0].Level, slog.LevelWarn)
+	}
+	if !strings.Contains(records[0].Message, "Accept error") {
+		t.Errorf("message = %q, want it to carry net/http's line", records[0].Message)
+	}
+}
+
+func TestWithSlogErrorLog_lastAppliedWins(t *testing.T) {
+	swapDefaultLogger(t, slog.New(&captureHandler{}))
+
+	// WithErrorLog remains the override for a custom logger.
+	custom := log.New(io.Discard, "", 0)
+	srv := httpserver.New(nil, httpserver.WithSlogErrorLog(slog.LevelError), httpserver.WithErrorLog(custom))
+	if srv.ErrorLog != custom {
+		t.Error("WithErrorLog did not override an earlier WithSlogErrorLog")
+	}
+}
+
+func TestNewServer_errorLogDefaultUnchanged(t *testing.T) {
+	// Neither option passed: the default stays net/http's standard logger (nil),
+	// so the additions change no existing default.
+	if srv := httpserver.New(nil); srv.ErrorLog != nil {
+		t.Errorf("ErrorLog = %v, want nil (net/http's standard logger)", srv.ErrorLog)
+	}
+}
+
+func TestAwaitDone_reportsCompletion(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+
+	if !httpserver.AwaitDone(t.Context(), done) {
+		t.Error("AwaitDone = false, want true when done is already closed")
+	}
+}
+
+func TestAwaitDone_reportsExpiry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	if httpserver.AwaitDone(ctx, make(chan struct{})) {
+		t.Error("AwaitDone = true, want false when the budget runs out first")
+	}
+}
+
+func TestAwaitDone_completionWinsWhenBothReadyAtOnce(t *testing.T) {
+	// The case the post-expiry recheck exists for: a drain that consumed the
+	// whole grace hands the teardown an ALREADY-EXPIRED context, so both select
+	// cases are ready and the choice is pseudo-random. Without the recheck this
+	// reports a teardown that DID finish as still running, roughly half the time.
+	done := make(chan struct{})
+	close(done)
+	// Deliberately pre-cancelled (not t.Context()): the already-expired context
+	// IS the fixture.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for i := range 500 {
+		if !httpserver.AwaitDone(ctx, done) {
+			t.Fatalf("AwaitDone = false on iteration %d; a completion that landed with the expiry must win", i)
+		}
+	}
+}
+
+func TestAwaitDone_nilChannelIsBoundedByContext(t *testing.T) {
+	// Deliberately pre-cancelled (not t.Context()) to bound the nil-channel wait.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if httpserver.AwaitDone(ctx, nil) {
+		t.Error("AwaitDone = true, want false: a nil channel never becomes ready")
+	}
+}
+
+func TestAwaitDone_waitsForALateCompletion(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		close(done)
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	if !httpserver.AwaitDone(ctx, done) {
+		t.Error("AwaitDone = false, want true: it must block for a completion still inside the budget")
+	}
+}
+
+func TestCausedByCancellation(t *testing.T) {
+	liveCtx := t.Context()
+
+	// The three below stay on context.Background(): each is deliberately
+	// cancelled/expired up front, which is exactly what they are fixtures for.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	expiredCtx, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+
+	// A cause that does NOT wrap context.Canceled: the shape net/http surfaces
+	// verbatim, which a ctx.Err()-only check would miss.
+	customCause := errors.New("listener torn down by the supervisor")
+	causeCtx, cancelCause := context.WithCancelCause(context.Background())
+	cancelCause(customCause)
+	defer cancelCause(nil)
+
+	var nilCtx context.Context
+
+	tests := map[string]struct {
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		"live context, real fault":         {liveCtx, errors.New("bind: address already in use"), false},
+		"live context, canceled-ish error": {liveCtx, context.Canceled, false},
+		"cancelled context, nil error":     {cancelledCtx, nil, false},
+		"cancelled context, its own error": {cancelledCtx, context.Canceled, true},
+		"cancelled context, wrapped":       {cancelledCtx, fmt.Errorf("binding :9190: %w", context.Canceled), true},
+		"cancelled context, real fault":    {cancelledCtx, errors.New("bind: address already in use"), false},
+		"expired context, its own error":   {expiredCtx, fmt.Errorf("drain: %w", context.DeadlineExceeded), true},
+		"expired context, real fault":      {expiredCtx, errors.New("bind: address already in use"), false},
+		"cause-only error":                 {causeCtx, fmt.Errorf("serve: %w", customCause), true},
+		"cause context, unrelated fault":   {causeCtx, errors.New("bind: address already in use"), false},
+		"nil context":                      {nilCtx, context.Canceled, false},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := httpserver.CausedByCancellation(tc.ctx, tc.err); got != tc.want {
+				t.Errorf("CausedByCancellation() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// fatalAcceptListener substitutes its own fatal error for whatever the wrapped
+// listener's Accept reports, and signals when Serve returns (Serve closes the
+// listener through a deferred Close on its way out, after it has already decided
+// which error to return). That signal is what makes the precedence test
+// deterministic: the pre-drain hook can wait for Serve to have committed to the
+// fatal error BEFORE Run reaches srv.Shutdown, which is the only window in which
+// net/http reports a serve error rather than ErrServerClosed.
+type fatalAcceptListener struct {
+	net.Listener
+	fatal      error
+	serveDone  chan struct{}
+	closedOnce sync.Once
+}
+
+func (l *fatalAcceptListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, l.fatal
+	}
+	return c, nil
+}
+
+func (l *fatalAcceptListener) Close() error {
+	l.closedOnce.Do(func() { close(l.serveDone) })
+	return l.Listener.Close()
+}
+
+// A real Serve error still takes precedence over the shutdown error, and stays
+// matchable: the grace-expiry marker must not displace it, and must not be
+// attached to it.
+func TestRun_serveErrorTakesPrecedenceOverGraceExpiry(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	fatal := errors.New("accept loop is gone")
+	ln := &fatalAcceptListener{Listener: inner, fatal: fatal, serveDone: make(chan struct{})}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var released atomic.Bool
+	releaseHandler := func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}
+	t.Cleanup(releaseHandler)
+
+	// The handler stays in-flight so srv.Shutdown cannot finish inside the grace,
+	// which is what makes the shutdown error a grace expiry.
+	srv := httpserver.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(func() { _ = srv.Close() })
+
+	preDrain := func(context.Context) {
+		// Break the accept loop while the server is not yet shutting down, so
+		// Serve returns the fatal error instead of ErrServerClosed, and wait until
+		// it has done so.
+		_ = inner.Close()
+		select {
+		case <-ln.serveDone:
+		case <-time.After(2 * time.Second):
+			t.Error("Serve did not return after the accept loop broke")
+		}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.Run(ctx, srv, ln, nil,
+			httpserver.WithShutdownGrace(100*time.Millisecond), httpserver.WithPreDrain(preDrain))
+	}()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		resp, err := client.Get("http://" + inner.Addr().String() + "/")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("handler never became in-flight")
+	}
+
+	cancel()
+
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+
+	if !errors.Is(runErr, fatal) {
+		t.Fatalf("Run = %v, want the serve error %v (it takes precedence and stays matchable)", runErr, fatal)
+	}
+	if errors.Is(runErr, httpserver.ErrShutdownGraceExpired) {
+		t.Error("the serve error was marked as a grace expiry; the marker belongs to the shutdown error only")
+	}
+
+	releaseHandler()
+	select {
+	case <-requestDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight request did not finish after release")
+	}
+}
+
+func TestRun_cleanShutdownIsNotMarkedAsGraceExpiry(t *testing.T) {
+	err := runAndShutdown(t, httpserver.WithShutdownGrace(2*time.Second))
+	if err != nil {
+		t.Fatalf("Run = %v, want nil on a clean graceful stop", err)
+	}
+	if errors.Is(err, httpserver.ErrShutdownGraceExpired) {
+		t.Error("a clean stop was marked as a grace expiry")
+	}
+}
+
+// TestMaxHeaderValueCountRefusalIsInvisibleToTheChain pins the claim New's
+// doc makes about Go 1.27's Server.MaxHeaderValueCount: the 431 it answers is
+// produced BELOW the handler, so neither Logging's access line nor
+// SecurityHeaders' headers appear on it.
+//
+// It is a tripwire on a stdlib behavior the library documents rather than owns.
+// If net/http ever moves that refusal above the handler, the doc note becomes
+// wrong and this test says so — which is the only way a "your access log cannot
+// see this" claim stays true.
+func TestMaxHeaderValueCountRefusalIsInvisibleToTheChain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		logs := &captureHandler{}
+		h := httpserver.Chain(okHandler(),
+			httpserver.Logging(httpserver.WithLogger(slog.New(logs))),
+			httpserver.SecurityHeaders(),
+		)
+		srv := httptest.NewTestServer(t, h)
+		srv.Config.MaxHeaderValueCount = 8 // set before Client() starts the server
+		client := srv.Client()
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		for range 40 { // well past the cap, counting Host and Connection too
+			req.Header.Add("X-Probe", "v")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+			t.Fatalf("status = %d, want 431", resp.StatusCode)
+		}
+		if got := resp.Header.Get("X-Content-Type-Options"); got != "" {
+			t.Errorf("X-Content-Type-Options = %q on the 431; SecurityHeaders now reaches it, so New's doc note is stale", got)
+		}
+		if n := len(logs.snapshot()); n != 0 {
+			t.Errorf("Logging emitted %d access lines for a 431; the refusal now reaches the chain, so New's doc note is stale", n)
+		}
+		// The default is what a caller gets when the field is left alone, and the
+		// doc names the number.
+		if http.DefaultMaxHeaderValueCount != 500 {
+			t.Errorf("http.DefaultMaxHeaderValueCount = %d, want 500 (New's doc names it)", http.DefaultMaxHeaderValueCount)
+		}
+	})
+}
