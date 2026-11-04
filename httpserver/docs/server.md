@@ -38,7 +38,7 @@ The option reads `slog.Default()` when `New` applies it. Install your process lo
 
 Both responses carry `Cache-Control: no-store`. Under RFC 9111, a 200 with no freshness information may be cached heuristically. A cached "ok" that outlives the readiness it reported would keep traffic arriving at an instance that has started to drain.
 
-This endpoint answers a load balancer asking whether the instance should receive traffic now. It is a different endpoint from the [health](https://github.com/cplieger/health) library's container probe, which answers whether the process is alive for a Docker `HEALTHCHECK`, with `{"status":"OK","timestamp":...}`. Use both.
+This endpoint answers a load balancer asking whether the instance should receive traffic now. It is a different endpoint from the [health](https://github.com/cplieger/go/tree/main/health) library's container probe, which answers whether the process is alive for a Docker `HEALTHCHECK`, with `{"status":"OK","timestamp":...}`. Use both.
 
 ## Run
 

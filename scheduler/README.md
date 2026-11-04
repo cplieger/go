@@ -118,7 +118,7 @@ These are deliberate non-goals, which keep the library small.
 | Cron expressions and calendar schedules | Run an external scheduler such as Ofelia or cron in `ModeExternal`. |
 | Coordination across hosts | The `flock` guard works on one host. Leader election across nodes needs a lease store. |
 | Concurrent runs in one process | `RunLoop` runs one job at a time by design. Run jobs concurrently yourself if you must. |
-| Retry and backoff of a failed run | Retrying outbound calls belongs to [httpclient](https://github.com/cplieger/httpx). A failed pass is retried on the next tick or trigger. |
+| Retry and backoff of a failed run | Retrying outbound calls belongs to [httpclient](https://github.com/cplieger/go/tree/main/httpclient). A failed pass is retried on the next tick or trigger. |
 
 ## Documentation
 
