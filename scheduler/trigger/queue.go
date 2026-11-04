@@ -42,15 +42,15 @@ type Job[P any] struct {
 	// Payload carries the request's arguments (the app's own type; an
 	// argless daemon uses an empty struct).
 	Payload P
-	// Trigger labels the run's origin in logs: TriggerExternal for socket
+	// Trigger labels the run's origin in logs: External for socket
 	// requests; apps use their own labels (startup, interval) for ticker
 	// jobs.
 	Trigger string
 }
 
-// TriggerExternal is the Trigger label the Server stamps on socket-submitted
+// External is the Trigger label the Server stamps on socket-submitted
 // jobs.
-const TriggerExternal = "external"
+const External = "external"
 
 // NewJob builds a job for the given trigger label and payload.
 func NewJob[P any](trigger string, payload P) *Job[P] {

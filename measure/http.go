@@ -14,14 +14,14 @@ import "time"
 // This is the metrics-side hook only: it takes no request and no status, so
 // middleware captures both and calls RecordHTTP once the response is complete.
 // Its parameters are this package's own types, so middleware that does not
-// import metrics cannot take RecordHTTP as its hook; the wiring is a small
+// import measure cannot take RecordHTTP as its hook; the wiring is a small
 // adapter that spreads the middleware's per-request values onto labelVals.
 //
-// With webhttp, adapt the access-log hook WithRecordRouteMetric registers: its
+// With httpserver, adapt the access-log hook WithRecordRouteMetric registers: its
 // (method, path) pair is bounded by the route table rather than by traffic,
 // which is what the rule above asks for, and the access logger records the
 // status itself. A zero-dependency module cannot ship a compiling example of
-// that pairing, so the hook's signature and label derivation live in webhttp's
+// that pairing, so the hook's signature and label derivation live in httpserver's
 // own godoc for WithRecordRouteMetric and RequestMetric.
 func RecordHTTP(c *LabeledCounter, h *Histogram, d time.Duration, labelVals ...string) {
 	if c != nil {

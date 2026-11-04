@@ -171,8 +171,8 @@ func TestServer_PayloadReplaysExactlyToTheExecutor(t *testing.T) {
 		mu.Lock()
 		seen = append(seen, j.Payload)
 		mu.Unlock()
-		if j.Trigger != TriggerExternal {
-			t.Errorf("socket job trigger = %q, want %q", j.Trigger, TriggerExternal)
+		if j.Trigger != External {
+			t.Errorf("socket job trigger = %q, want %q", j.Trigger, External)
 		}
 		runOK(j)
 	})
@@ -222,7 +222,7 @@ func TestServer_RejectsWhenQueueFull(t *testing.T) {
 
 	// No executor: jobs sit in the queue. Capacity 1, pre-filled.
 	q := NewQueue[testPayload](1)
-	if err := q.Submit(NewJob(TriggerExternal, testPayload{})); err != nil {
+	if err := q.Submit(NewJob(External, testPayload{})); err != nil {
 		t.Fatalf("pre-fill submit: %v", err)
 	}
 	ln, err := Listen(sock)
@@ -458,7 +458,7 @@ func TestServe_ContinuesAfterTransientAcceptError(t *testing.T) {
 	// No executor and a pre-filled capacity-1 queue: the request accepted
 	// after the transient error is answered immediately with done{queue full}.
 	q := NewQueue[testPayload](1)
-	if err := q.Submit(NewJob(TriggerExternal, testPayload{})); err != nil {
+	if err := q.Submit(NewJob(External, testPayload{})); err != nil {
 		t.Fatalf("pre-fill submit: %v", err)
 	}
 	srv := &Server[testPayload]{Queue: q}
@@ -503,7 +503,7 @@ func TestServe_ContinuesAfterTransientAcceptError(t *testing.T) {
 func TestRelayEvents_FastRunEmitsStartedBeforeDone(t *testing.T) {
 	t.Parallel()
 	for i := range 20 {
-		j := NewJob(TriggerExternal, testPayload{})
+		j := NewJob(External, testPayload{})
 		j.Start()
 		j.Finish(Outcome{OK: true, Duration: 42 * time.Millisecond})
 
@@ -544,7 +544,7 @@ func TestRelayEvents_FastRunEmitsStartedBeforeDone(t *testing.T) {
 func TestRelayEvents_DepartedClientLogsEachFailedWrite(t *testing.T) {
 	rec := captureLogs(t)
 
-	j := NewJob(TriggerExternal, testPayload{})
+	j := NewJob(External, testPayload{})
 	j.Start()
 	j.Finish(Outcome{OK: true, Duration: time.Millisecond})
 

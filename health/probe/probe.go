@@ -70,8 +70,8 @@ func Check(w io.Writer, timeout time.Duration, urls ...string) int {
 
 // Run runs in the probe process (a Docker HEALTHCHECK exec) and exits 0
 // when every URL answers 2xx within the shared timeout, 1 otherwise,
-// with each failure written to stderr. The HTTP counterpart of the
-// parent module's RunProbe; cmd/probe is the ready-made binary around
+// with each failure written to stderr. The HTTP counterpart of
+// health.RunProbe; cmd/probe is the ready-made binary around
 // it.
 func Run(timeout time.Duration, urls ...string) {
 	os.Exit(Check(os.Stderr, timeout, urls...))

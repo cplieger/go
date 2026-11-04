@@ -125,7 +125,7 @@ func bindOwnerOnly(path string) (net.Listener, error) {
 // its own payload attributes (the library never logs payload contents — a
 // forwarded environment can carry secrets).
 type Server[P any] struct {
-	// Queue receives every decoded request as a TriggerExternal job.
+	// Queue receives every decoded request as a External job.
 	Queue *Queue[P]
 	// OnAccepted, when non-nil, runs after a request is queued (the app's
 	// "triggered run queued" line).
@@ -200,7 +200,7 @@ func (s *Server[P]) handle(conn net.Conn) {
 		writeEvent(conn, Event{Kind: EventDone, OK: false, Reason: "undecodable request"})
 		return
 	}
-	j := NewJob(TriggerExternal, payload)
+	j := NewJob(External, payload)
 	if err := s.Queue.Submit(j); err != nil {
 		if s.OnRejected != nil {
 			s.OnRejected(payload, err)

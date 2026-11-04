@@ -12,8 +12,8 @@ import (
 func TestQueue_FIFOOrder(t *testing.T) {
 	t.Parallel()
 	q := NewQueue[testPayload](4)
-	a := NewJob(TriggerExternal, testPayload{Repos: []string{"a/a"}})
-	b := NewJob(TriggerExternal, testPayload{Repos: []string{"b/b"}})
+	a := NewJob(External, testPayload{Repos: []string{"a/a"}})
+	b := NewJob(External, testPayload{Repos: []string{"b/b"}})
 	c := NewJob("interval", testPayload{})
 	for _, j := range []*Job[testPayload]{a, b, c} {
 		if err := q.Submit(j); err != nil {
@@ -41,10 +41,10 @@ func TestQueue_FIFOOrder(t *testing.T) {
 func TestQueue_FullRejectsImmediately(t *testing.T) {
 	t.Parallel()
 	q := NewQueue[struct{}](1)
-	if err := q.Submit(NewJob(TriggerExternal, struct{}{})); err != nil {
+	if err := q.Submit(NewJob(External, struct{}{})); err != nil {
 		t.Fatalf("first Submit() = %v, want nil", err)
 	}
-	if err := q.Submit(NewJob(TriggerExternal, struct{}{})); !errors.Is(err, ErrFull) {
+	if err := q.Submit(NewJob(External, struct{}{})); !errors.Is(err, ErrFull) {
 		t.Errorf("Submit() on a full queue = %v, want ErrFull", err)
 	}
 }
@@ -54,7 +54,7 @@ func TestQueue_ClosedRejectsSubmissions(t *testing.T) {
 	t.Parallel()
 	q := NewQueue[struct{}](4)
 	q.Close()
-	if err := q.Submit(NewJob(TriggerExternal, struct{}{})); !errors.Is(err, ErrClosed) {
+	if err := q.Submit(NewJob(External, struct{}{})); !errors.Is(err, ErrClosed) {
 		t.Errorf("Submit() after Close = %v, want ErrClosed", err)
 	}
 	q.Close() // idempotent: a second close must not panic
@@ -70,7 +70,7 @@ func TestQueue_ConcurrentSubmitAndCloseIsSafe(t *testing.T) {
 		var wg sync.WaitGroup
 		for range 8 {
 			wg.Go(func() {
-				_ = q.Submit(NewJob(TriggerExternal, struct{}{}))
+				_ = q.Submit(NewJob(External, struct{}{}))
 			})
 		}
 		q.Close()
@@ -85,7 +85,7 @@ func TestQueue_ConcurrentSubmitAndCloseIsSafe(t *testing.T) {
 // and the single result reaches a late waiter intact.
 func TestJob_ExactlyOneResultNeverBlocksExecutor(t *testing.T) {
 	t.Parallel()
-	j := NewJob(TriggerExternal, testPayload{Repos: []string{"o/r"}})
+	j := NewJob(External, testPayload{Repos: []string{"o/r"}})
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
@@ -122,7 +122,7 @@ func TestQueue_NegativeCapacityPanics(t *testing.T) {
 func TestQueue_ZeroCapacityIsLegal(t *testing.T) {
 	t.Parallel()
 	q := NewQueue[struct{}](0)
-	if err := q.Submit(NewJob(TriggerExternal, struct{}{})); !errors.Is(err, ErrFull) {
+	if err := q.Submit(NewJob(External, struct{}{})); !errors.Is(err, ErrFull) {
 		t.Errorf("Submit() on an unbuffered queue with no receiver = %v, want ErrFull", err)
 	}
 }

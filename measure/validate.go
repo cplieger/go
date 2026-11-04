@@ -23,8 +23,8 @@ const maxLogValueLen = 256
 // attribute, appending the shared "..." truncation marker OUTSIDE the cap
 // (output is at most maxLogValueLen+3 bytes) when the value was cut; a
 // within-cap value is returned untouched. The rune-boundary backoff matches
-// runesafe.CapBytes byte for byte; compare against it when changing this. Kept
-// local and NARROWER than runesafe's SanitizeSingleLineBounded: metrics has no
+// textsafe.CapBytes byte for byte; compare against it when changing this. Kept
+// local and NARROWER than textsafe's SanitizeSingleLineBounded: measure has no
 // dependencies, every value logged here already passed sanitizeUTF8, and slog's
 // handlers escape control bytes in quoted text output.
 func truncateForLog(s string) string {
@@ -33,7 +33,7 @@ func truncateForLog(s string) string {
 	}
 	// Back off to the previous rune boundary so the truncated prefix of a
 	// just-sanitized (valid UTF-8) value cannot itself carry a split rune
-	// (runesafe.CapBytes semantics).
+	// (textsafe.CapBytes semantics).
 	cut := maxLogValueLen
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--

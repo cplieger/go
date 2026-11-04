@@ -168,7 +168,7 @@ func checkLabelQuoting(t *testing.T, inner string) {
 }
 
 // The shared machinery for this package's allocation contracts, which live in
-// counter_test.go, gauge_test.go, histogram_test.go, metrics_test.go and
+// counter_test.go, gauge_test.go, histogram_test.go, measure_test.go and
 // exposition_test.go — each beside the source file whose cost it pins.
 //
 // The library's cost model has two halves and both are now measured: recording

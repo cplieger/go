@@ -417,7 +417,7 @@ func TestSanitizeLabelValues_NoPanicAllTypes(t *testing.T) {
 // TestSanitizeLabelValues_LongInvalidUTF8LogTruncated pins the maxLogValueLen
 // truncation: a hostile multi-hundred-byte invalid label value sanitizes
 // without panicking, and the warning's value attribute retains a bounded
-// prefix with the shared "..." truncation marker (the runesafe convention)
+// prefix with the shared "..." truncation marker (the textsafe convention)
 // while dropping the attacker-controlled tail. Serial: it captures slog.Default.
 func TestSanitizeLabelValues_LongInvalidUTF8LogTruncated(t *testing.T) {
 	buf := captureDebugLogs(t)

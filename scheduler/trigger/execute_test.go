@@ -14,7 +14,7 @@ import (
 func TestExecute_RunsJobsInOrderWithOwnResults(t *testing.T) {
 	t.Parallel()
 	q := NewQueue[testPayload](4)
-	a := NewJob(TriggerExternal, testPayload{Repos: []string{"a/a"}})
+	a := NewJob(External, testPayload{Repos: []string{"a/a"}})
 	b := NewJob("interval", testPayload{})
 	for _, j := range []*Job[testPayload]{a, b} {
 		if err := q.Submit(j); err != nil {
@@ -29,14 +29,14 @@ func TestExecute_RunsJobsInOrderWithOwnResults(t *testing.T) {
 		return Outcome{OK: true, Reason: trigger, Duration: time.Duration(len(p.Repos))}
 	})
 
-	if len(seen) != 2 || seen[0] != TriggerExternal || seen[1] != "interval" {
+	if len(seen) != 2 || seen[0] != External || seen[1] != "interval" {
 		t.Fatalf("callback saw triggers %v, want [external interval] in order", seen)
 	}
 	for _, tc := range []struct {
 		job  *Job[testPayload]
 		want Outcome
 	}{
-		{a, Outcome{OK: true, Reason: TriggerExternal, Duration: 1}},
+		{a, Outcome{OK: true, Reason: External, Duration: 1}},
 		{b, Outcome{OK: true, Reason: "interval", Duration: 0}},
 	} {
 		select {
@@ -64,7 +64,7 @@ func TestExecute_CancelledContextFinishesWithoutStarting(t *testing.T) {
 	cancel()
 
 	q := NewQueue[struct{}](1)
-	j := NewJob(TriggerExternal, struct{}{})
+	j := NewJob(External, struct{}{})
 	if err := q.Submit(j); err != nil {
 		t.Fatalf("Submit() = %v, want nil", err)
 	}
@@ -94,7 +94,7 @@ func TestExecute_CancelledContextFinishesWithoutStarting(t *testing.T) {
 func TestExecute_PanickingCallbackStillDeliversResult(t *testing.T) {
 	t.Parallel()
 	q := NewQueue[struct{}](1)
-	j := NewJob(TriggerExternal, struct{}{})
+	j := NewJob(External, struct{}{})
 	if err := q.Submit(j); err != nil {
 		t.Fatalf("Submit() = %v, want nil", err)
 	}

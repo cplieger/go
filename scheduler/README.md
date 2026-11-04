@@ -1,10 +1,10 @@
 # scheduler
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/scheduler.svg)](https://pkg.go.dev/github.com/cplieger/go/scheduler) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=scheduler%2Fgo.mod)](https://github.com/cplieger/go/blob/main/scheduler/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/scheduler/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/scheduler.svg)](https://pkg.go.dev/github.com/cplieger/go/scheduler) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=scheduler%2Fgo.mod)](https://github.com/cplieger/go/blob/main/scheduler/go.mod)
 
 scheduler lets your Go container run its job on an interval or an outside trigger, with no overlapping runs and a clean shutdown.
 
-It replaces the interval parsing, ticker loop, lock-file handling and graceful child-process shutdown you would otherwise write in each job runner's `main`. It uses only the standard library at run time, needs Go 1.27.1 or later, works on Unix systems only because its locks use `flock(2)`, and is licensed under Apache-2.0.
+It replaces the interval parsing, ticker loop, lock-file handling and graceful child-process shutdown you would otherwise write in each job runner's `main`. It uses only the standard library at run time, needs Go 1.27.3 or later, works on Unix systems only because its locks use `flock(2)`, and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -118,7 +118,7 @@ These are deliberate non-goals, which keep the library small.
 | Cron expressions and calendar schedules | Run an external scheduler such as Ofelia or cron in `ModeExternal`. |
 | Coordination across hosts | The `flock` guard works on one host. Leader election across nodes needs a lease store. |
 | Concurrent runs in one process | `RunLoop` runs one job at a time by design. Run jobs concurrently yourself if you must. |
-| Retry and backoff of a failed run | Retrying outbound calls belongs to [httpx](https://github.com/cplieger/go/tree/main/httpclient). A failed pass is retried on the next tick or trigger. |
+| Retry and backoff of a failed run | Retrying outbound calls belongs to [httpclient](https://github.com/cplieger/httpx). A failed pass is retried on the next tick or trigger. |
 
 ## Documentation
 

@@ -16,7 +16,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:2019/config/"]
 ```
 
-No prebuilt binary is published, so `go install` in a builder stage is the way to get it. Pin a version in place of `@latest` to keep builds repeatable, written as `@vX.Y.Z`. The probe is its own Go module, `github.com/cplieger/go/health/probe`, versioned separately from the marker library. Its git tags are named `probe/vX.Y.Z`, and Go maps the bare version to them.
+No prebuilt binary is published, so `go install` in a builder stage is the way to get it. Pin a version in place of `@latest` to keep builds repeatable, written as `@vX.Y.Z`. The probe is a package of the health module, so it shares health's versions: pin the same `@vX.Y.Z` you use for `github.com/cplieger/go/health`.
 
 ## Timeouts
 

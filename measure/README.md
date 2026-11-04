@@ -1,14 +1,14 @@
-# metrics
+# measure
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/measure.svg)](https://pkg.go.dev/github.com/cplieger/go/measure) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=measure%2Fgo.mod)](https://github.com/cplieger/go/blob/main/measure/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/metrics/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/measure.svg)](https://pkg.go.dev/github.com/cplieger/go/measure) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=measure%2Fgo.mod)](https://github.com/cplieger/go/blob/main/measure/go.mod)
 
 measure gives your Go service a Prometheus `/metrics` endpoint with counters, gauges, histograms and process metrics, using only the standard library.
 
-It uses only the standard library, so it brings no other modules into your build. It needs Go 1.27.1 or later and is licensed under Apache-2.0. It is a v4 module that follows semantic versioning.
+It uses only the standard library, so it brings no other modules into your build. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
-metrics is built for Go services whose set of metrics is fixed when the program starts.
+measure is built for Go services whose set of metrics is fixed when the program starts.
 
 - Counters, gauges and histograms each have a labeled variant, plus a timer and a `RecordHTTP` hook for middleware.
 - A bad name, label set or bucket layout never panics at construction. `Register` returns the error, and `MustRegister` panics at startup naming the metric.
@@ -92,7 +92,7 @@ func instrument(route string, next http.Handler) http.Handler {
 }
 ```
 
-Label by the route you registered, never by the raw request path. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [webhttp](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
+Label by the route you registered, never by the raw request path. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/webhttp)'s route hook.
 
 ## API
 
@@ -102,7 +102,7 @@ Label by the route you registered, never by the raw request path. Each distinct 
 - Registry: `NewRegistry`, `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement.
 - Custom handlers: `WriteCounter`, `WriteGauge`, `WriteHistogram`, their labeled variants and `WriteProcess`.
 
-The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its `Example` function is runnable, and `go test` keeps it true. [How metrics works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its `Example` function is runnable, and `go test` keeps it true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
 
 ## Errors surface at registration
 
@@ -125,7 +125,7 @@ The process metrics are `go_goroutines`, `go_memstats_heap_alloc_bytes`, `proces
 
 ## Unsupported by design
 
-metrics leaves these out on purpose. The [non-goals](docs/non-goals.md) page gives the reason for each.
+measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page gives the reason for each.
 
 - The summary metric type. Use a histogram.
 - OpenMetrics and protobuf exposition, and the content negotiation between formats.
@@ -137,7 +137,7 @@ metrics leaves these out on purpose. The [non-goals](docs/non-goals.md) page giv
 
 ## Documentation
 
-- [How metrics works](docs/how-it-works.md) covers each metric type, the registry, label values, HTTP instrumentation, process metrics and the low-level writers.
+- [How measure works](docs/how-it-works.md) covers each metric type, the registry, label values, HTTP instrumentation, process metrics and the low-level writers.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 
 ## Credits

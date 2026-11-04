@@ -1,10 +1,10 @@
 # health
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/health.svg)](https://pkg.go.dev/github.com/cplieger/go/health) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=health%2Fgo.mod)](https://github.com/cplieger/go/blob/main/health/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/health.svg)](https://pkg.go.dev/github.com/cplieger/go/health) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=health%2Fgo.mod)](https://github.com/cplieger/go/blob/main/health/go.mod)
 
 health gives distroless Go services a Docker healthcheck with no shell, curl or wget. Your service writes a marker file, and the same binary checks it when Docker asks.
 
-It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks an HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27.1 or later and is licensed under Apache-2.0.
+It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks an HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

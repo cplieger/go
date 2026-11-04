@@ -1,10 +1,10 @@
 # filesafe
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/filesafe.svg)](https://pkg.go.dev/github.com/cplieger/go/filesafe) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=filesafe%2Fgo.mod)](https://github.com/cplieger/go/blob/main/filesafe/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/atomicfile/badges/mutation.json)](https://github.com/cplieger/go/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/filesafe.svg)](https://pkg.go.dev/github.com/cplieger/go/filesafe) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=filesafe%2Fgo.mod)](https://github.com/cplieger/go/blob/main/filesafe/go.mod)
 
 filesafe writes files from Go so that a crash or a power loss leaves the complete old content or the complete new content, never a partial file.
 
-It replaces the temp file, fsync and rename sequence you would otherwise write around `os.WriteFile`. It runs on Linux, containers included, uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0. macOS and BSD may work but are untested.
+It replaces the temp file, fsync and rename sequence you would otherwise write around `os.WriteFile`. It runs on Linux, containers included, uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0. macOS and BSD may work but are untested.
 
 ## Why use it
 

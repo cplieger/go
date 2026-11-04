@@ -1,6 +1,6 @@
-# How metrics works
+# How measure works
 
-This page is for a Go developer using metrics in a service. It covers each metric type and its methods, the registry, construction errors, label values, HTTP instrumentation, process metrics, the output format and the low-level writers.
+This page is for a Go developer using measure in a service. It covers each metric type and its methods, the registry, construction errors, label values, HTTP instrumentation, process metrics, the output format and the low-level writers.
 
 ## Metric types
 
@@ -71,9 +71,9 @@ Each distinct label combination is a series that stays until `Delete` or `Reset`
 
 `RecordHTTP(c, h, d, labelVals...)` records one request. It increments the labeled counter `c` with `labelVals` and observes `d` in seconds on the histogram `h`. Either metric may be nil to skip it. The values must match `c`'s label names in count and order.
 
-`RecordHTTP` takes no request and no status, so your middleware captures both and calls it once the response is complete. Its parameters are this package's own types. Middleware that does not import metrics cannot take `RecordHTTP` as its hook, so you write a small adapter that turns the middleware's per-request values into the label list.
+`RecordHTTP` takes no request and no status, so your middleware captures both and calls it once the response is complete. Its parameters are this package's own types. Middleware that does not import measure cannot take `RecordHTTP` as its hook, so you write a small adapter that turns the middleware's per-request values into the label list.
 
-With [webhttp](https://github.com/cplieger/go/tree/main/httpserver), adapt the access-log hook that `WithRecordRouteMetric` registers. Its method and path pair comes from the route table, so the number of series stays bounded however much traffic arrives. The access logger records the status for you. metrics has no dependencies, so it cannot ship a compiling example of that pairing. The hook's signature is in [webhttp's reference for `WithRecordRouteMetric`](https://pkg.go.dev/github.com/cplieger/go/httpserver#WithRecordRouteMetric).
+With [httpserver](https://github.com/cplieger/webhttp), adapt the access-log hook that `WithRecordRouteMetric` registers. Its method and path pair comes from the route table, so the number of series stays bounded however much traffic arrives. The access logger records the status for you. measure has no dependencies, so it cannot ship a compiling example of that pairing. The hook's signature is in [httpserver's reference for `WithRecordRouteMetric`](https://pkg.go.dev/github.com/cplieger/webhttp/v4#WithRecordRouteMetric).
 
 ## Process metrics
 
