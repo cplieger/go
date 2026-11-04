@@ -58,11 +58,11 @@ var (
 	// ErrSecretFilePathRejected means KEY_FILE named a path this package
 	// refuses to open: not already clean, or containing a ".." path component.
 	ErrSecretFilePathRejected = errors.New("envx: secret file path rejected")
-	// ErrSecretFileTooLarge means the file was already over maxSecretFileSize
+	// ErrSecretFileTooLarge means the file was already over the 1 MiB limit
 	// when it was opened.
 	ErrSecretFileTooLarge = errors.New("envx: secret file exceeds the size limit")
 	// ErrSecretFileGrew means the file passed the size gate and then grew past
-	// maxSecretFileSize while it was being read, so the content would have been
+	// the 1 MiB limit while it was being read, so the content would have been
 	// silently truncated.
 	ErrSecretFileGrew = errors.New("envx: secret file grew past the size limit during read")
 	// ErrSecretFileUnreadable means the operating system refused the open, stat

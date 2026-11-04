@@ -57,7 +57,7 @@ Read `ok`, not the value, to tell a variable set to `false` from one that is not
 
 Each way a file can be unusable has its own error value, matched with `errors.Is`: `ErrSecretFilePathRejected`, `ErrSecretFileTooLarge`, `ErrSecretFileGrew`, `ErrSecretFileUnreadable` and `ErrBlankSecretFile`. A caller can report why the file failed without matching error text and without echoing the path. That matters when `KEY_FILE` was set to the secret itself by mistake. `ErrSecretFileUnreadable` keeps the operating system's `*os.PathError` reachable with `errors.As`.
 
-`SecretWithSource` also returns the channel that answered: `SourceFile`, `SourceEnv` or `SourceNone`. It reports the channel on the error paths too, so a caller can warn that a `KEY` it also set was ignored in favor of `KEY_FILE`.
+`SecretWithSource` also returns the channel that answered: `SecretSourceFile`, `SecretSourceEnv` or `SecretSourceNone`. It reports the channel on the error paths too, so a caller can warn that a `KEY` it also set was ignored in favor of `KEY_FILE`.
 
 A `KEY_FILE` that is present but blank names no file. An empty one falls through to `KEY` as if it were unset, and a whitespace-only one is opened and fails. `IsBlankSecretFilePath` reports both shapes without changing how the secret resolves, so a caller can refuse a broken secret pointer. That matters most for an optional secret, where falling through to an unset `KEY` can leave a gate open.
 

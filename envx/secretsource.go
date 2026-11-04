@@ -13,15 +13,11 @@ import (
 // Blankness is the one judgement made on the whitespace-trimmed content: a file holding
 // only spaces or newlines is a broken secret mount, not a secret. The value a readable
 // file DOES carry is returned with at most a trailing line ending removed, so the two
-// operations do not share a rule (see trimTrailingLineEnding).
+// operations do not share a rule.
 //
 // It is a distinct sentinel because a caller often has a policy for a blank secret that
-// differs from its policy for an unusable one. cert-converter is the motivating case: it
-// offers PFX_ALLOW_EMPTY_PASSWORD as an explicit opt-in to running without a password,
-// and that opt-in has to mean the same thing whether the blank value arrived through the
-// environment or through a mounted file. Without a sentinel the file channel could only
-// be classified by matching this package's error TEXT, so the opt-in silently applied to
-// one channel and not the other.
+// differs from its policy for an unusable one, and that policy must hold whether the
+// blank value arrived through the environment or through a mounted file.
 //
 // It is deliberately NOT a *MissingError: the operator did configure a secret file, and
 // treating "you forgot to set this" the same as "the file you mounted is blank" would
@@ -80,12 +76,12 @@ type SecretSource string
 
 // The secret delivery channels SecretWithSource distinguishes.
 const (
-	// SourceNone means no value was found in either channel.
-	SourceNone SecretSource = "none"
-	// SourceEnv means the value came from KEY itself.
-	SourceEnv SecretSource = "env"
-	// SourceFile means the value came from the file named by KEY_FILE.
-	SourceFile SecretSource = "file"
+	// SecretSourceNone means no value was found in either channel.
+	SecretSourceNone SecretSource = "none"
+	// SecretSourceEnv means the value came from KEY itself.
+	SecretSourceEnv SecretSource = "env"
+	// SecretSourceFile means the value came from the file named by KEY_FILE.
+	SecretSourceFile SecretSource = "file"
 )
 
 // SecretWithSource is Secret, additionally reporting which channel supplied the value.
@@ -100,10 +96,10 @@ const (
 // A caller that needs the both-channels-set condition composes it in one line:
 //
 //	v, src, err := envx.SecretWithSource("PFX_PASSWORD")
-//	if src == envx.SourceFile && os.Getenv("PFX_PASSWORD") != "" { /* warn */ }
+//	if src == envx.SecretSourceFile && os.Getenv("PFX_PASSWORD") != "" { /* warn */ }
 //
 // That works on the error paths too, which is where it matters most: an unreadable file
-// still reports SourceFile, so the caller can tell the operator that the environment
+// still reports SecretSourceFile, so the caller can tell the operator that the environment
 // variable they also set is not a fallback.
 //
 // Precedence is unchanged from Secret: KEY_FILE wins when set to a non-empty value,
@@ -116,7 +112,7 @@ func SecretWithSource(key Key) (value string, source SecretSource, err error) {
 	if path := os.Getenv(string(secretFileKey(key))); path != "" {
 		data, readErr := readSecretFile(path)
 		if readErr != nil {
-			return "", SourceFile, fmt.Errorf("read secret file for %s: %w", key, readErr)
+			return "", SecretSourceFile, fmt.Errorf("read secret file for %s: %w", key, readErr)
 		}
 		content := string(data)
 		// Two different operations on the same bytes, deliberately not folded:
@@ -127,15 +123,15 @@ func SecretWithSource(key Key) (value string, source SecretSource, err error) {
 		if strings.TrimSpace(content) == "" {
 			// The path is named because a blank secret file cannot be diagnosed
 			// without it; the (absent) VALUE is what must never be logged.
-			return "", SourceFile, fmt.Errorf("%w for %s: %s", ErrBlankSecretFile, key, path)
+			return "", SecretSourceFile, fmt.Errorf("%w for %s: %s", ErrBlankSecretFile, key, path)
 		}
-		return trimTrailingLineEnding(content), SourceFile, nil
+		return trimTrailingLineEnding(content), SecretSourceFile, nil
 	}
 	v, reqErr := Require(key)
 	if reqErr != nil {
-		return "", SourceNone, reqErr
+		return "", SecretSourceNone, reqErr
 	}
-	return v, SourceEnv, nil
+	return v, SecretSourceEnv, nil
 }
 
 // trimTrailingLineEnding removes at most ONE trailing line ending ("\r\n" or

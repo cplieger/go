@@ -3,7 +3,7 @@
 // making an outbound HTTP request.
 //
 // Trust model: DNS resolution is delegated to net.DefaultResolver (or a custom
-// resolver via [WithResolver]). safeDialContext resolves a hostname once and
+// resolver via [WithResolver]). The transport's dialer resolves a hostname once and
 // hands the resolved literal IPs to the dialer. Additionally, a [net.Dialer]
 // Control hook validates the actually-connected IP at socket creation time,
 // providing defense-in-depth against DNS rebinding/TOCTOU attacks even if the
@@ -74,8 +74,7 @@ const (
 )
 
 // ErrorKind classifies SSRF validation failures. Consumers can use
-// errors.As(*Error) and switch on Kind for programmatic handling,
-// mirroring doyensec/safeurl's typed error approach.
+// errors.As(*Error) and switch on Kind for programmatic handling.
 type ErrorKind int
 
 const (
@@ -120,6 +119,7 @@ type Error struct {
 	Msg string
 	// Host is the hostname or IP that triggered the error (may be empty).
 	Host string
+	// Kind classifies the refusal; switch on it after errors.As.
 	Kind ErrorKind
 	// msgCoversErr: Msg already says what Err says, so Error leaves Err's
 	// text out while errors.As still reaches Err.
@@ -232,8 +232,7 @@ func orDefault(l *slog.Logger) *slog.Logger {
 // transport once the destination IS known and pass that one port — pinning the
 // destination it already validated is a stronger check than any standing
 // permissive policy, and it keeps the widest setting off this library's
-// surface. Mirrors doyensec/safeurl AllowedPorts, which likewise ships no
-// escape hatch.
+// surface.
 func WithAllowedPorts(ports ...uint16) TransportOption {
 	return func(c *transportConfig) {
 		if len(ports) == 0 {

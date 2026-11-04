@@ -240,7 +240,7 @@ func FuzzSecretPath(f *testing.F) {
 		}
 		t.Setenv("ENVX_FUZZ_SEC_FILE", p)
 		v, src, err := SecretWithSource("ENVX_FUZZ_SEC")
-		if IsBlankSecretFilePath("ENVX_FUZZ_SEC") && src == SourceFile && err == nil {
+		if IsBlankSecretFilePath("ENVX_FUZZ_SEC") && src == SecretSourceFile && err == nil {
 			t.Errorf("blank pointer %q delivered a secret from the file channel (value length %d)", p, len(v))
 		}
 	})

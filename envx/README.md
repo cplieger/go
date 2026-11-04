@@ -4,7 +4,7 @@
 
 envx configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it.
 
-It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. The root module depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. The optional yamlenv module adds [go-yaml](https://github.com/yaml/go-yaml) v3 for YAML config files. Both need Go 1.27.3 or later and are licensed under Apache-2.0.
+It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. The optional yamlenv module adds [go-yaml](https://github.com/yaml/go-yaml) v3 for YAML config files. Both need Go 1.27.3 or later and are licensed under Apache-2.0.
 
 ## Why use it
 
@@ -88,7 +88,7 @@ if err != nil {
 }
 ```
 
-[YAML config files with yamlenv](https://github.com/cplieger/envx/tree/main/yamlenv) covers the expansion rules, the steps `Load` runs and `WithErrorPassthrough`, which returns the decode errors you select unchanged. The runnable examples on pkg.go.dev show more cases, and `go test` keeps them true.
+[YAML config files with yamlenv](https://github.com/cplieger/go/tree/main/yamlenv) covers the expansion rules, the steps `Load` runs and `WithErrorPassthrough`, which returns the decode errors you select unchanged. The runnable examples on pkg.go.dev show more cases, and `go test` keeps them true.
 
 ## API
 
@@ -98,7 +98,7 @@ if err != nil {
 - An injected environment: `Source`, which carries the getters, the strict getters and `Require` as methods.
 - yamlenv: `Load` with its options, and the steps it runs, `ExpandWith`, `Expand`, `SanitizeDecodeError`, `CheckUnknownKeys` and `CheckSingleDocument`.
 
-The full reference is on pkg.go.dev for [envx](https://pkg.go.dev/github.com/cplieger/go/envx) and [yamlenv](https://pkg.go.dev/github.com/cplieger/envx/yamlenv/v2).
+The full reference is on pkg.go.dev for [envx](https://pkg.go.dev/github.com/cplieger/go/envx) and [yamlenv](https://pkg.go.dev/github.com/cplieger/go/yamlenv).
 
 ## Behavior contract
 
@@ -127,7 +127,7 @@ These are deliberate non-goals:
 ## Documentation
 
 - [Behavior contract](docs/behavior.md) explains how each getter treats unset, empty and malformed values, and how secrets are read.
-- [YAML config files with yamlenv](https://github.com/cplieger/envx/tree/main/yamlenv) covers `${VAR}` expansion, the `Load` pipeline and its options.
+- [YAML config files with yamlenv](https://github.com/cplieger/go/tree/main/yamlenv) covers `${VAR}` expansion, the `Load` pipeline and its options.
 - [Non-goals](docs/non-goals.md) gives the reason each unsupported feature is left out.
 
 ## Contributing

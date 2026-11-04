@@ -5,12 +5,7 @@ import "strconv"
 // Key is the NAME of an environment variable — "APP_LISTEN", never its value.
 // Every getter in this package takes its key as a Key.
 //
-// The type states the role, and its validation catches a malformed name. What
-// it deliberately no longer carries is the old key/fallback transposition
-// story: [String] takes no fallback, and the parsing getters' fallbacks are
-// typed (bool, int, time.Duration), so no getter in this package has two
-// adjacent parameters a caller could swap. That hazard is closed by the
-// signatures, not by this type.
+// The type states the role, and its validation catches a malformed name.
 //
 // What the type does buy, in two layers:
 //

@@ -28,9 +28,6 @@ import (
 // variable name, so a caller that aggregates failures and re-reads a variable
 // with a default passes it straight back into a getter. Value stays a plain
 // string because a rejected value is not a key.
-//
-// Field order is govet fieldalignment's, not editorial: Err leads because an
-// interface is two pointer words, which shortens the GC scan range.
 type ParseError struct {
 	// Err is the underlying strconv or time parse error.
 	Err error
@@ -42,7 +39,7 @@ type ParseError struct {
 
 // Error implements the error interface. The text is the key followed by the
 // underlying parse error, which is the form every strict variant has always
-// returned; only the type is new.
+// returned.
 func (e *ParseError) Error() string {
 	return "environment variable " + string(e.Key) + ": " + e.Err.Error()
 }

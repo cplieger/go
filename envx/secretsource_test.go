@@ -28,8 +28,8 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 		if v != "from-file" {
 			t.Errorf("value = %q, want %q (file content minus its line ending, file wins)", v, "from-file")
 		}
-		if src != SourceFile {
-			t.Errorf("source = %q, want %q", src, SourceFile)
+		if src != SecretSourceFile {
+			t.Errorf("source = %q, want %q", src, SecretSourceFile)
 		}
 	})
 
@@ -41,12 +41,12 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SecretWithSource = %v, want nil", err)
 		}
-		if v != "from-env" || src != SourceEnv {
-			t.Errorf("SecretWithSource = (%q, %q), want (%q, %q)", v, src, "from-env", SourceEnv)
+		if v != "from-env" || src != SecretSourceEnv {
+			t.Errorf("SecretWithSource = (%q, %q), want (%q, %q)", v, src, "from-env", SecretSourceEnv)
 		}
 	})
 
-	t.Run("neither channel set reports SourceNone with MissingError", func(t *testing.T) {
+	t.Run("neither channel set reports SecretSourceNone with MissingError", func(t *testing.T) {
 		t.Setenv("ENVX_SWS", "")
 		t.Setenv("ENVX_SWS_FILE", "")
 
@@ -54,8 +54,8 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 		if _, ok := errors.AsType[*MissingError](err); !ok {
 			t.Errorf("SecretWithSource = %v, want *MissingError", err)
 		}
-		if src != SourceNone {
-			t.Errorf("source = %q, want %q", src, SourceNone)
+		if src != SecretSourceNone {
+			t.Errorf("source = %q, want %q", src, SecretSourceNone)
 		}
 	})
 }
@@ -99,8 +99,8 @@ func TestSecretWithSource_file_channel_returns_the_value_as_written(t *testing.T
 			if v != tc.want {
 				t.Errorf("SecretWithSource(%q) = %q, want %q", tc.content, v, tc.want)
 			}
-			if src != SourceFile {
-				t.Errorf("source = %q, want %q", src, SourceFile)
+			if src != SecretSourceFile {
+				t.Errorf("source = %q, want %q", src, SecretSourceFile)
 			}
 		})
 	}
@@ -129,14 +129,14 @@ func TestSecretWithSource_channels_agree_on_the_value(t *testing.T) {
 			t.Setenv("ENVX_SWS", secret)
 			t.Setenv("ENVX_SWS_FILE", p)
 			fromFile, src, err := SecretWithSource("ENVX_SWS")
-			if err != nil || src != SourceFile {
-				t.Fatalf("file channel = (%q, %q, %v), want (_, %q, nil)", fromFile, src, err, SourceFile)
+			if err != nil || src != SecretSourceFile {
+				t.Fatalf("file channel = (%q, %q, %v), want (_, %q, nil)", fromFile, src, err, SecretSourceFile)
 			}
 
 			t.Setenv("ENVX_SWS_FILE", "")
 			fromEnv, src, err := SecretWithSource("ENVX_SWS")
-			if err != nil || src != SourceEnv {
-				t.Fatalf("env channel = (%q, %q, %v), want (_, %q, nil)", fromEnv, src, err, SourceEnv)
+			if err != nil || src != SecretSourceEnv {
+				t.Fatalf("env channel = (%q, %q, %v), want (_, %q, nil)", fromEnv, src, err, SecretSourceEnv)
 			}
 
 			if fromFile != fromEnv {
@@ -167,8 +167,8 @@ func TestSecretWithSource_blank_file_is_a_distinct_sentinel(t *testing.T) {
 	if _, ok := errors.AsType[*MissingError](err); ok {
 		t.Error("blank file reported as *MissingError; a configured-but-blank file is not an absent one")
 	}
-	if src != SourceFile {
-		t.Errorf("source = %q, want %q even on the error path", src, SourceFile)
+	if src != SecretSourceFile {
+		t.Errorf("source = %q, want %q even on the error path", src, SecretSourceFile)
 	}
 }
 
@@ -186,8 +186,8 @@ func TestSecretWithSource_unreadable_file_keeps_the_channel(t *testing.T) {
 	if v != "" {
 		t.Errorf("value = %q, want empty: an unusable file must never fall back to the env value", v)
 	}
-	if src != SourceFile {
-		t.Errorf("source = %q, want %q", src, SourceFile)
+	if src != SecretSourceFile {
+		t.Errorf("source = %q, want %q", src, SecretSourceFile)
 	}
 }
 
@@ -293,9 +293,9 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		t.Setenv("ENVX_SWS_FILE", "")
 
 		v, src, err := SecretWithSource("ENVX_SWS")
-		if v != "from-env" || src != SourceEnv || err != nil {
+		if v != "from-env" || src != SecretSourceEnv || err != nil {
 			t.Errorf("SecretWithSource = (%q, %q, %v), want (%q, %q, nil): precedence must be unchanged",
-				v, src, err, "from-env", SourceEnv)
+				v, src, err, "from-env", SecretSourceEnv)
 		}
 		if !IsBlankSecretFilePath("ENVX_SWS") {
 			t.Error("IsBlankSecretFilePath = false, want true: the operator did set an empty _FILE")
@@ -307,8 +307,8 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		t.Setenv("ENVX_SWS_FILE", "")
 
 		_, src, err := SecretWithSource("ENVX_SWS")
-		if _, ok := errors.AsType[*MissingError](err); !ok || src != SourceNone {
-			t.Errorf("SecretWithSource = (%q, %v), want (%q, *MissingError)", src, err, SourceNone)
+		if _, ok := errors.AsType[*MissingError](err); !ok || src != SecretSourceNone {
+			t.Errorf("SecretWithSource = (%q, %v), want (%q, *MissingError)", src, err, SecretSourceNone)
 		}
 		if !IsBlankSecretFilePath("ENVX_SWS") {
 			t.Error("IsBlankSecretFilePath = false, want true")
@@ -323,9 +323,9 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		if err == nil {
 			t.Fatalf("SecretWithSource = %q, nil; want the unchanged failure for an unopenable path", v)
 		}
-		if v != "" || src != SourceFile {
+		if v != "" || src != SecretSourceFile {
 			t.Errorf("SecretWithSource = (%q, %q), want (%q, %q): a set _FILE is never a fallback to the env value",
-				v, src, "", SourceFile)
+				v, src, "", SecretSourceFile)
 		}
 		if !IsBlankSecretFilePath("ENVX_SWS") {
 			t.Error("IsBlankSecretFilePath = false, want true: a whitespace-only path names no file either")
@@ -341,8 +341,8 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		t.Setenv("ENVX_SWS_FILE", p)
 
 		v, src, err := SecretWithSource("ENVX_SWS")
-		if v != "from-file" || src != SourceFile || err != nil {
-			t.Errorf("SecretWithSource = (%q, %q, %v), want (%q, %q, nil)", v, src, err, "from-file", SourceFile)
+		if v != "from-file" || src != SecretSourceFile || err != nil {
+			t.Errorf("SecretWithSource = (%q, %q, %v), want (%q, %q, nil)", v, src, err, "from-file", SecretSourceFile)
 		}
 		if IsBlankSecretFilePath("ENVX_SWS") {
 			t.Error("IsBlankSecretFilePath = true, want false for a real path")
@@ -358,8 +358,8 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		t.Setenv("ENVX_SWS_FILE", p)
 
 		_, src, err := SecretWithSource("ENVX_SWS")
-		if !errors.Is(err, ErrBlankSecretFile) || src != SourceFile {
-			t.Errorf("SecretWithSource = (%q, %v), want (%q, ErrBlankSecretFile)", src, err, SourceFile)
+		if !errors.Is(err, ErrBlankSecretFile) || src != SecretSourceFile {
+			t.Errorf("SecretWithSource = (%q, %v), want (%q, ErrBlankSecretFile)", src, err, SecretSourceFile)
 		}
 		// The two blank conditions are distinct: this pointer names a real file, and a
 		// caller routing blank CONTENT through an allow-empty opt-out must not have that
