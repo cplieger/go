@@ -54,7 +54,7 @@ func ExamplePolicy() {
 func ExampleClassify() {
 	for _, data := range [][]byte{[]byte(`14`), []byte(`"14"`), []byte(`"unknown"`)} {
 		f := jsonx.Classify(data)
-		numeric := f.Shape == jsonx.Number || f.Shape == jsonx.NumericString
+		numeric := f.Shape == jsonx.ShapeNumber || f.Shape == jsonx.ShapeNumericString
 		fmt.Printf("%-10s quoted=%-5v numeric=%-5v value=%d\n", data, f.WasString(), numeric, f.Value)
 	}
 	// Output:

@@ -333,13 +333,14 @@ func (d *Decoder) Map[V any](prior map[string]V, maxEntries int, what string, de
 	return m, d.Close()
 }
 
-// Preflight walks one complete JSON value from r, decoding nothing, and
-// rejects what json.Unmarshal silently tolerates: the first repeated object
-// key, matched case-insensitively as encoding/json matches fields, fails with
-// ErrDuplicateKey (Object and Array instead mirror Unmarshal's last-wins
-// merge). Trailing data after the value is rejected. It checks structure
-// only, so an accepted body can still fail the decode, and it judges neither
-// content nor UTF-8 validity. Depth is bounded by MaxDepth.
+// Preflight walks one complete JSON value from r, decoding nothing. It rejects
+// the first repeated object key, matched case-insensitively as encoding/json
+// matches fields, with ErrDuplicateKey, and rejects trailing data after the
+// value. It checks structure only, so an accepted body can still fail the
+// decode, and it judges neither content nor UTF-8 validity. Depth is bounded by
+// MaxDepth. It takes no caps: its cost is linear in the body, so the caller's
+// body cap bounds it (a Decoder caps elements as it builds them). It takes an
+// io.Reader because it runs on encoding/json's tokenizer.
 func Preflight(r io.Reader) error {
 	d := NewDecoder(r, 0)
 	if err := d.preflightValue(); err != nil {
