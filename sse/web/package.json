@@ -38,11 +38,6 @@
     "LICENSE",
     "NOTICE"
   ],
-  "sseFixture": "./ssetest/cmd",
-  "browserEngines": [
-    "firefox",
-    "webkit"
-  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.tests.json",
     "typecheck:tests": "tsc -p tsconfig.tests.json",

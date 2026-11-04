@@ -60,7 +60,7 @@ export interface TimingConfig {
 
 /**
  * The value every field a caller leaves unset takes. Each one is pinned, directly or by derivation,
- * to the repository's `timing.json` — the single source both halves of the protocol read — so a
+ * to the module's `timing.json` — the single source both halves of the protocol read — so a
  * client default and the server behaviour it assumes cannot drift apart.
  */
 export const DEFAULT_TIMING: TimingConfig = {

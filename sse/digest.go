@@ -26,7 +26,8 @@ type Held struct {
 	Version string
 }
 
-// Status is a resolver's answer for a subject it no longer serves.
+// Status is a resolver's answer about whether it still serves a subject:
+// StatusCurrent, StatusGone or StatusForbidden.
 type Status string
 
 // StatusCurrent means the subject exists and Version is its current version;
