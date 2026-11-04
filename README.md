@@ -20,11 +20,19 @@ Nothing here imports a cplieger repository outside this one. The other libraries
 | [`xmlx`](xmlx) | Caps the memory and work an untrusted XML document can cost your Go program, before and during an `encoding/xml` decode. |
 | [`pathinside`](pathinside) | Catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`. |
 
+### HTTP
+
+| Module | What it does |
+| --- | --- |
+| [`httpclient`](httpclient) | Makes your Go HTTP calls survive flaky servers, with retries, backoff and Retry-After built in. |
+| [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown. |
+
 ### Service runtime
 
 | Module | What it does |
 | --- | --- |
 | [`slogx`](slogx) | Gives every Go service the same `log/slog` setup in one call, with text or JSON output, UTC timestamps, a level you can change at run time and `LOG_LEVEL` parsing. |
+| [`yamlenv`](yamlenv) | Loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. |
 | [`health`](health) | Gives distroless Go services a Docker healthcheck with no shell, curl or wget. Your service writes a marker file, and the same binary checks it when Docker asks. |
 | [`measure`](measure) | Gives your Go service a Prometheus `/metrics` endpoint with counters, gauges, histograms and process metrics, using only the standard library. |
 | [`scheduler`](scheduler) | Lets your Go container run its job on an interval or an outside trigger, with no overlapping runs and a clean shutdown. |

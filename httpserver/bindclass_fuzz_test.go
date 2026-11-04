@@ -1,0 +1,140 @@
+package httpserver_test
+
+import (
+	"net"
+	"testing"
+
+	"github.com/cplieger/go/httpserver"
+)
+
+// FuzzClassifyBind asserts the classifier never panics and holds four
+// invariants:
+//
+//  1. Split agreement — ClassifyBind returns BindInvalid exactly when
+//     net.SplitHostPort rejects the input: the STRUCTURAL host:port split is
+//     exactly stdlib's, with no private dialect on top. (Service-name lookup
+//     and port validation stay net.Listen's; a splittable addr can still fail
+//     to listen. This pin is deliberately implementation-adjacent — its job
+//     is to fail if the parser is ever swapped for one with a different
+//     grammar, not to re-derive the split.)
+//  2. Door agreement — for any splittable input, ClassifyBind(addr) equals
+//     ClassifyBindHost(host-part): the two public doors share one
+//     classification, so an app using the classify-the-unsplit-input
+//     fallback recipe cannot diverge from an app splitting up front.
+//  3. Totality of the host door — ClassifyBindHost never returns
+//     BindInvalid, and every result of either door is one of the three
+//     declared classes (String() never renders a number).
+//  4. Case-insensitivity over ASCII case — classification never depends on
+//     letter case ("LOCALHOST", "Localhost", IPv6 hex digits), the drift axis
+//     that produced web-terminal-server's spurious exposure warning.
+//  5. No fold laundering — a BindLoopback verdict implies the host is pure
+//     ASCII, so no non-ASCII byte sequence can ever be read as loopback.
+//
+// Invariant 4 is stated over an ASCII-only case change, not strings.ToUpper /
+// strings.ToLower. Those apply full Unicode case mapping, which maps a
+// non-ASCII rune ONTO an ASCII letter (U+017F -> "S", U+212A -> "k"), so they
+// do not produce another spelling of the same host — they produce a DIFFERENT
+// host. "LOCALHOſT" uppercases to the literal "LOCALHOST", which is loopback
+// and correctly so, while "LOCALHOſT" itself is exposed and equally correctly
+// so: the classifier folds ASCII only, deliberately, and bindclass.go says why.
+// The weekly fuzz found that with the U+017F seed below, and invariant 5 is
+// what now carries the property those three seeds were added for.
+func FuzzClassifyBind(f *testing.F) {
+	seeds := []string{
+		":9848", "0.0.0.0:9848", "[::]:9848",
+		"127.0.0.1:9848", "127.0.0.2:9848", "[::1]:9848",
+		"[::ffff:127.0.0.1]:9848", "localhost:9848", "LOCALHOST:9848",
+		"Localhost:7681", "192.168.1.5:9848", "203.0.113.7:9848",
+		"[2001:db8::1]:9848", "myhost:9848", "foo.localhost:80",
+		"[::1%lo]:80", "127.0.0.1:", "localhost:http",
+		"9848", "127.0.0.1", "myhost", "", "127.0.0.1:80:90",
+		"::1:9848", "[::1:9848", "127.0.0.001:80", "0:0:0:0:0:0:0:1",
+		// Fold-laundering hosts: byte sequences Unicode simple folding maps
+		// onto the ASCII letters of "localhost". Each must classify as
+		// exposed, since no resolver maps them to loopback.
+		"localho\u017ft:80", "\u212A:80", "LOCALHO\u017fT:80",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, addr string) {
+		class := httpserver.ClassifyBind(addr)
+
+		// Invariant 3 (range): every result is a declared class.
+		switch class {
+		case httpserver.BindInvalid, httpserver.BindLoopback, httpserver.BindExposed:
+		default:
+			t.Fatalf("ClassifyBind(%q) = %d, not a declared BindClass", addr, int(class))
+		}
+
+		// Invariant 1: BindInvalid iff net.SplitHostPort rejects the input.
+		host, _, err := net.SplitHostPort(addr)
+		if (err != nil) != (class == httpserver.BindInvalid) {
+			t.Fatalf("ClassifyBind(%q) = %v but SplitHostPort err = %v", addr, class, err)
+		}
+
+		if err == nil {
+			// Invariant 2: the two doors agree on the host part.
+			if got := httpserver.ClassifyBindHost(host); got != class {
+				t.Fatalf("ClassifyBind(%q) = %v but ClassifyBindHost(%q) = %v", addr, class, host, got)
+			}
+		}
+
+		// Invariant 3 (totality) + 4 + 5 on the host door, treating the raw
+		// input as a bare host (the unsplit-input fallback path).
+		hostClass := httpserver.ClassifyBindHost(addr)
+		if hostClass == httpserver.BindInvalid {
+			t.Fatalf("ClassifyBindHost(%q) = BindInvalid; the host door must be total", addr)
+		}
+		if got := httpserver.ClassifyBindHost(asciiUpper(addr)); got != hostClass {
+			t.Fatalf("ClassifyBindHost ASCII-case-sensitive: %q = %v but ASCII-upper = %v", addr, hostClass, got)
+		}
+		if got := httpserver.ClassifyBindHost(asciiLower(addr)); got != hostClass {
+			t.Fatalf("ClassifyBindHost ASCII-case-sensitive: %q = %v but ASCII-lower = %v", addr, hostClass, got)
+		}
+
+		// Invariant 5: nothing non-ASCII may be read as loopback. Both
+		// loopback paths are ASCII-only by construction — the name path folds
+		// ASCII, and net.ParseIP accepts only ASCII literals — so a
+		// BindLoopback verdict on a host carrying a byte above 0x7F would mean
+		// a homograph or a case fold had laundered into the safe class.
+		for _, probe := range []struct {
+			host  string
+			class httpserver.BindClass
+		}{{addr, hostClass}, {host, class}} {
+			if probe.class != httpserver.BindLoopback {
+				continue
+			}
+			for i := range len(probe.host) {
+				if probe.host[i] > 0x7f {
+					t.Fatalf("ClassifyBindHost(%q) = BindLoopback with the non-ASCII byte %#x at %d; a non-ASCII host must never read as loopback",
+						probe.host, probe.host[i], i)
+				}
+			}
+		}
+	})
+}
+
+// asciiUpper and asciiLower change the case of ASCII letters and return every
+// byte above 0x7F unchanged — the same fold bindclass.go's equalASCIIFold
+// applies. See FuzzClassifyBind's invariant 4 for why the strings package's
+// full-Unicode versions cannot state that invariant.
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'a' && b[i] <= 'z' {
+			b[i] -= 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
+}
