@@ -115,8 +115,6 @@ A non-positive `burst` or `interval` returns the handler unwrapped, so a configu
 
 ### Presets
 
-`SessionCreateRateLimit(path)` is for an endpoint where each admitted request starts an expensive process. It throttles `POST` requests to `path`, an exact match, at a burst of 6 and one token per second. Its 429 says `session creation rate exceeded`. Other methods and paths pass through without taking a token.
-
 `FailedAuthRateLimit(when, msg)` is for a route guarded by one static credential. It throttles the requests `when` reports as presenting a failed credential, at a burst of 10 and one token every 6 seconds. It answers 429 with the fixed code `too_many_auth_failures` and `msg`.
 
 A valid credential never takes a token, so the tuning does not need to leave room for your own senders. `msg` is yours because the credential differs per service. An empty `msg` becomes `too many failed authentication attempts`. A nil `when` throttles every request the middleware sees, for a caller that has already filtered the failed requests itself.

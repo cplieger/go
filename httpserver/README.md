@@ -93,7 +93,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 
 ## API
 
-- Middleware: `Chain`, `Recoverer`, `SecurityHeaders`, `Gzip`, `Logging`, `RouteTimeout`, `RateLimiter` with its `SessionCreateRateLimit` and `FailedAuthRateLimit` presets, `NoStore`.
+- Middleware: `Chain`, `Recoverer`, `SecurityHeaders`, `Gzip`, `Logging`, `RouteTimeout`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
 - Logging and metrics: `RequestLogger` and its options, request-id helpers, `RouteMetricLabels`, `StatusRecorder`.
 - Trust checks: `ClientIP`, `ResolveClient`, `ParseCIDRs`, `ParseHostList` and `HostPolicy`, `CanonicalHost`, `LoopbackOnly`, `ClassifyBind`, `NewStaticTokenVerifier`.
 - Requests and responses: `WriteJSON`, `WriteError` and `ErrorCode`, `DecodeBody`, `DecodeJSONInto`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `CanonicalRequestPath`.
