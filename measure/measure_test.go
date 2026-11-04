@@ -583,8 +583,11 @@ func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 // least minAllocSpan are gated, since /proc reads add noise. Gating every wide
 // interval makes it a linearity check: a per-metric re-scan breaches at 100->1000.
 func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
-	// minAllocSpan is the smallest interval whose slope is gated (see above).
-	const minAllocSpan = 90
+	// minAllocSpan is the smallest interval whose slope is gated. The process
+	// families' /proc reads move a scrape's total by up to ~45 allocations
+	// between measurements under -race, which over a 99-metric span is 0.45 per
+	// metric, nearly the half-allocation margin; a 900-metric span cuts it to 0.05.
+	const minAllocSpan = 900
 
 	// The 1000-label-set shape crosses cardinalityWarnThreshold as it is
 	// built; capture the warning so it stays out of the test output. The
@@ -654,7 +657,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			name:  "histograms_of_8_bounds",
 			unit:  "histogram family (11 samples)",
 			units: "histogram families",
-			sizes: []int{1, 10, 100},
+			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				for i := range n {
@@ -671,7 +674,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			name:  "label_sets_on_one_labeled_histogram",
 			unit:  "label set (11 samples)",
 			units: "label sets",
-			sizes: []int{1, 10, 100},
+			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				lh := NewLabeledHistogram("scrape_lh", "allocation contract", []string{"a"}, WithBuckets(histBounds))
