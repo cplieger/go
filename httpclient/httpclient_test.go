@@ -9,6 +9,7 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -81,21 +82,21 @@ func TestIsTransient(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"auth error", &AuthError{Msg: "denied"}, false},
-		{"rate limit error", &RateLimitError{Msg: "slow down"}, false},
+		{"auth error", &StatusError{Code: http.StatusForbidden}, false},
+		{"rate limit error", &StatusError{Code: http.StatusTooManyRequests}, false},
 		{"deadline exceeded", context.DeadlineExceeded, false},
 		{"canceled", context.Canceled, false},
 		{"attempt timeout", AttemptTimeout(context.DeadlineExceeded), true},
 		{"attempt timeout wrapped by the caller", fmt.Errorf("delivering: %w", AttemptTimeout(context.DeadlineExceeded)), true},
 		{"permanent attempt timeout", Permanent(AttemptTimeout(context.DeadlineExceeded)), false},
 		{"permanent", Permanent(errors.New("nope")), false},
-		{"permanent transient", Permanent(&HTTPStatusError{Code: 503}), false},
-		{"http 502", &HTTPStatusError{Code: 502}, true},
-		{"http 503", &HTTPStatusError{Code: 503}, true},
-		{"http 504", &HTTPStatusError{Code: 504}, true},
-		{"http 500", &HTTPStatusError{Code: 500}, true},
-		{"http 408", &HTTPStatusError{Code: 408}, true},
-		{"http 400", &HTTPStatusError{Code: 400}, false},
+		{"permanent transient", Permanent(&StatusError{Code: 503}), false},
+		{"http 502", &StatusError{Code: 502}, true},
+		{"http 503", &StatusError{Code: 503}, true},
+		{"http 504", &StatusError{Code: 504}, true},
+		{"http 500", &StatusError{Code: 500}, true},
+		{"http 408", &StatusError{Code: 408}, true},
+		{"http 400", &StatusError{Code: 400}, false},
 		{"net timeout", &fakeNetError{timeout: true}, true},
 		{"net non-timeout", &fakeNetError{timeout: false}, false},
 		{"unexpected EOF", io.ErrUnexpectedEOF, true},
@@ -166,10 +167,10 @@ func TestDoRateLimitOnly(t *testing.T) {
 		calls := 0
 		err := doRateLimited(t.Context(), 3, 5*time.Second, func(_ context.Context) error {
 			calls++
-			return &HTTPStatusError{Code: 503}
+			return &StatusError{Code: 503}
 		})
-		if _, ok := errors.AsType[*HTTPStatusError](err); !ok {
-			t.Fatalf("expected *HTTPStatusError, got %v", err)
+		if _, ok := errors.AsType[*StatusError](err); !ok {
+			t.Fatalf("expected *StatusError, got %v", err)
 		}
 		if calls != 1 {
 			t.Fatalf("expected 1 call (transients are NOT retried in rate-limit-only mode), got %d", calls)
@@ -182,7 +183,7 @@ func TestDoRateLimitOnly(t *testing.T) {
 		err := doRateLimited(t.Context(), 3, 5*time.Second, func(_ context.Context) error {
 			calls++
 			if calls < 3 {
-				return &RateLimitError{Msg: "slow", RetryAfter: time.Millisecond}
+				return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
 			}
 			return nil
 		})
@@ -199,13 +200,13 @@ func TestDoRateLimitOnly(t *testing.T) {
 		calls := 0
 		err := doRateLimited(t.Context(), 2, 5*time.Second, func(_ context.Context) error {
 			calls++
-			return &RateLimitError{Msg: "slow", RetryAfter: time.Millisecond}
+			return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
 		})
 		if err == nil {
 			t.Fatal("expected error after exhausting attempts")
 		}
-		if _, ok := errors.AsType[*RateLimitError](err); !ok {
-			t.Fatalf("expected RateLimitError, got %T: %v", err, err)
+		if !errors.Is(err, ErrRateLimited) {
+			t.Fatalf("expected a 429, got %T: %v", err, err)
 		}
 		if calls != 2 {
 			t.Fatalf("expected 2 calls, got %d", calls)
@@ -221,7 +222,7 @@ func TestDoRateLimitOnly(t *testing.T) {
 			if calls == 1 {
 				cancel()
 			}
-			return &RateLimitError{Msg: "slow", RetryAfter: time.Millisecond}
+			return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
 		})
 		if err == nil {
 			t.Fatal("expected error from cancelled context")
@@ -275,7 +276,7 @@ func TestDo(t *testing.T) {
 		result, err := Do(t.Context(), func(_ context.Context) (int, error) {
 			calls++
 			if calls < 3 {
-				return 0, &HTTPStatusError{Code: 503}
+				return 0, &StatusError{Code: 503}
 			}
 			return 42, nil
 		}, WithMaxAttempts(4), WithBaseDelay(time.Millisecond), WithLabel("test"))
@@ -295,7 +296,7 @@ func TestDo(t *testing.T) {
 		calls := 0
 		_, err := Do(t.Context(), func(_ context.Context) (string, error) {
 			calls++
-			return "", &HTTPStatusError{Code: 502}
+			return "", &StatusError{Code: 502}
 		}, WithMaxAttempts(3), WithBaseDelay(time.Millisecond), WithLabel("test"))
 		if err == nil {
 			t.Fatal("expected error after exhausting retries")
@@ -329,7 +330,7 @@ func TestDo(t *testing.T) {
 			if calls == 1 {
 				cancel()
 			}
-			return "", &HTTPStatusError{Code: 503}
+			return "", &StatusError{Code: 503}
 		}, WithMaxAttempts(5), WithBaseDelay(time.Millisecond), WithLabel("test"))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
@@ -341,10 +342,10 @@ func TestDo(t *testing.T) {
 		calls := 0
 		_, err := Do(t.Context(), func(_ context.Context) (string, error) {
 			calls++
-			return "", &RateLimitError{Msg: "429", RetryAfter: time.Millisecond}
+			return "", &StatusError{Code: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
 		}, WithMaxAttempts(3), WithBaseDelay(time.Millisecond))
-		if _, ok := errors.AsType[*RateLimitError](err); !ok {
-			t.Fatalf("expected *RateLimitError, got %v", err)
+		if !errors.Is(err, ErrRateLimited) {
+			t.Fatalf("expected a 429, got %v", err)
 		}
 		if calls != 1 {
 			t.Fatalf("expected 1 call (rate limits non-retryable by default), got %d", calls)
@@ -364,9 +365,9 @@ func TestDo_WithRateLimitRetry(t *testing.T) {
 			calls++
 			switch calls {
 			case 1:
-				return "", &RateLimitError{Msg: "429", RetryAfter: time.Millisecond}
+				return "", &StatusError{Code: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
 			case 2:
-				return "", &HTTPStatusError{Code: 503} // transient, jittered backoff
+				return "", &StatusError{Code: 503} // transient, jittered backoff
 			}
 			return "ok", nil
 		}, WithMaxAttempts(4), WithBaseDelay(time.Millisecond), WithRateLimitRetry(time.Second))
@@ -406,7 +407,7 @@ func TestDo_WithRateLimitRetry(t *testing.T) {
 		_, err := Do(ctx, func(_ context.Context) (string, error) {
 			calls++
 			if calls == 1 {
-				return "", &RateLimitError{Msg: "429", RetryAfter: 10 * time.Second}
+				return "", &StatusError{Code: http.StatusTooManyRequests, RetryAfter: 10 * time.Second}
 			}
 			return "ok", nil
 		}, WithMaxAttempts(2), WithRateLimitRetry(10*time.Millisecond))
@@ -423,7 +424,7 @@ func TestDo_WithRateLimitRetry(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := Do(ctx, func(_ context.Context) (string, error) {
-			return "", &RateLimitError{Msg: "429"}
+			return "", &StatusError{Code: http.StatusTooManyRequests}
 		}, WithMaxAttempts(1), WithRateLimitRetry(time.Second))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Do(WithRateLimitRetry, dead ctx) = %v, want context.Canceled (default-mode ctx contract)", err)
@@ -451,11 +452,11 @@ func TestDo_rate_limit_modes_mutually_exclusive(t *testing.T) {
 	}
 }
 
-func TestHTTPStatusError_preserves_wire_format(t *testing.T) {
+func TestStatusError_preserves_wire_format(t *testing.T) {
 	t.Parallel()
-	got := (&HTTPStatusError{Code: 503}).Error()
+	got := (&StatusError{Code: 503}).Error()
 	if got != "HTTP 503" {
-		t.Errorf("HTTPStatusError{503}.Error() = %q, want %q", got, "HTTP 503")
+		t.Errorf("StatusError{503}.Error() = %q, want %q", got, "HTTP 503")
 	}
 }
 
@@ -508,7 +509,7 @@ func TestPermanentError(t *testing.T) {
 
 	t.Run("IsTransient returns false for PermanentError", func(t *testing.T) {
 		t.Parallel()
-		pe := Permanent(&HTTPStatusError{Code: 503})
+		pe := Permanent(&StatusError{Code: 503})
 		if IsTransient(pe) {
 			t.Error("PermanentError wrapping transient should not be transient")
 		}
@@ -586,16 +587,16 @@ func TestMarkTransient(t *testing.T) {
 		t.Parallel()
 		// The mark is the outermost verdict, so the caller's knowledge that
 		// this upstream's 409 self-heals wins over the status rule.
-		plain409 := &HTTPStatusError{Code: 409}
+		plain409 := &StatusError{Code: 409}
 		if IsTransient(plain409) {
 			t.Fatal("setup: IsTransient(HTTP 409) = true, want false")
 		}
 		if !IsTransient(MarkTransient(plain409)) {
 			t.Error("IsTransient(MarkTransient(HTTP 409)) = false, want true")
 		}
-		var hse *HTTPStatusError
+		var hse *StatusError
 		if !errors.As(MarkTransient(plain409), &hse) || hse.Code != 409 {
-			t.Error("errors.As(*HTTPStatusError) through the mark failed, want the wrapped status error")
+			t.Error("errors.As(*StatusError) through the mark failed, want the wrapped status error")
 		}
 	})
 
@@ -606,8 +607,9 @@ func TestMarkTransient(t *testing.T) {
 			err  error
 		}{
 			{"permanent wins", Permanent(MarkTransient(errors.New("stop")))},
-			{"auth error stays terminal", MarkTransient(&AuthError{Msg: "invalid API key (401)"})},
-			{"rate limit stays terminal", MarkTransient(&RateLimitError{Msg: "rate limited (429)"})},
+			{"401 stays terminal", MarkTransient(&StatusError{Code: http.StatusUnauthorized})},
+			{"403 stays terminal", MarkTransient(&StatusError{Code: http.StatusForbidden})},
+			{"429 stays terminal", MarkTransient(&StatusError{Code: http.StatusTooManyRequests})},
 			{"caller deadline stays terminal", MarkTransient(context.DeadlineExceeded)},
 			{"caller cancellation stays terminal", MarkTransient(context.Canceled)},
 		}
@@ -627,7 +629,7 @@ func TestMarkTransient(t *testing.T) {
 		_, err := Do(t.Context(), func(_ context.Context) (string, error) {
 			calls++
 			if calls == 1 {
-				return "", MarkTransient(&HTTPStatusError{Code: 409})
+				return "", MarkTransient(&StatusError{Code: 409})
 			}
 			return "ok", nil
 		}, WithMaxAttempts(3), WithBaseDelay(time.Millisecond), WithLabel("test"))
@@ -647,7 +649,7 @@ func TestDo_context_deadline_during_backoff_sleep(t *testing.T) {
 	calls := 0
 	_, err := Do(ctx, func(_ context.Context) (string, error) {
 		calls++
-		return "", &HTTPStatusError{Code: 503}
+		return "", &StatusError{Code: 503}
 	}, WithMaxAttempts(3), WithBaseDelay(10*time.Second), WithLabel("test"))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Do = %v, want context.DeadlineExceeded", err)
@@ -657,39 +659,33 @@ func TestDo_context_deadline_during_backoff_sleep(t *testing.T) {
 	}
 }
 
-// --- HTTPStatusError classification ---
+// --- StatusError classification ---
 
-func TestHTTPStatusError_classification(t *testing.T) {
+func TestStatusError_classification(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		code      int
 		transient bool
-		serverErr bool
-		clientErr bool
 	}{
-		{400, false, false, true},
-		{404, false, false, true},
-		{408, true, false, true},
-		{499, false, false, true},
-		{500, true, true, false},
-		{501, false, true, false},
-		{502, true, true, false},
-		{503, true, true, false},
-		{504, true, true, false},
-		{505, false, true, false},
-		{599, true, true, false},
-		{600, false, true, false},
+		{400, false},
+		{401, false},
+		{403, false},
+		{404, false},
+		{408, true},
+		{429, false},
+		{499, false},
+		{500, true},
+		{501, false},
+		{502, true},
+		{503, true},
+		{504, true},
+		{505, false},
+		{599, true},
+		{600, false},
 	}
 	for _, tt := range tests {
-		e := &HTTPStatusError{Code: tt.code}
-		if e.IsTransient() != tt.transient {
-			t.Errorf("HTTPStatusError{%d}.IsTransient() = %v, want %v", tt.code, e.IsTransient(), tt.transient)
-		}
-		if e.IsServerError() != tt.serverErr {
-			t.Errorf("HTTPStatusError{%d}.IsServerError() = %v, want %v", tt.code, e.IsServerError(), tt.serverErr)
-		}
-		if e.IsClientError() != tt.clientErr {
-			t.Errorf("HTTPStatusError{%d}.IsClientError() = %v, want %v", tt.code, e.IsClientError(), tt.clientErr)
+		if got := (&StatusError{Code: tt.code}).IsTransient(); got != tt.transient {
+			t.Errorf("StatusError{%d}.IsTransient() = %v, want %v", tt.code, got, tt.transient)
 		}
 	}
 }
@@ -776,14 +772,14 @@ func TestSleepCtx_cancelled_context_no_goroutine_leak(t *testing.T) {
 func TestDoRateLimitOnly_zero_attempts_clamps_to_one(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	sentinel := &RateLimitError{Msg: "rl"}
+	sentinel := &StatusError{Code: http.StatusTooManyRequests}
 	err := doRateLimited(t.Context(), 0, time.Second, func(_ context.Context) error {
 		calls++
 		return sentinel
 	})
 	// maxAttempts<1 clamps to 1: fn runs exactly once and its error is returned.
-	if _, ok := errors.AsType[*RateLimitError](err); !ok {
-		t.Errorf("Do(rate-limit-only, maxAttempts=0) = %v, want the single attempt's *RateLimitError", err)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("Do(rate-limit-only, maxAttempts=0) = %v, want the single attempt's 429", err)
 	}
 	if calls != 1 {
 		t.Errorf("fn calls = %d, want 1 (maxAttempts<1 clamps to 1)", calls)
@@ -799,10 +795,10 @@ func TestDoRateLimitOnly_no_sleep_after_final_attempt(t *testing.T) {
 	// (Under WithRateLimitOnly the final attempt's error wins even on a dead
 	// context — the v2 RetryOnRateLimit contract.)
 	err := doRateLimited(ctx, 1, time.Minute, func(_ context.Context) error {
-		return &RateLimitError{Msg: "slow"}
+		return &StatusError{Code: http.StatusTooManyRequests}
 	})
-	if _, ok := errors.AsType[*RateLimitError](err); !ok {
-		t.Errorf("Do(rate-limit-only, maxAttempts=1) = %v, want *RateLimitError (no trailing sleep)", err)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("Do(rate-limit-only, maxAttempts=1) = %v, want a 429 (no trailing sleep)", err)
 	}
 }
 
@@ -813,7 +809,7 @@ func TestDoRateLimitOnly_zero_retry_after_uses_max_wait(t *testing.T) {
 	// RetryAfter==0 must NOT override the (large) max wait, so SleepCtx waits an
 	// hour against the cancelled context and returns its error.
 	err := doRateLimited(ctx, 2, time.Hour, func(_ context.Context) error {
-		return &RateLimitError{Msg: "slow", RetryAfter: 0}
+		return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: 0}
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Do(rate-limit-only, RetryAfter=0) = %v, want context.Canceled (max wait honored)", err)
@@ -831,10 +827,10 @@ func TestDoRateLimitOnly_positive_retry_after_caps_below_max_wait(t *testing.T) 
 	// A positive RetryAfter must shrink the wait to 10ms so the retry completes
 	// well within the deadline and returns the rate-limit error.
 	err := doRateLimited(ctx, 2, 10*time.Second, func(_ context.Context) error {
-		return &RateLimitError{Msg: "slow", RetryAfter: 10 * time.Millisecond}
+		return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: 10 * time.Millisecond}
 	})
-	if _, ok := errors.AsType[*RateLimitError](err); !ok {
-		t.Errorf("Do(rate-limit-only, RetryAfter=10ms) = %v, want *RateLimitError (RetryAfter honored)", err)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("Do(rate-limit-only, RetryAfter=10ms) = %v, want a 429 (RetryAfter honored)", err)
 	}
 }
 
@@ -851,7 +847,7 @@ func TestDoRateLimitOnly_non_positive_max_wait_clamps_to_cap(t *testing.T) {
 	calls := 0
 	err := doRateLimited(ctx, 3, 0, func(_ context.Context) error {
 		calls++
-		return &RateLimitError{Msg: "rl"}
+		return &StatusError{Code: http.StatusTooManyRequests}
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Do(rate-limit-only, maxWait=0) = %v, want context.DeadlineExceeded (clamped wait parked in SleepCtx)", err)
@@ -870,7 +866,7 @@ func TestDo_zero_base_delay_defaults_to_base(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	_, err := Do(ctx, func(_ context.Context) (string, error) {
-		return "", &HTTPStatusError{Code: 503}
+		return "", &StatusError{Code: 503}
 	}, WithMaxAttempts(2), WithBaseDelay(0), WithLabel("test"))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Do(baseDelay=0) = %v, want context.DeadlineExceeded (delay defaulted)", err)
@@ -903,7 +899,7 @@ func TestDo_success_after_one_retry_logs_attempt_counts(t *testing.T) {
 		func(_ context.Context) (int, error) {
 			calls++
 			if calls == 1 {
-				return 0, &HTTPStatusError{Code: 503}
+				return 0, &StatusError{Code: 503}
 			}
 			return 42, nil
 		},
@@ -931,7 +927,7 @@ func TestDo_no_retry_log_after_final_attempt(t *testing.T) {
 	_, err := Do(t.Context(),
 		func(_ context.Context) (string, error) {
 			calls++
-			return "", &HTTPStatusError{Code: 503}
+			return "", &StatusError{Code: 503}
 		},
 		WithMaxAttempts(2), WithBaseDelay(time.Microsecond), WithLabel("lbl"))
 	if err == nil {
@@ -996,7 +992,7 @@ func TestDo_WithLogger_routes_all_lines(t *testing.T) {
 
 	_, err := Do(t.Context(),
 		func(_ context.Context) (string, error) {
-			return "", &HTTPStatusError{Code: 503}
+			return "", &StatusError{Code: 503}
 		},
 		WithMaxAttempts(2), WithBaseDelay(time.Microsecond), WithLabel("lbl"), WithLogger(bufLogger(&callBuf)))
 	if err == nil {
@@ -1022,7 +1018,7 @@ func TestDoRateLimitOnly_retry_debug_log_reports_one_indexed_attempt(t *testing.
 	err := doRateLimited(t.Context(), 3, time.Millisecond, func(_ context.Context) error {
 		calls++
 		if calls == 1 {
-			return &RateLimitError{Msg: "429"}
+			return &StatusError{Code: http.StatusTooManyRequests}
 		}
 		return nil
 	})
@@ -1052,7 +1048,7 @@ func TestDoRateLimitOnly_zero_max_wait_still_honors_hint(t *testing.T) {
 	err := doRateLimited(t.Context(), 2, 0, func(_ context.Context) error {
 		calls++
 		if calls == 1 {
-			return &RateLimitError{Msg: "rl", RetryAfter: 5 * time.Millisecond}
+			return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: 5 * time.Millisecond}
 		}
 		return nil
 	})
@@ -1074,7 +1070,7 @@ func TestDoRateLimitOnly_exhaustion_warn_message(t *testing.T) {
 	swapDefaultLogger(t, bufLogger(&buf))
 
 	err := doRateLimited(t.Context(), 2, time.Millisecond, func(_ context.Context) error {
-		return &RateLimitError{Msg: "rl", RetryAfter: time.Millisecond}
+		return &StatusError{Code: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
 	})
 	if err == nil {
 		t.Fatal("expected exhaustion error")
@@ -1111,7 +1107,7 @@ func TestDo_WithExhaustedLevel_demotes_the_terminal_line(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Do(t.Context(),
 		func(_ context.Context) (string, error) {
-			return "", &HTTPStatusError{Code: 503}
+			return "", &StatusError{Code: 503}
 		},
 		WithMaxAttempts(3), WithBaseDelay(time.Microsecond), WithLabel("lbl"),
 		WithLogger(bufLogger(&buf)), WithExhaustedLevel(slog.LevelDebug))
@@ -1136,7 +1132,7 @@ func TestDo_WithExhaustedLevel_demotes_the_terminal_line(t *testing.T) {
 // to Debug so a one-attempt door does not double-report) can be raised to Warn
 // by a caller that wants the verdict there.
 func TestDo_WithExhaustedLevel_overrides_both_default_rules(t *testing.T) {
-	fail := func(_ context.Context) (string, error) { return "", &HTTPStatusError{Code: 503} }
+	fail := func(_ context.Context) (string, error) { return "", &StatusError{Code: 503} }
 
 	var multi bytes.Buffer
 	if _, err := Do(t.Context(), fail,

@@ -497,7 +497,7 @@ func TestRetryClient_context_cancel_aborts_stalled_attempt(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 
-	client := httpclient.NewRetryClient(srv.Client().Transport, httpclient.RefuseAllRedirects, httpclient.TransportConfig{
+	client := httpclient.NewRetry(srv.Client().Transport, httpclient.RefuseAllRedirects, httpclient.TransportConfig{
 		BaseDelay:   time.Millisecond,
 		MaxAttempts: 3,
 	})

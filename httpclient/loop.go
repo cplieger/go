@@ -39,7 +39,7 @@ type Option interface {
 	GetOption
 }
 
-// rlMode selects how Do treats *RateLimitError.
+// rlMode selects how Do treats a 429 *StatusError.
 type rlMode uint8
 
 const (
@@ -183,20 +183,17 @@ func (o rateLimitOption) applyDo(c *loopConfig) {
 	c.rlMaxWait = o.maxWait
 }
 
-// WithRateLimitRetry makes Do additionally treat *RateLimitError as retryable,
-// alongside the transient set. The wait before a rate-limit retry is
-// min(err.RetryAfter, maxWait) when the error carries a positive hint, else
-// maxWait; a non-positive maxWait falls back to RetryAfterCap, so the wait is
-// always positive and a canceled context is observed before every retry.
-// Transient errors keep their jittered-backoff waits (with the RetryAfterHint
-// override), and the exponential base advances on every retry. Mutually
-// exclusive with WithRateLimitOnly (Do returns a configuration error when
-// both are supplied).
+// WithRateLimitRetry makes Do also retry a 429 *[StatusError], waiting
+// min(RetryAfter, maxWait) when it carries a positive RetryAfter, else maxWait.
+// A non-positive maxWait means RetryAfterCap, so the wait is always positive
+// and a canceled context is observed before every retry. Transient errors keep
+// their backoff waits and the exponential base advances on every retry.
+// Combined with WithRateLimitOnly, Do returns a configuration error.
 func WithRateLimitRetry(maxWait time.Duration) DoOption {
 	return rateLimitOption{maxWait: maxWait, mode: rlRetry}
 }
 
-// WithRateLimitOnly makes Do retry ONLY *RateLimitError (matched through
+// WithRateLimitOnly makes Do retry ONLY a 429 *[StatusError] (matched through
 // wrapped errors); every other error, including transient transport errors,
 // is returned immediately. The wait semantics match WithRateLimitRetry, the
 // terminal Warn is "rate limit retries exhausted", and the FINAL attempt's
@@ -409,7 +406,7 @@ func markAttemptTimeout(ctx, attemptCtx context.Context, err error) error {
 // explicit wait to honor (zero means jittered backoff).
 func (c *loopConfig) classify(err error) (retryable bool, explicitWait time.Duration) {
 	if c.rlMode != rlNone {
-		if rl, ok := errors.AsType[*RateLimitError](err); ok {
+		if rl, ok := errors.AsType[*StatusError](err); ok && rl.Code == http.StatusTooManyRequests {
 			wait := c.rlMaxWait
 			if rl.RetryAfter > 0 {
 				wait = min(rl.RetryAfter, c.rlMaxWait)
@@ -464,8 +461,8 @@ func (c *loopConfig) exhaustedLevel() slog.Level {
 
 // Do calls fn up to WithMaxAttempts times (total) with jittered exponential
 // backoff and returns the first success; a non-retryable error returns at
-// once. By default only IsTransient errors retry (a *RateLimitError is not
-// transient) and a positive RetryAfterHint replaces the backoff wait. After a
+// once. By default only IsTransient errors retry (a 429 is not transient)
+// and a positive RetryAfterHint replaces the backoff wait. After a
 // failed attempt a canceled context returns ctx.Err(), except under
 // WithRateLimitOnly, where the final attempt's error wins. Retries log at
 // Debug to WithLogger; exhaustion logs at Warn, or Debug for a single-attempt
@@ -557,10 +554,9 @@ func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...G
 }
 
 // retryAfterError carries a capped Retry-After hint on GetBytes's exhaustion
-// error so an enclosing retry loop can honor it. It deliberately does NOT
-// implement Transient: whether an exhausted GetBytes is worth another outer
-// attempt is the caller's policy, and claiming transience here would silently
-// widen every existing consumer's retryable set.
+// error so an enclosing retry loop can honor it. It does not implement
+// Transient, so IsTransient reads the wrapped failure: the *StatusError's code
+// or the transport error's cause.
 type retryAfterError struct {
 	err  error
 	hint time.Duration
@@ -598,20 +594,15 @@ func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *ge
 		return nil, retry, 0, err
 	}
 	if retry {
-		retryAfter = retryAfterOf(resp)
 		DrainClose(resp.Body)
-		return nil, true, retryAfter, &StatusError{Code: resp.StatusCode, URL: reqURL}
+		return nil, true, retryAfterOf(resp), newStatusError(resp, reqURL)
 	}
-	// Success is any 2xx. Everything else is a permanent failure for this
-	// door: it returns body bytes, and a redirect stub or an error page is not
-	// the requested resource. CheckHTTPStatus draws the same line (nil only
-	// for 2xx), so the band decision is delegated to it rather than
-	// restated here — the one thing GetBytes substitutes is the error VALUE:
-	// its *StatusError carries the request URL (rendered redacted), which
-	// consumers type-assert on, where the classifier's errors are URL-less.
-	if CheckHTTPStatus(resp) != nil {
+	// Any other non-2xx is permanent for this door: a redirect stub or an error
+	// page is not the requested resource. CheckStatus owns the success band;
+	// this door's error adds the request URL.
+	if CheckStatus(resp) != nil {
 		DrainClose(resp.Body)
-		return nil, false, 0, &StatusError{Code: resp.StatusCode, URL: reqURL}
+		return nil, false, 0, newStatusError(resp, reqURL)
 	}
 	// Read the body with overflow detection: an over-limit body fails loud with
 	// *ResponseTooLargeError rather than being silently truncated (a truncated

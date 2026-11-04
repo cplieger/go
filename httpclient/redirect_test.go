@@ -305,13 +305,13 @@ func TestRefuseAllRedirects_identity(t *testing.T) {
 	}
 }
 
-// TestRefuseAllRedirects_surfaced_3xx_is_a_CheckHTTPStatus_error closes the
+// TestRefuseAllRedirects_surfaced_3xx_is_a_CheckStatus_error closes the
 // loop the v4 strict window exists for: the response RefuseAllRedirects hands
 // back carries a nil error, so the caller's status handling is the only thing
 // standing between an unfollowed redirect and a "success". Since v4
-// CheckHTTPStatus reports it as *HTTPStatusError; under the old 200-399 window
+// CheckStatus reports it as *StatusError; under the old 200-399 window
 // it returned nil and the redirect stub passed as a completed request.
-func TestRefuseAllRedirects_surfaced_3xx_is_a_CheckHTTPStatus_error(t *testing.T) {
+func TestRefuseAllRedirects_surfaced_3xx_is_a_CheckStatus_error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/hop", http.StatusFound)
 	}))
@@ -328,10 +328,10 @@ func TestRefuseAllRedirects_surfaced_3xx_is_a_CheckHTTPStatus_error(t *testing.T
 	}
 	defer resp.Body.Close()
 
-	statusErr := httpclient.CheckHTTPStatus(resp)
-	var se *httpclient.HTTPStatusError
+	statusErr := httpclient.CheckStatus(resp)
+	var se *httpclient.StatusError
 	if !errors.As(statusErr, &se) || se.Code != http.StatusFound {
-		t.Fatalf("CheckHTTPStatus(surfaced 302) = %v, want *HTTPStatusError{302}", statusErr)
+		t.Fatalf("CheckStatus(surfaced 302) = %v, want *StatusError{302}", statusErr)
 	}
 	if httpclient.IsTransient(statusErr) {
 		t.Error("IsTransient(surfaced 302) = true, want false")

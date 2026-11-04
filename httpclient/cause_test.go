@@ -104,7 +104,7 @@ func TestCauseOf(t *testing.T) {
 	}{
 		{"nil", func(*testing.T) error { return nil }, httpclient.CauseUnknown},
 		{"plain", func(*testing.T) error { return errors.New("decode failed") }, httpclient.CauseUnknown},
-		{"status_answer", func(*testing.T) error { return &httpclient.HTTPStatusError{Code: 503} }, httpclient.CauseUnknown},
+		{"status_answer", func(*testing.T) error { return &httpclient.StatusError{Code: 503} }, httpclient.CauseUnknown},
 		{"caller_canceled", func(*testing.T) error { return fmt.Errorf("get: %w", context.Canceled) }, httpclient.CauseUnknown},
 		{"bare_eof", func(*testing.T) error { return io.EOF }, httpclient.CauseUnknown},
 		{"dns_not_found_wrapped_twice", func(*testing.T) error {

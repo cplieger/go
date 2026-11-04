@@ -317,7 +317,7 @@ func (e *capabilityError) IsTransient() bool { return e.transient }
 
 // transientErrors are the classes IsTransient reports as retryable, one per
 // mechanism in the classifier: the AttemptTimeout mark, the capability
-// interface, the built-in *HTTPStatusError transient band, MarkTransient, a
+// interface, the built-in *StatusError transient band, MarkTransient, a
 // net.Error timeout, io.ErrUnexpectedEOF, the dropped-connection errnos, and a
 // DNS failure. Each appears bare and, where a consumer would realistically wrap
 // it, at depth.
@@ -325,9 +325,9 @@ var transientErrors = map[string]error{
 	"attempt_timeout":           AttemptTimeout(context.DeadlineExceeded),
 	"attempt_timeout_wrapped":   wrapChain(AttemptTimeout(context.DeadlineExceeded), 8),
 	"capability_says_transient": &capabilityError{transient: true},
-	"http_500":                  &HTTPStatusError{Code: 500},
-	"http_502":                  &HTTPStatusError{Code: 502},
-	"http_503":                  &HTTPStatusError{Code: 503},
+	"http_500":                  &StatusError{Code: 500},
+	"http_502":                  &StatusError{Code: 502},
+	"http_503":                  &StatusError{Code: 503},
 	"marked_transient":          MarkTransient(errors.New("upstream 500 always clears")),
 	"net_timeout":               &benchNetError{timeout: true},
 	"unexpected_eof":            io.ErrUnexpectedEOF,
@@ -346,26 +346,26 @@ var transientErrors = map[string]error{
 }
 
 // nonTransientErrors are the classes IsTransient refuses, one per standing
-// rejection: nil, Permanent (including over an otherwise-transient error), an
-// *AuthError, a *RateLimitError, a caller context error in both flavours, a
+// rejection: nil, Permanent (including over an otherwise-transient error), a
+// 401 and a 429 *StatusError, a caller context error in both flavours, a
 // capability type that declares itself non-transient, a status outside the
 // transient band, and an error the classifier recognizes not at all. The plain
 // error is the classifier's longest path: every check runs and none matches.
 var nonTransientErrors = map[string]error{
 	"nil":                           nil,
 	"permanent":                     Permanent(errors.New("bad request")),
-	"permanent_over_transient":      Permanent(&HTTPStatusError{Code: 503}),
+	"permanent_over_transient":      Permanent(&StatusError{Code: 503}),
 	"permanent_over_attempt_bound":  Permanent(AttemptTimeout(context.DeadlineExceeded)),
-	"auth_error":                    &AuthError{Msg: "invalid API key (401)"},
-	"rate_limit_error":              &RateLimitError{Msg: "rate limited (429)"},
+	"auth_error":                    &StatusError{Code: http.StatusUnauthorized},
+	"rate_limit_error":              &StatusError{Code: http.StatusTooManyRequests},
 	"caller_deadline":               context.DeadlineExceeded,
 	"caller_deadline_wrapped":       wrapChain(context.DeadlineExceeded, 8),
 	"caller_canceled":               context.Canceled,
 	"capability_says_not_transient": &capabilityError{transient: false},
 	"net_non_timeout":               &benchNetError{timeout: false},
 	"net_op_error_timeout_text":     &net.OpError{Op: "read", Net: "tcp", Err: errors.New("i/o timeout")},
-	"http_400":                      &HTTPStatusError{Code: 400},
-	"http_501":                      &HTTPStatusError{Code: 501},
+	"http_400":                      &StatusError{Code: 400},
+	"http_501":                      &StatusError{Code: 501},
 	"bare_eof":                      io.EOF,
 	"unrecognized":                  errors.New("something else went wrong"),
 	"unrecognized_depth_8":          wrapChain(errors.New("something else went wrong"), 8),
@@ -545,7 +545,7 @@ func TestBackoffPrimitivesAllocations(t *testing.T) {
 // cooperating upstream actually sends: delta-seconds, the form rate-limiters
 // emit, and an absent header, what most responses carry. Both are free and on
 // the per-response path: GetBytes parses Retry-After on every retryable status,
-// and CheckHTTPStatus on every 429. The date forms measure 2 to 8 allocations,
+// and CheckStatus on every 429. The date forms measure 2 to 8 allocations,
 // so they are NOT in this table; their contract is the bounded one below.
 func TestParseRetryAfterAllocationsOnWellFormedValues(t *testing.T) {
 	headers := map[string]string{
@@ -743,7 +743,7 @@ func TestParseRetryAfterCostDoesNotScaleWithHeaderLength(t *testing.T) {
 }
 
 // TestParseRetryAfterResponseAllocations extends the same contract to the
-// response-shaped door, which is the one CheckHTTPStatus calls on every 429. The
+// response-shaped door, which is the one CheckStatus calls on every 429. The
 // header lookup itself must not allocate, so a canonical-key hit stays free and
 // an oversized value stays bounded.
 func TestParseRetryAfterResponseAllocations(t *testing.T) {
