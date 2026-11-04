@@ -580,8 +580,9 @@ func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 // rise from 260 to 380 allocations is a 1.46 ratio and stays silent, yet every
 // consumer with a hundred series pays it on every scrape. The rate is a slope
 // between two registry sizes, cancelling the fixed cost; only intervals of at
-// least minAllocSpan are gated, since -race makes the totals noisy. Gating every wide
-// interval makes it a linearity check: a per-metric re-scan breaches at 100->1000.
+// least minAllocSpan are gated, since -race makes the totals noisy. Gating
+// every wide interval makes it a linearity check: a per-metric re-scan
+// breaches at 100->1000.
 func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 	// minAllocSpan is the smallest interval whose slope is gated. Under -race,
 	// sync.Pool drops a quarter of its Puts at random, so fmt's printer pool
@@ -609,12 +610,12 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 		sizes []int
 		build func(n int) *Registry
 		// max is the per-unit ceiling for a plain build, maxRace for a -race
-		// build (the detector defeats some escape analysis and costs a third
-		// more). Each is the highest gated rate measured over six runs plus half
-		// an allocation, so one added allocation per unit breaches it while
-		// drift under half an allocation, such as a toolchain bump moving fmt's
-		// internals, does not; such a red is a re-measurement, and every rate
-		// the sweep computes is logged.
+		// build (the detector defeats some escape analysis and costs 10 to 30%
+		// more). Each is the highest gated rate over six runs plus half an
+		// allocation, rounded to a tenth: one added allocation per unit breaches
+		// it, while drift under half an allocation, such as a toolchain bump
+		// moving fmt's internals, does not. Such a red is a re-measurement, and
+		// every rate the sweep computes is logged.
 		max     float64
 		maxRace float64
 	}{
