@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/yamlenv"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // loadConfig is the config shape most Load tests decode into: a plain string,
@@ -53,13 +53,11 @@ type durConfig struct {
 	Name    string         `yaml:"name"`
 }
 
-// appOwned is the passthrough predicate the subflux consumer shape uses: an
-// error is app-owned when it is neither a *yaml.TypeError nor "yaml:"-prefixed.
-func appOwned(err error) bool {
-	if _, ok := errors.AsType[*yaml.TypeError](err); ok {
-		return false
-	}
-	return !strings.HasPrefix(err.Error(), "yaml:")
+// claimUnmarshaler is the recommended WithErrorPassthrough predicate: it
+// claims exactly the errors Load classified as the config type's own.
+func claimUnmarshaler(err error) bool {
+	_, ok := errors.AsType[*yamlenv.UnmarshalerError](err)
+	return ok
 }
 
 func TestLoad(t *testing.T) {
@@ -186,7 +184,7 @@ func TestLoad(t *testing.T) {
 	t.Run("app-owned decode error passes through under the caller's predicate", func(t *testing.T) {
 		var cfg durConfig
 		_, err := yamlenv.Load([]byte("timeout: notaduration\n"), &cfg, allowAppPrefix,
-			yamlenv.WithErrorPassthrough(appOwned))
+			yamlenv.WithErrorPassthrough(claimUnmarshaler))
 		if err == nil || !strings.Contains(err.Error(), "invalid duration (value withheld)") {
 			t.Fatalf("err = %v, want the app-owned vocabulary unchanged", err)
 		}
@@ -301,81 +299,39 @@ func TestLoad(t *testing.T) {
 	})
 }
 
+// relayDecode is a config type whose UnmarshalYAML wraps go-yaml's own decode
+// error with %w, so the cause chain reaches a *yaml.LoadErrors.
+type relayDecode struct{ n int }
+
+// UnmarshalYAML decodes an int and wraps go-yaml's error on failure.
+func (r *relayDecode) UnmarshalYAML(value *yaml.Node) error {
+	if err := value.Decode(&r.n); err != nil {
+		return fmt.Errorf("relay: %w", err)
+	}
+	return nil
+}
+
+// mimicYAML is a config type whose UnmarshalYAML error is spelled like one of
+// go-yaml's own constructor messages.
+type mimicYAML struct{}
+
+// UnmarshalYAML always fails with go-yaml's wrong-type wording.
+func (*mimicYAML) UnmarshalYAML(*yaml.Node) error {
+	return errors.New("cannot construct !!str `x` into int")
+}
+
 // TestLoadClassifiesUnmarshalerErrors pins the typed classification of the
-// decode step: a failure produced by the config type's OWN UnmarshalYAML is
-// detectable — and claimable through WithErrorPassthrough — as
-// *yamlenv.UnmarshalerError with errors.As, carrying the app's message
-// verbatim and the original error underneath, while yaml.v3's own decode
-// errors never receive the type. The old string-prefix predicate (the
-// appOwned helper above) keeps working through the wrap; this is the typed
-// replacement consumers migrate to.
+// decode step: a failure produced only by the config type's own UnmarshalYAML
+// is claimable as *yamlenv.UnmarshalerError with the app's message verbatim,
+// while go-yaml's own errors, alone or mixed with a hook's, never are.
 func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 	t.Parallel()
-	claimUnmarshaler := func(err error) bool {
-		_, ok := errors.AsType[*yamlenv.UnmarshalerError](err)
-		return ok
-	}
-
-	t.Run("yaml's own non-TypeError decode errors never carry the type", func(t *testing.T) {
-		t.Parallel()
-		// These two are the whole reason classifyDecodeError keeps a textual
-		// leg. yaml.v3 raises every non-TypeError decode failure through
-		// failf, which panics with fmt.Errorf("yaml: "+format, …) — a bare
-		// *errors.errorString carrying NO exported type and, for most of the
-		// ~19 failf sites, NO "line N:" locator either. So the prefix is the
-		// only structural signal that separates them from an error the config
-		// type's own UnmarshalYAML returned verbatim.
-		//
-		// This is the gate on that assumption: if yaml.v3 ever rewords or
-		// drops the prefix, these fail loudly here instead of silently
-		// reclassifying every alias and binary fault as app-owned, which
-		// would withhold the diagnostic on the fail-closed path.
-		//
-		// Deliberately NOT matched with sanitize.go's parseLineRe: neither
-		// message carries a line locator, so the narrower pattern would
-		// misclassify both.
-		for _, tc := range []struct {
-			name   string
-			doc    string
-			secret string
-		}{
-			{"unknown anchor", "api_key: *nope\n", "nope"},
-			{"invalid base64", "api_key: !!binary |\n  @@@not-base64@@@\n", "not-base64"},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				var cfg loadConfig
-				_, err := yamlenv.Load([]byte(tc.doc), &cfg, allowAppPrefix,
-					yamlenv.WithErrorPassthrough(claimUnmarshaler))
-				if err == nil {
-					t.Fatal("Load = nil, want yaml.v3's own decode error")
-				}
-				if _, ok := errors.AsType[*yaml.TypeError](err); ok {
-					t.Fatalf("err = %v, want a non-TypeError failure so the prefix arm is what classifies it", err)
-				}
-				if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
-					t.Errorf("yaml.v3's own %s error was classified app-owned: %v", tc.name, err)
-				}
-				// The consequence that makes the classification load-bearing:
-				// this caller claims UnmarshalerErrors through its
-				// passthrough, so a misclassification here would return
-				// yaml.v3's message UNSANITIZED and disclose the document
-				// fragment it names.
-				if strings.Contains(err.Error(), tc.secret) {
-					t.Errorf("err = %q, leaked the document fragment %q", err, tc.secret)
-				}
-			})
-		}
-	})
 
 	t.Run("app unmarshaler failure is claimable by type", func(t *testing.T) {
 		t.Parallel()
 		var cfg durConfig
 		_, err := yamlenv.Load([]byte("timeout: notaduration\n"), &cfg, allowAppPrefix,
 			yamlenv.WithErrorPassthrough(claimUnmarshaler))
-		if err == nil {
-			t.Fatal("Load = nil, want the app-owned decode error")
-		}
 		ue, ok := errors.AsType[*yamlenv.UnmarshalerError](err)
 		if !ok {
 			t.Fatalf("Load = %v (%T), want *UnmarshalerError reachable with errors.As", err, err)
@@ -384,97 +340,272 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 			t.Errorf("Error() = %q, want the app vocabulary verbatim: %q", err.Error(), want)
 		}
 		if ue.Err == nil || ue.Err.Error() != err.Error() {
-			t.Errorf("Err = %v, want the unmarshaler's error unchanged under Unwrap", ue.Err)
+			t.Errorf("Err = %v, want the unmarshaler's error unchanged", ue.Err)
+		}
+		if _, ok := errors.AsType[*yaml.LoadError](err); ok {
+			t.Errorf("errors.As reaches go-yaml's *LoadError through the wrap: %v", err)
+		}
+	})
+
+	t.Run("several app failures are all reachable", func(t *testing.T) {
+		t.Parallel()
+		var cfg struct {
+			A strictDuration `yaml:"a"`
+			B strictDuration `yaml:"b"`
+		}
+		_, err := yamlenv.Load([]byte("a: x\nb: y\n"), &cfg, allowAppPrefix,
+			yamlenv.WithErrorPassthrough(claimUnmarshaler))
+		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); !ok {
+			t.Fatalf("Load = %v (%T), want *UnmarshalerError", err, err)
+		}
+		want := "line 1: invalid duration (value withheld)\nline 2: invalid duration (value withheld)"
+		if err.Error() != want {
+			t.Errorf("Error() = %q, want both app messages in document order %q", err.Error(), want)
 		}
 	})
 
 	t.Run("reachable through a consumer's own wrap", func(t *testing.T) {
 		t.Parallel()
-		// The consumer shape: a config loader returning
-		// fmt.Errorf("parse YAML: %w", err) around Load's error.
 		var cfg durConfig
 		_, err := yamlenv.Load([]byte("timeout: notaduration\n"), &cfg, allowAppPrefix,
 			yamlenv.WithErrorPassthrough(claimUnmarshaler))
-		if err == nil {
-			t.Fatal("Load = nil, want the app-owned decode error")
-		}
 		wrapped := fmt.Errorf("parse YAML: %w", err)
 		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](wrapped); !ok {
 			t.Errorf("errors.As through a consumer wrap = false, want the type reachable: %v", wrapped)
 		}
 	})
 
-	t.Run("yaml's own wrong-type error never carries the type", func(t *testing.T) {
-		t.Parallel()
-		var cfg loadConfig
-		_, err := yamlenv.Load([]byte("port: notanint\n"), &cfg, allowAppPrefix,
-			yamlenv.WithErrorPassthrough(claimUnmarshaler))
-		if err == nil {
-			t.Fatal("Load = nil, want a decode error")
-		}
-		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
-			t.Errorf("yaml.v3's own decode error was classified app-owned: %v", err)
-		}
-		// The typed predicate could not claim it, so it was sanitized: the
-		// structurally-safe predicate can never re-open the leak.
-		if strings.Contains(err.Error(), "notanint") {
-			t.Errorf("err = %q, leaked the scalar excerpt", err)
-		}
-		if !strings.Contains(err.Error(), "cannot unmarshal") {
-			t.Errorf("err = %q, want the sanitized wrong-type shape", err)
-		}
-	})
+	// Every case here is a decode the caller claims through its passthrough,
+	// so a misclassification would return go-yaml's message unsanitized.
+	for name, tc := range map[string]struct {
+		doc    string
+		out    any
+		secret string
+	}{
+		"wrong type": {
+			doc: "port: notanint\n", out: &loadConfig{}, secret: "notanint",
+		},
+		"invalid base64": {
+			doc: "api_key: !!binary |\n  @@@not-base64@@@\n", out: &struct {
+				APIKey []byte `yaml:"api_key"`
+			}{}, secret: "not-base64",
+		},
+		"app failure beside a wrong type": {
+			doc: "timeout: x\nport: hunter2-mixed\n", out: &struct {
+				Timeout strictDuration `yaml:"timeout"`
+				Port    int            `yaml:"port"`
+			}{}, secret: "hunter2",
+		},
+		"hook relaying go-yaml's error": {
+			doc: "timeout: [hunter2-relayed]\n", out: &durConfig{}, secret: "hunter2",
+		},
+		"hook wrapping go-yaml's error": {
+			doc: "n: hunter2-wrapped\n", out: &struct {
+				N relayDecode `yaml:"n"`
+			}{}, secret: "hunter2",
+		},
+		"hook error spelled like go-yaml's": {
+			doc: "m: x\n", out: &struct {
+				M mimicYAML `yaml:"m"`
+			}{}, secret: "`x`",
+		},
+		"resolver error": {
+			doc: "port: !!int hunter2-resolver\n", out: &loadConfig{}, secret: "hunter2",
+		},
+	} {
+		t.Run("go-yaml's own error is never claimable: "+name, func(t *testing.T) {
+			t.Parallel()
+			_, err := yamlenv.Load([]byte(tc.doc), tc.out, allowAppPrefix,
+				yamlenv.WithErrorPassthrough(claimUnmarshaler))
+			if err == nil {
+				t.Fatal("Load = nil, want a decode error")
+			}
+			if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
+				t.Errorf("go-yaml's own error was classified app-owned: %v", err)
+			}
+			if strings.Contains(err.Error(), tc.secret) {
+				t.Errorf("err = %q, leaked the document fragment %q", err, tc.secret)
+			}
+		})
+	}
 
 	t.Run("without a passthrough the classification stays fail-closed", func(t *testing.T) {
 		t.Parallel()
 		var cfg durConfig
 		_, err := yamlenv.Load([]byte("timeout: notaduration\n"), &cfg, allowAppPrefix)
-		if err == nil {
-			t.Fatal("Load = nil, want a decode error")
-		}
 		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
 			t.Errorf("sanitized error still carries the typed wrap: %v", err)
 		}
-		if strings.Contains(err.Error(), "invalid duration") {
-			t.Errorf("err = %q, want the app vocabulary withheld without an explicit opt-in", err)
+		const want = "decode errors: line 1, column 10: value rejected (details withheld: they may embed an expanded secret)"
+		if err == nil || err.Error() != want {
+			t.Errorf("err = %v, want %q", err, want)
 		}
 	})
 }
 
+// TestLoadErrorShapes pins the exact text Load returns for each failure shape.
+func TestLoadErrorShapes(t *testing.T) {
+	t.Parallel()
+	const withheld = "configuration could not be decoded (details withheld: they may embed an expanded secret)"
+	tests := map[string]struct {
+		doc  string
+		opts []yamlenv.LoadOption
+		want string
+	}{
+		"parse error keeps only its position": {
+			doc:  "api_key: a\n\thunter2: b\n",
+			want: "line 2, column 1: " + withheld,
+		},
+		"unknown anchor keeps only its position": {
+			doc:  "api_key: *hunter2\n",
+			want: "line 1, column 10: " + withheld,
+		},
+		"wrong type": {
+			doc:  "port: hunter2\n",
+			want: "decode errors: line 1, column 7: cannot construct !!str <redacted> into int",
+		},
+		"duplicate key": {
+			doc:  "api_key: a\napi_key: hunter2\n",
+			want: "decode errors: line 2, column 1: mapping key <redacted> already defined at line 1",
+		},
+		"unknown key redacted": {
+			doc:  "api_key: a\nhunter2: b\n",
+			want: "decode errors: line 2, column 1: unknown configuration key <redacted>",
+		},
+		"unknown key echoed": {
+			doc:  "nested:\n  levl: 1\n",
+			opts: []yamlenv.LoadOption{yamlenv.WithSanitizeOptions(yamlenv.WithUnknownKeyEcho(true))},
+			want: `decode errors: line 2, column 3: unknown configuration key "levl"`,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var cfg loadConfig
+			_, err := yamlenv.Load([]byte(tt.doc), &cfg, allowAppPrefix, tt.opts...)
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("Load = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoadUnknownKeysBesideAppFailure pins that a custom UnmarshalYAML
+// rejecting a still-literal ${VAR} in the pre-expansion probe does not hide
+// an unknown key elsewhere in the document.
+func TestLoadUnknownKeysBesideAppFailure(t *testing.T) {
+	var cfg durConfig
+	_, err := yamlenv.Load([]byte("timeout: ${APP_TIMEOUT}\ntypo_key: x\n"), &cfg, allowAppPrefix,
+		yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_TIMEOUT": "5s"})),
+		yamlenv.WithSanitizeOptions(yamlenv.WithUnknownKeyEcho(true)))
+	if want := `decode errors: line 2, column 1: unknown configuration key "typo_key"`; err == nil || err.Error() != want {
+		t.Fatalf("Load = %v, want %q", err, want)
+	}
+}
+
 // TestLoadNeverLeaksSecrets pins Load's whole-pipeline confidentiality
-// contract: a secret — pasted literally into the document, or expanded into
-// it from the environment — never survives into any returned error text, on
-// both the pre-expansion parse path and the post-expansion decode path.
+// contract: a secret, pasted literally into the document or expanded into it
+// from the environment, never survives into any returned error text.
 func TestLoadNeverLeaksSecrets(t *testing.T) {
 	const secret = "hunter2-load-secret" //gitleaks:allow (planted fixture; the test asserts it never survives)
+	lookup := yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": secret}))
+	echo := yamlenv.WithSanitizeOptions(yamlenv.WithUnknownKeyEcho(true))
 
 	t.Run("pre-expansion parse error with a pasted literal secret", func(t *testing.T) {
-		// An unquoted literal secret read as an alias: yaml.v3's raw error is
-		// "unknown anchor '<secret>' referenced".
 		var cfg loadConfig
 		_, err := yamlenv.Load([]byte("api_key: *"+secret+"\n"), &cfg, allowAppPrefix)
 		if err == nil {
 			t.Fatal("Load = nil, want parse error")
 		}
-		if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "hunter2") {
+		if strings.Contains(err.Error(), "hunter2") {
 			t.Errorf("parse error leaks the pasted secret: %q", err)
 		}
 	})
 
 	t.Run("post-expansion decode error with an expanded secret", func(t *testing.T) {
-		t.Setenv("APP_SECRET", secret)
 		var cfg struct {
 			Flag bool `yaml:"flag"`
 		}
-		_, err := yamlenv.Load([]byte("flag: ${APP_SECRET}\n"), &cfg, allowAppPrefix)
+		_, err := yamlenv.Load([]byte("flag: ${APP_SECRET}\n"), &cfg, allowAppPrefix, lookup)
 		if err == nil {
 			t.Fatal("Load = nil, want decode error")
 		}
-		if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "hunter2") {
+		if strings.Contains(err.Error(), "hunter2") {
 			t.Errorf("decode error leaks the expanded secret: %q", err)
 		}
-		if !strings.Contains(err.Error(), "cannot unmarshal !!str <redacted> into bool") {
+		if !strings.Contains(err.Error(), "cannot construct !!str <redacted> into bool") {
 			t.Errorf("err = %q, want the redacted wrong-type shape kept actionable", err)
 		}
 	})
+
+	t.Run("alias key naming an expanded value is echoed pre-expansion", func(t *testing.T) {
+		var cfg struct {
+			Anchor string `yaml:"anchor"`
+		}
+		_, err := yamlenv.Load([]byte("anchor: &a ${APP_SECRET}\n*a : 1\n"), &cfg, allowAppPrefix, lookup, echo)
+		if err == nil {
+			t.Fatal("Load = nil, want unknown-key error")
+		}
+		if strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("unknown-key echo leaks the expanded secret: %q", err)
+		}
+		if !strings.Contains(err.Error(), `unknown configuration key "${APP_SECRET}"`) {
+			t.Errorf("err = %q, want the literal pre-expansion key echoed", err)
+		}
+	})
+
+	t.Run("expanded secret into a custom-tagged node", func(t *testing.T) {
+		var cfg loadConfig
+		_, err := yamlenv.Load([]byte("port: !!str ${APP_SECRET}\n"), &cfg, allowAppPrefix, lookup)
+		if err == nil {
+			t.Fatal("Load = nil, want decode error")
+		}
+		if strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("decode error leaks the expanded secret: %q", err)
+		}
+	})
+}
+
+// TestLoadResourceLimits pins go-yaml's default refusals through Load: an
+// alias bomb and nesting past 10,000 levels both fail instead of exhausting
+// memory or stack. yamlenv sets no limit of its own, so this is the gate
+// against a go-yaml upgrade relaxing DefaultAliasCheck or DefaultDepthCheck.
+func TestLoadResourceLimits(t *testing.T) {
+	t.Parallel()
+	var bomb strings.Builder
+	bomb.WriteString("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n")
+	for i := 1; i <= 8; i++ {
+		fmt.Fprintf(&bomb, "a%d: &a%d [", i, i)
+		for j := range 10 {
+			if j > 0 {
+				bomb.WriteString(", ")
+			}
+			fmt.Fprintf(&bomb, "*a%d", i-1)
+		}
+		bomb.WriteString("]\n")
+	}
+	tests := map[string]string{
+		"alias expansion": bomb.String(),
+		"flow depth":      "a: " + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + "\n",
+		"block depth": func() string {
+			var b strings.Builder
+			for i := range 10002 {
+				b.WriteString(strings.Repeat(" ", i) + "k:\n")
+			}
+			return b.String()
+		}(),
+	}
+	for name, doc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var cfg map[string]any
+			_, err := yamlenv.Load([]byte(doc), &cfg, allowAppPrefix)
+			if err == nil {
+				t.Fatal("Load = nil, want the limit refusal")
+			}
+			if !strings.Contains(err.Error(), "details withheld") {
+				t.Errorf("err = %q, want the fixed withheld message", err)
+			}
+		})
+	}
 }
