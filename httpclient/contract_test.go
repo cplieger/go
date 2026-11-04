@@ -19,7 +19,7 @@ import (
 )
 
 // === v3 contract: total-attempts semantics, hard body-overflow, bounded
-// === elapsed time, TransportConfig zero-value, NewRetryClient wiring
+// === elapsed time, TransportConfig zero-value, NewRetry wiring
 //
 // These tests pin the v3 contract directly (the older files exercise it
 // incidentally). They reuse the package-level helper roundTripFunc
@@ -91,7 +91,7 @@ func TestV3_Do_MaxAttempts_ExactCounts(t *testing.T) {
 			_, err := httpclient.Do(t.Context(),
 				func(_ context.Context) (int, error) {
 					calls.Add(1)
-					return 0, &httpclient.HTTPStatusError{Code: 503} // transient -> retried up to the cap
+					return 0, &httpclient.StatusError{Code: 503} // transient -> retried up to the cap
 				}, httpclient.WithMaxAttempts(tc.maxAttempts), httpclient.WithBaseDelay(time.Microsecond), httpclient.WithLabel("counts"))
 			if err == nil {
 				t.Fatal("Do = nil, want error after exhaustion")
@@ -260,31 +260,31 @@ func TestV3_TransportConfig_zero_value_works(t *testing.T) {
 	}
 }
 
-// TestV3_NewRetryClient_nil_policy_panics pins the loud-rejection contract: a
+// TestV3_NewRetry_nil_policy_panics pins the loud-rejection contract: a
 // nil redirect policy is a programmer error (it would silently mean net/http's
 // follow-anywhere default — the exact omission the constructor exists to
-// prevent), so NewRetryClient panics with a message naming the alternatives.
-func TestV3_NewRetryClient_nil_policy_panics(t *testing.T) {
+// prevent), so NewRetry panics with a message naming the alternatives.
+func TestV3_NewRetry_nil_policy_panics(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("NewRetryClient(nil policy) did not panic")
+			t.Fatal("NewRetry(nil policy) did not panic")
 		}
 		if msg, ok := r.(string); !ok || !strings.Contains(msg, "nil redirect policy") {
 			t.Errorf("panic = %v, want message naming the nil redirect policy", r)
 		}
 	}()
-	_ = httpclient.NewRetryClient(nil, nil, httpclient.TransportConfig{})
+	_ = httpclient.NewRetry(nil, nil, httpclient.TransportConfig{})
 }
 
-// TestV3_NewRetryClient_wiring pins the constructor's assembly: the returned
+// TestV3_NewRetry_wiring pins the constructor's assembly: the returned
 // client retries through the transport (a 503-then-200 upstream succeeds), the
 // supplied redirect policy is installed and enforced (a cross-host redirect is
 // refused under DefaultRedirectPolicy), and no Client.Timeout is set (a
 // Client.Timeout above a retrying transport would cap the whole retry
 // sequence).
-func TestV3_NewRetryClient_wiring(t *testing.T) {
+func TestV3_NewRetry_wiring(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int32
@@ -302,7 +302,7 @@ func TestV3_NewRetryClient_wiring(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	client := httpclient.NewRetryClient(nil, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{
+	client := httpclient.NewRetry(nil, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{
 		MaxAttempts: 3,
 		BaseDelay:   time.Millisecond,
 	})
@@ -383,11 +383,10 @@ func TestGetBytesRetriesRequestTimeout(t *testing.T) {
 // TestGetBytesSurfacesRetryAfterHint pins the hint's escape from the loop. A
 // caller running httpclient.GetBytes with httpclient.WithMaxAttempts(1) inside its own outer retry
 // loop - the sanctioned way to avoid 3x3 attempt amplification - needs the
-// upstream-requested wait, which previously died in the loop's internal
-// overrideWait and left the outer loop on jittered backoff. The exhaustion
-// error now implements httpclient.RetryAfterHint, the same interface Do already honors, so
-// the two doors compose. It deliberately does NOT implement Transient: whether
-// to make another outer attempt stays the caller's policy.
+// upstream-requested wait. The exhaustion error implements
+// httpclient.RetryAfterHint, the interface Do honors, so the two doors compose,
+// and a 429 inside it stays non-transient: only a rate-limit option on the
+// enclosing Do retries it.
 func TestGetBytesSurfacesRetryAfterHint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "7")
@@ -414,7 +413,7 @@ func TestGetBytesSurfacesRetryAfterHint(t *testing.T) {
 		t.Errorf("error = %v, want it to still unwrap to a 429 *httpclient.StatusError", err)
 	}
 	if httpclient.IsTransient(err) {
-		t.Error("httpclient.IsTransient(exhausted httpclient.GetBytes error) = true, want false: outer-retry policy is the caller's")
+		t.Error("httpclient.IsTransient(exhausted httpclient.GetBytes 429 error) = true, want false: only a rate-limit option retries a 429")
 	}
 }
 
@@ -436,6 +435,60 @@ func TestGetBytesNoHintWithoutRetryAfter(t *testing.T) {
 	var hint httpclient.RetryAfterHint
 	if errors.As(err, &hint) && hint.RetryAfterHint() > 0 {
 		t.Errorf("httpclient.RetryAfterHint() = %v, want no hint when the upstream sent no Retry-After", hint.RetryAfterHint())
+	}
+}
+
+// TestGetBytesInsideDo pins the composition docs/retries.md recommends: a
+// one-attempt GetBytes inside Do, its error returned unchanged. Do retries a
+// 408 or a retryable 5xx by itself, a 429 only under WithRateLimitRetry, and
+// never a 401 or a 501.
+func TestGetBytesInsideDo(t *testing.T) {
+	rateLimit := []httpclient.DoOption{httpclient.WithRateLimitRetry(time.Millisecond)}
+	for name, tc := range map[string]struct {
+		retryAfter string
+		opts       []httpclient.DoOption
+		status     int
+		wantCalls  int32
+	}{
+		"503 is retried": {status: http.StatusServiceUnavailable, wantCalls: 3},
+		"408 is retried": {status: http.StatusRequestTimeout, wantCalls: 3},
+		"429 is final without a rate-limit option": {
+			status: http.StatusTooManyRequests, retryAfter: "1", wantCalls: 1,
+		},
+		"429 is retried under WithRateLimitRetry": {
+			status: http.StatusTooManyRequests, retryAfter: "1", opts: rateLimit, wantCalls: 3,
+		},
+		"401 is final":                          {status: http.StatusUnauthorized, wantCalls: 1},
+		"401 is final under WithRateLimitRetry": {status: http.StatusUnauthorized, opts: rateLimit, wantCalls: 1},
+		"501 is final":                          {status: http.StatusNotImplemented, wantCalls: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Retry-After", tc.retryAfter) // WithRateLimitRetry caps the wait at 1ms
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+			discard := httpclient.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+			opts := append([]httpclient.DoOption{
+				httpclient.WithMaxAttempts(3), httpclient.WithBaseDelay(time.Millisecond), discard,
+			}, tc.opts...)
+			_, err := httpclient.Do(t.Context(), func(ctx context.Context) ([]byte, error) {
+				return httpclient.GetBytes(ctx, srv.Client(), srv.URL, httpclient.WithMaxAttempts(1), discard)
+			}, opts...)
+
+			if err == nil {
+				t.Fatalf("Do(GetBytes) on %d = nil error, want an error", tc.status)
+			}
+			if se, ok := errors.AsType[*httpclient.StatusError](err); !ok || se.Code != tc.status {
+				t.Errorf("Do(GetBytes) error = %v, want a %d *httpclient.StatusError in its chain", err, tc.status)
+			}
+			if got := calls.Load(); got != tc.wantCalls {
+				t.Errorf("upstream calls = %d, want %d", got, tc.wantCalls)
+			}
+		})
 	}
 }
 
@@ -481,7 +534,7 @@ func TestSingleAttemptTerminalLineIsDebug(t *testing.T) {
 			var buf bytes.Buffer
 			_, err := httpclient.Do(t.Context(),
 				func(context.Context) (struct{}, error) {
-					return struct{}{}, &httpclient.HTTPStatusError{Code: http.StatusServiceUnavailable}
+					return struct{}{}, &httpclient.StatusError{Code: http.StatusServiceUnavailable}
 				},
 				httpclient.WithMaxAttempts(tc.attempts),
 				httpclient.WithBaseDelay(time.Millisecond),

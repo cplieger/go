@@ -130,7 +130,7 @@ func TestGetBytes_non_followed_3xx_is_status_error(t *testing.T) {
 }
 
 // TestGetBytes_sub_200_is_status_error guards the v4 delegation: getAttempt no
-// longer restates the 2xx band, it asks CheckHTTPStatus, so this pins that a
+// longer restates the 2xx band, it asks CheckStatus, so this pins that a
 // status BELOW 200 is still a permanent *StatusError and not a body read. Only a
 // fake transport can produce a bare 1xx response (net/http resolves a real
 // 100-continue itself), and without this test a future loosening of the
@@ -1154,10 +1154,11 @@ func TestDo_ignoresNonPositiveHint(t *testing.T) {
 }
 
 // TestOneRetryRule pins one status rule behind every door: over every code
-// net/http parses from a status line (000-999), a status error reports itself
-// transient, and the transport's default policy retries it, exactly when
-// IsRetryableStatus says so; every transport-error class gets one verdict from
-// IsTransient and the transport alike.
+// net/http parses from a status line (000-999), the transport's default policy
+// retries it exactly when IsRetryableStatus says so, and a status error reports
+// itself transient on the same rule less 429, which Do leaves to its rate-limit
+// options; every transport-error class gets one verdict from IsTransient and
+// the transport alike.
 func TestOneRetryRule(t *testing.T) {
 	t.Parallel()
 	transportRetries := func(t *testing.T, answer func() (*http.Response, error)) bool {
@@ -1180,8 +1181,9 @@ func TestOneRetryRule(t *testing.T) {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			t.Parallel()
 			want := httpclient.IsRetryableStatus(code)
-			if got := (&httpclient.HTTPStatusError{Code: code}).IsTransient(); got != want {
-				t.Errorf("HTTPStatusError{%d}.IsTransient() = %v, IsRetryableStatus = %v", code, got, want)
+			wantTransient := want && code != http.StatusTooManyRequests
+			if got := (&httpclient.StatusError{Code: code}).IsTransient(); got != wantTransient {
+				t.Errorf("StatusError{%d}.IsTransient() = %v, want %v", code, got, wantTransient)
 			}
 			got := transportRetries(t, func() (*http.Response, error) {
 				return &http.Response{StatusCode: code, Body: http.NoBody, Header: http.Header{}}, nil

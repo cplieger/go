@@ -155,7 +155,7 @@ func TestWithAttemptTimeout_bounds_each_attempt_independently(t *testing.T) {
 			t.Error("attempt context carried no deadline")
 		}
 		deadlines = append(deadlines, dl)
-		return struct{}{}, &httpclient.HTTPStatusError{Code: 503}
+		return struct{}{}, &httpclient.StatusError{Code: 503}
 	}, httpclient.WithAttemptTimeout(time.Minute),
 		httpclient.WithMaxAttempts(2),
 		httpclient.WithBaseDelay(2*time.Millisecond),

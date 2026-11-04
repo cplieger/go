@@ -16,8 +16,7 @@
 //   - [NewRetryRoundTripper] retries transparently beneath any client, under a
 //     [TransportConfig].
 //
-// [New] and [NewRetryClient] build clients with a redirect policy in
-// place.
+// [New] and [NewRetry] build clients with a redirect policy in place.
 //
 // # Errors
 //
@@ -25,8 +24,10 @@
 // [RetryAfterHint] interfaces or [MarkTransient]. [Permanent] marks an error
 // non-retryable. A context deadline is the total budget and is never retried,
 // while [AttemptTimeout] marks the end of one attempt, which is.
-// [CheckHTTPStatus] returns nil only for a 2xx status and a typed error for
-// every other one, matched with errors.As or errors.Is.
+// For every non-2xx status, [CheckStatus] and [GetBytes] return an error whose
+// chain holds a *[StatusError], matched with errors.As or with errors.Is
+// against [ErrUnauthorized], [ErrForbidden], [ErrRateLimited] and
+// [ErrServerError].
 //
 // # Secrets
 //

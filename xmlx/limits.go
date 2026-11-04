@@ -39,7 +39,7 @@ type Limits struct {
 	// everything the DEFAULT decoder accepts. It is not exact for a decoder
 	// with Strict disabled, which accepts a bare name as an attribute whose
 	// value is its own name; such a tag carries attributes this bound does not
-	// see. See Preflight's decoder-configuration note.
+	// see. See docs/non-goals.md "Decoder settings other than the defaults".
 	MaxTagAttrs int
 	// MaxDepth caps element nesting.
 	//
