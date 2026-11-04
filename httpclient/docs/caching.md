@@ -67,6 +67,7 @@ client := &http.Client{Transport: cache, Timeout: 30 * time.Second}
 - A body that fails while the cache reads it reaches you as the server sent it: the bytes read, then the error.
 - Each redirect hop your client follows is a request of its own.
 - A read whose context ends before `RoundTrip` returns, even after its answer was read, fails with the context's error and keeps nothing.
+- A response `next` returns beside an error, such as a refused redirect's, reaches you beside that error with its body closed.
 - `CloseIdleConnections` reaches `next`.
 
 The cache never answers without the server, and it does no retries. To retry, put a `RetryRoundTripper` beneath it, as `next`.
@@ -115,4 +116,4 @@ _, ended := read.Finish(ctx, err == nil)
 - `Keep` keeps what its function returns, for a `200` whose wire body you pass, where the wire vouches for both, the answer has a validator and no `no-store`.
 - `Finish` settles the read once, whether it succeeded or not. A context ended by then fails the read, which keeps nothing, and its error is returned. A second call changes nothing.
 
-`Variant` names what you keep of an answer, such as the Go type it decodes into, so reads that differ only in what they keep never serve each other. `Store` false sends the read with no validator and keeps nothing, for a read that must not be cached. `Discarded` takes the header of an answer the read drops, a resent `304`'s and a `304` that fails the read, for code that tracks rate headers.
+`Variant` names what you keep of an answer, such as the Go type it decodes into, so reads that differ only in what they keep never serve each other. `Store` false sends the read with no validator and keeps nothing, for a read that must not be cached; only a `GET` is ever looked up or kept, so `Store` on another method does the same. `Discarded` takes the header of an answer the read drops, a resent `304`'s and a `304` that fails the read, for code that tracks rate headers.

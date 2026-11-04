@@ -326,13 +326,19 @@ func TestOnlyTheDeclaredFieldsAreHeld(t *testing.T) {
 		name        string
 		held        []httpclient.HeldField
 		notModified http.Header
-		wantLink    string
-		wantCustom  string
+		// later is what a third read's 304 carries; nil sends no third read.
+		later      http.Header
+		wantLink   string
+		wantCustom string
 	}{
 		{name: "a_declared_field_the_304_omits_keeps_the_held_value", held: []httpclient.HeldField{{Name: "Link"}}, wantLink: "<page2>"},
 		{
 			name: "a_declared_field_the_304_carries_takes_the_304s_value", held: []httpclient.HeldField{{Name: "Link"}},
 			notModified: http.Header{"Link": {"<page3>"}}, wantLink: "<page3>",
+		},
+		{
+			name: "a_declared_field_one_304_replaced_and_the_next_omits", held: []httpclient.HeldField{{Name: "Link"}},
+			notModified: http.Header{"Link": {"<page3>"}}, later: http.Header{}, wantLink: "<page3>",
 		},
 		{name: "an_undeclared_field_is_never_held"},
 		{name: "an_undeclared_field_the_304_carries_is_the_304s", notModified: http.Header{"X-Custom": {"live"}}, wantCustom: "live"},
@@ -344,6 +350,12 @@ func TestOnlyTheDeclaredFieldsAreHeld(t *testing.T) {
 			tr := newCacheTransport(t, nil, httpclient.CacheConfig{Held: test.held})
 			cacheGet(t, tr, http.MethodGet, url, nil)
 			status, header, body := cacheGet(t, tr, http.MethodGet, url, nil)
+			wantHits := 1
+			if test.later != nil {
+				s.set(func(s *cacheServer) { s.notModified = test.later })
+				status, header, body = cacheGet(t, tr, http.MethodGet, url, nil)
+				wantHits = 2
+			}
 			if status != http.StatusOK || body != `[]` {
 				t.Fatalf("the revalidated read = %d %q, want the held answer served", status, body)
 			}
@@ -352,6 +364,9 @@ func TestOnlyTheDeclaredFieldsAreHeld(t *testing.T) {
 			}
 			if got := header.Get("X-Custom"); got != test.wantCustom {
 				t.Errorf("the served X-Custom = %q, want %q", got, test.wantCustom)
+			}
+			if got := tr.State().Hits; got != wantHits {
+				t.Errorf("the reads hit %d time(s), want %d", got, wantHits)
 			}
 		})
 	}
@@ -865,4 +880,54 @@ func (f *failOnce) Read(p []byte) (int, error) {
 		return n, f.err
 	}
 	return n, err
+}
+
+// A response next returns beside its error, as net/http's client does for a
+// redirect its CheckRedirect refuses, reaches the caller with that error, its
+// body closed, whether or not the read's context has ended by then.
+func TestAResponseBesideAnErrorReachesTheCaller(t *testing.T) {
+	errRefused := errors.New("redirect refused")
+	for _, test := range []struct {
+		want   error
+		name   string
+		cancel bool
+	}{
+		{name: "a_live_context", want: errRefused},
+		{name: "an_ended_context", cancel: true, want: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			wire := cacheRoundTrip(func(r *http.Request) (*http.Response, error) {
+				if test.cancel {
+					cancel()
+				}
+				return &http.Response{
+					StatusCode: http.StatusFound, Header: http.Header{"Location": {"/elsewhere"}},
+					Body: http.NoBody, Request: r,
+				}, errRefused
+			})
+			tr := newCacheTransport(t, wire, httpclient.CacheConfig{})
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://server.example/x", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := tr.RoundTrip(req)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if !errors.Is(err, test.want) {
+				t.Errorf("RoundTrip = %v, want %v", err, test.want)
+			}
+			if resp == nil || resp.Header.Get("Location") != "/elsewhere" {
+				t.Fatalf("RoundTrip answered %+v, want the refused hop's response and its Location", resp)
+			}
+			if resp.Request != req {
+				t.Errorf("the response reports request %p, want the caller's %p", resp.Request, req)
+			}
+			if got := tr.State(); got != (httpclient.CacheState{}) {
+				t.Errorf("State = %+v, want nothing kept or counted", got)
+			}
+		})
+	}
 }

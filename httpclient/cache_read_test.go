@@ -1,11 +1,13 @@
 package httpclient_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -1340,5 +1342,105 @@ func TestClosingAGuardedClientsIdleConnectionsReachesNext(t *testing.T) {
 	(&http.Client{Transport: httpclient.CacheGuard(next)}).CloseIdleConnections()
 	if got := next.closed.Load(); got != 1 {
 		t.Errorf("next's idle connections were closed %d time(s), want 1", got)
+	}
+}
+
+// RFC 9111 section 4.3.4: a 304 updates each held field it carries, so a later
+// 304 that omits the field serves the updated lines, not the first answer's.
+func TestAFieldANotModifiedUpdatesServesTheLaterReads(t *testing.T) {
+	o := newOrigin(`{"login":"octo"}`, `"v1"`)
+	o.header = http.Header{"Link": {"<page2>"}}
+	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpclient.CacheConfig{Held: []httpclient.HeldField{{Name: "Link"}}}})
+	for i, link := range []string{"<page2>", "<page3>", ""} {
+		o.set(func(o *origin) {
+			o.header = http.Header{}
+			if link != "" {
+				o.header.Set("Link", link)
+			}
+		})
+		if _, _, err := c.get(t, "/user"); err != nil {
+			t.Fatalf("read %d = %v", i, err)
+		}
+	}
+	_, answer, err := c.get(t, "/user")
+	if err != nil || !answer.served {
+		t.Fatalf("the fourth read = served %v, %v, want it served", answer.served, err)
+	}
+	if got := answer.header.Get("Link"); got != "<page3>" {
+		t.Errorf("the served Link = %q, want <page3>: the second read's 304 updated the held field", got)
+	}
+	if got := c.cache.State().Hits; got != 3 {
+		t.Errorf("the reads hit %d time(s), want 3", got)
+	}
+}
+
+// Only a GET is looked up and kept: a stored read sent by another method carries
+// no held validator, keeps nothing and counts nothing.
+func TestOnlyAStoredGetIsLookedUpAndKept(t *testing.T) {
+	o := newOrigin(`{"login":"octo"}`, `"v1"`)
+	c := newOwner(serveOrigin(t, o), ownerConfig{})
+	if _, err := c.do(t.Context(), ownerRead{path: "/user", method: http.MethodPost}); err != nil {
+		t.Fatalf("Setup: the stored POST = %v", err)
+	}
+	if _, _, err := c.get(t, "/user"); err != nil {
+		t.Fatalf("the GET after the POST = %v", err)
+	}
+	if got := o.last().Get("If-None-Match"); got != "" {
+		t.Errorf("a GET after a stored POST carried If-None-Match %q, want none: a POST's answer is never kept", got)
+	}
+	answer, err := c.do(t.Context(), ownerRead{path: "/user", method: http.MethodPost})
+	if err != nil {
+		t.Fatalf("the POST after the GET = %v", err)
+	}
+	if got := o.last().Get("If-None-Match"); got != "" || answer.served || answer.answered {
+		t.Errorf("a stored POST after a kept GET carried If-None-Match %q, served %v, answered %v, want no validator and nothing counted", got, answer.served, answer.answered)
+	}
+	if got := c.cache.State(); got.Hits != 0 || got.Misses != 1 {
+		t.Errorf("State = %+v, want only the GET counted, as a miss", got)
+	}
+}
+
+// A served header carries every field the 304 sent, its Content-Length
+// included: the owner reads the 304's framing as the server wrote it.
+func TestAServedHeaderCarriesTheNotModifiedsContentLength(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				for {
+					r, err := http.ReadRequest(br)
+					if err != nil {
+						return
+					}
+					// net/http's server drops a 304's Content-Length, so the answer is written by hand.
+					if r.Header.Get("If-None-Match") == `"v1"` {
+						_, _ = io.WriteString(conn, "HTTP/1.1 304 Not Modified\r\nEtag: \"v1\"\r\nContent-Length: 0\r\n\r\n")
+						continue
+					}
+					_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nEtag: \"v1\"\r\nContent-Length: 16\r\n\r\n{\"login\":\"octo\"}")
+				}
+			}()
+		}
+	}()
+	c := newOwner("http://"+ln.Addr().String(), ownerConfig{})
+	if _, _, err := c.get(t, "/user"); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	_, answer, err := c.get(t, "/user")
+	if err != nil || !answer.served {
+		t.Fatalf("the revalidated read = served %v, %v, want it served", answer.served, err)
+	}
+	if got := answer.header.Values("Content-Length"); !slices.Equal(got, []string{"0"}) {
+		t.Errorf("the served header's Content-Length = %q, want the 304's [0]", got)
 	}
 }

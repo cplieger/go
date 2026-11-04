@@ -40,7 +40,9 @@ func NewCacheRoundTripper(next http.RoundTripper, cfg CacheConfig) *CacheRoundTr
 
 // RoundTrip revalidates a GET carrying no validator of its own and sends every
 // other request through next as given. A read whose context has ended by the
-// time its answer is read keeps nothing and fails with the context's error.
+// time its answer is read keeps nothing and fails with the context's error. A
+// response next returns beside an error, such as a refused redirect's, reaches
+// the caller beside that error with its body closed.
 func (t *CacheRoundTripper) RoundTrip(orig *http.Request) (*http.Response, error) {
 	if orig.Method != http.MethodGet {
 		return t.next.RoundTrip(orig)
@@ -57,9 +59,13 @@ func (t *CacheRoundTripper) RoundTrip(orig *http.Request) (*http.Response, error
 	})
 	if err != nil {
 		if _, ended := read.Finish(r.Context(), false); ended != nil {
-			return nil, ended
+			err = ended
 		}
-		return nil, err
+		if resp != nil {
+			resp.Body.Close()
+			resp.Request = orig
+		}
+		return resp, err
 	}
 	out, ok := t.answer(read, resp)
 	out.Request = orig

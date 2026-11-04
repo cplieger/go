@@ -1,6 +1,7 @@
 package httpclient_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -145,6 +146,7 @@ type ownerRead struct {
 	header   http.Header
 	into     any
 	path     string
+	method   string
 	maxBytes int64
 	unstored bool
 	noResend bool
@@ -192,7 +194,7 @@ func (o *owner) do(ctx context.Context, req ownerRead) (ownerAnswer, error) {
 	})
 	target := o.base + req.path
 	resp, err := read.Send(func(prepare func(*http.Request) *http.Request) (*http.Response, error) {
-		r, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		r, err := http.NewRequestWithContext(ctx, cmp.Or(req.method, http.MethodGet), target, nil)
 		if err != nil {
 			return nil, err
 		}

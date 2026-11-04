@@ -18,8 +18,9 @@ type CacheReadConfig struct {
 	// Variant names what the owner keeps of an answer, such as the Go type it
 	// decodes into. Reads that differ only in Variant never serve each other.
 	Variant string
-	// Store looks the read up and keeps its answer. It is false on a cache that
-	// holds nothing.
+	// Store looks the read up and keeps its answer, for a GET only: a request
+	// sent by another method is neither looked up nor kept. It is false on a
+	// cache that holds nothing.
 	Store bool
 	// Resend sends a 304 nothing held may serve once more without a validator.
 	Resend bool
@@ -217,9 +218,10 @@ func (c *Cache) attempt(cfg CacheReadConfig, send func(func(*http.Request) *http
 // revalidate keys a stored request by its credential and variant, and in the
 // conditional mode sets the held entry's validator on it. It answers the request
 // to send, carrying the [wireCheck] [CacheGuard] holds every attempt and hop to.
-// A request carrying no-store is left unkeyed (RFC 9111 section 5.2.1.5).
+// A request other than a GET, which [Cache.key] does not separate by method, and
+// one carrying no-store (RFC 9111 section 5.2.1.5) are left unkeyed.
 func (c *Cache) revalidate(r *http.Request, variant string, mode cacheMode, rv *revalidation) *http.Request {
-	if noStore(r.Header) {
+	if r.Method != http.MethodGet || noStore(r.Header) {
 		return r
 	}
 	cred := credential(r)
