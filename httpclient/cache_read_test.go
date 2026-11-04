@@ -121,9 +121,7 @@ func TestEveryHeaderThatVariesTheAnswerIsKeyed(t *testing.T) {
 }
 
 // profile is a second Go type the same body decodes into.
-type profile struct {
-	Login string `json:"login"`
-}
+type profile account
 
 func TestReadsOfAnotherVariantNeverServeEachOther(t *testing.T) {
 	o := newOrigin(`{"login":"octo"}`, `"v1"`)
@@ -655,6 +653,7 @@ type slowAccount struct {
 	account
 }
 
+//deadset:ignore DS1103 -- encoding/json calls it through json.Unmarshaler when the read decodes into a *slowAccount.
 func (a *slowAccount) UnmarshalJSON(b []byte) error {
 	if a.slow.Load() {
 		time.Sleep(300 * time.Millisecond)
@@ -900,6 +899,7 @@ type cancelingAccount struct {
 	account
 }
 
+//deadset:ignore DS1103 -- encoding/json calls it through json.Unmarshaler when the read decodes into a *cancelingAccount.
 func (a *cancelingAccount) UnmarshalJSON(b []byte) error {
 	if a.cancel != nil {
 		a.cancel()

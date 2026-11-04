@@ -211,7 +211,7 @@ func (o *owner) do(ctx context.Context, req ownerRead) (ownerAnswer, error) {
 		}
 		return o.client.Do(prepare(r))
 	})
-	answer, err := o.answer(read, resp, err, req, into)
+	answer, err := readAnswer(read, resp, err, req, into)
 	hit, ended := read.Finish(ctx, err == nil)
 	if err == nil && ended != nil {
 		err = ended
@@ -221,7 +221,7 @@ func (o *owner) do(ctx context.Context, req ownerRead) (ownerAnswer, error) {
 	return answer, err
 }
 
-func (o *owner) answer(read *httpclient.CacheRead, resp *http.Response, err error, req ownerRead, into any) (ownerAnswer, error) {
+func readAnswer(read *httpclient.CacheRead, resp *http.Response, err error, req ownerRead, into any) (ownerAnswer, error) {
 	if err != nil {
 		if resp != nil {
 			resp.Body.Close()
