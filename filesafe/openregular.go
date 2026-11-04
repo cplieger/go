@@ -1,0 +1,179 @@
+package filesafe
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"syscall"
+)
+
+// OpenRegularInRoot opens name inside root read-only and returns the open
+// descriptor together with the FileInfo of that same descriptor, having
+// already refused anything that is not a regular file. The caller owns the
+// returned file and closes it; root stays the caller's too.
+//
+// It is the open half of ReadBoundedInRoot, which is built on it: open
+// through the root (so a symlink or ".." in name cannot escape its tree),
+// non-blocking so a planted FIFO cannot stall the caller in open(2), then
+// stat the OPEN HANDLE — never the pathname again — refusing a directory,
+// FIFO, device node or socket with ErrNotRegular. Stating the handle rather
+// than the path closes the window where a rename between a check and an
+// open would let a caller decode one generation's bytes while recording
+// another's identity as a FileIdentity.
+//
+// The descriptor lets a caller stream the file through a decoder or
+// decryptor without materializing it, which a []byte-returning helper
+// cannot serve. For the bytes, hand the descriptor to ReadBoundedFile — that
+// composition IS ReadBoundedInRoot. OpenRegular is the ambient-path sibling.
+//
+// Errors are the filesystem's own except where this package adds a verdict:
+// name must be relative and null-byte-free (ErrEmptyPath / ErrUnsafePath), a
+// missing file or an escaping symlink surfaces as the root's own error, and
+// a non-regular file is ErrNotRegular naming the actual mode. No context
+// parameter (matching OpenParentInRoot): an open is one syscall, and a
+// caller that goes on to read passes its context there.
+func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	if root == nil {
+		return nil, nil, errors.New("filesafe: nil root")
+	}
+	clean, err := validateRootName(name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// O_NONBLOCK makes an open on a planted FIFO a rejection rather than a hang.
+	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := statRegular(f, clean)
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return f, fi, nil
+}
+
+// OpenRegular opens the absolute path read-only and returns the open
+// descriptor together with the FileInfo of that same descriptor, refusing a
+// symlink at the final component and anything that is not a regular file.
+// The caller owns the returned file and closes it.
+//
+// It is the ambient-path sibling of OpenRegularInRoot, for a caller holding
+// a full path into a directory it trusts rather than an *os.Root. The
+// refusals differ because the mechanisms do: O_NOFOLLOW makes the KERNEL
+// refuse a final-component symlink (reported as ErrSymlinkTarget), where the
+// root-confined form lets an in-root symlink resolve and only bounds where
+// it can land. Neither pins the ANCESTOR components.
+//
+// This does not change ReadBounded, which follows symlinks by design; a
+// caller wanting the refusal asks for it here.
+//
+// Errors: ErrEmptyPath or ErrUnsafePath for an empty, NUL-holding, or
+// non-absolute path; ErrSymlinkTarget when the kernel refuses the open
+// because the final component is a symlink; ErrNotRegular for a directory,
+// FIFO, device node or socket, naming the actual mode; the filesystem's own
+// error otherwise (a missing file matches fs.ErrNotExist). ELOOP from a
+// symlink loop in an ANCESTOR component takes the same ErrSymlinkTarget arm
+// as the final-component refusal; a caller that must tell them apart reads
+// the wrapped error.
+func OpenRegular(path string) (*os.File, os.FileInfo, error) {
+	clean, err := validateAbsClean(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// O_NOFOLLOW refuses a final-component symlink without a check-then-open race;
+	// O_NONBLOCK turns a FIFO at the path into a rejection rather than a hang.
+	f, err := os.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, nil, fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, clean, err)
+		}
+		return nil, nil, err
+	}
+	fi, err := statRegular(f, clean)
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return f, fi, nil
+}
+
+// statRegular stats the OPEN descriptor, not the path (a path-then-open
+// sequence leaves a window where the two refer to different files), and
+// refuses anything that is not a regular file.
+func statRegular(f *os.File, name string) (os.FileInfo, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, notRegular(name, fi.Mode())
+	}
+	return fi, nil
+}
+
+// OpenRegularInRootNoFollow is OpenRegularInRoot with the opposite link
+// policy: it REFUSES a symlink at the final component instead of resolving it.
+// Same returns and same ownership, and the same ErrNotRegular verdict for a
+// directory, FIFO, device node or socket.
+//
+// A second function rather than an option on the first, because the permissive
+// answer must not be reachable by omission: a policy type has a zero value, and
+// a zero value meaning "follow" is a guarantee lost by forgetting a field.
+//
+// O_NOFOLLOW IS NOT THE MECHANISM, measured rather than assumed: os.Root
+// resolves in-root symlinks itself before opening the final component, so the
+// flag is silently inert through Root.OpenFile (go1.27.1 — the symlink opens
+// and yields the target's bytes with it set). Root.Lstat's answer is the
+// refusal instead, and the descriptor's identity is confirmed against it so a
+// name repointed in between is ErrRaced rather than passed off as the file that
+// was checked. A hard link to the same inode compares equal, correctly.
+//
+// Errors: ErrEmptyPath or ErrUnsafePath for an empty, NUL-holding or absolute
+// name; ErrSymlinkTarget for a symlink; ErrRaced for a mid-sequence change;
+// *NotRegularError (matching ErrNotRegular) carrying the mode; the root's own
+// error otherwise. Like its sibling it does not pin the ANCESTOR components —
+// OpenParentInRoot is the primitive for that.
+func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	if root == nil {
+		return nil, nil, errors.New("filesafe: nil root")
+	}
+	clean, err := validateRootName(name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	before, err := root.Lstat(clean)
+	if err != nil {
+		return nil, nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
+	}
+
+	// O_NONBLOCK for the same reason as the sibling: a FIFO that slipped in
+	// between the Lstat and here is a rejection rather than a hang.
+	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	// Identity BEFORE kind: a name swapped for a directory is more honestly
+	// reported as a race than as "not a regular file", because the caller's
+	// question was about the object it checked.
+	if !os.SameFile(before, fi) {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("%w: %s", ErrRaced, clean)
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, notRegular(clean, fi.Mode())
+	}
+	return f, fi, nil
+}
