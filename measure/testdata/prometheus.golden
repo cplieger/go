@@ -1,0 +1,68 @@
+# HELP http_requests_total Total HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{method="GET",path="/api",status="200"} 3
+http_requests_total{method="GET",path="/health",status="200"} 7
+http_requests_total{method="POST",path="/a\"b\\c",status="500"} 1
+# HELP tasks_total Total tasks processed
+# TYPE tasks_total counter
+tasks_total 42
+# HELP events Total events
+# TYPE events counter
+events 5
+# HELP queue_depth Items queued
+# TYPE queue_depth gauge
+queue_depth{queue="egress"} 0.5
+queue_depth{queue="ingest"} 12
+# HELP temperature_celsius Ambient temperature
+# TYPE temperature_celsius gauge
+temperature_celsius 23.5
+# HELP active_connections Active connections
+# TYPE active_connections gauge
+active_connections 8
+# HELP request_duration_seconds Request latency in "seconds"\nline2\\end
+# TYPE request_duration_seconds histogram
+request_duration_seconds_bucket{le="0.1"} 2
+request_duration_seconds_bucket{le="0.5"} 3
+request_duration_seconds_bucket{le="1"} 3
+request_duration_seconds_bucket{le="+Inf"} 4
+request_duration_seconds_sum 2.45
+request_duration_seconds_count 4
+# HELP api_latency_seconds API latency
+# TYPE api_latency_seconds histogram
+api_latency_seconds_bucket{endpoint="create",le="0.25"} 0
+api_latency_seconds_bucket{endpoint="create",le="1"} 0
+api_latency_seconds_bucket{endpoint="create",le="+Inf"} 1
+api_latency_seconds_sum{endpoint="create"} 5
+api_latency_seconds_count{endpoint="create"} 1
+api_latency_seconds_bucket{endpoint="list",le="0.25"} 1
+api_latency_seconds_bucket{endpoint="list",le="1"} 2
+api_latency_seconds_bucket{endpoint="list",le="+Inf"} 2
+api_latency_seconds_sum{endpoint="list"} 0.6
+api_latency_seconds_count{endpoint="list"} 2
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines <value>
+# HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes <value>
+# HELP process_gc_pause_seconds_total Total GC pause time
+# TYPE process_gc_pause_seconds_total counter
+process_gc_pause_seconds_total <value>
+# HELP process_uptime_seconds Process uptime
+# TYPE process_uptime_seconds gauge
+process_uptime_seconds <value>
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds <value>
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total <value>
+# HELP process_resident_memory_bytes Resident memory size in bytes
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes <value>
+# HELP process_open_fds Number of open file descriptors
+# TYPE process_open_fds gauge
+process_open_fds <value>
+# HELP process_max_fds Maximum number of open file descriptors
+# TYPE process_max_fds gauge
+process_max_fds <value>
