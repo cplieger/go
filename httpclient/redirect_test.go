@@ -134,7 +134,7 @@ func TestDefaultRedirectPolicy_too_many_hops(t *testing.T) {
 	}
 }
 
-func TestNewClient_wires_timeout_and_redirect_policy(t *testing.T) {
+func TestNew_wires_timeout_and_redirect_policy(t *testing.T) {
 	c := httpclient.New(42 * time.Second)
 	if c.Timeout != 42*time.Second {
 		t.Errorf("Timeout = %v, want 42s", c.Timeout)

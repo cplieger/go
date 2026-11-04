@@ -1,6 +1,10 @@
-# YAML config files with yamlenv
+# yamlenv
 
-This page covers the yamlenv module, for a developer whose app reads a YAML config file and keeps its secrets in the environment. yamlenv is its own Go module with its own version tags. It is the only part of envx that needs a YAML library, [go-yaml](https://github.com/yaml/go-yaml) v3. Importing plain envx never links it.
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/yamlenv.svg)](https://pkg.go.dev/github.com/cplieger/go/yamlenv) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=yamlenv%2Fgo.mod)](https://github.com/cplieger/go/blob/main/yamlenv/go.mod)
+
+yamlenv loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. It is for an app that reads a YAML config file and keeps its secrets in the environment.
+
+Its one dependency is [go-yaml](https://github.com/yaml/go-yaml) v3. It is a module of its own, so a program that only needs envx links no YAML library. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ```sh
 go get github.com/cplieger/go/yamlenv@latest
@@ -17,7 +21,7 @@ A config file refers to an environment variable as `${VAR}`. yamlenv replaces th
 - Mapping keys and values that are not strings stay as written.
 - Expansion runs once. A `${VAR}` that an expanded value brings in is neither expanded again nor reported as unresolved, so a password may contain `${`.
 - An expanded value stays a string. `port: ${APP_PORT}` cannot fill an `int` field, even when the variable holds `8080`. Read a number, a bool or a duration from the environment into a string field and parse it yourself.
-- A variable that is set but empty does replace its reference. Here set or unset is what counts, unlike the getters, so an operator can blank a field on purpose.
+- A variable that is set but empty does replace its reference. Here set or unset is what counts, so an operator can blank a field on purpose.
 
 Your allow function decides which names may expand. It is usually a one-line prefix check.
 

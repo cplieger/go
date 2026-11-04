@@ -21,7 +21,7 @@ import (
 	"github.com/cplieger/go/httpserver"
 )
 
-func TestNewServer_defaults(t *testing.T) {
+func TestNew_defaults(t *testing.T) {
 	h := http.NewServeMux()
 	srv := httpserver.New(h)
 
@@ -45,7 +45,7 @@ func TestNewServer_defaults(t *testing.T) {
 	}
 }
 
-func TestNewServer_optionsOverride(t *testing.T) {
+func TestNew_optionsOverride(t *testing.T) {
 	srv := httpserver.New(nil,
 		httpserver.WithReadTimeout(1*time.Second),
 		httpserver.WithWriteTimeout(2*time.Second),
@@ -78,7 +78,7 @@ func TestWithErrorLog_setsServerErrorLog(t *testing.T) {
 	}
 }
 
-func TestNewServer_nilOptionIgnored(t *testing.T) {
+func TestNew_nilOptionIgnored(t *testing.T) {
 	srv := httpserver.New(nil, nil) // must not panic
 	if srv == nil {
 		t.Fatal("New returned nil")
@@ -910,7 +910,7 @@ func TestWithSlogErrorLog_lastAppliedWins(t *testing.T) {
 	}
 }
 
-func TestNewServer_errorLogDefaultUnchanged(t *testing.T) {
+func TestNew_errorLogDefaultUnchanged(t *testing.T) {
 	// Neither option passed: the default stays net/http's standard logger (nil),
 	// so the additions change no existing default.
 	if srv := httpserver.New(nil); srv.ErrorLog != nil {

@@ -13,7 +13,7 @@ httpclient is built for Go code that must keep working when a remote API fails f
 - `Do` retries a typed operation, `GetBytes` fetches a capped body, and a retrying `http.RoundTripper` fits an existing `*http.Client`.
 - Each decides which network errors and status codes to retry. `GetBytes` and the transport honor `Retry-After` up to 60 seconds.
 - `GetBytes` removes a URL's username, password and query values from its logs and error messages.
-- The default redirect policy keeps custom auth headers on the host you called. No shipped policy follows an `https` to `http` hop unless you opt in.
+- The default redirect policy keeps custom auth headers on the host you called. No shipped policy follows an `https` to `http` hop.
 - `GetBytes` fails on a body over its 10 MB default cap instead of cutting it.
 
 Consider [cenkalti/backoff](https://github.com/cenkalti/backoff) if you want to choose your own backoff policy, through its `WithBackOff` option. Consider [failsafe-go](https://github.com/failsafe-go/failsafe-go) if you need a circuit breaker, a rate limiter or a bulkhead, policies it wraps around any function.

@@ -827,8 +827,8 @@ func WithMaxHops(n int) RedirectOption {
 // entries. It follows that host on any port and an http->https upgrade there,
 // so a custom auth header can reach another service on the host;
 // [WithSameOrigin] keeps it on one origin. An https->http hop is still
-// refused. Later options win, so a later
-// WithSameHost(false) turns the permission back off.
+// refused. Later options win, so a later WithSameHost(false) turns the
+// permission back off.
 func WithSameHost(same bool) RedirectOption {
 	return func(c *redirectCfg) { c.sameHost = same }
 }
@@ -1033,10 +1033,10 @@ func originKeyOf(u *url.URL) (originKey, bool) {
 // entry, a WithAllowedSuffixes match, the original host under WithSameHost, the
 // original origin under WithSameOrigin) and never https->http, so a custom
 // auth header, which Go forwards across a redirect, never rides a cleartext
-// hop. With none of those permissions every redirect is
-// refused. The hop cap is WithMaxHops. Every hard refusal is a
-// [*RedirectRefusedError]; WithPreserveMethod(true) instead answers
-// http.ErrUseLastResponse for a hop that would change the method.
+// hop. With none of those permissions every redirect is refused. The hop cap
+// is WithMaxHops. Every hard refusal is a [*RedirectRefusedError];
+// WithPreserveMethod(true) instead answers http.ErrUseLastResponse for a hop
+// that would change the method.
 func RedirectPolicyFunc(opts ...RedirectOption) func(*http.Request, []*http.Request) error {
 	cfg := redirectCfg{}
 	for _, o := range opts {
