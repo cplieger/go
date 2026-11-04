@@ -579,10 +579,9 @@ func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 // proportional to the metric count, so the PER-METRIC rate must stay bounded. A
 // rise from 260 to 380 allocations is a 1.46 ratio and stays silent, yet every
 // consumer with a hundred series pays it on every scrape. The rate is a slope
-// between two registry sizes, cancelling the fixed cost; only intervals of at
-// least minAllocSpan are gated, since -race makes the totals noisy. Gating
-// every wide interval makes it a linearity check: a per-metric re-scan
-// breaches at 100->1000.
+// between two registry sizes, cancelling the fixed cost, over every interval of
+// at least minAllocSpan, which also makes it a linearity check: a per-metric
+// re-scan breaches at 100->1000.
 func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 	// minAllocSpan is the smallest interval whose slope is gated. Under -race,
 	// sync.Pool drops a quarter of its Puts at random, so fmt's printer pool
