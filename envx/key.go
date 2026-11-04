@@ -11,9 +11,7 @@ import "strconv"
 //
 //   - At compile time it guards VARIABLE-passing sites: a plain string
 //     variable in a key position does not compile. Untyped literals still
-//     convert implicitly, so existing literal call sites are unaffected — the
-//     type alone was never the guard, which is why the signatures had to carry
-//     it.
+//     convert implicitly.
 //
 //   - At run time, first use validates the spelling: a Key that is not an
 //     environment-variable name ([A-Za-z_][A-Za-z0-9_]*, and never empty)

@@ -3,8 +3,8 @@
 // making an outbound HTTP request.
 //
 // Trust model: DNS resolution is delegated to net.DefaultResolver (or a custom
-// resolver via [WithResolver]). The transport's dialer resolves a hostname once and
-// hands the resolved literal IPs to the dialer. Additionally, a [net.Dialer]
+// resolver via [WithResolver]). The transport resolves a hostname once and
+// dials only the resolved literal IPs. Additionally, a [net.Dialer]
 // Control hook validates the actually-connected IP at socket creation time,
 // providing defense-in-depth against DNS rebinding/TOCTOU attacks even if the
 // resolve-once layer is somehow bypassed.

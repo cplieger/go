@@ -38,8 +38,7 @@ type ParseError struct {
 }
 
 // Error implements the error interface. The text is the key followed by the
-// underlying parse error, which is the form every strict variant has always
-// returned.
+// underlying parse error.
 func (e *ParseError) Error() string {
 	return "environment variable " + string(e.Key) + ": " + e.Err.Error()
 }
