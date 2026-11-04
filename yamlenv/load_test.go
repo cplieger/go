@@ -311,13 +311,21 @@ func (r *relayDecode) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// mimicYAML is a config type whose UnmarshalYAML error is spelled like one of
-// go-yaml's own constructor messages.
-type mimicYAML struct{}
+// relayConfig holds a relayDecode.
+type relayConfig struct {
+	N relayDecode `yaml:"n"`
+}
 
-// UnmarshalYAML always fails with go-yaml's wrong-type wording.
-func (*mimicYAML) UnmarshalYAML(*yaml.Node) error {
-	return errors.New("cannot construct !!str `x` into int")
+// scriptedHook is a config type whose UnmarshalYAML fails with the message
+// the caller's defaults preset, so a test can spell it like go-yaml's own.
+type scriptedHook struct{ msg string }
+
+// UnmarshalYAML fails with the preset message.
+func (h *scriptedHook) UnmarshalYAML(*yaml.Node) error { return errors.New(h.msg) }
+
+// scriptedConfig holds a scriptedHook.
+type scriptedConfig struct {
+	H scriptedHook `yaml:"h"`
 }
 
 // TestLoadClassifiesUnmarshalerErrors pins the typed classification of the
@@ -344,6 +352,17 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 		}
 		if _, ok := errors.AsType[*yaml.LoadError](err); ok {
 			t.Errorf("errors.As reaches go-yaml's *LoadError through the wrap: %v", err)
+		}
+	})
+
+	t.Run("a hook decoding through go-yaml succeeds", func(t *testing.T) {
+		t.Parallel()
+		var cfg relayConfig
+		if _, err := yamlenv.Load([]byte("n: 5\n"), &cfg, allowAppPrefix); err != nil {
+			t.Fatalf("Load = %v, want nil", err)
+		}
+		if cfg.N.n != 5 {
+			t.Errorf("N = %d, want 5", cfg.N.n)
 		}
 	})
 
@@ -400,14 +419,7 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 			doc: "timeout: [hunter2-relayed]\n", out: &durConfig{}, secret: "hunter2",
 		},
 		"hook wrapping go-yaml's error": {
-			doc: "n: hunter2-wrapped\n", out: &struct {
-				N relayDecode `yaml:"n"`
-			}{}, secret: "hunter2",
-		},
-		"hook error spelled like go-yaml's": {
-			doc: "m: x\n", out: &struct {
-				M mimicYAML `yaml:"m"`
-			}{}, secret: "`x`",
+			doc: "n: hunter2-wrapped\n", out: &relayConfig{}, secret: "hunter2",
 		},
 		"resolver error": {
 			doc: "port: !!int hunter2-resolver\n", out: &loadConfig{}, secret: "hunter2",
@@ -428,6 +440,19 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a hook error spelled like go-yaml's is never claimable", func(t *testing.T) {
+		t.Parallel()
+		cfg := scriptedConfig{H: scriptedHook{msg: "cannot construct !!str `hunter2` into int"}}
+		_, err := yamlenv.Load([]byte("h: x\n"), &cfg, allowAppPrefix,
+			yamlenv.WithErrorPassthrough(claimUnmarshaler))
+		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
+			t.Errorf("a go-yaml-shaped hook error was classified app-owned: %v", err)
+		}
+		if want := "decode errors: line 1, column 4: cannot construct !!str <redacted> into int"; err == nil || err.Error() != want {
+			t.Errorf("err = %v, want %q", err, want)
+		}
+	})
 
 	t.Run("without a passthrough the classification stays fail-closed", func(t *testing.T) {
 		t.Parallel()
