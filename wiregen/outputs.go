@@ -212,7 +212,7 @@ func splitPath(p string) []string {
 	return slices.DeleteFunc(strings.Split(filepath.ToSlash(p), "/"), func(n string) bool { return n == "" || n == "." })
 }
 
-// writeFiles stages every file as an filesafe pending file, the TS files
+// writeFiles stages every file as a filesafe pending file, the TS files
 // through an os.Root of tsDir, then commits each.
 func writeFiles(ctx context.Context, tsDir string, files []genFile) error {
 	if err := os.MkdirAll(tsDir, 0o755); err != nil {

@@ -124,7 +124,7 @@ wiregen reads your types from source with `go/packages` and applies the field ru
 - Go generic types. Register each concrete instantiation instead.
 - `T | null` on a field. A field that can be absent or `null` is optional, `key?: T`, and the OpenAPI document carries the exact nullability.
 - `tstype` struct tags. `Mappings` does the same job for the whole registry.
-- Windows. wiregen runs on Linux and macOS, because it writes every file atomically through filesafe/v4, which does not support Windows.
+- Windows. wiregen runs on Linux and macOS, because it writes every file atomically through filesafe, which does not support Windows.
 
 ## Documentation
 
