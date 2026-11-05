@@ -211,9 +211,9 @@ func processFamiliesOf(g *goRuntime, d *processMetricsData) []Family {
 		{pmCPUTotal, helpCPU, TypeCounter, d.hasCPU(), d.cpuSeconds},
 		{pmResidentBytes, helpResident, TypeGauge, d.hasRSS(), float64(d.rss)},
 		{pmOpenFDs, helpOpenFDs, TypeGauge, d.hasOpenFDs(), float64(d.openFDs)},
-		{pmMaxFDs, helpMaxFDs, TypeGauge, d.hasMaxFDs(), limitValue(d.maxFDs)},
+		{pmMaxFDs, helpMaxFDs, TypeGauge, d.hasMaxFDs(), d.maxFDs},
 		{pmVirtualBytes, helpVirtual, TypeGauge, d.hasVirtual(), d.vsize},
-		{pmVirtualMaxBytes, helpVirtualMax, TypeGauge, d.hasMaxVirtual(), limitValue(d.maxVsize)},
+		{pmVirtualMaxBytes, helpVirtualMax, TypeGauge, d.hasMaxVirtual(), d.maxVsize},
 		{pmNetReceive, helpNetRx, TypeCounter, d.hasNetwork(), d.netRx},
 		{pmNetTransmit, helpNetTx, TypeCounter, d.hasNetwork(), d.netTx},
 	} {

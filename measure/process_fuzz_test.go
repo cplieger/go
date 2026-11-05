@@ -52,8 +52,8 @@ func FuzzParseProcLimit_ValueAmongNoise(f *testing.F) {
 	f.Fuzz(func(t *testing.T, n uint32, noise string) {
 		data := []byte("Max open files  " + strconv.FormatUint(uint64(n), 10) + "  " +
 			strconv.FormatUint(uint64(n), 10) + "  files\n" + noise)
-		if got := parseProcLimit(data, "Max open files"); got != int64(n) {
-			t.Errorf("parseProcLimit(n=%d, noise=%q) = %d, want %d", n, noise, got, int64(n))
+		if got := parseProcLimit(data, "Max open files"); got != float64(n) {
+			t.Errorf("parseProcLimit(n=%d, noise=%q) = %v, want %d", n, noise, got, n)
 		}
 	})
 }

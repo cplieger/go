@@ -32,7 +32,7 @@ import (
 var helpEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`)
 
 // Go and process family names, defined once so the reservation list
-// (processFamilyNames) and the builders (processGather, runtimeFamilies)
+// (processFamilyNames) and the builders (processFamiliesOf, runtimeFamilies)
 // cannot drift. The go_memstats_* names other than the heap allocation one
 // live only in runtimeFamilies.
 const (

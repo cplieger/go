@@ -90,13 +90,6 @@ func parseAuxvClkTck(data []byte, wordSize int) int64 {
 	return -1
 }
 
-// unlimitedLimit is the value parseProcLimit returns when /proc/self/limits
-// reports a soft limit as the literal token "unlimited". It is distinct from 0
-// (the absent or read-failure value), so an unlimited limit is a successful
-// reading, exposed as float64(math.MaxUint64) as client_golang exposes it (see
-// limitValue), rather than dropped.
-const unlimitedLimit int64 = -1
-
 // Process-metric ok-mask bits. Each bit is set when the corresponding /proc
 // read succeeded, so the mask records WHICH process_* series are currently
 // collectable, not just whether any read failed.
@@ -133,23 +126,21 @@ type processMetricsData struct {
 	vsize      float64 // -1 when the read failed
 	netRx      float64 // -1 when the read failed, as netTx
 	netTx      float64
-	rss        int64 // 0 when the read failed
-	maxFDs     int64 // 0 when the read failed, or unlimitedLimit
-	maxVsize   int64 // 0 when the read failed, or unlimitedLimit
-	openFDs    int   // -1 when the read failed
+	maxFDs     float64 // -1 when the read failed
+	maxVsize   float64 // -1 when the read failed
+	rss        int64   // 0 when the read failed
+	openFDs    int     // -1 when the read failed
 }
 
-// Series-presence predicates used by processGather, gating the optional
+// Series-presence predicates used by processFamiliesOf, gating the optional
 // series set in one place.
-func (d *processMetricsData) hasCPU() bool     { return d.cpuSeconds >= 0 }
-func (d *processMetricsData) hasRSS() bool     { return d.rss > 0 }
-func (d *processMetricsData) hasOpenFDs() bool { return d.openFDs >= 0 }
-func (d *processMetricsData) hasMaxFDs() bool  { return d.maxFDs > 0 || d.maxFDs == unlimitedLimit }
-func (d *processMetricsData) hasVirtual() bool { return d.vsize >= 0 }
-func (d *processMetricsData) hasMaxVirtual() bool {
-	return d.maxVsize > 0 || d.maxVsize == unlimitedLimit
-}
-func (d *processMetricsData) hasNetwork() bool { return d.netRx >= 0 && d.netTx >= 0 }
+func (d *processMetricsData) hasCPU() bool        { return d.cpuSeconds >= 0 }
+func (d *processMetricsData) hasRSS() bool        { return d.rss > 0 }
+func (d *processMetricsData) hasOpenFDs() bool    { return d.openFDs >= 0 }
+func (d *processMetricsData) hasMaxFDs() bool     { return d.maxFDs >= 0 }
+func (d *processMetricsData) hasVirtual() bool    { return d.vsize >= 0 }
+func (d *processMetricsData) hasMaxVirtual() bool { return d.maxVsize >= 0 }
+func (d *processMetricsData) hasNetwork() bool    { return d.netRx >= 0 && d.netTx >= 0 }
 
 // procOKMask computes the ok-mask for process metric collection from the
 // series-presence predicates. On platforms other than Linux, where /proc-based
@@ -188,7 +179,8 @@ func procDegradedTransition(s *atomic.Uint32, mask uint32) bool {
 }
 
 // collectProcessMetrics gathers the start time and the /proc readings. Each
-// /proc file is read once per scrape.
+// /proc file is read once per scrape; the first scrape also reads
+// /proc/self/stat and /proc/stat once more to resolve the start time.
 func collectProcessMetrics(d *processMetricsData) {
 	start := resolvedProcStartTime()
 	if start < 0 {
@@ -408,11 +400,11 @@ func readProcOpenFDs() int {
 }
 
 // parseProcLimit parses /proc/self/limits content for the soft value of the
-// named limit ("Max open files", "Max address space"). Returns unlimitedLimit
-// for the literal "unlimited" token (a successful reading), and 0 when the line
-// is absent, carries no value, or holds a malformed or negative number, so a
-// negative token never collides with unlimitedLimit.
-func parseProcLimit(data []byte, name string) int64 {
+// named limit ("Max open files", "Max address space"), which the kernel prints
+// unsigned. The literal "unlimited" reads as float64(math.MaxUint64)
+// (rendered "1.8446744073709552e+19"), what client_golang serves. Returns -1
+// when the line is absent, carries no value, or holds a malformed number.
+func parseProcLimit(data []byte, name string) float64 {
 	for line := range strings.SplitSeq(string(data), "\n") {
 		after, ok := strings.CutPrefix(line, name)
 		if !ok {
@@ -420,28 +412,18 @@ func parseProcLimit(data []byte, name string) int64 {
 		}
 		fields := strings.Fields(after)
 		if len(fields) == 0 {
-			return 0
+			return -1
 		}
 		if strings.EqualFold(fields[0], "unlimited") {
-			return unlimitedLimit
+			return float64(math.MaxUint64)
 		}
-		n, err := strconv.ParseInt(fields[0], 10, 64)
-		if err != nil || n < 0 {
-			return 0
+		n, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return -1
 		}
-		return n
+		return float64(n)
 	}
-	return 0
-}
-
-// limitValue is a soft limit as a gauge value. The unlimitedLimit sentinel
-// becomes float64(math.MaxUint64) (rendered "1.8446744073709552e+19"), what
-// client_golang emits for an unlimited limit.
-func limitValue(limit int64) float64 {
-	if limit == unlimitedLimit {
-		return float64(math.MaxUint64)
-	}
-	return float64(limit)
+	return -1
 }
 
 // parseProcNetstatOctets parses /proc/self/net/netstat content for the IpExt

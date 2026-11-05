@@ -190,8 +190,13 @@ func TestRuntimeSettingFamiliesReadTheLiveSettings(t *testing.T) {
 	if !slices.Equal(info.Labels, []Label{{Name: "version", Value: runtime.Version()}}) || info.Value != 1 {
 		t.Errorf("go_info = %+v, want version %q and 1", info, runtime.Version())
 	}
-	if threads := gatheredFamily(t, pmThreads).Samples[0].Value; threads < 1 {
-		t.Errorf("go_threads = %v, want at least 1", threads)
+	// A Go program has at least the main thread and sysmon's, and this test's
+	// goroutine.
+	if threads := gatheredFamily(t, pmThreads).Samples[0].Value; threads < 2 {
+		t.Errorf("go_threads = %v, want at least 2", threads)
+	}
+	if goroutines := gatheredFamily(t, pmGoroutines).Samples[0].Value; goroutines < 1 {
+		t.Errorf("go_goroutines = %v, want at least 1", goroutines)
 	}
 }
 
@@ -299,7 +304,7 @@ func TestProcessFamiliesOfWireEachValue(t *testing.T) {
 	g.gc.LastGC = time.Unix(1700000000, 500000000)
 	d := processMetricsData{
 		startTime: 1000, uptime: 20, cpuSeconds: 3.5, vsize: 8192, netRx: 11, netTx: 12,
-		rss: 4096, maxFDs: 1024, maxVsize: unlimitedLimit, openFDs: 7,
+		rss: 4096, maxFDs: 1024, maxVsize: float64(math.MaxUint64), openFDs: 7,
 	}
 	want := map[string]float64{
 		pmThreads: 9, pmLastGC: 1700000000.5, pmGoInfo: 1, pmGCPauseTotal: 2,
@@ -324,11 +329,12 @@ func TestProcessFamiliesOfWireEachValue(t *testing.T) {
 		}
 	}
 	sum := got[pmGCDuration].Summary
-	if sum == nil || sum.Count != 6 || sum.Sum != 2 || sum.Quantiles[4] != (Quantile{Quantile: 1, Value: 5e-9}) {
-		t.Errorf("go_gc_duration_seconds = %+v, want count 6, sum 2 and a 5ns maximum", sum)
+	wantQ := []Quantile{{0, 1e-9}, {0.25, 2e-9}, {0.5, 3e-9}, {0.75, 4e-9}, {1, 5e-9}}
+	if sum == nil || sum.Count != 6 || sum.Sum != 2 || !slices.Equal(sum.Quantiles, wantQ) {
+		t.Errorf("go_gc_duration_seconds = %+v, want count 6, sum 2 and quantiles %v", sum, wantQ)
 	}
 
-	failed := processMetricsData{cpuSeconds: -1, vsize: -1, netRx: -1, netTx: -1, openFDs: -1}
+	failed := processMetricsData{cpuSeconds: -1, vsize: -1, netRx: -1, netTx: -1, maxFDs: -1, maxVsize: -1, openFDs: -1}
 	served := map[string]bool{}
 	for _, f := range processFamiliesOf(g, &failed) {
 		served[f.Name] = true
