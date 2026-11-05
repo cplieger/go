@@ -8,7 +8,7 @@ go get github.com/cplieger/go/<module>@latest
 
 A module with a TypeScript half keeps it in `<module>/web` and publishes it to npm and JSR as `@cplieger/<module>`, at the module's version.
 
-Nothing here imports a cplieger repository outside this one. The other libraries move here from their own repositories, each with its first development release.
+Nothing here imports a cplieger repository outside this one.
 
 ## Modules
 
@@ -30,6 +30,7 @@ Nothing here imports a cplieger repository outside this one. The other libraries
 | --- | --- |
 | [`httpclient`](httpclient) | Makes your Go HTTP calls survive flaky servers, with retries, backoff and Retry-After built in. |
 | [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown. |
+| [`sse`](sse) | Keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client. |
 
 ### Service runtime
 
