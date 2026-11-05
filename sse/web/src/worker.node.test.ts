@@ -365,6 +365,36 @@ describe("createWorkerHost: routing a run to the tabs", () => {
     await outcome;
   });
 
+  it("rejects the run with a tab's 401 before another's failure, which reaches auth_lost route digest", async () => {
+    const h = hostHarness();
+    const t1 = tab(h, "t1");
+    const t2 = tab(h, "t2");
+    t1.attach();
+    t2.attach();
+    await hello(h);
+    const run = h.runs[0]!;
+    const failed = run.tabs.run(run.ctx).catch((e: unknown) => e);
+    await settle();
+    t1.send({
+      type: "revalidate_failed",
+      runId: t1.ofType("revalidate_run")[0]!.runId,
+      cause: "busy",
+      status: 503,
+    });
+    t2.send({
+      type: "revalidate_failed",
+      runId: t2.ofType("revalidate_run")[0]!.runId,
+      cause: "signed out",
+      status: 401,
+    });
+    const error = await failed;
+    expect(error).toMatchObject({ message: "signed out", status: 401 });
+    run.reject(error);
+    await settle();
+    expect(h.ofKind("auth_lost")).toEqual([{ kind: "auth_lost", route: "digest", status: 401 }]);
+    expect(h.host.stream().state().kind).toBe("stopped");
+  });
+
   it("rejects a routed run whose signal aborts before the tabs answer", async () => {
     const h = hostHarness();
     const t = tab(h, "t1");

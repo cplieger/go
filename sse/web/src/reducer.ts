@@ -55,8 +55,7 @@ export type StreamEnd =
  * Why an attempt never became an open stream: either of the two connect-phase deadlines, a
  * rejected fetch, a status other than 200, a media type other than `text/event-stream`, or one
  * of the two hello refusals. Each is reported as a `connect_failed` record, and the attempt then
- * backs off — or waits in `offline` instead, when the network reading has already gone false. A
- * 401 never reaches the reducer: createStream stops the stream on it.
+ * backs off — or waits in `offline` instead, when the network reading has already gone false.
  * `wire_unsupported` carries the revision the server announced and emits its own record beside
  * the shared one.
  */

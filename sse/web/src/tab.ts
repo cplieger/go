@@ -7,7 +7,7 @@ import {
   isWorkerMessage,
 } from "./port-protocol.js";
 import type { ClientState } from "./reducer.js";
-import type { Frame, Stream } from "./stream.js";
+import { type Frame, type Stream, statusOf } from "./stream.js";
 import { DEFAULT_TIMING } from "./timing.js";
 import type { Subject, VersionMap } from "./versions.js";
 import {
@@ -229,10 +229,12 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
           reply({ type: "revalidate_done", runId });
         },
         (e: unknown) => {
+          const status = statusOf(e);
           reply({
             type: "revalidate_failed",
             runId,
             cause: e instanceof Error ? e.message : String(e),
+            ...(status === null ? {} : { status }),
           });
         },
       )

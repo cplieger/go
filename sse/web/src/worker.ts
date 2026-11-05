@@ -29,6 +29,8 @@ export interface TabSet {
   /**
    * Fans the run to every acknowledging tab; settles when each answered, expired or left.
    * With `verdict`, each tab's context carries `changed` and `removed`, so one digest serves them all.
+   * A failed run rejects with a tab's cause and its `status`, a 401 first, so a revalidate that
+   * rethrows it reaches `auth_lost` route `digest`.
    */
   run(ctx: RevalidateContext, verdict?: DigestVerdict): Promise<void>;
   size(): number;
@@ -80,7 +82,7 @@ interface PortEntry {
 
 interface Quorum {
   readonly pending: Set<PortEntry>;
-  readonly failures: string[];
+  readonly failures: { readonly cause: string; readonly status: number | null }[];
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
 }
@@ -191,11 +193,13 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       return;
     }
     quorums.delete(runId);
-    const failure = quorum.failures[0];
+    const failure = quorum.failures.find((f) => f.status === 401) ?? quorum.failures[0];
     if (failure === undefined) {
       quorum.resolve();
+    } else if (failure.status === null) {
+      quorum.reject(new Error(failure.cause));
     } else {
-      quorum.reject(new Error(failure));
+      quorum.reject(Object.assign(new Error(failure.cause), { status: failure.status }));
     }
   }
 
@@ -396,7 +400,10 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
           return;
         }
         if (message.type === "revalidate_failed") {
-          quorum.failures.push(message.cause);
+          quorum.failures.push({
+            cause: message.cause,
+            status: typeof message.status === "number" ? message.status : null,
+          });
         }
         settleQuorum(message.runId, quorum);
         return;

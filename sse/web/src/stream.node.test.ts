@@ -796,6 +796,7 @@ describe("stream runtime: losing authorisation", () => {
     expect(h.ofKind("auth_lost")).toEqual(lost("digest"));
     expect(h.ofKind("revalidate_failed")).toEqual([]);
     expect(h.stream.state().kind).toBe("stopped");
+    expect(h.runs[0]!.ctx.signal.aborted).toBe(true);
   });
 
   it("a revalidate rejecting with another status fails the run and keeps the stream", async () => {

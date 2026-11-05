@@ -150,7 +150,8 @@ function transportGeneration(event: ClientEvent): number | null {
   }
 }
 
-function statusOf(error: unknown): number | null {
+/** The numeric `status` an error carries, or null. */
+export function statusOf(error: unknown): number | null {
   if (typeof error !== "object" || error === null) {
     return null;
   }
@@ -669,14 +670,14 @@ export function createStream(opts: StreamOptions): Stream {
     if (inflight !== current) {
       return;
     }
-    if (current.timer !== null) {
-      clearTimeout(current.timer);
-    }
-    inflight = null;
     if (rejected && statusOf(error) === 401) {
       authLost("digest");
       return;
     }
+    if (current.timer !== null) {
+      clearTimeout(current.timer);
+    }
+    inflight = null;
     if (!rejected) {
       unverified = false;
       drain();
