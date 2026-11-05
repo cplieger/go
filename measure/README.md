@@ -15,9 +15,11 @@ measure is built for Go services whose set of metrics is fixed when the program 
 - The handler writes valid Prometheus text format 0.0.4, with invalid UTF-8 replaced by U+FFFD.
 - Every registry adds Go and process metrics. On Linux, it also adds CPU time, resident memory and file descriptors when their `/proc` reads succeed.
 - A labeled metric logs one warning when it reaches 1,000 series, so a runaway label shows in your logs.
+- A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, with any number of labels.
+- `Gather` reads a registry as structured values, so a test can check a metric without parsing the page.
 - Recording and scraping are safe from many goroutines at once.
 
-Consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Prometheus project's Go client, if you need summaries, custom collectors, exemplars or native histograms. Consider [VictoriaMetrics/metrics](https://github.com/VictoriaMetrics/metrics) if you push metrics to remote storage.
+Consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Prometheus project's Go client, if you need summaries, exemplars, native histograms or a third-party `prometheus.Collector`. Consider [VictoriaMetrics/metrics](https://github.com/VictoriaMetrics/metrics) if you push metrics to remote storage.
 
 ## Install
 
@@ -94,19 +96,35 @@ func instrument(route string, next http.Handler) http.Handler {
 
 Label by the route you registered, never by the raw request path. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
 
+To serve values read when Prometheus scrapes, declare their families and register a collector. Every scrape calls the function with the request's context:
+
+```go
+var depth = measure.NewGaugeDesc("queue_depth", "Items waiting in each queue", []string{"queue"})
+
+func init() {
+	reg.MustRegister(measure.NewCollector(func(ctx context.Context, e *measure.Emitter) {
+		for name, n := range store.QueueDepths(ctx) {
+			e.Emit(depth, float64(n), name)
+		}
+	}, depth))
+}
+```
+
 ## API
 
 - Metrics: `NewCounter`, `NewGauge`, `NewHistogram` and their labeled variants `NewLabeledCounter`, `NewLabeledGauge` and `NewLabeledHistogram`.
 - Buckets: `DefaultBuckets`, `APIBuckets` and the `WithBuckets` option.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.
 - Registry: `NewRegistry`, `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement.
+- Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewCollector` and `(*Emitter).Emit`.
+- Reading: `Gather`, which returns `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`.
 - Custom handlers: `WriteCounter`, `WriteGauge`, `WriteHistogram`, their labeled variants and `WriteProcess`.
 
-The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its `Example` function is runnable, and `go test` keeps it true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
 
 ## Errors surface at registration
 
-A constructor never panics on an invalid metric name, an invalid, reserved or duplicate label name, more than 8 labels, or bad histogram buckets. It captures the error into the metric, and the error surfaces when you register it. `Register` returns it, and `MustRegister` panics on the first one. Use `MustRegister` for metrics declared at package level, where no caller can take an error.
+A constructor never panics on an invalid metric name, an invalid, reserved or duplicate label name, more than 8 labels on an instrument, or bad histogram buckets. It captures the error into the metric, and the error surfaces when you register it. `Register` returns it, and `MustRegister` panics on the first one. Use `MustRegister` for metrics declared at package level, where no caller can take an error.
 
 `Register` also rejects a metric that is already registered, a nil metric and a name that collides with another metric or with a process metric. When `Register` refuses a metric because its name collides, the metric stays unattached, and you can still register it with a different registry. A metric with a construction error stays broken, so build a new one with valid arguments. Every `Register` call reports an invalid registry prefix.
 
@@ -117,7 +135,7 @@ A metric that carries a construction error records nothing and never reaches the
 `Handler` serves Prometheus text exposition format 0.0.4, the plain-text format every Prometheus server can scrape.
 
 - Label values escape only `\`, `"` and newline. HELP text escapes only `\` and newline.
-- Invalid UTF-8 in a label value or HELP text is replaced with U+FFFD and never panics. A label value logs one warning per new series, and HELP text one warning per metric.
+- Invalid UTF-8 in a label value or HELP text is replaced with U+FFFD and never panics. On an instrument, a label value logs one warning per new series, and HELP text one warning per metric. A collector logs it once when it appears and once when it clears.
 - Every histogram has a `+Inf` bucket equal to its `_count`.
 - Whole numbers render as bare integers such as `42`, other values in the shortest form that reads back exactly, and non-finite values as `+Inf`, `-Inf` and `NaN`.
 
@@ -132,12 +150,12 @@ measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page giv
 - Exemplars and native histograms.
 - Pushing metrics or remote write.
 - Removing a metric from a registry after it is registered.
-- Third-party collectors. Only this package's six metric types can be registered.
-- Float counters, gzip compression of the response and `Gauge.SetToCurrentTime`.
+- Third-party collectors. A collector is a function you give `NewCollector`, and only this package's types can be registered.
+- Float counter instruments, gzip compression of the response and `Gauge.SetToCurrentTime`.
 
 ## Documentation
 
-- [How measure works](docs/how-it-works.md) covers each metric type, the registry, label values, HTTP instrumentation, process metrics and the low-level writers.
+- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather`, label values, HTTP instrumentation, process metrics and the low-level writers.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 
 ## Credits

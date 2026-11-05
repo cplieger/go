@@ -85,6 +85,8 @@ type Registry struct {
 	labeledGauges     []*LabeledGauge
 	histograms        []*Histogram
 	labeledHistograms []*LabeledHistogram
+	collectors        []*Collector
+	collectorFamilies int // descs across collectors, for slice capacities
 	mu                sync.RWMutex
 }
 
@@ -161,11 +163,10 @@ func (r *Registry) reserveHistogramFamily(name, kind string) error {
 }
 
 // Metric is implemented by every metric type in this package: *Counter,
-// *Gauge, *LabeledCounter, *LabeledGauge, *Histogram, and *LabeledHistogram.
-// The interface is sealed (its method is unexported), so those six are the
-// only implementations: third-party collectors in the client_golang style are
-// out of scope by design, like the rest of the README's "Unsupported by
-// Design" list.
+// *Gauge, *LabeledCounter, *LabeledGauge, *Histogram, *LabeledHistogram and
+// *Collector. The interface is sealed (its method is unexported), so those
+// seven are the only implementations: a scrape-time value comes from a
+// function given to NewCollector, not from a type implementing an interface.
 type Metric interface {
 	// registerInto validates and attaches the metric to r. Callers hold r.mu.
 	registerInto(r *Registry) error
@@ -179,10 +180,14 @@ var errNilMetric = errors.New("measure: Register called with nil metric")
 
 // Register adds a metric to the registry. It returns the error the metric
 // captured at construction (invalid metric name, invalid/reserved/duplicate
-// label name, more than 8 labels, bad histogram buckets), an error when the
+// label name, more than 8 labels on a labeled instrument, bad histogram buckets), an error when the
 // metric is already registered, an error when the metric's exposition
 // family name collides with an already-registered one, or an error when m is
-// nil. On error the metric is not attached and the registry is unchanged.
+// nil. A collector also returns the errors NewCollector captured (no descs, a
+// nil desc, a nil collect, a repeated family name, a desc another collector
+// holds, a desc not built with NewGaugeDesc or NewCounterDesc, or a desc's
+// invalid name or label), and a Collector not built with NewCollector is
+// refused. On error the metric is not attached and the registry is unchanged.
 // After a family-name collision the metric itself is left unregistered and
 // intact, so it can still be registered with a different registry (or with
 // this one once the colliding name is freed); a construction error is
@@ -307,12 +312,13 @@ func (lh *LabeledHistogram) registerInto(r *Registry) error {
 	})
 }
 
-// Handler returns an HTTP handler serving Prometheus text format.
+// Handler returns an HTTP handler serving Prometheus text format. Each request
+// runs every registered collector with the request's context.
 func (r *Registry) Handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if _, err := io.WriteString(w, encodePrometheus(r.collect())); err != nil {
+		if _, err := io.WriteString(w, encodePrometheus(r.collect(req.Context()))); err != nil {
 			slog.Debug("measure: writing prometheus exposition failed", "error", err)
 		}
 	}
