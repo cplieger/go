@@ -85,6 +85,7 @@ type Registry struct {
 	labeledGauges     []*LabeledGauge
 	histograms        []*Histogram
 	labeledHistograms []*LabeledHistogram
+	collectors        []*Collector
 	mu                sync.RWMutex
 }
 
@@ -161,11 +162,10 @@ func (r *Registry) reserveHistogramFamily(name, kind string) error {
 }
 
 // Metric is implemented by every metric type in this package: *Counter,
-// *Gauge, *LabeledCounter, *LabeledGauge, *Histogram, and *LabeledHistogram.
-// The interface is sealed (its method is unexported), so those six are the
-// only implementations: third-party collectors in the client_golang style are
-// out of scope by design, like the rest of the README's "Unsupported by
-// Design" list.
+// *Gauge, *LabeledCounter, *LabeledGauge, *Histogram, *LabeledHistogram and
+// *Collector. The interface is sealed (its method is unexported), so those
+// seven are the only implementations: a scrape-time value comes from a
+// function given to NewCollector, not from a type implementing an interface.
 type Metric interface {
 	// registerInto validates and attaches the metric to r. Callers hold r.mu.
 	registerInto(r *Registry) error
@@ -307,12 +307,13 @@ func (lh *LabeledHistogram) registerInto(r *Registry) error {
 	})
 }
 
-// Handler returns an HTTP handler serving Prometheus text format.
+// Handler returns an HTTP handler serving Prometheus text format. Each request
+// runs every registered collector with the request's context.
 func (r *Registry) Handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if _, err := io.WriteString(w, encodePrometheus(r.collect())); err != nil {
+		if _, err := io.WriteString(w, encodePrometheus(r.collect(req.Context()))); err != nil {
 			slog.Debug("measure: writing prometheus exposition failed", "error", err)
 		}
 	}

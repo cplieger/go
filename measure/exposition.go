@@ -1,6 +1,7 @@
 package measure
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -183,11 +184,11 @@ func leLabels(labelStr, le string) string {
 
 // collect materialises the whole registry into a flat []metricFamily in the
 // canonical scrape order (labeled counters, counters, labeled gauges, gauges,
-// histograms, labeled histograms, then process metrics). Registry metrics are
-// read under the registry read lock; process metrics are collected afterwards,
-// outside the lock, because gathering them performs /proc and runtime reads
-// that must not block registration.
-func (r *Registry) collect() []metricFamily {
+// histograms, labeled histograms, collectors, then process metrics). Registry
+// metrics are read under the registry read lock; collectors and process
+// metrics run afterwards, outside the lock, because they call app code and
+// perform /proc and runtime reads that must not block registration.
+func (r *Registry) collect(ctx context.Context) []metricFamily {
 	r.mu.RLock()
 	fams := make([]metricFamily, 0,
 		len(r.labeledCounters)+len(r.counters)+len(r.labeledGauges)+
@@ -216,8 +217,24 @@ func (r *Registry) collect() []metricFamily {
 			fams = append(fams, f)
 		}
 	}
+	collectors := r.collectors
 	r.mu.RUnlock()
+	fams = appendCollectorFamilies(ctx, fams, collectors)
 	return append(fams, processFamilies()...)
+}
+
+// appendCollectorFamilies runs each collector and appends its non-empty
+// families. The page serves what survived; run logs the drops.
+func appendCollectorFamilies(ctx context.Context, fams []metricFamily, collectors []*Collector) []metricFamily {
+	for _, c := range collectors {
+		cf, _ := c.run(ctx)
+		for i := range cf {
+			if f, ok := pageFamily(&cf[i]); ok {
+				fams = append(fams, f)
+			}
+		}
+	}
+	return fams
 }
 
 // encodePrometheus renders the IR in Prometheus text format 0.0.4: HELP before

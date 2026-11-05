@@ -1,6 +1,7 @@
 package measure
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -119,7 +120,7 @@ func TestCollect_capacityCounters(t *testing.T) {
 		reg.MustRegister(NewCounter(prefix+strconv.Itoa(i)+"_total", "h"))
 	}
 
-	fams := reg.collect()
+	fams := reg.collect(context.Background())
 
 	if got := countFamiliesWithPrefix(fams, prefix); got != 20 {
 		t.Fatalf("collect() emitted %d %q families, want 20", got, prefix)
@@ -135,7 +136,7 @@ func TestCollect_capacityLabeledGauges(t *testing.T) {
 		lg.Set(1, "v") // a labeled metric only emits a family once a combo is set
 	}
 
-	fams := reg.collect()
+	fams := reg.collect(context.Background())
 
 	if got := countFamiliesWithPrefix(fams, prefix); got != 20 {
 		t.Fatalf("collect() emitted %d %q families, want 20", got, prefix)
@@ -149,7 +150,7 @@ func TestCollect_capacityHistograms(t *testing.T) {
 		reg.MustRegister(NewHistogram(prefix+strconv.Itoa(i), "h"))
 	}
 
-	fams := reg.collect()
+	fams := reg.collect(context.Background())
 
 	if got := countFamiliesWithPrefix(fams, prefix); got != 20 {
 		t.Fatalf("collect() emitted %d %q families, want 20", got, prefix)
@@ -165,7 +166,7 @@ func TestCollect_capacityLabeledHistograms(t *testing.T) {
 		lh.Observe(0.1, "v")
 	}
 
-	fams := reg.collect()
+	fams := reg.collect(context.Background())
 
 	if got := countFamiliesWithPrefix(fams, prefix); got != 20 {
 		t.Fatalf("collect() emitted %d %q families, want 20", got, prefix)
@@ -179,7 +180,7 @@ func TestCollect_capacityGauges(t *testing.T) {
 		reg.MustRegister(NewGauge(prefix+strconv.Itoa(i), "h"))
 	}
 
-	fams := reg.collect()
+	fams := reg.collect(context.Background())
 
 	if got := countFamiliesWithPrefix(fams, prefix); got != 20 {
 		t.Fatalf("collect() emitted %d %q families, want 20", got, prefix)
@@ -353,15 +354,15 @@ func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
 		// The fixture asserts its own regime: if the escaped output ever stops
 		// being longer than the plain one, the escaper is no longer on this
 		// path and the surcharge below would be measuring nothing.
-		plainOut := encodePrometheus(plainRegistry.collect())
-		escapedOut := encodePrometheus(escapedRegistry.collect())
+		plainOut := encodePrometheus(plainRegistry.collect(context.Background()))
+		escapedOut := encodePrometheus(escapedRegistry.collect(context.Background()))
 		if len(escapedOut) <= len(plainOut) {
 			t.Fatalf("with %d-byte all-quote label values the exposition is %d bytes against %d for plain values, want longer: the fixture is meant to exercise the escaper",
 				n, len(escapedOut), len(plainOut))
 		}
 
-		plainAllocs := testing.AllocsPerRun(scrapeAllocRuns, func() { _ = encodePrometheus(plainRegistry.collect()) })
-		escapedAllocs := testing.AllocsPerRun(scrapeAllocRuns, func() { _ = encodePrometheus(escapedRegistry.collect()) })
+		plainAllocs := testing.AllocsPerRun(scrapeAllocRuns, func() { _ = encodePrometheus(plainRegistry.collect(context.Background())) })
+		escapedAllocs := testing.AllocsPerRun(scrapeAllocRuns, func() { _ = encodePrometheus(escapedRegistry.collect(context.Background())) })
 		surcharge[i] = (escapedAllocs - plainAllocs) / series
 		t.Logf("%d series of %d-byte label values: %v allocations per scrape plain, %v all-escaped, a surcharge of %.3f per series",
 			series, n, plainAllocs, escapedAllocs, surcharge[i])
