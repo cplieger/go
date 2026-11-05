@@ -190,6 +190,33 @@ func (m *Marker) CheckHealthy() bool {
 // per call, not a field read.
 func (m *Marker) Healthy() bool { return m.CheckHealthy() }
 
+// Within returns a Signal that is healthy while the marker exists and, for a
+// positive d, was last refreshed no more than d ago: the rule [WithMaxAge]
+// applies to the probe. A non-positive d checks existence only, as Healthy
+// does. Pass the same [Lease.Duration] to both, so the Docker probe and an
+// HTTP handler cannot disagree. Like Healthy, it reports unhealthy in
+// degraded mode, and costs one os.Stat per call.
+func (m *Marker) Within(d time.Duration) Signal {
+	return markerWithin{m: m, d: d}
+}
+
+// markerWithin is the Signal Within returns.
+type markerWithin struct {
+	m *Marker
+	d time.Duration
+}
+
+func (w markerWithin) Healthy() bool {
+	if w.m == nil {
+		return false
+	}
+	info, err := os.Stat(w.m.path)
+	if err != nil {
+		return false
+	}
+	return w.d <= 0 || time.Since(info.ModTime()) <= w.d
+}
+
 // ProbeOption configures the probe-side health decision (RunProbe and
 // ProbeCheck). Without options the probe checks marker existence only.
 type ProbeOption func(*probeConfig)

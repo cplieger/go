@@ -3,49 +3,75 @@ package health
 import (
 	"encoding/json"
 	"net/http"
-	"time"
+	"slices"
 )
 
+// The fleet health body's status values.
 const (
-	statusOK          = "OK"
-	statusUnavailable = "Unavailable"
+	statusOK        = "ok"
+	statusUnhealthy = "unhealthy"
 )
 
-// Status is the JSON response emitted by Handler.
-type Status struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
+// reasonUnhealthy is the reason Handler gives for its one signal.
+const reasonUnhealthy = "the app reports itself unhealthy"
+
+// Check is one condition a health endpoint reports.
+type Check struct {
+	// Signal decides the check. A nil Signal is unhealthy.
+	Signal Signal
+	// Reason is one plain sentence, written where the app wires the check,
+	// that "reasons" lists while Signal reports unhealthy. Never build it from
+	// error text: the endpoint answers without authentication.
+	Reason string
 }
 
-// Handler returns an http.Handler that reports the health of the given
-// Signal as a JSON object. Returns 200 with {"status":"OK"} when healthy,
-// 503 with {"status":"Unavailable"} otherwise (including a nil Signal).
-// This mirrors the response shape of hellofresh/health-go and satisfies
-// K8s HTTP probe expectations.
+// body is the JSON a health endpoint writes.
+type body struct {
+	Status  string   `json:"status"`
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// CheckHandler returns a handler that reports checks, in order. It answers 200
+// with {"status":"ok"} while every check is healthy, and 503 with
+// {"status":"unhealthy","reasons":[...]} otherwise, listing the Reason of each
+// failing check. Both carry Content-Type: application/json,
+// Cache-Control: no-store and X-Content-Type-Options: nosniff. With no checks
+// it always answers 200.
 //
-// In degraded mode (unwritable marker directory), Marker.Healthy()
-// returns false, so this endpoint reports 503 — unlike the `health`
-// subcommand probe (ProbeCheck), which reports healthy to avoid a
-// Docker restart loop. Do not wire this endpoint as the sole liveness
-// probe on a service that may run with a read-only filesystem and no
-// /tmp tmpfs, or it will restart-loop a container that is actually alive.
-//
-// With a *Marker signal, every request performs one os.Stat (see
-// Marker.CheckHealthy); keep this endpoint behind the platform's probe
-// cadence, not a request-per-second hot path.
-func Handler(s Signal) http.Handler {
+// Register it as "GET /healthz" on an http.ServeMux, which also answers HEAD
+// and answers 405 to every other method. The handler reads each Signal on
+// every request; a *Marker costs one os.Stat.
+func CheckHandler(checks ...Check) http.Handler {
+	checks = slices.Clone(checks)
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		st := Status{Timestamp: time.Now().UTC().Format(time.RFC3339)}
-		code := http.StatusOK
-		if s != nil && s.Healthy() {
-			st.Status = statusOK
-		} else {
-			st.Status = statusUnavailable
-			code = http.StatusServiceUnavailable
+		var reasons []string
+		for _, c := range checks {
+			if c.Signal == nil || !c.Signal.Healthy() {
+				reasons = append(reasons, c.Reason)
+			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+		b, code := body{Status: statusOK}, http.StatusOK
+		if len(reasons) > 0 {
+			b, code = body{Status: statusUnhealthy, Reasons: reasons}, http.StatusServiceUnavailable
+		}
+		h := w.Header()
+		h.Set("Content-Type", "application/json")
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(code)
-		_ = json.NewEncoder(w).Encode(st)
+		_ = json.NewEncoder(w).Encode(b)
 	})
+}
+
+// Handler returns CheckHandler for one signal, s, with the reason
+// "the app reports itself unhealthy". A nil s is unhealthy.
+//
+// In degraded mode (an unwritable marker directory), Marker.Healthy reports
+// false, so this endpoint answers 503 while the `health` subcommand
+// (ProbeCheck) reports healthy to avoid a Docker restart loop. Do not wire this
+// endpoint as the only liveness probe of a service that may run with a
+// read-only filesystem and no /tmp tmpfs, or it will restart a container that
+// is alive.
+func Handler(s Signal) http.Handler {
+	return CheckHandler(Check{Signal: s, Reason: reasonUnhealthy})
 }

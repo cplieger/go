@@ -17,7 +17,7 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 
 Every `Set(true)` refreshes the marker's modification time, so the writing side needs no change. Pick a deadline comfortably above one interval plus the longest normal cycle. Three intervals is a reasonable default. A stale marker fails with a stderr line that gives its age and the deadline.
 
-`CheckHealthy`, `Healthy` and `Handler` check existence only, whether or not the probe has a deadline.
+`CheckHealthy`, `Healthy` and `Handler` check existence only, whether or not the probe has a deadline. For an HTTP endpoint that applies the same deadline, pass `m.Within(d)` as its signal with the `d` you give `WithMaxAge`. It is healthy while the marker exists and is no older than `d`, and a non-positive `d` checks existence only, the probe's rule.
 
 ## Building it with `Lease`
 

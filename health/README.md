@@ -14,6 +14,7 @@ health is built for container images with no shell, whether the main process is 
 - When `/tmp` cannot be written, the check still reports healthy and the service logs one warning with the fix. A read-only filesystem never marks a working container unhealthy.
 - An optional deadline fails the check when a work loop stops refreshing the marker.
 - `Latch` keeps the container unhealthy once shutdown begins, even when late work succeeds.
+- `CheckHandler` serves `GET /healthz`: 200 with `{"status":"ok"}`, or 503 listing one plain reason for each failing check.
 - The `probe` binary passes only when every URL answers 2xx within one shared timeout, and it writes each failure to stderr.
 
 Consider [alexliesenfeld/health](https://github.com/alexliesenfeld/health) if you want an HTTP health endpoint that runs checks against your database and other dependencies, with caching, periodic checks and a status for each component.
@@ -68,11 +69,11 @@ Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write i
 
 ## API
 
-- Marker: `NewMarker`, `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `CheckHealthy` and `Healthy` methods, with the `Signal` interface.
+- Marker: `NewMarker`, `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `CheckHealthy`, `Healthy` and `Within` methods, with the `Signal` interface.
 - Probe side: `RunProbe`, `ProbeCheck` and the `WithMaxAge` option, with `Lease` to build its deadline.
 - Reading a marker in-process: `Inspect`, `Freshness` and the `MarkerState` values.
 - Shutdown: `Latch`, `NewLatch`, and the `Set` and `BeginDrain` methods.
-- HTTP endpoint: `Handler` and its `Status` JSON body.
+- HTTP endpoint: `CheckHandler` with `Check`, and `Handler` for one signal.
 - HTTP probe package: `probe.URL`, `probe.Check`, `probe.Run`, `probe.DefaultTimeout` and the `probe/cmd/probe` binary.
 
 The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/go/health) and [health/probe](https://pkg.go.dev/github.com/cplieger/go/health/probe). Its `Example` functions are runnable, and `go test` keeps them true.
@@ -101,7 +102,7 @@ Arm it only for a service that runs its own work loop at a known interval. Leave
 
 health leaves these out on purpose. The [non-goals](docs/non-goals.md) page gives the reason for each.
 
-- Registered dependency checks. `Set(bool)` is where your code combines them.
+- Running dependency checks on each request. `CheckHandler` reads signals your code keeps, and never calls a database or an upstream itself.
 - Separate liveness and readiness signals. Use two markers with different paths.
 - A `context.Context` or a shutdown hook. `Cleanup` is the shutdown action.
 - Status-change callbacks. Wrap `Set` to add your own.
@@ -115,10 +116,6 @@ health leaves these out on purpose. The [non-goals](docs/non-goals.md) page give
 - [Freshness deadline](docs/freshness.md) covers when to arm `WithMaxAge`, building it with `Lease`, and reading a marker in-process with `Inspect`.
 - [HTTP probe](docs/http-probe.md) covers the Dockerfile, timeouts, several URLs and exit codes.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
-
-## Credits
-
-`Handler`'s JSON body uses the `status` and `timestamp` fields and the `OK` and `Unavailable` values of the `/status` response in [hellofresh/health-go](https://github.com/hellofresh/health-go).
 
 ## Contributing
 
