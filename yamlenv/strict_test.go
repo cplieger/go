@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cplieger/go/yamlenv"
+	"go.yaml.in/yaml/v4"
 )
 
 // probeConfig is the throwaway config shape the strict unknown-key tests
@@ -54,6 +55,9 @@ func TestCheckUnknownKeysErrorSanitizes(t *testing.T) {
 	if err == nil {
 		t.Fatal("CheckUnknownKeys = nil, want unknown-key error")
 	}
+	if _, ok := errors.AsType[*yaml.LoadErrors](err); !ok {
+		t.Errorf("CheckUnknownKeys = %v (%T), want go-yaml's structured *yaml.LoadErrors", err, err)
+	}
 	sanitized := yamlenv.SanitizeDecodeError(err)
 	if !strings.Contains(sanitized.Error(), "unknown configuration key") {
 		t.Errorf("sanitized = %q, want the value-independent unknown-key rewrite", sanitized.Error())
@@ -73,6 +77,8 @@ func TestCheckSingleDocument(t *testing.T) {
 		{name: "single document no trailing newline", input: "a: b"},
 		{name: "empty input", input: ""},
 		{name: "leading separator only", input: "---\na: b\n"},
+		{name: "comment only", input: "# nothing\n"},
+		{name: "document end marker", input: "a: b\n...\n"},
 		{name: "unparseable first document", input: "a: [\n"}, // parse steps own this
 		{name: "two documents", input: "a: b\n---\nc: d\n", wantMult: true},
 		{name: "trailing separator empty second doc", input: "a: b\n---\n", wantMult: true},

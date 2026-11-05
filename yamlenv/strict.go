@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // ErrMultipleDocuments is returned by CheckSingleDocument when the input
@@ -14,59 +14,57 @@ import (
 // SanitizeDecodeError.
 var ErrMultipleDocuments = errors.New("yamlenv: more than one YAML document; remove the '---' separator")
 
-// CheckUnknownKeys fails loudly on a key the config type does not declare:
-// it re-decodes data with yaml.v3's KnownFields(true) into probe, so a
-// misspelled or misplaced key errors ("line N: field X not found in type T")
-// instead of being silently ignored while its intended setting stays at the
-// default. probe must be a pointer to a fresh throwaway value of the
-// caller's config struct type; the decode mutates it and nothing reads it
-// afterwards.
-//
-// Run it on the RAW pre-expansion bytes, beside Expand rather than after it:
-// expansion rewrites string scalar values only (keys stay literal), so it
-// cannot change which keys exist, and the error's line numbers then point at
-// the file the operator actually wrote. An empty document passes — absence
-// of keys is not an unknown key, and emptiness policy belongs to the
-// caller's own parse and decode steps.
-//
-// The returned error is yaml.v3's and may embed document content (the key
-// name; an accompanying wrong-type entry can embed a scalar excerpt), so a
-// caller that logs it at startup should pass it through SanitizeDecodeError,
-// which recognizes the unknown-key entry shape and rewrites it
-// value-independently.
+// CheckUnknownKeys loads data into probe, a pointer to a fresh throwaway value
+// of the caller's config type, with go-yaml's WithKnownFields, so a misspelled
+// or misplaced key fails instead of being ignored. Run it on the RAW
+// pre-expansion bytes: expansion cannot change which keys exist, positions
+// then match the file, and an alias used as a key names the literal ${VAR}. An
+// empty document passes. The error is a *yaml.LoadErrors, or a *yaml.LoadError
+// for a parse error or an aborted load; either may embed document content, so
+// pass it through SanitizeDecodeError before logging it.
 func CheckUnknownKeys(data []byte, probe any) error {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(probe); err != nil && !errors.Is(err, io.EOF) {
+	l, err := yaml.NewLoader(bytes.NewReader(data), yaml.WithKnownFields())
+	if err != nil {
+		return err
+	}
+	if err := l.Load(probe); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	return nil
 }
 
 // CheckSingleDocument rejects input that carries more than one YAML
-// document. Single-document parse pipelines (yaml.Unmarshal, one
-// Decoder.Decode, CheckUnknownKeys above) consume only the first document,
-// so everything below a stray "---" separator would otherwise be silently
-// ignored — the opposite of a fail-loud config loader. Like CheckUnknownKeys
-// it runs on the raw pre-expansion bytes; expansion is post-parse and
-// string-values-only, so it cannot change how many documents exist.
-//
-// A first document that fails to parse returns nil deliberately: the
-// caller's parse and decode steps own those diagnostics, this check owns
-// only document multiplicity. The only non-nil return is
-// ErrMultipleDocuments, which embeds no input content and is safe to log
-// unsanitized.
+// document, so nothing below a stray "---" separator is silently ignored. Run
+// it on the raw pre-expansion bytes; Load runs the same check in its parse. A
+// first document that fails to parse returns nil: the caller's parse owns that
+// diagnostic. The only non-nil return is ErrMultipleDocuments, which embeds no
+// input content and is safe to log unsanitized.
 func CheckSingleDocument(data []byte) error {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	var doc yaml.Node
-	if err := dec.Decode(&doc); err != nil {
-		return nil
-	}
-	if err := dec.Decode(&doc); !errors.Is(err, io.EOF) {
-		// Anything but EOF — a second document (even the empty one a
-		// trailing separator produces) or a syntax error inside it — means
-		// content beyond the first document.
-		return ErrMultipleDocuments
+	if _, err := parseSingleDocument(data); errors.Is(err, ErrMultipleDocuments) {
+		return err
 	}
 	return nil
+}
+
+// parseSingleDocument parses data into its only document node. It returns a
+// nil node for an empty stream, ErrMultipleDocuments when anything follows
+// the first document (even the empty one a trailing separator produces, or a
+// syntax error), and go-yaml's error when the first document fails to parse.
+func parseSingleDocument(data []byte) (*yaml.Node, error) {
+	l, err := yaml.NewLoader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var doc yaml.Node
+	if err := l.Load(&doc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var next yaml.Node
+	if err := l.Load(&next); !errors.Is(err, io.EOF) {
+		return nil, ErrMultipleDocuments
+	}
+	return &doc, nil
 }

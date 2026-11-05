@@ -8,7 +8,7 @@
 // literal, and expansion is a single pass. ExpandWith reads variables through
 // a caller-supplied lookup; Expand and Load read the process environment
 // unless WithLookupEnv says otherwise. SanitizeDecodeError strips value
-// excerpts (possibly expanded secrets) from yaml.v3 decode errors.
+// excerpts (possibly expanded secrets) from go-yaml v4 load errors.
 // CheckUnknownKeys and CheckSingleDocument are the strict-load checks.
 //
 // A reference expands only into a string-typed (!!str) node, and the node
@@ -25,7 +25,7 @@ import (
 	"os"
 	"regexp"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // refRe matches a ${VAR} reference, the only supported expansion form.
