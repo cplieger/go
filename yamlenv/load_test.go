@@ -675,6 +675,36 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 		}
 	})
 
+	// go-yaml found a problem beside the hook's, so the error is not the
+	// config type's own and no predicate may claim it, whatever go-yaml's
+	// error types let errors.As reach.
+	t.Run("a mixed hook and go-yaml error never reaches the predicate", func(t *testing.T) {
+		t.Parallel()
+		var calls []error
+		recordCalls := func(err error) bool { calls = append(calls, err); return true }
+		for name, pred := range map[string]func(error) bool{
+			"app type":    func(err error) bool { _, ok := errors.AsType[*portError](err); return ok },
+			"always true": func(error) bool { return true },
+			"recorded":    recordCalls,
+		} {
+			var cfg struct {
+				Port    port `yaml:"port"`
+				Workers int  `yaml:"workers"`
+			}
+			_, err := yamlenv.Load([]byte("port: x\nworkers: ${APP_SECRET}\n"), &cfg, allowAppPrefix,
+				yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": "hunter2"})),
+				yamlenv.WithErrorPassthrough(pred))
+			const want = "decode errors: line 1, column 7: value rejected (details withheld: they may embed an expanded secret); " +
+				"line 2, column 10: cannot construct !!str <redacted> into int"
+			if err == nil || err.Error() != want {
+				t.Errorf("%s: err = %v, want %q", name, err, want)
+			}
+		}
+		if len(calls) != 0 {
+			t.Errorf("predicate called with %v, want no call for a mixed error", calls)
+		}
+	})
+
 	t.Run("without a passthrough the classification stays fail-closed", func(t *testing.T) {
 		t.Parallel()
 		var cfg durConfig

@@ -102,13 +102,8 @@ func TestClassifyDecodeError(t *testing.T) {
 		tests["copied go-yaml message: "+name] = tc{err: hookErrors(msg)}
 	}
 	for name, tt := range tests {
-		got := classifyDecodeError(tt.err)
-		_, wrapped := got.(*UnmarshalerError)
-		if wrapped != tt.want {
-			t.Errorf("%s: classifyDecodeError = %T, want wrapped=%v", name, got, tt.want)
-		}
-		if !wrapped && got != tt.err {
-			t.Errorf("%s: classifyDecodeError changed an unclaimed error: %v", name, got)
+		if got := classifyDecodeError(tt.err); (got != nil) != tt.want {
+			t.Errorf("%s: classifyDecodeError = %v, want wrapped=%v", name, got, tt.want)
 		}
 	}
 }

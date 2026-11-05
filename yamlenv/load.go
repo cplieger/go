@@ -9,13 +9,13 @@ import (
 )
 
 // UnmarshalerError is a decode failure Load attributes to the config type's
-// own UnmarshalYAML, the classification WithErrorPassthrough's predicate sees:
+// own UnmarshalYAML, the only error WithErrorPassthrough's predicate sees:
 // every entry came from the config type, and none wraps a go-yaml error or
-// carries the fixed words of a go-yaml message that quotes input. Load cannot
-// vouch for other text a hook writes, so claim the app's own error type, not
-// this one. Err is the method's error, or errors.Join of several in document
-// order; Error returns its text unchanged. Only Load constructs it, always
-// with a non-nil Err.
+// carries the fixed words of a go-yaml message (listed in the README). Load
+// cannot vouch for other text a hook writes, so claim the app's own error
+// type, not this one. Err is the method's error, or errors.Join of several in
+// document order; Error returns its text unchanged. Only Load constructs it,
+// always with a non-nil Err.
 type UnmarshalerError struct {
 	// Err is the error the config type's UnmarshalYAML returned, unchanged.
 	Err error
@@ -57,13 +57,13 @@ func WithSanitizeOptions(opts ...SanitizeOption) LoadOption {
 }
 
 // WithErrorPassthrough returns a decode error unchanged instead of sanitized
-// when pred reports true. pred sees the classified error: claim the app's own
-// error type (errors.AsType[*myconfig.Error]), whose text the app controls; it
-// matches only inside an *UnmarshalerError. A hook error that copies go-yaml's
-// text is withheld only when it matches a marker of the go-yaml release the
-// tests pin, and a TextUnmarshaler field's error (netip.Addr) can echo its
-// input; a predicate claiming every *UnmarshalerError passes both. Parse
-// errors and unknown-key findings never reach pred.
+// when pred reports true. pred sees only an *UnmarshalerError, so a raw
+// go-yaml error is never passed through: parse errors, unknown-key findings
+// and a decode error where go-yaml found a problem too never reach it. Claim
+// the app's own error type (errors.AsType[*myconfig.Error]), whose text the
+// app controls: a hook error copying go-yaml's text is withheld only when it
+// matches a marker of the go-yaml release the tests pin, and a TextUnmarshaler
+// field's error (netip.Addr) can echo its input.
 func WithErrorPassthrough(pred func(error) bool) LoadOption {
 	return func(o *loadOptions) { o.passthrough = pred }
 }
@@ -74,8 +74,7 @@ func WithErrorPassthrough(pred func(error) bool) LoadOption {
 // (allow, and WithLookupEnv's lookup), the decode, and error sanitization. An
 // empty document leaves out unchanged; unresolved is ExpandWith's return.
 // Every error is safe to log, except a decode error claimed through
-// WithErrorPassthrough, which arrives classified (*UnmarshalerError for the
-// config type's own) and otherwise unchanged.
+// WithErrorPassthrough, which arrives as the *UnmarshalerError pred claimed.
 func Load(data []byte, out any, allow func(name string) bool, opts ...LoadOption) (unresolved []string, err error) {
 	var o loadOptions
 	for _, opt := range opts {
@@ -107,8 +106,8 @@ func Load(data []byte, out any, allow func(name string) bool, opts ...LoadOption
 	unresolved = ExpandWith(doc, allow, o.lookup)
 	if err := doc.Decode(out); err != nil {
 		if o.passthrough != nil {
-			if classified := classifyDecodeError(err); o.passthrough(classified) {
-				return unresolved, classified
+			if owned := classifyDecodeError(err); owned != nil && o.passthrough(owned) {
+				return unresolved, owned
 			}
 		}
 		so := o.sanitizeOptions(cfgType, doc)
@@ -130,21 +129,21 @@ func (o loadOptions) sanitizeOptions(cfgType reflect.Type, doc *yaml.Node) sanit
 }
 
 // classifyDecodeError wraps a decode failure in *UnmarshalerError when every
-// entry came from the config type's own code. go-yaml v4 relays a method's
-// error as a constructor-stage LoadError that unwraps to it, but its own
-// entries share the stage and also unwrap to a fresh error, so the message
-// shape is what tells them apart. A single *LoadError is go-yaml stopping at
-// its own failure and is never wrapped.
-func classifyDecodeError(err error) error {
+// entry came from the config type's own code, and returns nil otherwise.
+// go-yaml v4 relays a method's error as a constructor-stage LoadError that
+// unwraps to it, but its own entries share the stage and also unwrap to a
+// fresh error, so the message shape is what tells them apart. A single
+// *LoadError is go-yaml stopping at its own failure and is never wrapped.
+func classifyDecodeError(err error) *UnmarshalerError {
 	errs, ok := errors.AsType[*yaml.LoadErrors](err)
 	if !ok || len(errs.Errors) == 0 {
-		return err
+		return nil
 	}
 	causes := make([]error, 0, len(errs.Errors))
 	for _, e := range errs.Errors {
 		cause := unmarshalerCause(e)
 		if cause == nil {
-			return err
+			return nil
 		}
 		causes = append(causes, cause)
 	}
