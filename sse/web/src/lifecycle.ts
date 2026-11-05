@@ -54,7 +54,7 @@ export type LifecycleEvent =
   | { kind: "worker_dead"; sinceLastPortMessageMs: number }
   | { kind: "worker_unavailable"; cause: "silent" | "error" }
   | { kind: "worker_recovered" }
-  | { kind: "auth_lost"; route: string; status: number }
+  | { kind: "auth_lost"; route: "stream" | "alive" | "digest"; status: 401 }
   | { kind: "tab_attached"; replaced: boolean; state: ClientState["kind"] }
   | { kind: "tab_detached"; cause: string }
   | { kind: "port_expired"; sinceLastAckMs: number }

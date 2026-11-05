@@ -384,6 +384,22 @@ describe("attachToWorker: the port conversation", () => {
     ]);
   });
 
+  it("answers a routed run with revalidate_failed carrying the rejection's status", async () => {
+    const h = harness({
+      supported: true,
+      revalidate: () => Promise.reject(Object.assign(new Error("signed out"), { status: 401 })),
+    });
+    h.latest().host({
+      type: "revalidate_run",
+      runId: 14,
+      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false },
+    });
+    await waitFor("failed", () => h.latest().sent.some((m) => m.type === "revalidate_failed"));
+    expect(h.latest().sent.filter((m) => m.type === "revalidate_failed")).toEqual([
+      { type: "revalidate_failed", runId: 14, cause: "signed out", status: 401 },
+    ]);
+  });
+
   it("answers a routed run with revalidate_failed when the body throws synchronously", async () => {
     const h = harness({
       supported: true,

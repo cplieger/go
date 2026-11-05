@@ -8,7 +8,7 @@ import {
   helloFrame,
 } from "./test-helpers/scripted-fetch.js";
 import { harness } from "./test-helpers/stream-harness.js";
-import { DEFAULT_TIMING, MAX_FRAME_BYTES } from "./timing.js";
+import { DEFAULT_RETRY_MS, DEFAULT_TIMING, MAX_FRAME_BYTES } from "./timing.js";
 import { createVersionMap } from "./versions.js";
 
 const A = "aaaaaaaaaaaaaaaa";
@@ -700,5 +700,112 @@ describe("stream runtime", () => {
         "wire_unsupported",
       ].sort(),
     );
+  });
+});
+
+describe("stream runtime: losing authorisation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers(FAKE_CLOCK);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const lost = (route: "stream" | "alive" | "digest") => [
+    { kind: "auth_lost", route, status: 401 },
+  ];
+
+  it("a stream request answering 401 stops the stream with route stream and never reconnects", async () => {
+    const h = harness();
+    h.sf.expect({ status: 401, noBody: true });
+    h.stream.start();
+    await flush();
+    expect(h.ofKind("connect_failed")).toEqual([
+      { kind: "connect_failed", reason: { kind: "status", status: 401 } },
+    ]);
+    expect(h.ofKind("auth_lost")).toEqual(lost("stream"));
+    expect(h.stream.state().kind).toBe("stopped");
+    vi.advanceTimersByTime(60_000);
+    await flush();
+    expect(h.sf.connections).toHaveLength(1);
+  });
+
+  it.each([403, 503])(
+    "a stream request answering %i still backs off and reconnects",
+    async (status) => {
+      const h = harness();
+      h.sf.expect({ status, noBody: true });
+      h.stream.start();
+      await flush();
+      expect(h.ofKind("auth_lost")).toEqual([]);
+      expect(h.stream.state().kind).toBe("backoff");
+      vi.advanceTimersByTime(DEFAULT_RETRY_MS);
+      await flush();
+      expect(h.sf.connections).toHaveLength(2);
+    },
+  );
+
+  it("a reconnect answering 401 stops a stream open longer than stableMs, which reconnects at once", async () => {
+    const h = harness();
+    const conn = await h.open({ resumed: true });
+    vi.advanceTimersByTime(DEFAULT_TIMING.stableMs + 1);
+    h.sf.expect({ status: 401, noBody: true });
+    conn.end();
+    await flush();
+    expect(h.sf.connections).toHaveLength(2);
+    expect(h.ofKind("auth_lost")).toEqual(lost("stream"));
+    expect(h.stream.state().kind).toBe("stopped");
+    vi.advanceTimersByTime(60_000);
+    await flush();
+    expect(h.sf.connections).toHaveLength(2);
+  });
+
+  it("a reconnect answering 401 stops a younger stream after its retryMs floor", async () => {
+    const h = harness();
+    const conn = await h.open({ resumed: true });
+    h.sf.expect({ status: 401, noBody: true });
+    conn.end();
+    await flush();
+    expect(h.stream.state().kind).toBe("backoff");
+    expect(h.ofKind("auth_lost")).toEqual([]);
+    vi.advanceTimersByTime(DEFAULT_RETRY_MS);
+    await flush();
+    expect(h.sf.connections).toHaveLength(2);
+    expect(h.ofKind("auth_lost")).toEqual(lost("stream"));
+    expect(h.stream.state().kind).toBe("stopped");
+  });
+
+  it("an alive acknowledgement answering 401 stops the stream with route alive", async () => {
+    const h = harness({ alive: { url: "/alive" } });
+    h.sf.onPost(() => new Response(null, { status: 401 }));
+    const conn = await h.open({ resumed: true });
+    conn.push(KEEPALIVE_FRAME);
+    await flush();
+    expect(h.ofKind("alive_ack")).toEqual([{ kind: "alive_ack", ok: false, status: 401 }]);
+    expect(h.ofKind("auth_lost")).toEqual(lost("alive"));
+    expect(h.stream.state().kind).toBe("stopped");
+  });
+
+  it("a revalidate rejecting with status 401 stops the stream with route digest", async () => {
+    const h = harness();
+    await h.open();
+    expect(h.runs).toHaveLength(1);
+    h.runs[0]!.reject(Object.assign(new Error("unauthorized"), { status: 401 }));
+    await flush();
+    expect(h.ofKind("auth_lost")).toEqual(lost("digest"));
+    expect(h.ofKind("revalidate_failed")).toEqual([]);
+    expect(h.stream.state().kind).toBe("stopped");
+    expect(h.runs[0]!.ctx.signal.aborted).toBe(true);
+  });
+
+  it("a revalidate rejecting with another status fails the run and keeps the stream", async () => {
+    const h = harness();
+    await h.open();
+    h.runs[0]!.reject(Object.assign(new Error("forbidden"), { status: 403 }));
+    await flush();
+    expect(h.ofKind("auth_lost")).toEqual([]);
+    expect(h.ofKind("revalidate_failed").map((e) => e.cause)).toEqual(["forbidden"]);
+    expect(h.stream.state().kind).toBe("backoff");
   });
 });

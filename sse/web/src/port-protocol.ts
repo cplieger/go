@@ -55,7 +55,13 @@ export type TabToWorker =
   | { readonly type: "reconnect"; readonly resetCursor: boolean }
   | { readonly type: "set_tag"; readonly tag: string }
   | { readonly type: "revalidate_done"; readonly runId: number }
-  | { readonly type: "revalidate_failed"; readonly runId: number; readonly cause: string }
+  | {
+      readonly type: "revalidate_failed";
+      readonly runId: number;
+      readonly cause: string;
+      /** The rejection's numeric `status`, absent when it carried none. */
+      readonly status?: number;
+    }
   | { readonly type: "frame_failed"; readonly generation: number; readonly cursor: Cursor | null };
 
 /**

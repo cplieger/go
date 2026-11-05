@@ -365,6 +365,36 @@ describe("createWorkerHost: routing a run to the tabs", () => {
     await outcome;
   });
 
+  it("rejects the run with a tab's 401 before another's failure, which reaches auth_lost route digest", async () => {
+    const h = hostHarness();
+    const t1 = tab(h, "t1");
+    const t2 = tab(h, "t2");
+    t1.attach();
+    t2.attach();
+    await hello(h);
+    const run = h.runs[0]!;
+    const failed = run.tabs.run(run.ctx).catch((e: unknown) => e);
+    await settle();
+    t1.send({
+      type: "revalidate_failed",
+      runId: t1.ofType("revalidate_run")[0]!.runId,
+      cause: "busy",
+      status: 503,
+    });
+    t2.send({
+      type: "revalidate_failed",
+      runId: t2.ofType("revalidate_run")[0]!.runId,
+      cause: "signed out",
+      status: 401,
+    });
+    const error = await failed;
+    expect(error).toMatchObject({ message: "signed out", status: 401 });
+    run.reject(error);
+    await settle();
+    expect(h.ofKind("auth_lost")).toEqual([{ kind: "auth_lost", route: "digest", status: 401 }]);
+    expect(h.host.stream().state().kind).toBe("stopped");
+  });
+
   it("rejects a routed run whose signal aborts before the tabs answer", async () => {
     const h = hostHarness();
     const t = tab(h, "t1");
@@ -436,6 +466,25 @@ describe("createWorkerHost: losing authorisation", () => {
     expect(h.sf.requests.filter((r) => r.method === "POST").map((r) => r.url)).toEqual([URL_ALIVE]);
     expect(h.ofKind("auth_lost")).toEqual([{ kind: "auth_lost", route: "alive", status: 401 }]);
     expect(h.host.stream().state().kind).toBe("stopped");
+  });
+
+  it("stops the profile's stream when its request answers 401, and every tab hears it", async () => {
+    const h = hostHarness();
+    h.sf.expect({ status: 401, noBody: true, holdHeaders: true });
+    const t1 = tab(h, "t1");
+    const t2 = tab(h, "t2");
+    t1.attach();
+    t2.attach();
+    await settle();
+    h.sf.connections[0]!.respond();
+    await settle();
+    const lost = { kind: "auth_lost", route: "stream", status: 401 };
+    expect(h.ofKind("auth_lost")).toEqual([lost]);
+    expect(h.host.stream().state().kind).toBe("stopped");
+    for (const t of [t1, t2]) {
+      expect(t.ofType("lifecycle").map((m) => m.event)).toContainEqual(lost);
+    }
+    expect(h.sf.connections).toHaveLength(1);
   });
 
   it("leaves the stream running when an alive acknowledgement answers 200", async () => {

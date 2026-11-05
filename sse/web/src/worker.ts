@@ -29,6 +29,8 @@ export interface TabSet {
   /**
    * Fans the run to every acknowledging tab; settles when each answered, expired or left.
    * With `verdict`, each tab's context carries `changed` and `removed`, so one digest serves them all.
+   * A failed run rejects with a tab's cause and its `status`, a 401 first, so a revalidate that
+   * rethrows it reaches `auth_lost` route `digest`.
    */
   run(ctx: RevalidateContext, verdict?: DigestVerdict): Promise<void>;
   size(): number;
@@ -56,8 +58,9 @@ export interface WorkerHostOptions extends Omit<
 /**
  * The profile's stream owner: one stream, one cursor and one version map behind however many tabs.
  * The stream starts when the first tab attaches, and it is stopped by `close()`, by a `logout` detach
- * or by a 401 — not by the last port going away, since the browser keeps a SharedWorker alive for its
- * owner documents and a tab that navigates is expected back.
+ * or by a 401 (createStream's `auth_lost`, which every tab receives), not by the last port going
+ * away, since the browser keeps a SharedWorker alive for its owner documents and a tab that
+ * navigates is expected back.
  */
 export interface WorkerHost {
   /** Called from the SharedWorker's onconnect with each new port. */
@@ -79,20 +82,12 @@ interface PortEntry {
 
 interface Quorum {
   readonly pending: Set<PortEntry>;
-  readonly failures: string[];
+  readonly failures: { readonly cause: string; readonly status: number | null }[];
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
 }
 
 const EXPIRY_BEATS = 3;
-
-function statusOf(error: unknown): number | null {
-  if (typeof error !== "object" || error === null) {
-    return null;
-  }
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : null;
-}
 
 function cloneSafe(event: LifecycleEvent): LifecycleEvent {
   if (event.kind === "frame_rejected") {
@@ -198,11 +193,13 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       return;
     }
     quorums.delete(runId);
-    const failure = quorum.failures[0];
+    const failure = quorum.failures.find((f) => f.status === 401) ?? quorum.failures[0];
     if (failure === undefined) {
       quorum.resolve();
+    } else if (failure.status === null) {
+      quorum.reject(new Error(failure.cause));
     } else {
-      quorum.reject(new Error(failure));
+      quorum.reject(Object.assign(new Error(failure.cause), { status: failure.status }));
     }
   }
 
@@ -212,11 +209,6 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         settleQuorum(runId, quorum);
       }
     }
-  }
-
-  function authLost(route: string, status: number): void {
-    stream.stop();
-    emit({ kind: "auth_lost", route, status });
   }
 
   const stream = createStream({
@@ -240,20 +232,8 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         broadcast({ type: "state", state: stream.state() });
       }
       emit(event);
-      if (event.kind === "alive_ack" && event.status === 401) {
-        authLost("alive", 401);
-      }
     },
-    async revalidate(ctx) {
-      try {
-        await opts.revalidate(ctx, tabs);
-      } catch (e: unknown) {
-        if (statusOf(e) === 401) {
-          authLost("digest", 401);
-        }
-        throw e;
-      }
-    },
+    revalidate: (ctx) => opts.revalidate(ctx, tabs),
   });
   const controls = streamInternals(stream);
 
@@ -420,7 +400,10 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
           return;
         }
         if (message.type === "revalidate_failed") {
-          quorum.failures.push(message.cause);
+          quorum.failures.push({
+            cause: message.cause,
+            status: typeof message.status === "number" ? message.status : null,
+          });
         }
         settleQuorum(message.runId, quorum);
         return;
