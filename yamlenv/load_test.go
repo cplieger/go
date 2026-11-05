@@ -675,6 +675,87 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 		}
 	})
 
+	// errors.Join exposes every cause to errors.As, so a predicate judging
+	// the joined error would claim a TextUnmarshaler field's echo beside one
+	// of the app's own errors.
+	t.Run("the app's own error type claims a join only when it owns every problem", func(t *testing.T) {
+		t.Parallel()
+		claimPort := func(err error) bool { _, ok := errors.AsType[*portError](err); return ok }
+		secret := yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": "hunter2-mixed"})) //gitleaks:allow (planted fixture; the test asserts it never survives)
+		var addrCfg struct {
+			Port port       `yaml:"port"`
+			Addr netip.Addr `yaml:"addr"`
+		}
+		var timeCfg struct {
+			Port port      `yaml:"port"`
+			When time.Time `yaml:"when"`
+		}
+		for name, tc := range map[string]struct {
+			doc string
+			out any
+		}{
+			"port and netip.Addr": {doc: "port: x\naddr: ${APP_SECRET}\n", out: &addrCfg},
+			"port and time.Time":  {doc: "port: x\nwhen: ${APP_SECRET}\n", out: &timeCfg},
+		} {
+			_, err := yamlenv.Load([]byte(tc.doc), tc.out, allowAppPrefix, secret, yamlenv.WithErrorPassthrough(claimPort))
+			if err == nil {
+				t.Fatalf("%s: Load = nil (port %d, addr %v, when %v), want a decode error",
+					name, addrCfg.Port.n, addrCfg.Addr, timeCfg.When)
+			}
+			if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
+				t.Errorf("%s: err = %q passed through, want it sanitized", name, err)
+			}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Errorf("%s: err = %q, the app-type predicate passed the field's echo of the value", name, err)
+			}
+		}
+
+		var twoPorts struct {
+			Port  port `yaml:"port"`
+			Admin port `yaml:"admin"`
+		}
+		_, err := yamlenv.Load([]byte("port: x\nadmin: y\n"), &twoPorts, allowAppPrefix, yamlenv.WithErrorPassthrough(claimPort))
+		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); !ok {
+			t.Fatalf("Load = %v (%T), want the app's two errors passed through (ports %d, %d)",
+				err, err, twoPorts.Port.n, twoPorts.Admin.n)
+		}
+		if want := "port: must be a port number from 1 to 65535\nport: must be a port number from 1 to 65535"; err.Error() != want {
+			t.Errorf("err = %q, want the joined app text %q", err, want)
+		}
+	})
+
+	t.Run("the predicate sees one UnmarshalerError per problem", func(t *testing.T) {
+		t.Parallel()
+		var calls []error
+		record := func(err error) bool { calls = append(calls, err); return true }
+		var cfg struct {
+			Port port       `yaml:"port"`
+			Addr netip.Addr `yaml:"addr"`
+		}
+		_, err := yamlenv.Load([]byte("port: x\naddr: y\n"), &cfg, allowAppPrefix, yamlenv.WithErrorPassthrough(record))
+		if err == nil {
+			t.Fatalf("Load = nil (port %d, addr %v), want a decode error", cfg.Port.n, cfg.Addr)
+		}
+		if len(calls) != 2 {
+			t.Fatalf("predicate called %d times with %v, want once per problem", len(calls), calls)
+		}
+		for i, call := range calls {
+			ue, ok := errors.AsType[*yamlenv.UnmarshalerError](call)
+			if !ok || error(ue) != call {
+				t.Fatalf("call %d: %T, want *yamlenv.UnmarshalerError", i, call)
+			}
+			if strings.Contains(ue.Err.Error(), "\n") {
+				t.Errorf("call %d: Err = %q joins several problems, want one", i, ue.Err)
+			}
+		}
+		if _, ok := errors.AsType[*portError](calls[0]); !ok {
+			t.Errorf("first call = %v, want the port field's *portError", calls[0])
+		}
+		if _, ok := errors.AsType[*portError](calls[1]); ok {
+			t.Errorf("second call = %v, want the addr field's error alone", calls[1])
+		}
+	})
+
 	// go-yaml found a problem beside the hook's, so the error is not the
 	// config type's own and no predicate may claim it, whatever go-yaml's
 	// error types let errors.As reach.

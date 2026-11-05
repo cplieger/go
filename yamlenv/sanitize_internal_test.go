@@ -103,7 +103,7 @@ func TestClassifyDecodeError(t *testing.T) {
 	}
 	for name, tt := range tests {
 		if got := classifyDecodeError(tt.err); (got != nil) != tt.want {
-			t.Errorf("%s: classifyDecodeError = %v, want wrapped=%v", name, got, tt.want)
+			t.Errorf("%s: classifyDecodeError = %v, want owned=%v", name, got, tt.want)
 		}
 	}
 }

@@ -30,10 +30,10 @@ const (
 )
 
 // goYAMLMarkers are go-yaml v4.0.0's Error() wrappers and the fixed words of
-// its constructor, composer, scanner, reader and plugin messages, every
-// value-quoting one among them. A config type's error that copies one with %v
-// or errors.New loses the *LoadError chain, so these words are all that is
-// left to recognise it by. Sources are under internal/libyaml unless named.
+// its messages, every value-quoting one among them. A config type's error
+// that copies one with %v or errors.New loses the *LoadError chain, so these
+// words are all that is left to recognise it by. Sources are under
+// internal/libyaml unless named.
 // TestGoYAMLMarkersAudited fails on any other go-yaml version until this list
 // is re-audited.
 var goYAMLMarkers = []string{
