@@ -17,9 +17,9 @@ import (
 // exactly one [NewCollector].
 type Desc struct {
 	err    error
-	owner  *Collector // set by NewCollector; nil until then
-	name   string     // prefixed by the registry at registration
-	base   string     // the declared name, never written after construction
+	owner  atomic.Pointer[Collector] // claimed by NewCollector; nil until then
+	name   string                    // prefixed by the registry at registration
+	base   string                    // the declared name, never written after construction
 	help   string
 	typ    Type
 	labels []string
@@ -56,19 +56,20 @@ type Collector struct {
 	err        error
 	collect    func(ctx context.Context, e *Emitter)
 	active     map[problemKey]bool // problems the last scrape saw; guarded by mu
+	pending    []logEntry          // transitions not logged yet, in order; guarded by mu
 	descs      []*Desc
 	mu         sync.Mutex
 	registered atomic.Bool
+	logging    bool // a run is draining pending; guarded by mu
 }
 
-// NewCollector returns a collector that runs collect on every scrape of the
-// registry's [Registry.Handler] and on every [Registry.Gather], with that
-// request's context, and serves what collect emits for descs. Two concurrent
-// scrapes run collect concurrently, each with its own [Emitter].
-//
-// No descs, a nil desc, a nil collect, two descs with one name, a desc another
-// collector already holds, and any desc's construction error are captured and
-// surface at [Registry.Register].
+// NewCollector returns a collector that runs collect, with the request's
+// context, on every scrape of [Registry.Handler] and every [Registry.Gather],
+// and serves what it emits for descs. Concurrent scrapes run collect
+// concurrently, each with its own [Emitter]. Construction errors surface at
+// [Registry.Register]: no descs, a nil desc or collect, two descs with one
+// name, a desc another collector holds or not built by [NewGaugeDesc] or
+// [NewCounterDesc], and any desc's own error.
 func NewCollector(collect func(ctx context.Context, e *Emitter), descs ...*Desc) *Collector {
 	c := &Collector{collect: collect, active: make(map[problemKey]bool)}
 	c.err = c.adopt(descs)
@@ -76,6 +77,9 @@ func NewCollector(collect func(ctx context.Context, e *Emitter), descs ...*Desc)
 }
 
 // adopt claims descs for c and reports the first reason c cannot be registered.
+// It reads only a desc's immutable fields before claiming it, and claims each
+// with a compare-and-swap, so two collectors racing for one desc cannot both
+// win and neither reads a name the other's registration is writing.
 func (c *Collector) adopt(descs []*Desc) error {
 	if c.collect == nil {
 		return errors.New("measure: NewCollector called with a nil collect function")
@@ -92,15 +96,18 @@ func (c *Collector) adopt(descs []*Desc) error {
 			return errors.New("measure: desc was not built with NewGaugeDesc or NewCounterDesc")
 		case d.err != nil:
 			return d.err
-		case seen[d.name]:
-			return fmt.Errorf("measure: collector declares %q twice", d.name)
-		case d.owner != nil:
-			return fmt.Errorf("measure: desc %q already belongs to another collector", d.name)
+		case seen[d.base]:
+			return fmt.Errorf("measure: collector declares %q twice", d.base)
 		}
-		seen[d.name] = true
+		seen[d.base] = true
 	}
-	for _, d := range descs {
-		d.owner = c
+	for i, d := range descs {
+		if !d.owner.CompareAndSwap(nil, c) {
+			for _, claimed := range descs[:i] {
+				claimed.owner.Store(nil)
+			}
+			return fmt.Errorf("measure: desc %q already belongs to another collector", d.base)
+		}
 	}
 	c.descs = slices.Clone(descs)
 	return nil
@@ -166,7 +173,7 @@ func (e *Emitter) Emit(d *Desc, value float64, labelValues ...string) {
 		return
 	}
 	switch {
-	case d == nil || d.owner != e.c:
+	case d == nil || d.owner.Load() != e.c:
 		// Another collector's desc may be renamed by its own registration right
 		// now, so only its declared name is read.
 		name := "<nil>"
@@ -278,30 +285,68 @@ func (c *Collector) run(ctx context.Context) ([]Family, error) {
 	return fams, errors.Join(errs...)
 }
 
+// logEntry is one transition logTransitions owes the log.
+type logEntry struct {
+	key     problemKey
+	count   int
+	cleared bool
+}
+
+func (e logEntry) log() {
+	if e.cleared {
+		slog.Info("measure: collector problem cleared", "family", e.key.family, "problem", e.key.kind.String())
+		return
+	}
+	slog.Warn("measure: collector problem", "family", e.key.family, "problem", e.key.kind.String(), "count", e.count)
+}
+
 // logTransitions logs a problem once when a scrape first sees it and once
-// when a later scrape no longer does, never on every scrape. It logs after
-// releasing c.mu, so a log handler that scrapes the registry cannot deadlock.
+// when a later scrape no longer does, never on every scrape. Transitions queue
+// under c.mu in the order they happen, and one run at a time drains the queue
+// with c.mu released: concurrent scrapes log in state order, and a log handler
+// that scrapes the registry only queues, so it cannot deadlock.
 func (c *Collector) logTransitions(seen map[problemKey]int) {
-	var appeared, cleared []problemKey
 	c.mu.Lock()
-	for k := range seen {
+	for k, n := range seen {
 		if !c.active[k] {
 			c.active[k] = true
-			appeared = append(appeared, k)
+			c.pending = append(c.pending, logEntry{key: k, count: n})
 		}
 	}
 	for k := range c.active {
 		if _, still := seen[k]; !still {
 			delete(c.active, k)
-			cleared = append(cleared, k)
+			c.pending = append(c.pending, logEntry{key: k, cleared: true})
 		}
 	}
-	c.mu.Unlock()
-	for _, k := range appeared {
-		slog.Warn("measure: collector problem", "family", k.family, "problem", k.kind.String(), "count", seen[k])
+	if c.logging || len(c.pending) == 0 {
+		c.mu.Unlock()
+		return
 	}
-	for _, k := range cleared {
-		slog.Info("measure: collector problem cleared", "family", k.family, "problem", k.kind.String())
+	c.logging = true
+	c.mu.Unlock()
+	drained := false
+	defer func() { // a panicking log handler must not leave the queue owned forever
+		if !drained {
+			c.mu.Lock()
+			c.logging = false
+			c.mu.Unlock()
+		}
+	}()
+	for {
+		c.mu.Lock()
+		batch := c.pending
+		c.pending = nil
+		if len(batch) == 0 {
+			c.logging = false
+			drained = true
+			c.mu.Unlock()
+			return
+		}
+		c.mu.Unlock()
+		for _, e := range batch {
+			e.log()
+		}
 	}
 }
 

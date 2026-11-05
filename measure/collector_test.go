@@ -553,3 +553,117 @@ func TestEmitOfAnotherCollectorsDescRacesNothing(t *testing.T) {
 	wg.Go(func() { _, _ = r.Gather(t.Context()) })
 	wg.Wait()
 }
+
+// orderHandler records log messages and, while holding, parks a Warn until an
+// Info has been logged, so a run that logs late shows up out of order.
+type orderHandler struct {
+	infoDone chan struct{}
+	msgs     []string
+	mu       sync.Mutex
+	hold     atomic.Bool
+}
+
+func (h *orderHandler) Enabled(_ context.Context, l slog.Level) bool {
+	if l == slog.LevelWarn && h.hold.Load() {
+		select {
+		case <-h.infoDone:
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	return true
+}
+func (h *orderHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *orderHandler) WithGroup(string) slog.Handler      { return h }
+func (h *orderHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.msgs = append(h.msgs, r.Message)
+	h.mu.Unlock()
+	if r.Level == slog.LevelInfo {
+		select {
+		case <-h.infoDone:
+		default:
+			close(h.infoDone)
+		}
+	}
+	return nil
+}
+
+type badScrape struct{}
+
+// TestCollectorLogsTransitionsInStateOrder: scrape A sees a problem and scrape B,
+// running beside it, does not. The state ends cleared, so the last line logged
+// for the problem must be its clearing.
+func TestCollectorLogsTransitionsInStateOrder(t *testing.T) {
+	captureDebugLogs(t) // restores the default logger after the test
+	g := NewGaugeDesc("g", "h", []string{"k"})
+	r := NewRegistry("")
+	r.MustRegister(NewCollector(func(ctx context.Context, e *Emitter) {
+		e.Emit(g, 1, "a")
+		if ctx.Value(badScrape{}) != nil {
+			e.Emit(g, 2, "a")
+		}
+	}, g))
+	h := &orderHandler{infoDone: make(chan struct{})}
+	h.hold.Store(true)
+	slog.SetDefault(slog.New(h))
+	var wg sync.WaitGroup
+	wg.Go(func() { _, _ = r.Gather(context.WithValue(t.Context(), badScrape{}, true)) })
+	time.Sleep(100 * time.Millisecond)
+	wg.Go(func() { _, _ = r.Gather(t.Context()) })
+	wg.Wait()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if want := []string{"measure: collector problem", "measure: collector problem cleared"}; !slices.Equal(h.msgs, want) {
+		t.Errorf("log order %q, want %q", h.msgs, want)
+	}
+}
+
+func TestCollect_capacityCollectors(t *testing.T) {
+	r := NewRegistry("")
+	for i := range 20 {
+		d := NewGaugeDesc(fmt.Sprintf("capcoll_%d", i), "h", nil)
+		r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(d, 1) }, d))
+	}
+	fams := r.collect(t.Context())
+	if want := 20 + len(processFamilyNames); cap(fams) != want {
+		t.Errorf("collect reserved %d families, want %d: the collectors' families are counted", cap(fams), want)
+	}
+	gathered, err := r.Gather(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 20 + len(processFamilyNames); cap(gathered) != want {
+		t.Errorf("Gather reserved %d families, want %d", cap(gathered), want)
+	}
+}
+
+func TestNewCollectorClaimsADescOnce(t *testing.T) {
+	d := NewGaugeDesc("d", "h", nil)
+	owner := NewCollector(func(context.Context, *Emitter) {}, d)
+	var wg sync.WaitGroup
+	wins := atomic.Int32{}
+	for range 8 {
+		wg.Go(func() {
+			if NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("other", "h", nil), d).err == nil {
+				wins.Add(1)
+			}
+		})
+	}
+	wg.Go(func() { _ = NewRegistry("p").Register(owner) })
+	wg.Wait()
+	if wins.Load() != 0 {
+		t.Errorf("%d collectors claimed a desc another collector holds", wins.Load())
+	}
+	free := NewGaugeDesc("free", "h", nil)
+	for range 8 {
+		wg.Go(func() {
+			if NewCollector(func(context.Context, *Emitter) {}, free).err == nil {
+				wins.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Errorf("%d collectors claimed one unowned desc, want exactly 1", wins.Load())
+	}
+}

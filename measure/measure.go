@@ -185,8 +185,9 @@ var errNilMetric = errors.New("measure: Register called with nil metric")
 // family name collides with an already-registered one, or an error when m is
 // nil. A collector also returns the errors NewCollector captured (no descs, a
 // nil desc, a nil collect, a repeated family name, a desc another collector
-// holds, or a desc's invalid name or label). On error the metric is not
-// attached and the registry is unchanged.
+// holds, a desc not built with NewGaugeDesc or NewCounterDesc, or a desc's
+// invalid name or label), and a Collector not built with NewCollector is
+// refused. On error the metric is not attached and the registry is unchanged.
 // After a family-name collision the metric itself is left unregistered and
 // intact, so it can still be registered with a different registry (or with
 // this one once the colliding name is freed); a construction error is
