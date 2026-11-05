@@ -39,24 +39,21 @@ func FuzzParseProcStatusRSS_ValueAmongNoise(f *testing.F) {
 	})
 }
 
-// FuzzParseProcLimitsMaxFDs_ValueAmongNoise checks that a known "Max open files"
+// FuzzParseProcLimit_ValueAmongNoise checks that a known "Max open files"
 // line placed first is parsed to its soft-limit field regardless of arbitrary
-// trailing /proc/self/limits noise. One of the /proc parser fuzz quintet
-// (parseProcStatCPU, parseProcStatStartTime, parseProcStatusRSS and
-// parseProcStatBtime carry the others) and exercises the discarded-error path
-// of strconv.ParseInt. n is bounded to uint32 so the
-// value is always a valid non-negative int64; the parser returns at the FIRST
-// "Max open files" match, so the leading known line fixes the expected result
-// and trailing noise can never override it.
-func FuzzParseProcLimitsMaxFDs_ValueAmongNoise(f *testing.F) {
+// trailing /proc/self/limits noise: the parser returns at the FIRST "Max open
+// files" match, so the leading known line fixes the expected result. n is a
+// uint32 so it round-trips through float64 exactly. TestParseProcLimit covers
+// the malformed values.
+func FuzzParseProcLimit_ValueAmongNoise(f *testing.F) {
 	f.Add(uint32(1024), "Max locked memory  0  0  bytes\n")
 	f.Add(uint32(0), "")
 	f.Add(uint32(4096), "Max stack size  8388608  unlimited  bytes\n")
 	f.Fuzz(func(t *testing.T, n uint32, noise string) {
 		data := []byte("Max open files  " + strconv.FormatUint(uint64(n), 10) + "  " +
 			strconv.FormatUint(uint64(n), 10) + "  files\n" + noise)
-		if got := parseProcLimitsMaxFDs(data); got != int64(n) {
-			t.Errorf("parseProcLimitsMaxFDs(n=%d, noise=%q) = %d, want %d", n, noise, got, int64(n))
+		if got := parseProcLimit(data, "Max open files"); got != float64(n) {
+			t.Errorf("parseProcLimit(n=%d, noise=%q) = %v, want %d", n, noise, got, n)
 		}
 	})
 }
@@ -86,7 +83,7 @@ func FuzzParseProcStatStartTime_CommRobustness(f *testing.F) {
 // so the leading known line fixes the expected result and trailing noise can
 // never override it. n is bounded to uint32 so the value is always a valid
 // non-negative int64. Completes the /proc parser fuzz set alongside
-// parseProcStatCPU, parseProcStatusRSS and parseProcLimitsMaxFDs.
+// parseProcStatCPU, parseProcStatusRSS and parseProcLimit.
 func FuzzParseProcStatBtime_ValueAmongNoise(f *testing.F) {
 	f.Add(uint32(1700000000), "processes 4242\nctxt 99\n")
 	f.Add(uint32(0), "")
@@ -96,5 +93,36 @@ func FuzzParseProcStatBtime_ValueAmongNoise(f *testing.F) {
 		if got := parseProcStatBtime(data); got != int64(n) {
 			t.Errorf("parseProcStatBtime(n=%d, noise=%q) = %d, want %d", n, noise, got, int64(n))
 		}
+	})
+}
+
+// FuzzParseProcStatVsize_CommRobustness checks that an arbitrary comm never
+// corrupts the field-23 vsize extraction, as for the CPU fields.
+func FuzzParseProcStatVsize_CommRobustness(f *testing.F) {
+	f.Add("cat")
+	f.Add("a (b) c")
+	f.Add("x) 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 (y")
+	f.Fuzz(func(t *testing.T, comm string) {
+		if got := parseProcStatVsize([]byte(statLine(comm, "123456789"))); got != 123456789 {
+			t.Errorf("parseProcStatVsize(comm=%q) = %v, want 123456789", comm, got)
+		}
+	})
+}
+
+// FuzzParseProcNetstatOctets_ValueAmongNoise checks that a known IpExt section
+// placed first is read whatever follows it, and that any input parses without
+// a panic.
+func FuzzParseProcNetstatOctets_ValueAmongNoise(f *testing.F) {
+	f.Add(uint64(1), uint64(2), "MPTcpExt: A\nMPTcpExt: 1\n")
+	f.Add(uint64(0), uint64(0), "")
+	f.Add(uint64(1<<63), uint64(5), "IpExt: InOctets OutOctets\nIpExt: 9 9\n")
+	f.Fuzz(func(t *testing.T, rx, tx uint64, noise string) {
+		data := "IpExt: InNoRoutes InOctets OutOctets\nIpExt: 0 " +
+			strconv.FormatUint(rx, 10) + " " + strconv.FormatUint(tx, 10) + "\n" + noise
+		gotRx, gotTx := parseProcNetstatOctets([]byte(data))
+		if gotRx != float64(rx) || gotTx != float64(tx) {
+			t.Errorf("parseProcNetstatOctets(%d, %d, noise=%q) = %v, %v", rx, tx, noise, gotRx, gotTx)
+		}
+		parseProcNetstatOctets([]byte(noise))
 	})
 }

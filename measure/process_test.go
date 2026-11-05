@@ -236,39 +236,44 @@ func TestParseProcStatusRSS(t *testing.T) {
 }
 
 func TestProcOKMask(t *testing.T) {
+	healthy := processMetricsData{cpuSeconds: 1.5, rss: 4096, openFDs: 12, maxFDs: 1024, vsize: 8192, maxVsize: float64(math.MaxUint64), netRx: 10, netTx: 20}
+	failed := processMetricsData{cpuSeconds: -1, rss: 0, openFDs: -1, maxFDs: -1, vsize: -1, maxVsize: -1, netRx: -1, netTx: -1}
 	tests := []struct {
-		name       string
-		goos       string
-		cpuSeconds float64
-		rss        int64
-		openFDs    int
-		maxFDs     int64
-		want       uint32
+		name string
+		goos string
+		edit func(*processMetricsData)
+		want uint32
 	}{
-		{"linux all healthy", "linux", 1.5, 4096, 12, 1024, procOKAll},
-		{"linux cpu read failed", "linux", -1, 4096, 12, 1024, procOKAll &^ procOKCPU},
-		// cpuSeconds == 0 and openFDs == 0 are HEALTHY readings: the failure
-		// guards are strict (< 0), so a <= 0 mutation would wrongly degrade them.
-		{"linux cpu zero healthy", "linux", 0, 4096, 12, 1024, procOKAll},
-		{"linux rss zero", "linux", 1.5, 0, 12, 1024, procOKAll &^ procOKRSS},
-		{"linux rss negative", "linux", 1.5, -1, 12, 1024, procOKAll &^ procOKRSS},
-		{"linux fds read failed", "linux", 1.5, 4096, -1, 1024, procOKAll &^ procOKOpenFDs},
-		{"linux fds zero healthy", "linux", 1.5, 4096, 0, 1024, procOKAll},
-		// maxFDs: the unlimited sentinel is a successful reading (not degraded);
-		// a non-positive maxFDs that is NOT the sentinel is a failed limits read.
-		{"linux max fds unlimited healthy", "linux", 1.5, 4096, 12, unlimitedMaxFDs, procOKAll},
-		{"linux max fds read failed", "linux", 1.5, 4096, 12, 0, procOKAll &^ procOKMaxFDs},
-		{"linux all failed", "linux", -1, 0, -1, 0, 0},
-		{"non-linux all failed stays quiet", "darwin", -1, 0, -1, 0, procOKAll},
-		{"non-linux healthy", "windows", 1.5, 4096, 12, 1024, procOKAll},
+		{"linux all healthy", "linux", func(*processMetricsData) {}, procOKAll},
+		{"linux cpu read failed", "linux", func(d *processMetricsData) { d.cpuSeconds = -1 }, procOKAll &^ procOKCPU},
+		// cpuSeconds == 0, openFDs == 0, vsize == 0 and zero traffic are
+		// HEALTHY readings: the failure guards are strict (< 0), so a <= 0
+		// mutation would wrongly degrade them.
+		{"linux cpu zero healthy", "linux", func(d *processMetricsData) { d.cpuSeconds = 0 }, procOKAll},
+		{"linux rss zero", "linux", func(d *processMetricsData) { d.rss = 0 }, procOKAll &^ procOKRSS},
+		{"linux rss negative", "linux", func(d *processMetricsData) { d.rss = -1 }, procOKAll &^ procOKRSS},
+		{"linux fds read failed", "linux", func(d *processMetricsData) { d.openFDs = -1 }, procOKAll &^ procOKOpenFDs},
+		{"linux fds zero healthy", "linux", func(d *processMetricsData) { d.openFDs = 0 }, procOKAll},
+		// A limit of zero is a reading; only -1 is a failed limits read.
+		{"linux max fds zero healthy", "linux", func(d *processMetricsData) { d.maxFDs = 0 }, procOKAll},
+		{"linux max fds read failed", "linux", func(d *processMetricsData) { d.maxFDs = -1 }, procOKAll &^ procOKMaxFDs},
+		{"linux vsize read failed", "linux", func(d *processMetricsData) { d.vsize = -1 }, procOKAll &^ procOKVirtual},
+		{"linux vsize zero healthy", "linux", func(d *processMetricsData) { d.vsize = 0 }, procOKAll},
+		{"linux max vsize finite healthy", "linux", func(d *processMetricsData) { d.maxVsize = 1 << 30 }, procOKAll},
+		{"linux max vsize read failed", "linux", func(d *processMetricsData) { d.maxVsize = -1 }, procOKAll &^ procOKMaxVirtual},
+		{"linux network read failed", "linux", func(d *processMetricsData) { d.netRx, d.netTx = -1, -1 }, procOKAll &^ procOKNetwork},
+		{"linux network one side failed", "linux", func(d *processMetricsData) { d.netTx = -1 }, procOKAll &^ procOKNetwork},
+		{"linux network zero healthy", "linux", func(d *processMetricsData) { d.netRx, d.netTx = 0, 0 }, procOKAll},
+		{"linux all failed", "linux", func(d *processMetricsData) { *d = failed }, 0},
+		{"non-linux all failed stays quiet", "darwin", func(d *processMetricsData) { *d = failed }, procOKAll},
+		{"non-linux healthy", "windows", func(*processMetricsData) {}, procOKAll},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			d := &processMetricsData{cpuSeconds: tc.cpuSeconds, rss: tc.rss, openFDs: tc.openFDs, maxFDs: tc.maxFDs}
-			got := procOKMask(tc.goos, d)
-			if got != tc.want {
-				t.Errorf("procOKMask(%q, {cpu:%v rss:%d fds:%d max:%d}) = %#05b, want %#05b",
-					tc.goos, tc.cpuSeconds, tc.rss, tc.openFDs, tc.maxFDs, got, tc.want)
+			d := healthy
+			tc.edit(&d)
+			if got := procOKMask(tc.goos, &d); got != tc.want {
+				t.Errorf("procOKMask(%q, %+v) = %#09b, want %#09b", tc.goos, d, got, tc.want)
 			}
 		})
 	}
@@ -325,8 +330,8 @@ func TestProcDegradedTransition(t *testing.T) {
 }
 
 // TestProcPresencePredicates_Boundaries pins each series-presence predicate at
-// the value where its `>`/`>=` comparison diverges: a zero CPU/openFDs reading
-// is present, a zero RSS/maxFDs reading is absent.
+// the value where its `>`/`>=` comparison diverges: a zero CPU, open-FD or
+// limit reading is present, a zero RSS reading is absent.
 func TestProcPresencePredicates_Boundaries(t *testing.T) {
 	if !(&processMetricsData{cpuSeconds: 0}).hasCPU() {
 		t.Error("hasCPU(cpuSeconds=0) = false, want true (>= 0 boundary)")
@@ -349,16 +354,17 @@ func TestProcPresencePredicates_Boundaries(t *testing.T) {
 		t.Error("hasOpenFDs(openFDs=-1) = true, want false")
 	}
 
-	if (&processMetricsData{maxFDs: 0}).hasMaxFDs() {
-		t.Error("hasMaxFDs(maxFDs=0) = true, want false (> 0 boundary)")
+	if !(&processMetricsData{maxFDs: 0}).hasMaxFDs() {
+		t.Error("hasMaxFDs(maxFDs=0) = false, want true (>= 0 boundary)")
 	}
-	if !(&processMetricsData{maxFDs: 1}).hasMaxFDs() {
-		t.Error("hasMaxFDs(maxFDs=1) = false, want true")
+	if (&processMetricsData{maxFDs: -1}).hasMaxFDs() {
+		t.Error("hasMaxFDs(maxFDs=-1) = true, want false")
 	}
-	// The unlimited sentinel (-1) is a present, successful reading despite being
-	// non-positive, so hasMaxFDs must accept it via the sentinel branch.
-	if !(&processMetricsData{maxFDs: unlimitedMaxFDs}).hasMaxFDs() {
-		t.Error("hasMaxFDs(maxFDs=unlimitedMaxFDs) = false, want true (sentinel branch)")
+	if !(&processMetricsData{maxVsize: 0}).hasMaxVirtual() {
+		t.Error("hasMaxVirtual(maxVsize=0) = false, want true (>= 0 boundary)")
+	}
+	if (&processMetricsData{maxVsize: -1}).hasMaxVirtual() {
+		t.Error("hasMaxVirtual(maxVsize=-1) = true, want false")
 	}
 }
 
@@ -506,71 +512,53 @@ func TestParseProcStatCPU_DivisorIsUserHZ(t *testing.T) {
 	}
 }
 
-// TestParseProcLimitsMaxFDs pins the "single field" boundary: with exactly one
-// field after the "Max open files" label, the parser reports it (the guard is
-// len(fields) >= 1, not > 1).
-func TestParseProcLimitsMaxFDs(t *testing.T) {
+// TestParseProcLimit pins the soft-limit parser, including the "single field"
+// boundary: with exactly one field after the label, the parser reports it.
+func TestParseProcLimit(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
-		want int64
+		want float64
 	}{
 		// Real kernel shape: soft, hard, then the "files" unit. fields[0] is the
 		// soft limit this parser reports.
 		{"soft hard unit", "Max open files            1024                 4096                 files\n", 1024},
 		{"single field", "Max open files 4096\n", 4096},
-		{"label only", "Max open files\n", 0},
-		{"absent", "Max locked memory         0                    0                    bytes\n", 0},
-		// "unlimited" is a valid, successful reading, mapped to the sentinel.
-		{"unlimited soft", "Max open files            unlimited            unlimited            files\n", unlimitedMaxFDs},
-		{"unlimited mixed case", "Max open files Unlimited\n", unlimitedMaxFDs},
-		// A malformed (non-numeric, non-"unlimited") value is a failed read.
-		{"malformed value", "Max open files notanumber\n", 0},
-		// A malformed negative value is a failed read, never a collision with
-		// the unlimitedMaxFDs sentinel (-1).
-		{"negative malformed", "Max open files  -1  4096  files\n", 0},
+		{"zero is a reading", "Max open files 0 4096 files\n", 0},
+		// The kernel prints the limit unsigned, so a finite limit above 2^63 is
+		// a reading, as procfs parses it.
+		{"above int64", "Max open files 9223372036854775808 unlimited files\n", 9223372036854775808},
+		{"largest finite", "Max open files 18446744073709551614 unlimited files\n", 18446744073709551614},
+		{"label only", "Max open files\n", -1},
+		{"absent", "Max locked memory         0                    0                    bytes\n", -1},
+		// "unlimited" is a valid, successful reading, served as client_golang
+		// serves it ("1.8446744073709552e+19").
+		{"unlimited soft", "Max open files            unlimited            unlimited            files\n", float64(math.MaxUint64)},
+		{"unlimited mixed case", "Max open files Unlimited\n", float64(math.MaxUint64)},
+		{"malformed value", "Max open files notanumber\n", -1},
+		{"negative value", "Max open files  -1  4096  files\n", -1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := parseProcLimitsMaxFDs([]byte(tc.in)); got != tc.want {
-				t.Errorf("parseProcLimitsMaxFDs(%q) = %d, want %d", tc.in, got, tc.want)
+			if got := parseProcLimit([]byte(tc.in), "Max open files"); got != tc.want {
+				t.Errorf("parseProcLimit(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}
-}
-
-// TestMaxFDsValue pins the exposition rendering: the unlimited sentinel becomes
-// float64(math.MaxUint64) ("1.8446744073709552e+19", what client_golang emits
-// for an unlimited limit); every other value is decimal.
-func TestMaxFDsValue(t *testing.T) {
-	tests := []struct {
-		name string
-		in   int64
-		want string
-	}{
-		{"unlimited sentinel", unlimitedMaxFDs, "1.8446744073709552e+19"},
-		{"finite limit", 1024, "1024"},
-		{"zero", 0, "0"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := formatValue(maxFDsValue(tc.in)); got != tc.want {
-				t.Errorf("formatValue(maxFDsValue(%d)) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
+	if got := formatValue(float64(math.MaxUint64)); got != "1.8446744073709552e+19" {
+		t.Errorf("an unlimited limit renders %q, want client_golang's 1.8446744073709552e+19", got)
 	}
 }
 
-// TestReadProcFDs_readsAllEntries verifies readProcFDs reads every fd entry, not
+// TestReadProcOpenFDs_readsAllEntries verifies readProcOpenFDs reads every fd entry, not
 // just one: a live process always has at least its standard descriptors plus the
 // directory handle open, so the open count is >= 1.
-func TestReadProcFDs_readsAllEntries(t *testing.T) {
+func TestReadProcOpenFDs_readsAllEntries(t *testing.T) {
 	if runtime.GOOS != goosLinux {
 		t.Skip("process fd metrics are Linux-only (/proc/self/fd)")
 	}
-	open, _ := readProcFDs()
-	if open < 1 {
-		t.Fatalf("readProcFDs() open = %d, want >= 1 (must read all fd entries)", open)
+	if open := readProcOpenFDs(); open < 1 {
+		t.Fatalf("readProcOpenFDs() = %d, want >= 1 (must read all fd entries)", open)
 	}
 }
 
@@ -671,14 +659,10 @@ func TestWriteProcess_uptimeAndStartTimeReconcile(t *testing.T) {
 	}
 }
 
-// TestWriteProcess_LinuxFDsEmitted pins the Linux-only fd emit wiring in
-// processFamilies: when /proc/self/fd and /proc/self/limits are readable,
-// WriteProcess emits process_open_fds and process_max_fds, the latter
-// rendered through maxFDsValue (a positive integer, or the
-// float64(math.MaxUint64) sentinel for an unlimited soft limit). The
-// always-present-metric assertions in TestWriteProcess
-// never check these two series, so the hasOpenFDs/hasMaxFDs emit composition and
-// the maxFDsValue call site are otherwise unexercised end-to-end.
+// TestWriteProcess_LinuxFDsEmitted checks end to end that WriteProcess emits
+// process_open_fds and process_max_fds when /proc/self/fd and
+// /proc/self/limits are readable: a non-negative count, and a positive limit
+// (float64(math.MaxUint64) when unlimited).
 func TestWriteProcess_LinuxFDsEmitted(t *testing.T) {
 	if runtime.GOOS != goosLinux {
 		t.Skip("process fd metrics are Linux-only (/proc/self/fd, /proc/self/limits)")
@@ -705,9 +689,9 @@ func TestWriteProcess_LinuxFDsEmitted(t *testing.T) {
 	if !gotMax {
 		t.Fatal("missing process_max_fds line")
 	}
-	// process_max_fds is either a positive integer (a finite limit) or the
-	// unlimited sentinel rendered as float64(math.MaxUint64)
-	// ("1.8446744073709552e+19"), so parse it as a float rather than an int.
+	// process_max_fds is a positive integer for a finite limit, or
+	// float64(math.MaxUint64) ("1.8446744073709552e+19") for an unlimited one,
+	// so parse it as a float rather than an int.
 	if n, err := strconv.ParseFloat(maxVal, 64); err != nil || n <= 0 {
 		t.Errorf("process_max_fds = %q, want a positive number", maxVal)
 	}
@@ -788,5 +772,114 @@ func TestCollectProcessMetrics_ZeroKernelStartTimeIsNotAFailure(t *testing.T) {
 
 	if d.startTime != 0 {
 		t.Errorf("startTime = %v, want 0 (a zero kernel start time is a reading, not the -1 failure sentinel)", d.startTime)
+	}
+}
+
+// statLine builds a /proc/self/stat line with the given comm and fields 3 to
+// 23, field 23 (vsize) last.
+func statLine(comm, vsize string) string {
+	fields := make([]string, 20)
+	for i := range fields {
+		fields[i] = strconv.Itoa(i + 3)
+	}
+	return "1234 (" + comm + ") " + strings.Join(fields, " ") + " " + vsize + " 77 0"
+}
+
+func TestParseProcStatVsize(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want float64
+	}{
+		{"simple comm", statLine("cat", "1683972096"), 1683972096},
+		// The comm may hold spaces and parens; fields count from the last ')'.
+		{"comm with spaces and parens", statLine("weird (proc) name)", "4096"), 4096},
+		{"zero is a reading", statLine("cat", "0"), 0},
+		{"above int64", statLine("cat", "18446744073709551615"), float64(math.MaxUint64)},
+		{"non-numeric", statLine("cat", "abc"), -1},
+		{"negative", statLine("cat", "-1"), -1},
+		{"too few fields", "1234 (cat) S 1 1 1 0 0 0 0 0 0 0 200 100 0 0", -1},
+		{"no closing paren", "1234 cat S 1 1", -1},
+		{"empty input", "", -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseProcStatVsize([]byte(tc.in)); got != tc.want {
+				t.Errorf("parseProcStatVsize(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseProcLimit_addressSpace reads the second limit the families use, in
+// the kernel's own layout, beside a "Max open files" line it must not take.
+func TestParseProcLimit_addressSpace(t *testing.T) {
+	limits := "Limit                     Soft Limit           Hard Limit           Units     \n" +
+		"Max open files            1048576              1048576              files     \n" +
+		"Max address space         %s            unlimited            bytes     \n"
+	for in, want := range map[string]float64{
+		"unlimited":           float64(math.MaxUint64),
+		"8589934592":          8589934592,
+		"9223372036854775808": 9223372036854775808,
+		"bogus":               -1,
+	} {
+		data := []byte(fmt.Sprintf(limits, in))
+		if got := parseProcLimit(data, "Max address space"); got != want {
+			t.Errorf("parseProcLimit(address space %s) = %v, want %v", in, got, want)
+		}
+		if got := parseProcLimit(data, "Max open files"); got != 1048576 {
+			t.Errorf("parseProcLimit(open files) = %v beside address space %s, want 1048576", got, in)
+		}
+	}
+	if got := parseProcLimit(nil, "Max address space"); got != -1 {
+		t.Errorf("parseProcLimit(nil) = %v, want -1 (a failed read)", got)
+	}
+}
+
+func TestParseProcNetstatOctets(t *testing.T) {
+	const tcp = "TcpExt: SyncookiesSent SyncookiesRecv\nTcpExt: 0 0\n"
+	const ipExt = "IpExt: InNoRoutes InOctets OutOctets InMcastOctets\n"
+	tests := []struct {
+		name   string
+		in     string
+		rx, tx float64
+	}{
+		{"kernel layout", tcp + ipExt + "IpExt: 0 14284339956 19615187908 0\nMPTcpExt: A\nMPTcpExt: 1\n", 14284339956, 19615187908},
+		{"zero traffic is a reading", ipExt + "IpExt: 0 0 0 0\n", 0, 0},
+		{"no IpExt section", tcp, -1, -1},
+		{"header without values", tcp + ipExt, -1, -1},
+		{"values line of another section", ipExt + "TcpExt: 0 1 2 3\n", -1, -1},
+		{"field count mismatch", ipExt + "IpExt: 0 1 2\n", -1, -1},
+		{"non-numeric octets", ipExt + "IpExt: 0 x 2 3\n", -1, -1},
+		{"non-numeric other field is ignored", ipExt + "IpExt: x 1 2 3\n", 1, 2},
+		{"no OutOctets", "IpExt: InOctets\nIpExt: 5\n", -1, -1},
+		{"empty input", "", -1, -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rx, tx := parseProcNetstatOctets([]byte(tc.in))
+			if rx != tc.rx || tx != tc.tx {
+				t.Errorf("parseProcNetstatOctets(%q) = %v, %v, want %v, %v", tc.in, rx, tx, tc.rx, tc.tx)
+			}
+		})
+	}
+}
+
+// TestProcessFamiliesOnLinux reads the live /proc files: every family appears,
+// and the new ones carry plausible values.
+func TestProcessFamiliesOnLinux(t *testing.T) {
+	if runtime.GOOS != goosLinux {
+		t.Skip("the /proc families are Linux-only")
+	}
+	var d processMetricsData
+	collectProcessMetrics(&d)
+	if d.vsize <= 0 || !d.hasMaxVirtual() || !d.hasNetwork() {
+		t.Errorf("vsize %v, max vsize %v, network %v/%v; want every read to succeed", d.vsize, d.maxVsize, d.netRx, d.netTx)
+	}
+	if rss := float64(d.rss); d.vsize < rss {
+		t.Errorf("virtual memory %v is below resident memory %v", d.vsize, rss)
+	}
+	if d.maxVsize < d.vsize {
+		t.Errorf("virtual memory limit %v is below the virtual memory in use %v", d.maxVsize, d.vsize)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,38 +31,63 @@ import (
 // helpEscaper escapes backslashes and newlines in HELP text per Prometheus exposition format.
 var helpEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`)
 
-// Process metric family names, defined once so the reservation list
-// (processFamilyNames) and the process-metric IR builder (processFamilies)
-// reference a single source and cannot drift.
+// Go and process family names, defined once so the reservation list
+// (processFamilyNames) and the builders (processFamiliesOf, runtimeFamilies)
+// cannot drift. The go_memstats_* names other than the heap allocation one
+// live only in runtimeFamilies.
 const (
-	pmGoroutines     = "go_goroutines"
-	pmHeapAllocBytes = "go_memstats_heap_alloc_bytes"
-	pmGCPauseTotal   = "process_gc_pause_seconds_total"
-	pmUptime         = "process_uptime_seconds"
-	pmStartTime      = "process_start_time_seconds"
-	pmCPUTotal       = "process_cpu_seconds_total"
-	pmResidentBytes  = "process_resident_memory_bytes"
-	pmOpenFDs        = "process_open_fds"
-	pmMaxFDs         = "process_max_fds"
+	pmGCDuration      = "go_gc_duration_seconds"
+	pmGOGC            = "go_gc_gogc_percent"
+	pmGOMEMLIMIT      = "go_gc_gomemlimit_bytes"
+	pmGoroutines      = "go_goroutines"
+	pmGoInfo          = "go_info"
+	pmHeapAllocBytes  = "go_memstats_heap_alloc_bytes"
+	pmLastGC          = "go_memstats_last_gc_time_seconds"
+	pmGOMAXPROCS      = "go_sched_gomaxprocs_threads"
+	pmThreads         = "go_threads"
+	pmGCPauseTotal    = "process_gc_pause_seconds_total"
+	pmUptime          = "process_uptime_seconds"
+	pmStartTime       = "process_start_time_seconds"
+	pmCPUTotal        = "process_cpu_seconds_total"
+	pmResidentBytes   = "process_resident_memory_bytes"
+	pmOpenFDs         = "process_open_fds"
+	pmMaxFDs          = "process_max_fds"
+	pmVirtualBytes    = "process_virtual_memory_bytes"
+	pmVirtualMaxBytes = "process_virtual_memory_max_bytes"
+	pmNetReceive      = "process_network_receive_bytes_total"
+	pmNetTransmit     = "process_network_transmit_bytes_total"
 )
 
-// processFamilyNames are the family names processFamilies emits. Reserved at
-// creation so a user metric colliding with one fails fast like any other
-// duplicate instead of silently producing a duplicate "# TYPE" line that
-// breaks the scrape.
-var processFamilyNames = []string{
-	pmGoroutines, pmHeapAllocBytes,
-	pmGCPauseTotal,
-	pmUptime, pmStartTime,
-	pmCPUTotal,
-	pmResidentBytes, pmOpenFDs, pmMaxFDs,
-}
+// processFamilyNames are the family names processGather can emit, sorted.
+// NewRegistry reserves them, and processSummarySeries, so a user metric
+// colliding with one fails at Register instead of producing a duplicate
+// "# TYPE" line or series that breaks the scrape.
+var processFamilyNames = func() []string {
+	names := []string{
+		pmGCDuration, pmGoroutines, pmGoInfo, pmLastGC, pmThreads,
+		pmGCPauseTotal, pmUptime, pmStartTime, pmCPUTotal, pmResidentBytes,
+		pmOpenFDs, pmMaxFDs, pmVirtualBytes, pmVirtualMaxBytes, pmNetReceive, pmNetTransmit,
+	}
+	names = slices.Grow(names, len(runtimeFamilies))
+	for i := range runtimeFamilies {
+		names = append(names, runtimeFamilies[i].name)
+	}
+	slices.Sort(names)
+	return names
+}()
 
-// Process metric HELP text, single-sourced so the reservation list and the
-// writers cannot expose divergent descriptions for the same family.
+// processSummarySeries are the series names the go_gc_duration_seconds
+// summary writes beside its quantiles.
+var processSummarySeries = []string{pmGCDuration + "_sum", pmGCDuration + "_count"}
+
+// Go and process HELP text for the families built outside runtimeFamilies.
 const (
+	helpGCDuration = "Stop-the-world pause durations of recent garbage collections in seconds."
 	helpGoroutines = "Number of goroutines that currently exist."
+	helpGoInfo     = "Information about the Go environment, with the Go version as a label."
 	helpHeapAlloc  = "Number of heap bytes allocated and currently in use."
+	helpLastGC     = "Time of the last garbage collection in seconds since the Unix epoch."
+	helpThreads    = "Number of operating system threads the Go runtime has created."
 	helpGCPause    = "Total GC pause time"
 	helpUptime     = "Process uptime"
 	helpStartTime  = "Start time of the process since unix epoch in seconds"
@@ -69,6 +95,10 @@ const (
 	helpResident   = "Resident memory size in bytes"
 	helpOpenFDs    = "Number of open file descriptors"
 	helpMaxFDs     = "Maximum number of open file descriptors"
+	helpVirtual    = "Virtual memory size in bytes."
+	helpVirtualMax = "Soft limit on the process's virtual memory size in bytes."
+	helpNetRx      = "Bytes received over the network in the process's network namespace."
+	helpNetTx      = "Bytes sent over the network in the process's network namespace."
 )
 
 // Registry holds a collection of metrics to be served.
@@ -112,7 +142,7 @@ func NewRegistry(prefix string) *Registry {
 			r.err = fmt.Errorf("measure: invalid registry prefix %q: %w", prefix, err)
 		}
 	}
-	for _, n := range processFamilyNames {
+	for _, n := range slices.Concat(processFamilyNames, processSummarySeries) {
 		r.names[n] = "process metric"
 	}
 	return r

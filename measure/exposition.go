@@ -22,6 +22,7 @@ const (
 	typeCounter   = "counter"
 	typeGauge     = "gauge"
 	typeHistogram = "histogram"
+	typeSummary   = "summary"
 )
 
 // metricFamily is one "# TYPE"/"# HELP" block: a metric name, its type, its
@@ -34,12 +35,12 @@ type metricFamily struct {
 }
 
 // sample is a single exposition line within a family. nameSuffix is appended to
-// the family's series base name ("" for counters and gauges; "_bucket"/"_sum"/
-// "_count" for histograms). labels is the pre-rendered, spec-escaped label
-// content WITHOUT the surrounding braces — for histogram bucket samples it
-// already includes the implicit le label ("" when the sample has no labels).
-// value is the pre-rendered value token (formatValue output or a base-10
-// integer).
+// the family's series base name: "" for counters, gauges and summary quantiles,
+// "_bucket", "_sum" or "_count" for the rest of a histogram or summary. labels
+// is the pre-rendered, spec-escaped label content WITHOUT the surrounding
+// braces, including the implicit le or quantile label where one applies ("" when
+// the sample has no labels). value is the pre-rendered value token (formatValue
+// output or a base-10 integer).
 type sample struct {
 	nameSuffix string
 	labels     string
@@ -160,26 +161,39 @@ func histogramSamples(h *Histogram, labelStr string) []sample {
 	for i, bound := range h.bounds {
 		samples = append(samples, sample{
 			nameSuffix: "_bucket",
-			labels:     leLabels(labelStr, formatValue(bound)),
+			labels:     withLabel(labelStr, "le", formatValue(bound)),
 			value:      strconv.FormatInt(bucketVals[i], 10),
 		})
 	}
 	samples = append(samples,
-		sample{nameSuffix: "_bucket", labels: leLabels(labelStr, "+Inf"), value: strconv.FormatInt(bucketVals[len(h.bounds)], 10)},
+		sample{nameSuffix: "_bucket", labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatInt(bucketVals[len(h.bounds)], 10)},
 		sample{nameSuffix: "_sum", labels: labelStr, value: formatValue(sum)},
 		sample{nameSuffix: "_count", labels: labelStr, value: strconv.FormatInt(count, 10)},
 	)
 	return samples
 }
 
-// leLabels joins the user labels with the implicit le bucket label. With no
-// user labels it yields just le="<bound>"; otherwise the le label follows the
-// user labels, matching the writers' `{labels,le="..."}` rendering.
-func leLabels(labelStr, le string) string {
+// withLabel joins the user labels with an implicit label (le for a bucket,
+// quantile for a summary quantile) whose value needs no escaping. With no user
+// labels it yields just name="value"; otherwise it follows the user labels, the
+// writers' `{labels,le="..."}` rendering.
+func withLabel(labelStr, name, value string) string {
 	if labelStr == "" {
-		return `le="` + le + `"`
+		return name + `="` + value + `"`
 	}
-	return labelStr + `,le="` + le + `"`
+	return labelStr + "," + name + `="` + value + `"`
+}
+
+// summarySamples expands one summary series into its quantile, _sum and _count
+// samples, in the order the exposition format gives them.
+func summarySamples(samples []sample, labelStr string, v *SummaryValue) []sample {
+	for _, q := range v.Quantiles {
+		samples = append(samples, sample{labels: withLabel(labelStr, "quantile", formatValue(q.Quantile)), value: formatValue(q.Value)})
+	}
+	return append(samples,
+		sample{nameSuffix: "_sum", labels: labelStr, value: formatValue(v.Sum)},
+		sample{nameSuffix: "_count", labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
+	)
 }
 
 // collect materialises the whole registry into a flat []metricFamily in the

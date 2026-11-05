@@ -94,6 +94,9 @@ func maskProcessValues(exposition string) string {
 			continue
 		}
 		name, _, _ := strings.Cut(series, "{")
+		if name == pmGoInfo {
+			series = pmGoInfo + `{version="<version>"}` // the toolchain building the test
+		}
 		if strings.HasPrefix(name, "process_") || strings.HasPrefix(name, "go_") {
 			lines[i] = series + " <value>"
 		}

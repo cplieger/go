@@ -90,14 +90,6 @@ func parseAuxvClkTck(data []byte, wordSize int) int64 {
 	return -1
 }
 
-// unlimitedMaxFDs is the sentinel stored in processMetricsData.maxFDs when
-// /proc/self/limits reports the soft "Max open files" limit as the literal
-// token "unlimited". It is distinct from 0 (the absent/read-failure value) so
-// an unlimited limit is treated as a successful reading and exposed as
-// float64(math.MaxUint64), matching client_golang (see maxFDsValue), rather
-// than silently dropped.
-const unlimitedMaxFDs int64 = -1
-
 // Process-metric ok-mask bits. Each bit is set when the corresponding /proc
 // read succeeded, so the mask records WHICH process_* series are currently
 // collectable, not just whether any read failed.
@@ -106,9 +98,13 @@ const (
 	procOKRSS
 	procOKOpenFDs
 	procOKMaxFDs
+	procOKVirtual
+	procOKMaxVirtual
+	procOKNetwork
 
 	// procOKAll is the all-ok mask: every /proc read succeeded.
-	procOKAll = procOKCPU | procOKRSS | procOKOpenFDs | procOKMaxFDs
+	procOKAll = procOKCPU | procOKRSS | procOKOpenFDs | procOKMaxFDs |
+		procOKVirtual | procOKMaxVirtual | procOKNetwork
 )
 
 // procDegraded holds the last stored ok-mask. It starts all-ok so the first
@@ -121,48 +117,55 @@ func newProcDegradedState() *atomic.Uint32 {
 	return &s
 }
 
-// processMetricsData holds collected process metrics for shared use.
+// processMetricsData holds one scrape's /proc readings and start time. A
+// failed read leaves the sentinel its predicate rejects.
 type processMetricsData struct {
-	goroutines int
-	heapAlloc  uint64
-	gcPause    float64
 	startTime  float64
 	uptime     float64
-	cpuSeconds float64
-	rss        int64
-	openFDs    int
-	maxFDs     int64
+	cpuSeconds float64 // -1 when the read failed
+	vsize      float64 // -1 when the read failed
+	netRx      float64 // -1 when the read failed, as netTx
+	netTx      float64
+	maxFDs     float64 // -1 when the read failed
+	maxVsize   float64 // -1 when the read failed
+	rss        int64   // 0 when the read failed
+	openFDs    int     // -1 when the read failed
 }
 
-// Series-presence predicates used by processFamilies when materialising the
-// process-metric IR, gating the optional series set in one place.
-func (d *processMetricsData) hasCPU() bool     { return d.cpuSeconds >= 0 }
-func (d *processMetricsData) hasRSS() bool     { return d.rss > 0 }
-func (d *processMetricsData) hasOpenFDs() bool { return d.openFDs >= 0 }
-func (d *processMetricsData) hasMaxFDs() bool  { return d.maxFDs > 0 || d.maxFDs == unlimitedMaxFDs }
+// Series-presence predicates used by processFamiliesOf, gating the optional
+// series set in one place.
+func (d *processMetricsData) hasCPU() bool        { return d.cpuSeconds >= 0 }
+func (d *processMetricsData) hasRSS() bool        { return d.rss > 0 }
+func (d *processMetricsData) hasOpenFDs() bool    { return d.openFDs >= 0 }
+func (d *processMetricsData) hasMaxFDs() bool     { return d.maxFDs >= 0 }
+func (d *processMetricsData) hasVirtual() bool    { return d.vsize >= 0 }
+func (d *processMetricsData) hasMaxVirtual() bool { return d.maxVsize >= 0 }
+func (d *processMetricsData) hasNetwork() bool    { return d.netRx >= 0 && d.netTx >= 0 }
 
-// procOKMask computes the 4-bit ok-mask for process metric collection from the
+// procOKMask computes the ok-mask for process metric collection from the
 // series-presence predicates. On platforms other than Linux, where /proc-based
 // metrics are not expected, it returns procOKAll so degradation is never
-// reported. Failed reads are signalled by the predicates: cpuSeconds < 0,
-// rss <= 0, openFDs < 0, or a non-positive maxFDs (excluding the
-// unlimitedMaxFDs sentinel, which is a successful "unlimited" reading).
+// reported.
 func procOKMask(goos string, d *processMetricsData) uint32 {
 	if goos != goosLinux {
 		return procOKAll
 	}
 	var mask uint32
-	if d.hasCPU() {
-		mask |= procOKCPU
-	}
-	if d.hasRSS() {
-		mask |= procOKRSS
-	}
-	if d.hasOpenFDs() {
-		mask |= procOKOpenFDs
-	}
-	if d.hasMaxFDs() {
-		mask |= procOKMaxFDs
+	for _, c := range [...]struct {
+		bit uint32
+		ok  bool
+	}{
+		{procOKCPU, d.hasCPU()},
+		{procOKRSS, d.hasRSS()},
+		{procOKOpenFDs, d.hasOpenFDs()},
+		{procOKMaxFDs, d.hasMaxFDs()},
+		{procOKVirtual, d.hasVirtual()},
+		{procOKMaxVirtual, d.hasMaxVirtual()},
+		{procOKNetwork, d.hasNetwork()},
+	} {
+		if c.ok {
+			mask |= c.bit
+		}
 	}
 	return mask
 }
@@ -175,13 +178,11 @@ func procDegradedTransition(s *atomic.Uint32, mask uint32) bool {
 	return s.Swap(mask) != mask
 }
 
-// collectProcessMetrics gathers all process metrics into a struct.
+// collectProcessMetrics gathers the start time and the /proc readings. Each
+// scrape reads /proc/self/stat, status, limits and net/netstat once and lists
+// /proc/self/fd; the first scrape also reads /proc/self/stat and /proc/stat to
+// resolve the start time, and /proc/self/auxv for USER_HZ.
 func collectProcessMetrics(d *processMetricsData) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	d.goroutines = runtime.NumGoroutine()
-	d.heapAlloc = m.HeapAlloc
-	d.gcPause = float64(m.PauseTotalNs) / 1e9
 	start := resolvedProcStartTime()
 	if start < 0 {
 		start = float64(processStartTime.Unix())
@@ -189,29 +190,45 @@ func collectProcessMetrics(d *processMetricsData) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	d.startTime = start
 	d.uptime = now - start
-	d.cpuSeconds = readProcCPUSeconds()
-	d.rss = readProcRSS()
-	d.openFDs, d.maxFDs = readProcFDs()
+	stat := readProcFile("/proc/self/stat")
+	d.cpuSeconds = parseProcStatCPU(stat, userHZ())
+	d.vsize = parseProcStatVsize(stat)
+	d.rss = parseProcStatusRSS(readProcFile("/proc/self/status"))
+	d.openFDs = readProcOpenFDs()
+	limits := readProcFile("/proc/self/limits")
+	d.maxFDs = parseProcLimit(limits, "Max open files")
+	d.maxVsize = parseProcLimit(limits, "Max address space")
+	d.netRx, d.netTx = parseProcNetstatOctets(readProcFile("/proc/self/net/netstat"))
 	mask := procOKMask(runtime.GOOS, d)
 	if procDegradedTransition(procDegraded, mask) {
 		if mask != procOKAll {
 			slog.Warn("process metric collection partially failed; some process_* metrics will be omitted",
 				"cpu_ok", mask&procOKCPU != 0, "rss_ok", mask&procOKRSS != 0,
-				"fds_ok", mask&procOKOpenFDs != 0, "max_fds_ok", mask&procOKMaxFDs != 0)
+				"fds_ok", mask&procOKOpenFDs != 0, "max_fds_ok", mask&procOKMaxFDs != 0,
+				"vsize_ok", mask&procOKVirtual != 0, "max_vsize_ok", mask&procOKMaxVirtual != 0,
+				"network_ok", mask&procOKNetwork != 0)
 		} else {
 			slog.Info("process metric collection recovered; process_* metrics restored")
 		}
 	}
 }
 
-// processFamilies materialises Go runtime and standard process metrics into the
-// neutral IR. go_goroutines, go_memstats_heap_alloc_bytes,
-// process_gc_pause_seconds_total, process_uptime_seconds and
-// process_start_time_seconds are emitted on every platform.
-// process_cpu_seconds_total, process_resident_memory_bytes,
-// process_open_fds and process_max_fds are sourced from /proc and are
-// Linux-only; on other platforms they are silently omitted. CPU time is
-// divided by USER_HZ (see userHZ).
+// readProcFile reads one /proc file, or returns nil. A failure is logged at
+// Debug on Linux only, where the read is expected to work.
+func readProcFile(path string) []byte {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if runtime.GOOS == goosLinux {
+			slog.Debug("measure: reading "+path+" failed", "error", err)
+		}
+		return nil
+	}
+	return data
+}
+
+// processFamilies renders processGather's families for the page: the Go
+// families on every platform, and the /proc families on Linux when their
+// reads succeed. CPU time is divided by USER_HZ (see userHZ).
 func processFamilies() []metricFamily {
 	gathered := processGather()
 	fams := make([]metricFamily, 0, len(gathered))
@@ -231,29 +248,22 @@ func WriteProcess(b *strings.Builder) {
 	appendPrometheus(b, processFamilies())
 }
 
-// readProcCPUSeconds reads /proc/self/stat for utime+stime in seconds. Returns -1 on failure.
-func readProcCPUSeconds() float64 {
-	data, err := os.ReadFile("/proc/self/stat")
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/self/stat failed", "error", err)
-		}
-		return -1
-	}
-	return parseProcStatCPU(data, userHZ())
-}
-
-// parseProcStatCPU parses /proc/self/stat content for utime+stime in seconds,
-// scaled by the given USER_HZ. Returns -1 on failure.
-func parseProcStatCPU(data []byte, hz float64) float64 {
-	// The comm field is parenthesized and may itself contain spaces and
-	// parens, so the fields after it start after the LAST ')'.
+// procStatFields returns the /proc/self/stat fields after the comm, so index 0
+// is field 3 (state). The comm is parenthesized and may itself contain spaces
+// and parens, so the fields start after the LAST ')'. It returns nil when no
+// ')' is present.
+func procStatFields(data []byte) []string {
 	_, afterComm, ok := strings.CutLast(string(data), ")")
 	if !ok {
-		return -1
+		return nil
 	}
-	fields := strings.Fields(afterComm)
-	// utime is field index 11, stime is 12 (0-indexed from after comm)
+	return strings.Fields(afterComm)
+}
+
+// parseProcStatCPU parses /proc/self/stat content for utime+stime (fields 14
+// and 15) in seconds, scaled by the given USER_HZ. Returns -1 on failure.
+func parseProcStatCPU(data []byte, hz float64) float64 {
+	fields := procStatFields(data)
 	if len(fields) < 13 {
 		return -1
 	}
@@ -263,6 +273,21 @@ func parseProcStatCPU(data []byte, hz float64) float64 {
 		return -1
 	}
 	return float64(utime+stime) / hz
+}
+
+// parseProcStatVsize parses /proc/self/stat content for vsize (field 23), the
+// virtual memory size in bytes. Returns -1 on failure.
+func parseProcStatVsize(data []byte) float64 {
+	const vsizeIdx = 23 - 3
+	fields := procStatFields(data)
+	if len(fields) <= vsizeIdx {
+		return -1
+	}
+	n, err := strconv.ParseUint(fields[vsizeIdx], 10, 64)
+	if err != nil {
+		return -1
+	}
+	return float64(n)
 }
 
 // resolvedProcStartTime memoizes the kernel-derived process start time. Because
@@ -291,25 +316,11 @@ func resolvedProcStartTime() float64 {
 // failure (including non-Linux platforms, where the /proc files are absent) so
 // the caller can fall back to the package-init anchor.
 func readProcStartTime() float64 {
-	statData, err := os.ReadFile("/proc/self/stat")
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/self/stat for start time failed", "error", err)
-		}
-		return -1
-	}
-	ticks := parseProcStatStartTime(statData)
+	ticks := parseProcStatStartTime(readProcFile("/proc/self/stat"))
 	if ticks < 0 {
 		return -1
 	}
-	btimeData, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/stat for btime failed", "error", err)
-		}
-		return -1
-	}
-	btime := parseProcStatBtime(btimeData)
+	btime := parseProcStatBtime(readProcFile("/proc/stat"))
 	if btime < 0 {
 		return -1
 	}
@@ -317,18 +328,10 @@ func readProcStartTime() float64 {
 }
 
 // parseProcStatStartTime parses /proc/self/stat content for the process
-// starttime (field 22, 1-indexed), in clock ticks since boot. Returns -1 on
-// failure. Like parseProcStatCPU it locates the fields after the comm by
-// cutting around the final ')', since the comm may itself contain spaces and
-// parens; counting from field 3 (state) at slice index 0, starttime sits at
-// index 22-3 = 19.
+// starttime (field 22), in clock ticks since boot. Returns -1 on failure.
 func parseProcStatStartTime(data []byte) int64 {
-	_, afterComm, ok := strings.CutLast(string(data), ")")
-	if !ok {
-		return -1
-	}
-	fields := strings.Fields(afterComm)
-	const startTimeIdx = 19
+	const startTimeIdx = 22 - 3
+	fields := procStatFields(data)
 	if len(fields) <= startTimeIdx {
 		return -1
 	}
@@ -357,18 +360,6 @@ func parseProcStatBtime(data []byte) int64 {
 	return -1
 }
 
-// readProcRSS reads /proc/self/status for VmRSS in bytes. Returns 0 on failure.
-func readProcRSS() int64 {
-	data, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/self/status failed", "error", err)
-		}
-		return 0
-	}
-	return parseProcStatusRSS(data)
-}
-
 // parseProcStatusRSS parses /proc/self/status content for VmRSS in bytes. Returns 0 on failure.
 func parseProcStatusRSS(data []byte) int64 {
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -388,14 +379,15 @@ func parseProcStatusRSS(data []byte) int64 {
 	return 0
 }
 
-// readProcFDs returns (open, maxFDs) file descriptors. Returns (-1, 0) on failure.
-func readProcFDs() (open int, maxFDs int64) {
+// readProcOpenFDs counts the process's open file descriptors from
+// /proc/self/fd. Returns -1 on failure.
+func readProcOpenFDs() int {
 	f, err := os.Open("/proc/self/fd")
 	if err != nil {
 		if runtime.GOOS == goosLinux {
 			slog.Debug("measure: opening /proc/self/fd failed", "error", err)
 		}
-		return -1, 0
+		return -1
 	}
 	names, err := f.Readdirnames(-1)
 	_ = f.Close()
@@ -403,60 +395,86 @@ func readProcFDs() (open int, maxFDs int64) {
 		if runtime.GOOS == goosLinux {
 			slog.Debug("measure: reading /proc/self/fd entries failed", "error", err)
 		}
-		return -1, 0
+		return -1
 	}
-	// Subtract the fd held by the open directory handle itself, which
-	// appears in its own /proc/self/fd listing.
-	open = openFDCount(names)
-	// Read max from /proc/self/limits
-	data, err := os.ReadFile("/proc/self/limits")
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/self/limits failed", "error", err)
-		}
-		return open, maxFDs
-	}
-	return open, parseProcLimitsMaxFDs(data)
+	return openFDCount(names)
 }
 
-// parseProcLimitsMaxFDs parses /proc/self/limits content for the soft "Max open
-// files" limit in descriptors. Returns the unlimitedMaxFDs sentinel for the
-// literal "unlimited" token (a successful reading), and 0 when the line is
-// absent, carries no value, or holds a malformed or negative number (a
-// negative token must never collide with the unlimitedMaxFDs sentinel). Like parseProcStatCPU
-// and parseProcStatusRSS, this is the pure-parse counterpart to its I/O reader
-// (readProcFDs), so the limits parsing is unit testable in isolation.
-func parseProcLimitsMaxFDs(data []byte) int64 {
+// parseProcLimit parses /proc/self/limits content for the soft value of the
+// named limit ("Max open files", "Max address space"), which the kernel prints
+// unsigned. The literal "unlimited" reads as float64(math.MaxUint64)
+// (rendered "1.8446744073709552e+19"), what client_golang serves. Returns -1
+// when the line is absent, carries no value, or holds a malformed number.
+func parseProcLimit(data []byte, name string) float64 {
 	for line := range strings.SplitSeq(string(data), "\n") {
-		after, ok := strings.CutPrefix(line, "Max open files")
+		after, ok := strings.CutPrefix(line, name)
 		if !ok {
 			continue
 		}
 		fields := strings.Fields(after)
-		if len(fields) >= 1 {
-			if strings.EqualFold(fields[0], "unlimited") {
-				return unlimitedMaxFDs
-			}
-			n, err := strconv.ParseInt(fields[0], 10, 64)
-			if err != nil || n < 0 {
-				return 0
-			}
-			return n
+		if len(fields) == 0 {
+			return -1
 		}
-		return 0
+		if strings.EqualFold(fields[0], "unlimited") {
+			return float64(math.MaxUint64)
+		}
+		n, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return -1
+		}
+		return float64(n)
 	}
-	return 0
+	return -1
 }
 
-// maxFDsValue is the soft "Max open files" limit as a gauge value. The
-// unlimitedMaxFDs sentinel becomes float64(math.MaxUint64) (rendered
-// "1.8446744073709552e+19"), matching what client_golang emits for an
-// unlimited limit.
-func maxFDsValue(maxFDs int64) float64 {
-	if maxFDs == unlimitedMaxFDs {
-		return float64(math.MaxUint64)
+// parseProcNetstatOctets parses /proc/self/net/netstat content for the IpExt
+// InOctets and OutOctets counters. They count the traffic of the process's
+// network namespace, as client_golang's same-named families do. Returns -1, -1
+// when either counter is missing or malformed.
+func parseProcNetstatOctets(data []byte) (rx, tx float64) {
+	keys, vals, ok := procNetstatSection(data, "IpExt:")
+	if !ok {
+		return -1, -1
 	}
-	return float64(maxFDs)
+	rx, tx = -1, -1
+	for j, k := range keys {
+		if k != "InOctets" && k != "OutOctets" {
+			continue
+		}
+		n, err := strconv.ParseUint(vals[j], 10, 64)
+		if err != nil {
+			return -1, -1
+		}
+		if k == "InOctets" {
+			rx = float64(n)
+		} else {
+			tx = float64(n)
+		}
+	}
+	if rx < 0 || tx < 0 {
+		return -1, -1
+	}
+	return rx, tx
+}
+
+// procNetstatSection finds a netstat section: a line of field names, then a
+// line of as many values, both starting with prefix. ok is false when the
+// section is absent or its value line is missing or does not match.
+func procNetstatSection(data []byte, prefix string) (keys, vals []string, ok bool) {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		names, found := strings.CutPrefix(line, prefix)
+		if !found {
+			continue
+		}
+		if i+1 == len(lines) {
+			return nil, nil, false
+		}
+		values, found := strings.CutPrefix(lines[i+1], prefix)
+		keys, vals = strings.Fields(names), strings.Fields(values)
+		return keys, vals, found && len(keys) == len(vals)
+	}
+	return nil, nil, false
 }
 
 // openFDCount converts the raw /proc/self/fd entry list into the number of

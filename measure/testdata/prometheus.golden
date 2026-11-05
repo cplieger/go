@@ -39,30 +39,129 @@ api_latency_seconds_bucket{endpoint="list",le="1"} 2
 api_latency_seconds_bucket{endpoint="list",le="+Inf"} 2
 api_latency_seconds_sum{endpoint="list"} 0.6
 api_latency_seconds_count{endpoint="list"} 2
+# HELP go_gc_duration_seconds Stop-the-world pause durations of recent garbage collections in seconds.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} <value>
+go_gc_duration_seconds{quantile="0.25"} <value>
+go_gc_duration_seconds{quantile="0.5"} <value>
+go_gc_duration_seconds{quantile="0.75"} <value>
+go_gc_duration_seconds{quantile="1"} <value>
+go_gc_duration_seconds_sum <value>
+go_gc_duration_seconds_count <value>
+# HELP go_gc_gogc_percent The GOGC setting: the heap growth percentage that triggers a collection.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent <value>
+# HELP go_gc_gomemlimit_bytes The GOMEMLIMIT setting: the Go runtime's soft memory limit in bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes <value>
 # HELP go_goroutines Number of goroutines that currently exist.
 # TYPE go_goroutines gauge
 go_goroutines <value>
+# HELP go_info Information about the Go environment, with the Go version as a label.
+# TYPE go_info gauge
+go_info{version="<version>"} <value>
+# HELP go_memstats_alloc_bytes Bytes of allocated heap objects, the same value as go_memstats_heap_alloc_bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes <value>
+# HELP go_memstats_alloc_bytes_total Total bytes allocated on the heap, including freed objects.
+# TYPE go_memstats_alloc_bytes_total counter
+go_memstats_alloc_bytes_total <value>
+# HELP go_memstats_buck_hash_sys_bytes Bytes of memory in profiling bucket hash tables.
+# TYPE go_memstats_buck_hash_sys_bytes gauge
+go_memstats_buck_hash_sys_bytes <value>
+# HELP go_memstats_frees_total Total heap objects freed.
+# TYPE go_memstats_frees_total counter
+go_memstats_frees_total <value>
+# HELP go_memstats_gc_sys_bytes Bytes of memory in garbage collection metadata.
+# TYPE go_memstats_gc_sys_bytes gauge
+go_memstats_gc_sys_bytes <value>
 # HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use.
 # TYPE go_memstats_heap_alloc_bytes gauge
 go_memstats_heap_alloc_bytes <value>
-# HELP process_gc_pause_seconds_total Total GC pause time
-# TYPE process_gc_pause_seconds_total counter
-process_gc_pause_seconds_total <value>
-# HELP process_uptime_seconds Process uptime
-# TYPE process_uptime_seconds gauge
-process_uptime_seconds <value>
-# HELP process_start_time_seconds Start time of the process since unix epoch in seconds
-# TYPE process_start_time_seconds gauge
-process_start_time_seconds <value>
+# HELP go_memstats_heap_idle_bytes Bytes of heap memory with no objects in it, free or released.
+# TYPE go_memstats_heap_idle_bytes gauge
+go_memstats_heap_idle_bytes <value>
+# HELP go_memstats_heap_inuse_bytes Bytes of heap memory in spans that hold objects.
+# TYPE go_memstats_heap_inuse_bytes gauge
+go_memstats_heap_inuse_bytes <value>
+# HELP go_memstats_heap_objects Number of allocated heap objects.
+# TYPE go_memstats_heap_objects gauge
+go_memstats_heap_objects <value>
+# HELP go_memstats_heap_released_bytes Bytes of heap memory returned to the operating system.
+# TYPE go_memstats_heap_released_bytes gauge
+go_memstats_heap_released_bytes <value>
+# HELP go_memstats_heap_sys_bytes Bytes of heap memory obtained from the operating system.
+# TYPE go_memstats_heap_sys_bytes gauge
+go_memstats_heap_sys_bytes <value>
+# HELP go_memstats_last_gc_time_seconds Time of the last garbage collection in seconds since the Unix epoch.
+# TYPE go_memstats_last_gc_time_seconds gauge
+go_memstats_last_gc_time_seconds <value>
+# HELP go_memstats_mallocs_total Total heap objects allocated, including freed ones.
+# TYPE go_memstats_mallocs_total counter
+go_memstats_mallocs_total <value>
+# HELP go_memstats_mcache_inuse_bytes Bytes of memory in mcache structures in use.
+# TYPE go_memstats_mcache_inuse_bytes gauge
+go_memstats_mcache_inuse_bytes <value>
+# HELP go_memstats_mcache_sys_bytes Bytes of memory obtained for mcache structures.
+# TYPE go_memstats_mcache_sys_bytes gauge
+go_memstats_mcache_sys_bytes <value>
+# HELP go_memstats_mspan_inuse_bytes Bytes of memory in mspan structures in use.
+# TYPE go_memstats_mspan_inuse_bytes gauge
+go_memstats_mspan_inuse_bytes <value>
+# HELP go_memstats_mspan_sys_bytes Bytes of memory obtained for mspan structures.
+# TYPE go_memstats_mspan_sys_bytes gauge
+go_memstats_mspan_sys_bytes <value>
+# HELP go_memstats_next_gc_bytes Heap size in bytes at which the next collection starts.
+# TYPE go_memstats_next_gc_bytes gauge
+go_memstats_next_gc_bytes <value>
+# HELP go_memstats_other_sys_bytes Bytes of memory in other runtime allocations.
+# TYPE go_memstats_other_sys_bytes gauge
+go_memstats_other_sys_bytes <value>
+# HELP go_memstats_stack_inuse_bytes Bytes of heap memory used for goroutine stacks.
+# TYPE go_memstats_stack_inuse_bytes gauge
+go_memstats_stack_inuse_bytes <value>
+# HELP go_memstats_stack_sys_bytes Bytes of memory used for stacks, including operating system thread stacks.
+# TYPE go_memstats_stack_sys_bytes gauge
+go_memstats_stack_sys_bytes <value>
+# HELP go_memstats_sys_bytes Bytes of memory obtained from the operating system.
+# TYPE go_memstats_sys_bytes gauge
+go_memstats_sys_bytes <value>
+# HELP go_sched_gomaxprocs_threads The GOMAXPROCS setting: how many threads can run Go code at once.
+# TYPE go_sched_gomaxprocs_threads gauge
+go_sched_gomaxprocs_threads <value>
+# HELP go_threads Number of operating system threads the Go runtime has created.
+# TYPE go_threads gauge
+go_threads <value>
 # HELP process_cpu_seconds_total Total user and system CPU time spent in seconds
 # TYPE process_cpu_seconds_total counter
 process_cpu_seconds_total <value>
-# HELP process_resident_memory_bytes Resident memory size in bytes
-# TYPE process_resident_memory_bytes gauge
-process_resident_memory_bytes <value>
-# HELP process_open_fds Number of open file descriptors
-# TYPE process_open_fds gauge
-process_open_fds <value>
+# HELP process_gc_pause_seconds_total Total GC pause time
+# TYPE process_gc_pause_seconds_total counter
+process_gc_pause_seconds_total <value>
 # HELP process_max_fds Maximum number of open file descriptors
 # TYPE process_max_fds gauge
 process_max_fds <value>
+# HELP process_network_receive_bytes_total Bytes received over the network in the process's network namespace.
+# TYPE process_network_receive_bytes_total counter
+process_network_receive_bytes_total <value>
+# HELP process_network_transmit_bytes_total Bytes sent over the network in the process's network namespace.
+# TYPE process_network_transmit_bytes_total counter
+process_network_transmit_bytes_total <value>
+# HELP process_open_fds Number of open file descriptors
+# TYPE process_open_fds gauge
+process_open_fds <value>
+# HELP process_resident_memory_bytes Resident memory size in bytes
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes <value>
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds <value>
+# HELP process_uptime_seconds Process uptime
+# TYPE process_uptime_seconds gauge
+process_uptime_seconds <value>
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes <value>
+# HELP process_virtual_memory_max_bytes Soft limit on the process's virtual memory size in bytes.
+# TYPE process_virtual_memory_max_bytes gauge
+process_virtual_memory_max_bytes <value>
