@@ -882,18 +882,20 @@ func (f *failOnce) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// A response next returns beside its error, as net/http's client does for a
-// redirect its CheckRedirect refuses, reaches the caller with that error, its
-// body closed, whether or not the read's context has ended by then.
+// A response a next that breaks the RoundTripper contract returns beside its
+// error reaches the caller with that error, its body closed where it has one,
+// whether or not the read's context has ended by then.
 func TestAResponseBesideAnErrorReachesTheCaller(t *testing.T) {
 	errRefused := errors.New("redirect refused")
 	for _, test := range []struct {
-		want   error
-		name   string
-		cancel bool
+		want    error
+		name    string
+		cancel  bool
+		nilBody bool
 	}{
 		{name: "a_live_context", want: errRefused},
 		{name: "an_ended_context", cancel: true, want: context.Canceled},
+		{name: "a_nil_body", nilBody: true, want: errRefused},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -902,10 +904,14 @@ func TestAResponseBesideAnErrorReachesTheCaller(t *testing.T) {
 				if test.cancel {
 					cancel()
 				}
-				return &http.Response{
+				resp := &http.Response{
 					StatusCode: http.StatusFound, Header: http.Header{"Location": {"/elsewhere"}},
 					Body: http.NoBody, Request: r,
-				}, errRefused
+				}
+				if test.nilBody {
+					resp.Body = nil
+				}
+				return resp, errRefused
 			})
 			tr := newCacheTransport(t, wire, httpclient.CacheConfig{})
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://server.example/x", nil)
@@ -913,7 +919,7 @@ func TestAResponseBesideAnErrorReachesTheCaller(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp, err := tr.RoundTrip(req)
-			if resp != nil {
+			if resp != nil && resp.Body != nil {
 				resp.Body.Close()
 			}
 			if !errors.Is(err, test.want) {

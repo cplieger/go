@@ -1273,6 +1273,29 @@ func TestAnObserverThatChangesAnAnswerBypassesTheCache(t *testing.T) {
 				t.Errorf("the read after a swapped body = %+v with If-None-Match %q, want the server's answer read unconditionally", got, o.last().Get("If-None-Match"))
 			}
 		})
+		t.Run(position.name+"_another_body_after_the_wire_one", func(t *testing.T) {
+			o := newOrigin(`{"login":"octo"}`, `"v1"`)
+			var swap atomic.Bool
+			swap.Store(true)
+			c := newOwner(serveOrigin(t, o), position.config(answerRewrite(func(resp *http.Response) {
+				if swap.Load() && resp.StatusCode == http.StatusOK {
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+					resp.Body = io.NopCloser(strings.NewReader(`{"login":"forged"}`))
+				}
+			})))
+			if got, _, err := c.get(t, "/user"); err != nil || got.Login != "forged" {
+				t.Fatalf("Setup: the read = %+v, %v, want the observer's body", got, err)
+			}
+			swap.Store(false)
+			got, answer, err := c.get(t, "/user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if answer.served || got.Login != "octo" || o.last().Get("If-None-Match") != "" {
+				t.Errorf("the read after a body read to its end and replaced = %+v, served %v, If-None-Match %q, want the server's answer read unconditionally", got, answer.served, o.last().Get("If-None-Match"))
+			}
+		})
 	}
 }
 

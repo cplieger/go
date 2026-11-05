@@ -67,7 +67,7 @@ client := &http.Client{Transport: cache, Timeout: 30 * time.Second}
 - A body that fails while the cache reads it reaches you as the server sent it: the bytes read, then the error.
 - Each redirect hop your client follows is a request of its own.
 - A read whose context ends before `RoundTrip` returns, even after its answer was read, fails with the context's error and keeps nothing.
-- A response `next` returns beside an error, such as a refused redirect's, reaches you beside that error with its body closed.
+- A response that `next` returns beside an error breaks the `http.RoundTripper` contract. `RoundTrip` returns it beside that error with its body closed, and `http.Client` ignores it. A redirect your `CheckRedirect` refuses is not this case: `RoundTrip` answers that hop with no error, and `http.Client.Do` returns the refusal itself.
 - `CloseIdleConnections` reaches `next`.
 
 The cache never answers without the server, and it does no retries. To retry, put a `RetryRoundTripper` beneath it, as `next`.
@@ -76,7 +76,7 @@ The cache never answers without the server, and it does no retries. To retry, pu
 
 A round tripper you put inside `next` sees every request that reaches the server, and a `304` as the `304` it is. One around the cache round tripper sees a served answer as a `200`.
 
-Each answer from `next` must report the request it answered as its `Request`, as `net/http`'s `Transport` does. An answer to a request `next` changed, or one naming no request, is neither served from nor kept. So a round tripper that sets a credential or any other header, such as an OAuth or signing transport, wraps the cache round tripper rather than sitting inside `next`, where the key would not see what it sets.
+Each answer from `next` must report the request it answered as its `Request`, as `net/http`'s `Transport` does. An answer to a request whose method, URL, host or any header `next` changed, or one naming no request, is neither served from nor kept. So a round tripper that sets a credential or any other header, such as an OAuth or signing transport, wraps the cache round tripper rather than sitting inside `next`, where the key would not see what it sets.
 
 ## Reading your own answers
 
@@ -109,11 +109,11 @@ if err == nil {
 _, ended := read.Finish(ctx, err == nil)
 ```
 
-- `Send` runs the attempts: the first, and with `Resend` the one a `304` nothing held may serve forces. Your function builds the request and calls `prepare` last, after every other header is set, because `prepare` keys the request and sets the held copy's validator.
+- `Send` runs the attempts: the first, and with `Resend` the one a `304` nothing held may serve forces. Your function builds the request and calls `prepare` last, after every other header is set, because `prepare` keys the request and sets the held copy's validator. A `CacheRead` is sent once: a second `Send` sends nothing and fails.
 - The request must travel through `CacheGuard`, placed beneath every round tripper that may change a request or an answer, such as a retry round tripper or an observer. The guard sends a request that differs from the keyed one without validators, and marks an answer it did not get from the wire as given. A read that reaches no guard is never served or kept. A `CacheRoundTripper` guards its own `next`.
 - `Answered` records that you read the answer in full, and reports whether `State` counts this read. Skip it when the body fails to read, so the read counts nothing.
 - `Serve` answers a `304` the held copy serves: the `304`'s header with the held fields, and a copy of the held body. For any other answer it reports false, and a `304` it refuses is yours to treat as the `304` it is.
-- `Keep` keeps what its function returns, for a `200` whose wire body you pass, where the wire vouches for both, the answer has a validator and no `no-store`.
-- `Finish` settles the read once, whether it succeeded or not. A context ended by then fails the read, which keeps nothing, and its error is returned. A second call changes nothing.
+- `Keep` keeps what its function returns, for a `200` whose body you read in full and pass, where the wire vouches for the answer, the body you pass is the wire's byte for byte, and the answer has a validator and no `no-store`. A body that a round tripper above the guard replaced is not kept.
+- `Finish` settles the read once, whether it succeeded or not. A context ended by then fails the read, which keeps nothing, and its error is returned. A second call changes nothing and returns the first call's result.
 
 `Variant` names what you keep of an answer, such as the Go type it decodes into, so reads that differ only in what they keep never serve each other. `Store` false sends the read with no validator and keeps nothing, for a read that must not be cached; only a `GET` is ever looked up or kept, so `Store` on another method does the same. `Discarded` takes the header of an answer the read drops, a resent `304`'s and a `304` that fails the read, for code that tracks rate headers.

@@ -85,9 +85,11 @@ func (r *CacheRead) Serve(live http.Header) (header http.Header, body []byte, ok
 	return header, body, true
 }
 
-// Keep keeps what kept returns for resp, a 200 whose body the owner read as body,
-// where the wire vouches for both, the answer carries a well-formed validator and
-// no no-store, and kept succeeds. It keeps nothing otherwise.
+// Keep keeps what kept returns for resp, a 200 the owner read in full as body,
+// where the wire vouches for resp, body is the wire's body byte for byte, the
+// answer carries a well-formed validator and no no-store, and kept succeeds. It
+// keeps nothing otherwise, so nothing is kept from a body a round tripper above
+// the guard replaced.
 func (r *CacheRead) Keep(resp *http.Response, body []byte, kept func() ([]byte, error)) {
 	if r.done || resp == nil || resp.StatusCode != http.StatusOK || !r.rv.vouched(resp, body) {
 		return

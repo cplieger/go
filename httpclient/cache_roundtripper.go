@@ -27,9 +27,10 @@ type CacheRoundTripper struct {
 
 // NewCacheRoundTripper builds a [CacheRoundTripper] sending through next, which
 // an attempt observer wraps to see each request that reaches the server. An
-// answer from next is served from or kept only where its Request is the request
-// next was given, as [http.Transport] reports it, so a round tripper that sets a
-// credential wraps the CacheRoundTripper instead. Nil next means
+// answer from next is served from or kept only where its Request reports the
+// request next was given, as [http.Transport] does, with its method, URL, host
+// and every header unchanged, so a round tripper that sets a credential or any
+// other header wraps the CacheRoundTripper instead. Nil next means
 // [http.DefaultTransport].
 func NewCacheRoundTripper(next http.RoundTripper, cfg CacheConfig) *CacheRoundTripper {
 	if next == nil {
@@ -41,8 +42,8 @@ func NewCacheRoundTripper(next http.RoundTripper, cfg CacheConfig) *CacheRoundTr
 // RoundTrip revalidates a GET carrying no validator of its own and sends every
 // other request through next as given. A read whose context has ended by the
 // time its answer is read keeps nothing and fails with the context's error. A
-// response next returns beside an error, such as a refused redirect's, reaches
-// the caller beside that error with its body closed.
+// response a next that breaks the RoundTripper contract returns beside an error
+// is returned beside that error with its body closed; [http.Client] ignores it.
 func (t *CacheRoundTripper) RoundTrip(orig *http.Request) (*http.Response, error) {
 	if orig.Method != http.MethodGet {
 		return t.next.RoundTrip(orig)
@@ -62,7 +63,9 @@ func (t *CacheRoundTripper) RoundTrip(orig *http.Request) (*http.Response, error
 			err = ended
 		}
 		if resp != nil {
-			resp.Body.Close()
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
 			resp.Request = orig
 		}
 		return resp, err
