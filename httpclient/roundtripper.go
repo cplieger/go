@@ -252,6 +252,10 @@ func (rt *RetryRoundTripper) buildAttemptRequest(ctx context.Context, req *http.
 	return tryReq, nil
 }
 
+// CloseIdleConnections closes the base transport's idle connections where it
+// can, so [http.Client.CloseIdleConnections] reaches them.
+func (rt *RetryRoundTripper) CloseIdleConnections() { closeIdle(rt.transport()) }
+
 // drainResp drains and closes a response body if present.
 func drainResp(resp *http.Response) {
 	if resp != nil && resp.Body != nil {

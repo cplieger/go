@@ -898,3 +898,20 @@ func TestRetryRoundTripper_drains_every_discarded_response_body(t *testing.T) {
 		t.Errorf("closed count = %d, want 4 (3 intermediate + 1 final)", got)
 	}
 }
+
+// idleCounter is a round tripper that counts the calls to close its idle
+// connections.
+type idleCounter struct {
+	http.RoundTripper
+	closed atomic.Int32
+}
+
+func (c *idleCounter) CloseIdleConnections() { c.closed.Add(1) }
+
+func TestClosingARetryClientsIdleConnectionsReachesItsBase(t *testing.T) {
+	base := &idleCounter{RoundTripper: http.DefaultTransport}
+	httpclient.NewRetry(base, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{}).CloseIdleConnections()
+	if got := base.closed.Load(); got != 1 {
+		t.Errorf("the base transport's idle connections were closed %d time(s), want 1", got)
+	}
+}
