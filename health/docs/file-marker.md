@@ -36,7 +36,7 @@ In degraded mode:
 
 - `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts.
 - `RunProbe` and `ProbeCheck` report healthy. The service is alive, and only its way of reporting health is broken, which a restart cannot fix.
-- `CheckHealthy`, `Healthy`, `Within` and `Handler` report unhealthy, because nothing can have written the marker.
+- `CheckHealthy`, `Healthy`, `Within` and `Handler` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it.
 
 The usual cause is compose's `read_only: true` with no tmpfs at `/tmp`. Mount one to keep a working signal:
 
@@ -105,4 +105,4 @@ Write each reason where you wire the check, never from an error's text: the endp
 
 Both take any `Signal`, the one-method interface `*Marker` satisfies, so an in-memory flag works too. With a `*Marker`, each request does one `os.Stat`, so serve it at your platform's probe interval rather than on a busy path. To make the endpoint follow the probe's deadline, pass `m.Within(lease.Duration())` instead of `m`, as [Freshness deadline](freshness.md) describes.
 
-In degraded mode `Handler` answers 503 while the marker is absent, the usual case, since `Set` cannot write it, while the `health` subcommand reports healthy. A leftover marker that still exists is healthy on both. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.
+In degraded mode `Handler` always answers 503, even for a marker left in the folder, because `Set` cannot change it, while the `health` subcommand reports healthy. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.
