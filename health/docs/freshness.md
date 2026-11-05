@@ -17,7 +17,7 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 
 Every `Set(true)` refreshes the marker's modification time, so the writing side needs no change. Pick a deadline comfortably above one interval plus the longest normal cycle. Three intervals is a reasonable default. A stale marker fails with a stderr line that gives its age and the deadline.
 
-`CheckHealthy`, `Healthy` and `Handler` check existence only, whether or not the probe has a deadline.
+`CheckHealthy`, `Healthy` and `Handler` check existence only, whether or not the probe has a deadline. For an HTTP endpoint that applies the same deadline, pass `m.Within(d)` as its signal with the `d` you give `WithMaxAge`. It is healthy while the marker exists and is no older than `d`, and a non-positive `d` checks existence only, the probe's rule. In degraded mode it is unhealthy, as `Healthy` is.
 
 ## Building it with `Lease`
 
@@ -57,9 +57,9 @@ case health.MarkerAbsent, health.MarkerUnreadable, health.MarkerDirUnavailable:
 | State | Meaning |
 | --- | --- |
 | `MarkerFresh` | The marker exists and, with a deadline armed, is inside it |
-| `MarkerStale` | The marker is older than the armed deadline. Only reachable with `WithMaxAge` |
+| `MarkerStale` | The marker is older than the armed deadline, in a folder the app can write. Only reachable with `WithMaxAge` |
 | `MarkerAbsent` | No marker in a writable folder |
 | `MarkerUnreadable` | The stat failed for another reason, such as permissions or an I/O error |
-| `MarkerDirUnavailable` | Degraded mode. The folder cannot be written, and the probe treats this as healthy |
+| `MarkerDirUnavailable` | Degraded mode. The folder cannot be written, so the marker is absent, unreadable or past a deadline nothing can refresh, and the probe treats this as healthy |
 
 `RunProbe` and `ProbeCheck` are built on `Inspect`, so a process acting on `Inspect` and the container healthcheck reach the same verdict. Without `WithMaxAge`, a present marker is always `MarkerFresh`.

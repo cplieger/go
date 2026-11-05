@@ -1,51 +1,73 @@
 package health
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
-	"time"
+	"slices"
 )
 
+// The fleet health body's status values.
 const (
-	statusOK          = "OK"
-	statusUnavailable = "Unavailable"
+	statusOK        = "ok"
+	statusUnhealthy = "unhealthy"
 )
 
-// Status is the JSON response emitted by Handler.
-type Status struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
+// reasonUnhealthy is the reason Handler gives for its one signal.
+const reasonUnhealthy = "the app reports itself unhealthy"
+
+// Check is one condition a health endpoint reports.
+type Check struct {
+	// Signal decides the check. A nil Signal is unhealthy.
+	Signal Signal
+	// Reason is one plain sentence, written where the app wires the check,
+	// that "reasons" lists while Signal reports unhealthy. Never build it from
+	// error text: the endpoint answers without authentication. An empty Reason
+	// reads as "the app reports itself unhealthy".
+	Reason string
 }
 
-// Handler returns an http.Handler that reports the health of the given
-// Signal as a JSON object. Returns 200 with {"status":"OK"} when healthy,
-// 503 with {"status":"Unavailable"} otherwise (including a nil Signal).
-// This mirrors the response shape of hellofresh/health-go and satisfies
-// K8s HTTP probe expectations.
-//
-// In degraded mode (unwritable marker directory), Marker.Healthy()
-// returns false, so this endpoint reports 503 — unlike the `health`
-// subcommand probe (ProbeCheck), which reports healthy to avoid a
-// Docker restart loop. Do not wire this endpoint as the sole liveness
-// probe on a service that may run with a read-only filesystem and no
-// /tmp tmpfs, or it will restart-loop a container that is actually alive.
-//
-// With a *Marker signal, every request performs one os.Stat (see
-// Marker.CheckHealthy); keep this endpoint behind the platform's probe
-// cadence, not a request-per-second hot path.
-func Handler(s Signal) http.Handler {
+// body is the JSON a health endpoint writes.
+type body struct {
+	Status  string   `json:"status"`
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// CheckHandler returns a handler that answers 200 {"status":"ok"} while every
+// check is healthy, and 503 {"status":"unhealthy","reasons":[...]} listing the
+// Reason of each failing check in order. It sets Content-Type:
+// application/json, Cache-Control: no-store and X-Content-Type-Options:
+// nosniff, and reads each Signal on every request. With no checks it answers
+// 200. Register it as "GET /healthz": an http.ServeMux then also answers HEAD,
+// and 405 to every other method.
+func CheckHandler(checks ...Check) http.Handler {
+	checks = slices.Clone(checks)
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		st := Status{Timestamp: time.Now().UTC().Format(time.RFC3339)}
-		code := http.StatusOK
-		if s != nil && s.Healthy() {
-			st.Status = statusOK
-		} else {
-			st.Status = statusUnavailable
-			code = http.StatusServiceUnavailable
+		var reasons []string
+		for _, c := range checks {
+			if c.Signal == nil || !c.Signal.Healthy() {
+				reasons = append(reasons, cmp.Or(c.Reason, reasonUnhealthy))
+			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+		b, code := body{Status: statusOK}, http.StatusOK
+		if len(reasons) > 0 {
+			b, code = body{Status: statusUnhealthy, Reasons: reasons}, http.StatusServiceUnavailable
+		}
+		h := w.Header()
+		h.Set("Content-Type", "application/json")
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(code)
-		_ = json.NewEncoder(w).Encode(st)
+		_ = json.NewEncoder(w).Encode(b)
 	})
+}
+
+// Handler returns CheckHandler for one signal, s, with the reason "the app
+// reports itself unhealthy"; a nil s is unhealthy. With a *Marker it answers
+// 503 while the marker is absent, and always in degraded mode (an unwritable
+// marker directory, such as a read-only /tmp), where the `health` subcommand
+// reports healthy to avoid a restart loop. So it must not be the only liveness
+// probe of a service that may run read-only.
+func Handler(s Signal) http.Handler {
+	return CheckHandler(Check{Signal: s, Reason: reasonUnhealthy})
 }

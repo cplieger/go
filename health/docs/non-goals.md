@@ -4,7 +4,7 @@ This page lists what health leaves out on purpose and why, for a developer decid
 
 | Left out | Reason |
 | --- | --- |
-| Registered dependency checks | `Set(bool)` is where your code combines its checks, and the service owns that logic. A check registry is a different abstraction |
+| Running dependency checks on each request | `Set(bool)` and the signals given to `CheckHandler` are where your code records its checks, and the service owns that logic. `CheckHandler` only reads those signals; a registry that calls a database or an upstream per request is a different abstraction |
 | Separate liveness and readiness signals | Docker Compose has one `HEALTHCHECK`. On Kubernetes, create two `Marker` values with different paths |
 | Graceful shutdown hooks or `context.Context` | `Cleanup` is the shutdown action. The library starts no goroutine, so nothing needs cancelling |
 | Status-change callbacks | Changes of state are logged through `slog`. Wrap `Set` to add your own callback |
