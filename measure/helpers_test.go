@@ -75,11 +75,11 @@ func (w *failWriter) Header() http.Header {
 	return w.hdr
 }
 
-func (w *failWriter) Write([]byte) (int, error) {
+func (*failWriter) Write([]byte) (int, error) {
 	return 0, errors.New("forced write failure")
 }
 
-func (w *failWriter) WriteHeader(int) {}
+func (*failWriter) WriteHeader(int) {}
 
 // captureDebugLogs redirects the default slog logger to an in-memory buffer at
 // Debug level for the duration of the test and returns that buffer. Callers
@@ -258,11 +258,11 @@ func (w *discardResponseWriter) Header() http.Header {
 	return w.hdr
 }
 
-func (w *discardResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (*discardResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
 
-func (w *discardResponseWriter) WriteString(s string) (int, error) { return len(s), nil }
+func (*discardResponseWriter) WriteString(s string) (int, error) { return len(s), nil }
 
-func (w *discardResponseWriter) WriteHeader(int) {}
+func (*discardResponseWriter) WriteHeader(int) {}
 
 // labelNames returns n label names ("l0", "l1", ...), for a contract that
 // varies a metric's label ARITY.

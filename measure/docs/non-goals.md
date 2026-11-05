@@ -11,9 +11,9 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 | Protobuf exposition | Prometheus asks for protobuf first only when native histograms are on, and protobuf needs the protobuf runtime module as a dependency |
 | Native histograms with exponential buckets | They need protobuf exposition and a large specialized implementation |
 | Unregistering metrics or a dynamic metric lifecycle | measure is built for a set of metrics that is fixed when the program starts |
-| Third-party collectors | The `Metric` interface is sealed, so registration accepts the six built-in types only. `client_golang` has an open `Collector` interface for this |
-| Float counters | Counters count whole events as `int64` |
+| Third-party collectors | The `Metric` interface is sealed. A collector is a function given to `NewCollector`, so registration accepts this package's types only. `client_golang` has an open `Collector` interface for a third-party `prometheus.Collector` |
+| Float counter instruments | The counter types count whole events as `int64`. A collector counter reports a `float64` total it reads elsewhere |
 | Gzip compression of the response | Wrap `Handler` in standard HTTP middleware |
 | `Gauge.SetToCurrentTime()` | Call `g.Set(float64(time.Now().Unix()))` |
 
-If you need summaries, custom collectors, exemplars or native histograms, consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Go client of the Prometheus project.
+If you need summaries, exemplars, native histograms or a third-party `prometheus.Collector`, consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Go client of the Prometheus project.

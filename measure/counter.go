@@ -340,23 +340,7 @@ func (s *series) sortedLabelKeys[V any](vals map[labelKey]V) []labelKey {
 
 // buildLabelString builds a sorted, spec-escaped label string from labels and key.
 func buildLabelString(labels []string, key *labelKey) string {
-	type lp struct{ k, v string }
-	pairs := make([]lp, len(labels))
-	for i, l := range labels {
-		pairs[i] = lp{l, key[i]}
-	}
-	slices.SortFunc(pairs, func(a, b lp) int { return strings.Compare(a.k, b.k) })
-	var sb strings.Builder
-	for i, p := range pairs {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(p.k)
-		sb.WriteString(`="`)
-		_, _ = labelEscaper.WriteString(&sb, p.v)
-		sb.WriteByte('"')
-	}
-	return sb.String()
+	return renderLabels(labelsFor(labels, key))
 }
 
 // WriteLabeledCounter writes a labeled counter in Prometheus text format (IR
