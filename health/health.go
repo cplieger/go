@@ -362,8 +362,9 @@ type Freshness struct {
 	// Err is the underlying stat or directory-probe error for MarkerUnreadable
 	// and MarkerDirUnavailable, nil otherwise.
 	Err error
-	// Age is how long ago the marker was last written. Meaningful only for
-	// MarkerFresh and MarkerStale; zero for every state with no marker to age.
+	// Age is how long ago the marker was last written: set for MarkerFresh,
+	// MarkerStale, and MarkerDirUnavailable when a stale marker was found;
+	// zero for every state with no marker to age.
 	Age time.Duration
 	// MaxAge is the armed deadline, or 0 when none was armed.
 	MaxAge time.Duration
