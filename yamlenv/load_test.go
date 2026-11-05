@@ -362,11 +362,9 @@ func (h *echoingHook) UnmarshalYAML(value *yaml.Node) error {
 	return errors.New(h.prefix + value.Value + h.suffix)
 }
 
-// echoingConfig holds an echoingHook beside an int, so int is a type the
-// config reaches.
+// echoingConfig holds an echoingHook.
 type echoingConfig struct {
-	H    echoingHook `yaml:"h"`
-	Port int         `yaml:"port"`
+	H echoingHook `yaml:"h"`
 }
 
 // strictHook is a config type whose UnmarshalYAML strict-loads its mapping
@@ -705,18 +703,6 @@ func TestLoadKeepsOnlyVouchedParts(t *testing.T) {
 			out:  &echoingConfig{H: echoingHook{prefix: `mapping key "`, suffix: `" already defined at line 1`}},
 			want: "decode errors: line 1, column 4: " + entryWithheld,
 		},
-		"hook unknown-field wording in the probe under the echo": {
-			doc:  "name: n\nh: hunter2-pasted\n",
-			out:  &forgedConfig{},
-			opts: []yamlenv.LoadOption{echo},
-			want: "decode errors: line 2, column 4: unknown configuration key <redacted>",
-		},
-		"hook unknown-field wording naming a real key under the echo": {
-			doc:  "name: n\nh: name\n",
-			out:  &forgedConfig{},
-			opts: []yamlenv.LoadOption{echo},
-			want: "decode errors: line 2, column 4: unknown configuration key <redacted>",
-		},
 		"hook strict-loading expanded keys under the echo": {
 			doc:  "anchor: &k ${APP_SECRET}\nsub:\n  a: ${APP_SECRET}\n  *k : 1\n",
 			out:  &strictHookConfig{},
@@ -724,8 +710,11 @@ func TestLoadKeepsOnlyVouchedParts(t *testing.T) {
 			want: "decode errors: line 4, column 3: unknown configuration key <redacted>",
 		},
 		"go-yaml's wrong type into the config's own int": {
-			doc:  "h: ok\nport: ${APP_SECRET}\n",
-			out:  &echoingConfig{H: echoingHook{prefix: "", suffix: ""}},
+			doc: "h: ok\nport: ${APP_SECRET}\n",
+			out: &struct {
+				H    echoingHook `yaml:"h"`
+				Port int         `yaml:"port"`
+			}{},
 			want: "decode errors: line 1, column 4: " + entryWithheld + "; line 2, column 7: cannot construct !!str <redacted> into int",
 		},
 	}
@@ -740,6 +729,45 @@ func TestLoadKeepsOnlyVouchedParts(t *testing.T) {
 				t.Errorf("err = %q, leaked the value", err)
 			}
 		})
+	}
+}
+
+// TestLoadProbeRedactsHookWordedKeys pins that a config type's error worded
+// as go-yaml's unknown field, raised in the raw-bytes probe, is redacted under
+// the echo whatever it names, and that the failed load leaves out unchanged.
+func TestLoadProbeRedactsHookWordedKeys(t *testing.T) {
+	t.Parallel()
+	echo := yamlenv.WithSanitizeOptions(yamlenv.WithUnknownKeyEcho(true))
+	for name, doc := range map[string]string{
+		"a pasted value":  "name: n\nh: hunter2-pasted\n",
+		"a real key name": "name: n\nh: name\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := forgedConfig{Name: "default", H: forgedUnknownKey{}}
+			_, err := yamlenv.Load([]byte(doc), &cfg, allowAppPrefix, echo)
+			if want := "decode errors: line 2, column 4: unknown configuration key <redacted>"; err == nil || err.Error() != want {
+				t.Errorf("Load = %v, want %q", err, want)
+			}
+			if cfg.Name != "default" {
+				t.Errorf("Name = %q, want the default kept after a probe failure", cfg.Name)
+			}
+		})
+	}
+}
+
+// TestLoadStrictHookSeesExpandedValues pins that strictHook strict-loads the
+// expanded node, so the echo case above exercises a real post-expansion load.
+func TestLoadStrictHookSeesExpandedValues(t *testing.T) {
+	t.Parallel()
+	var cfg strictHookConfig
+	lookup := yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": "expanded"}))
+	_, err := yamlenv.Load([]byte("anchor: ${APP_SECRET}\nsub:\n  a: ${APP_SECRET}\n"), &cfg, allowAppPrefix, lookup)
+	if err != nil {
+		t.Fatalf("Load = %v, want nil", err)
+	}
+	if cfg.Anchor != "expanded" || cfg.Sub.S.A != "expanded" {
+		t.Errorf("cfg = %+v, want both values expanded", cfg)
 	}
 }
 
