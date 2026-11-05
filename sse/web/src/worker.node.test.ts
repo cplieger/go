@@ -438,6 +438,25 @@ describe("createWorkerHost: losing authorisation", () => {
     expect(h.host.stream().state().kind).toBe("stopped");
   });
 
+  it("stops the profile's stream when its request answers 401, and every tab hears it", async () => {
+    const h = hostHarness();
+    h.sf.expect({ status: 401, noBody: true, holdHeaders: true });
+    const t1 = tab(h, "t1");
+    const t2 = tab(h, "t2");
+    t1.attach();
+    t2.attach();
+    await settle();
+    h.sf.connections[0]!.respond();
+    await settle();
+    const lost = { kind: "auth_lost", route: "stream", status: 401 };
+    expect(h.ofKind("auth_lost")).toEqual([lost]);
+    expect(h.host.stream().state().kind).toBe("stopped");
+    for (const t of [t1, t2]) {
+      expect(t.ofType("lifecycle").map((m) => m.event)).toContainEqual(lost);
+    }
+    expect(h.sf.connections).toHaveLength(1);
+  });
+
   it("leaves the stream running when an alive acknowledgement answers 200", async () => {
     const h = hostHarness({ alive: true });
     h.sf.onPost(() => new Response(null, { status: 200 }));

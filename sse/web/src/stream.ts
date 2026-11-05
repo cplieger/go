@@ -150,6 +150,14 @@ function transportGeneration(event: ClientEvent): number | null {
   }
 }
 
+function statusOf(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
 function describe(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -157,7 +165,12 @@ function describe(error: unknown): string {
   return String(error);
 }
 
-/** Creates the client runtime. Throws RangeError when `timing.maxBufferBytes` is below MAX_FRAME_BYTES. */
+/**
+ * Creates the client runtime. Throws RangeError when `timing.maxBufferBytes` is below MAX_FRAME_BYTES.
+ * A 401 stops the stream and emits `auth_lost`, with route `stream` for the stream request, `alive`
+ * for the alive acknowledgement and `digest` for a revalidate rejecting with `{status: 401}`; any
+ * other status backs off, or fails the run.
+ */
 export function createStream(opts: StreamOptions): Stream {
   const cfg = resolveTiming(opts.timing);
   const doFetch: typeof fetch = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
@@ -198,6 +211,11 @@ export function createStream(opts: StreamOptions): Stream {
 
   function emit(event: LifecycleEvent): void {
     opts.onLifecycle?.(event);
+  }
+
+  function authLost(route: "stream" | "alive" | "digest"): void {
+    stream.stop();
+    emit({ kind: "auth_lost", route, status: 401 });
   }
 
   bindListener(opts.versions, (epoch) => {
@@ -323,6 +341,10 @@ export function createStream(opts: StreamOptions): Stream {
         onConnectFailed(g, reason) {
           if (g === state.generation) {
             emit({ kind: "connect_failed", reason });
+            if (reason.kind === "status" && reason.status === 401) {
+              authLost("stream");
+              return;
+            }
           }
           dispatch({ type: "connect_failed", generation: g, now: now(), reason, rand: rand() });
         },
@@ -579,6 +601,9 @@ export function createStream(opts: StreamOptions): Stream {
       .then(
         (response) => {
           emit({ kind: "alive_ack", ok: response.ok, status: response.status });
+          if (response.status === 401 && state.kind !== "stopped") {
+            authLost("alive");
+          }
         },
         () => {
           if (!scope.signal.aborted) {
@@ -648,6 +673,10 @@ export function createStream(opts: StreamOptions): Stream {
       clearTimeout(current.timer);
     }
     inflight = null;
+    if (rejected && statusOf(error) === 401) {
+      authLost("digest");
+      return;
+    }
     if (!rejected) {
       unverified = false;
       drain();
