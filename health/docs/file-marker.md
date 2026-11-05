@@ -30,7 +30,7 @@ When the marker cannot be read, written or removed, `Set` logs the failure once 
 
 ## Degraded mode
 
-`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it. When that fails, the marker enters degraded mode and logs one warning with the folder, the error and the tmpfs mount to add. Callers do not need to branch on the result.
+`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that a marker already there opens for writing, without changing it. When either fails, the marker enters degraded mode and logs one warning with the path, the error and the fix: a tmpfs mount for the folder, or removing a marker that an earlier run as another user left behind. Callers do not need to branch on the result.
 
 In degraded mode:
 

@@ -57,9 +57,9 @@ case health.MarkerAbsent, health.MarkerUnreadable, health.MarkerDirUnavailable:
 | State | Meaning |
 | --- | --- |
 | `MarkerFresh` | The marker exists and, with a deadline armed, is inside it |
-| `MarkerStale` | The marker is older than the armed deadline, in a folder the app can write. Only reachable with `WithMaxAge` |
+| `MarkerStale` | The marker is older than the armed deadline, and the app can write it and its folder. Only reachable with `WithMaxAge` |
 | `MarkerAbsent` | No marker in a writable folder |
 | `MarkerUnreadable` | The stat failed for another reason, such as permissions or an I/O error |
-| `MarkerDirUnavailable` | Degraded mode. The folder cannot be written, so the marker is absent, unreadable or past a deadline nothing can refresh, and the probe treats this as healthy |
+| `MarkerDirUnavailable` | Degraded mode. The folder or the marker cannot be written, so the marker is absent, unreadable or past a deadline nothing can refresh, and the probe treats this as healthy |
 
 `RunProbe` and `ProbeCheck` are built on `Inspect`, so a process acting on `Inspect` and the container healthcheck reach the same verdict. Without `WithMaxAge`, a present marker is always `MarkerFresh`.

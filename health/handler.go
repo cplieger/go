@@ -65,9 +65,9 @@ func CheckHandler(checks ...Check) http.Handler {
 // Handler returns CheckHandler for one signal, s, with the reason "the app
 // reports itself unhealthy"; a nil s is unhealthy. With a *Marker it answers
 // 503 while the marker is absent, and always in degraded mode (an unwritable
-// marker directory, such as a read-only /tmp), where the `health` subcommand
-// reports healthy to avoid a restart loop. So it must not be the only liveness
-// probe of a service that may run read-only.
+// marker or marker directory, such as a read-only /tmp), where the `health`
+// subcommand reports healthy to avoid a restart loop. So it must not be the
+// only liveness probe of a service that may run read-only.
 func Handler(s Signal) http.Handler {
 	return CheckHandler(Check{Signal: s, Reason: reasonUnhealthy})
 }
