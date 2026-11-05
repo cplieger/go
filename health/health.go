@@ -174,11 +174,11 @@ func (m *Marker) Cleanup() {
 
 // CheckHealthy reports whether the marker file currently exists via a
 // strict os.Stat, one call per invocation. Unlike RunProbe/ProbeCheck,
-// it reports false (not healthy) in degraded mode: an HTTP consumer via
-// Handler deserves an honest signal rather than the restart-loop
-// avoidance the file-probe side needs.
+// it reports false in degraded mode whatever file is there, because Set
+// cannot change it: an HTTP consumer via Handler deserves an honest signal
+// rather than the restart-loop avoidance the probe needs.
 func (m *Marker) CheckHealthy() bool {
-	if m == nil {
+	if m == nil || m.degraded {
 		return false
 	}
 	_, err := os.Stat(m.path)
@@ -189,6 +189,37 @@ func (m *Marker) CheckHealthy() bool {
 // [Marker.CheckHealthy]. It inherits CheckHealthy's cost: one os.Stat
 // per call, not a field read.
 func (m *Marker) Healthy() bool { return m.CheckHealthy() }
+
+// Within returns a Signal for a marker os.Stat can read: healthy when d is
+// non-positive or the marker is no older than d, the comparison [WithMaxAge]
+// gives the probe, so a future modification time is fresh. Any stat error is
+// unhealthy. Pass the same [Lease.Duration] to both, so a marker in a writable
+// directory gets one verdict from the probe and the handler. In degraded mode
+// (an unwritable directory) it is unhealthy whatever file is there, as
+// CheckHealthy is, while the probe reports healthy. It costs one os.Stat per
+// call.
+func (m *Marker) Within(d time.Duration) Signal {
+	if m == nil || m.degraded {
+		return markerWithin{}
+	}
+	return markerWithin{path: m.path, d: d}
+}
+
+// markerWithin is the Signal Within returns; a nil or degraded marker leaves
+// path empty, which never stats.
+type markerWithin struct {
+	path string
+	d    time.Duration
+}
+
+func (w markerWithin) Healthy() bool {
+	info, err := os.Stat(w.path)
+	return err == nil && !stale(time.Since(info.ModTime()), w.d)
+}
+
+// stale is the lease rule the probe and Within share: a positive maxAge
+// that the marker's age exceeds.
+func stale(age, maxAge time.Duration) bool { return maxAge > 0 && age > maxAge }
 
 // ProbeOption configures the probe-side health decision (RunProbe and
 // ProbeCheck). Without options the probe checks marker existence only.
@@ -289,8 +320,9 @@ type MarkerState int
 const (
 	// MarkerFresh is a marker present and, when a deadline is armed, inside it.
 	MarkerFresh MarkerState = iota
-	// MarkerStale is a marker present but older than the armed deadline. Only
-	// reachable with WithMaxAge; without it a present marker is always fresh.
+	// MarkerStale is a marker present but older than the armed deadline, in a
+	// directory the app can write. Only reachable with WithMaxAge; without it a
+	// present marker is always fresh.
 	MarkerStale
 	// MarkerAbsent is a marker that does not exist in a usable directory.
 	MarkerAbsent
@@ -298,7 +330,8 @@ const (
 	// absence (permission, symlink loop, I/O) in a usable directory.
 	MarkerUnreadable
 	// MarkerDirUnavailable is degraded mode: the marker's directory cannot be
-	// written, so the app has no way to signal through the filesystem at all.
+	// written, so the app has no way to signal through the filesystem at all:
+	// the marker is absent, unreadable or past a deadline nothing can refresh.
 	// The probe treats this as healthy; see RunProbe.
 	MarkerDirUnavailable
 )
@@ -329,8 +362,9 @@ type Freshness struct {
 	// Err is the underlying stat or directory-probe error for MarkerUnreadable
 	// and MarkerDirUnavailable, nil otherwise.
 	Err error
-	// Age is how long ago the marker was last written. Meaningful only for
-	// MarkerFresh and MarkerStale; zero for every state with no marker to age.
+	// Age is how long ago the marker was last written: set for MarkerFresh,
+	// MarkerStale, and MarkerDirUnavailable when a stale marker was found;
+	// zero for every state with no marker to age.
 	Age time.Duration
 	// MaxAge is the armed deadline, or 0 when none was armed.
 	MaxAge time.Duration
@@ -375,11 +409,16 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 	info, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
 	if statErr == nil {
 		age := time.Since(info.ModTime())
-		state := MarkerFresh
-		if cfg.maxAge > 0 && age > cfg.maxAge {
-			state = MarkerStale
+		if !stale(age, cfg.maxAge) {
+			return Freshness{State: MarkerFresh, Age: age, MaxAge: cfg.maxAge}
 		}
-		return Freshness{State: state, Age: age, MaxAge: cfg.maxAge}
+		// A stale marker nothing can refresh, in an unwritable directory, is
+		// degraded mode: failing it would restart-loop a container a restart
+		// cannot fix.
+		if dirErr := probeHealthDir(path); dirErr != nil {
+			return Freshness{State: MarkerDirUnavailable, Age: age, MaxAge: cfg.maxAge, Err: dirErr}
+		}
+		return Freshness{State: MarkerStale, Age: age, MaxAge: cfg.maxAge}
 	}
 	// A directory nothing can write to explains absence without implicating
 	// app health, so the dir probe runs before classifying the stat error.
@@ -396,8 +435,8 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 // 0 if the marker is present (and fresh, when WithMaxAge is armed) or
 // the marker directory is unwritable (degraded mode: the long-running
 // process cannot signal through the filesystem, so the probe falls
-// back to "alive"). It exits 1 when the marker is absent from a
-// writable directory or stale past an armed deadline; the stderr
+// back to "alive"). It exits 1 when the marker, in a writable
+// directory, is absent or stale past an armed deadline; the stderr
 // diagnostic names the underlying stat failure when the cause is
 // something other than absence.
 func RunProbe(path string, opts ...ProbeOption) {

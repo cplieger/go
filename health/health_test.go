@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -358,6 +359,56 @@ func TestHealthMarker_HealthyDegraded(t *testing.T) {
 
 	if m.Healthy() {
 		t.Error("Healthy() = true in degraded mode, want false (strict os.Stat)")
+	}
+	if m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+		t.Error("absent marker in degraded mode: want Within unhealthy and the probe healthy")
+	}
+}
+
+// TestHealthMarker_DegradedWithALeftoverMarker: a marker left in an
+// unwritable directory is one Set cannot change, so the in-process signals
+// are unhealthy whatever its age, and the probe stays healthy even past its
+// lease rather than restart-looping the container.
+func TestHealthMarker_DegradedWithALeftoverMarker(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ".healthy")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	m := NewMarker(path)
+	if !m.degraded {
+		t.Skip("test environment bypasses directory mode; skipping")
+	}
+	inProcessUnhealthy := func(age string) {
+		t.Helper()
+		if m.CheckHealthy() || m.Healthy() || m.Within(time.Hour).Healthy() || m.Within(0).Healthy() {
+			t.Errorf("%s leftover in degraded mode: want CheckHealthy, Healthy and Within unhealthy", age)
+		}
+		if rec := serve(t, Handler(m)); rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s leftover in degraded mode: Handler = %d, want 503", age, rec.Code)
+		}
+	}
+	inProcessUnhealthy("fresh")
+	if ProbeCheck(path) != 0 || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+		t.Error("fresh leftover in degraded mode: want the probe healthy")
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	inProcessUnhealthy("stale")
+	if got := Inspect(path, WithMaxAge(time.Hour)); got.State != MarkerDirUnavailable || got.Age < time.Hour || got.Err == nil {
+		t.Errorf("stale leftover in degraded mode: Inspect = %+v, want MarkerDirUnavailable with its age and the directory error", got)
+	}
+	if ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+		t.Error("stale leftover in degraded mode: want a healthy probe, not a restart loop")
 	}
 }
 
