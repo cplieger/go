@@ -41,7 +41,7 @@ type Result struct {
 
 A nil error means the data reached its final path. The write either fully succeeded, or its rename completed while a directory sync failed, for example with an `EIO` from a failing disk. In that case the data is at the path, and the write logs the sync failure at `Warn`. `Result.Durable` tells the two outcomes apart, so a caller that cares about crash durability reads it rather than decoding error types.
 
-On Windows `Durable` is true only on NTFS, when both the temp sync and the flush after the rename succeeded. A failed flush is logged at `Warn`. On ReFS, FAT, exFAT and network shares every write reports `Durable == false`, because nothing documents that a flush persists a rename there. The package logs that once per volume, at `Info`, rather than warning on every write.
+On Windows `Durable` is true only on a local NTFS volume, when both the temp sync and the flush after the rename succeeded. A failed flush is logged at `Warn`. On ReFS, FAT, exFAT and network shares every write reports `Durable == false`, because nothing documents that a flush persists a rename there. A share or mapped drive reports the server's filesystem name, often NTFS, so the package asks whether the volume is remote rather than trusting the name. The package logs that once per volume, at `Info`, rather than warning on every write.
 
 A caller that needs strict durability treats `Durable == false` as a failure to act on, by retrying or alerting. A caller that only needs atomicity can ignore it. A non-nil error always means the data did not reach its final path.
 

@@ -20,10 +20,21 @@ func TestReparsePointRefusal(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "real"), []byte("old"), 0o644); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
+		return root, dir
+	}
+	withSymlink := func(t *testing.T) (root *os.Root, dir string) {
+		t.Helper()
+		root, dir = setup(t)
+		symlinkOrSkip(t, filepath.Join(dir, "real"), filepath.Join(dir, "link"))
+		return root, dir
+	}
+	// A junction needs no privilege, so its cases never skip.
+	withJunction := func(t *testing.T) (root *os.Root, dir string) {
+		t.Helper()
+		root, dir = setup(t)
 		if err := os.Mkdir(filepath.Join(dir, "realdir"), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		symlinkOrSkip(t, filepath.Join(dir, "real"), filepath.Join(dir, "link"))
 		junction := filepath.Join(dir, "junction")
 		if out, err := exec.Command("cmd", "/c", "mklink", "/J", junction, filepath.Join(dir, "realdir")).CombinedOutput(); err != nil {
 			t.Fatalf("mklink /J: %v: %s", err, out)
@@ -33,7 +44,7 @@ func TestReparsePointRefusal(t *testing.T) {
 
 	t.Run("OpenRegular_symlink", func(t *testing.T) {
 		t.Parallel()
-		_, dir := setup(t)
+		_, dir := withSymlink(t)
 		f, _, err := OpenRegular(filepath.Join(dir, "link"))
 		if !errors.Is(err, ErrSymlinkTarget) {
 			t.Fatalf("OpenRegular(symlink) = %v, want ErrSymlinkTarget", err)
@@ -45,7 +56,7 @@ func TestReparsePointRefusal(t *testing.T) {
 
 	t.Run("OpenRegular_junction", func(t *testing.T) {
 		t.Parallel()
-		_, dir := setup(t)
+		_, dir := withJunction(t)
 		f, _, err := OpenRegular(filepath.Join(dir, "junction"))
 		if !errors.Is(err, ErrNotRegular) {
 			t.Fatalf("OpenRegular(junction) = %v, want ErrNotRegular", err)
@@ -57,7 +68,7 @@ func TestReparsePointRefusal(t *testing.T) {
 
 	t.Run("OpenRegularInRootNoFollow_symlink", func(t *testing.T) {
 		t.Parallel()
-		root, _ := setup(t)
+		root, _ := withSymlink(t)
 		if _, _, err := OpenRegularInRootNoFollow(root, "link"); !errors.Is(err, ErrSymlinkTarget) {
 			t.Fatalf("OpenRegularInRootNoFollow(symlink) = %v, want ErrSymlinkTarget", err)
 		}
@@ -65,7 +76,7 @@ func TestReparsePointRefusal(t *testing.T) {
 
 	t.Run("WriteFile_symlink_target", func(t *testing.T) {
 		t.Parallel()
-		_, dir := setup(t)
+		_, dir := withSymlink(t)
 		link := filepath.Join(dir, "link")
 		if _, err := WriteFile(t.Context(), link, []byte("new")); !errors.Is(err, ErrSymlinkTarget) {
 			t.Fatalf("WriteFile(symlink) = %v, want ErrSymlinkTarget", err)
@@ -80,7 +91,7 @@ func TestReparsePointRefusal(t *testing.T) {
 
 	t.Run("WriteFileInRoot_junction_target", func(t *testing.T) {
 		t.Parallel()
-		root, dir := setup(t)
+		root, dir := withJunction(t)
 		if _, err := WriteFileInRoot(t.Context(), root, "junction", []byte("new")); !errors.Is(err, ErrNotRegular) {
 			t.Fatalf("WriteFileInRoot(junction) = %v, want ErrNotRegular", err)
 		}

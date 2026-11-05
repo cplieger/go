@@ -35,7 +35,18 @@ var rootRename = (*os.Root).Rename
 // to report a durable write, so each is logged once per process.
 var nonDurableVolumes sync.Map
 
-var procGetVolumeInformationByHandleW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetVolumeInformationByHandleW")
+var (
+	procGetVolumeInformationByHandleW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetVolumeInformationByHandleW")
+	procNtQueryVolumeInformationFile  = syscall.NewLazyDLL("ntdll.dll").NewProc("NtQueryVolumeInformationFile")
+)
+
+// FileFsDeviceInformation and its FILE_REMOTE_DEVICE characteristic, set for
+// a volume on a remote file system such as SMB
+// (https://learn.microsoft.com/openspecs/windows_protocols/ms-fscc/616b66d5-b335-4e1c-8f87-b4a55e8d3e4a).
+const (
+	fileFsDeviceInformation = 4
+	fileRemoteDevice        = 0x10
+)
 
 // closeTempBeforeRename keeps the temp open: commitTempInRoot flushes the
 // published file through this handle, and the root's handle shares DELETE,
@@ -103,8 +114,8 @@ func replaceBusy(err error) bool {
 
 // publishDurable flushes the just-published file through f and reports
 // whether the write is durable. A failed flush or volume query is logged at
-// Warn; a filesystem durableOn refuses is logged at Info once per volume,
-// since every write there reports the same.
+// Warn; a volume durableOn refuses is logged at Info once per volume, since
+// every write there reports the same.
 func publishDurable(root *os.Root, f *os.File, name string, c *cfg) bool {
 	if err := f.Sync(); err != nil {
 		c.logger.Warn("filesafe: flush after the rename failed; write is not durable",
@@ -117,21 +128,28 @@ func publishDurable(root *os.Root, f *os.File, name string, c *cfg) bool {
 			"root", root.Name(), "path", name, "error", err)
 		return false
 	}
-	if durableOn(fsName) {
+	remote, err := volumeRemote(f)
+	if err != nil {
+		c.logger.Warn("filesafe: device query failed; write is not durable",
+			"root", root.Name(), "path", name, "error", err)
+		return false
+	}
+	if durableOn(fsName, remote) {
 		return true
 	}
 	if _, logged := nonDurableVolumes.LoadOrStore(serial, struct{}{}); !logged {
 		c.logger.Info("filesafe: writes on this volume report Durable=false",
-			"root", root.Name(), "filesystem", fsName)
+			"root", root.Name(), "filesystem", fsName, "remote", remote)
 	}
 	return false
 }
 
-// durableOn reports whether a file flush on the filesystem named fsName
-// persists the file's rename. Only NTFS documents that it does ([MS-FSA]
-// 2.1.5.7 and its note 80), so ReFS, FAT, exFAT and network redirectors
-// report false.
-func durableOn(fsName string) bool { return fsName == "NTFS" }
+// durableOn reports whether a file flush persists the file's rename. Only
+// local NTFS documents that it does ([MS-FSA] 2.1.5.7 and its note 80). A
+// remote volume reports the server's filesystem name, often NTFS (Samba's
+// default fstype), while its flush reaches only the file on the server, so
+// it reports false, as do ReFS, FAT and exFAT.
+func durableOn(fsName string, remote bool) bool { return !remote && fsName == "NTFS" }
 
 // volumeFilesystem returns the filesystem name and the volume serial number
 // of the volume holding f
@@ -148,6 +166,25 @@ func volumeFilesystem(f *os.File) (fsName string, serial uint32, err error) {
 		return "", 0, callErr
 	}
 	return syscall.UTF16ToString(buf[:]), serial, nil
+}
+
+// volumeRemote reports whether the volume holding f is on a remote file
+// system, a mapped drive included
+// (https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryvolumeinformationfile).
+func volumeRemote(f *os.File) (bool, error) {
+	if err := procNtQueryVolumeInformationFile.Find(); err != nil {
+		return false, err
+	}
+	var iosb struct{ status, information uintptr }
+	var info struct{ deviceType, characteristics uint32 }
+	r, _, _ := procNtQueryVolumeInformationFile.Call(f.Fd(),
+		uintptr(unsafe.Pointer(&iosb)), uintptr(unsafe.Pointer(&info)),
+		unsafe.Sizeof(info), fileFsDeviceInformation)
+	// An NTSTATUS is 32 bits; the register's upper half is not part of it.
+	if status := r & 0xffffffff; status != 0 {
+		return false, fmt.Errorf("NtQueryVolumeInformationFile(FileFsDeviceInformation): NTSTATUS %#x", status)
+	}
+	return info.characteristics&fileRemoteDevice != 0, nil
 }
 
 // refuseReadOnlyTarget refuses a target with the read-only attribute (mode

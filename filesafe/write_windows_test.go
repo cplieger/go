@@ -223,3 +223,39 @@ func TestFilesafeReaderDoesNotBlockWrite(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoteVolumeNotDurable writes through the loopback administrative share
+// of a local NTFS directory. The share reports the server volume's NTFS, but
+// a flush over SMB reaches only the file on the server, so the write must
+// report Durable false. A missing share skips off CI and fails on it.
+func TestRemoteVolumeNotDurable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	vol := filepath.VolumeName(dir)
+	if len(vol) != 2 || vol[1] != ':' {
+		t.Fatalf("TempDir %q is not on a drive letter", dir)
+	}
+	unc := `\\localhost\` + vol[:1] + `$` + dir[len(vol):]
+	if _, err := os.Stat(unc); err != nil {
+		if os.Getenv("CI") == "" {
+			t.Skipf("loopback administrative share unreachable: %v", err)
+		}
+		t.Fatalf("Stat(%q) = %v, want the runner's loopback administrative share", unc, err)
+	}
+	if fsName, _ := volumeInfo(t, unc); fsName != "NTFS" {
+		t.Fatalf("share %q reports filesystem %q; the test needs NTFS to isolate the remote check", unc, fsName)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	res, err := WriteFile(t.Context(), filepath.Join(unc, "target"), []byte("new"))
+	if err != nil {
+		t.Fatalf("WriteFile over the share = %v, want nil", err)
+	}
+	if res.Durable {
+		t.Error("Durable = true over an SMB share, want false")
+	}
+	assertContent(t, target, "new")
+	assertNoTempLeak(t, dir)
+}

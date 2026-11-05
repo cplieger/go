@@ -8,15 +8,22 @@ import (
 	"testing"
 )
 
-// TestDurableOn pins that only NTFS, whose file flush persists the file's
-// directory entry ([MS-FSA] 2.1.5.7 and its note 80), reports a durable write.
+// TestDurableOn pins that only local NTFS, whose file flush persists the
+// file's directory entry ([MS-FSA] 2.1.5.7 and its note 80), reports a
+// durable write; a remote volume never does, whatever name it reports.
 func TestDurableOn(t *testing.T) {
 	t.Parallel()
-	for fsName, want := range map[string]bool{
-		"NTFS": true, "ReFS": false, "FAT": false, "FAT32": false, "exFAT": false, "": false,
+	type volume struct {
+		fsName string
+		remote bool
+	}
+	for v, want := range map[volume]bool{
+		{"NTFS", false}: true, {"ReFS", false}: false, {"FAT", false}: false,
+		{"FAT32", false}: false, {"exFAT", false}: false, {"", false}: false,
+		{"NTFS", true}: false, {"ReFS", true}: false,
 	} {
-		if got := durableOn(fsName); got != want {
-			t.Errorf("durableOn(%q) = %t, want %t", fsName, got, want)
+		if got := durableOn(v.fsName, v.remote); got != want {
+			t.Errorf("durableOn(%q, remote=%t) = %t, want %t", v.fsName, v.remote, got, want)
 		}
 	}
 }
