@@ -41,10 +41,10 @@ func FuzzParseProcStatusRSS_ValueAmongNoise(f *testing.F) {
 
 // FuzzParseProcLimit_ValueAmongNoise checks that a known "Max open files"
 // line placed first is parsed to its soft-limit field regardless of arbitrary
-// trailing /proc/self/limits noise, and exercises the discarded-error path of
-// strconv.ParseInt. n is bounded to uint32 so the value is always a valid
-// non-negative int64; the parser returns at the FIRST "Max open files" match,
-// so the leading known line fixes the expected result.
+// trailing /proc/self/limits noise: the parser returns at the FIRST "Max open
+// files" match, so the leading known line fixes the expected result. n is a
+// uint32 so it round-trips through float64 exactly. TestParseProcLimit covers
+// the malformed values.
 func FuzzParseProcLimit_ValueAmongNoise(f *testing.F) {
 	f.Add(uint32(1024), "Max locked memory  0  0  bytes\n")
 	f.Add(uint32(0), "")

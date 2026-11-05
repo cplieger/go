@@ -179,8 +179,9 @@ func procDegradedTransition(s *atomic.Uint32, mask uint32) bool {
 }
 
 // collectProcessMetrics gathers the start time and the /proc readings. Each
-// /proc file is read once per scrape; the first scrape also reads
-// /proc/self/stat and /proc/stat once more to resolve the start time.
+// scrape reads /proc/self/stat, status, limits and net/netstat once and lists
+// /proc/self/fd; the first scrape also reads /proc/self/stat and /proc/stat to
+// resolve the start time, and /proc/self/auxv for USER_HZ.
 func collectProcessMetrics(d *processMetricsData) {
 	start := resolvedProcStartTime()
 	if start < 0 {

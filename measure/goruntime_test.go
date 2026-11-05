@@ -334,17 +334,33 @@ func TestProcessFamiliesOfWireEachValue(t *testing.T) {
 		t.Errorf("go_gc_duration_seconds = %+v, want count 6, sum 2 and quantiles %v", sum, wantQ)
 	}
 
-	failed := processMetricsData{cpuSeconds: -1, vsize: -1, netRx: -1, netTx: -1, maxFDs: -1, maxVsize: -1, openFDs: -1}
-	served := map[string]bool{}
-	for _, f := range processFamiliesOf(g, &failed) {
-		served[f.Name] = true
-	}
-	for _, name := range []string{pmCPUTotal, pmVirtualBytes, pmNetReceive, pmNetTransmit, pmResidentBytes, pmMaxFDs, pmVirtualMaxBytes, pmOpenFDs} {
-		if served[name] {
-			t.Errorf("%s is served after its read failed", name)
+	// Fail one /proc read at a time, so each family is gated by its own read.
+	procNames := []string{pmCPUTotal, pmResidentBytes, pmOpenFDs, pmMaxFDs, pmVirtualBytes, pmVirtualMaxBytes, pmNetReceive, pmNetTransmit}
+	for _, tc := range []struct {
+		fail func(*processMetricsData)
+		gone []string
+	}{
+		{func(d *processMetricsData) { d.cpuSeconds = -1 }, []string{pmCPUTotal}},
+		{func(d *processMetricsData) { d.rss = 0 }, []string{pmResidentBytes}},
+		{func(d *processMetricsData) { d.openFDs = -1 }, []string{pmOpenFDs}},
+		{func(d *processMetricsData) { d.maxFDs = -1 }, []string{pmMaxFDs}},
+		{func(d *processMetricsData) { d.vsize = -1 }, []string{pmVirtualBytes}},
+		{func(d *processMetricsData) { d.maxVsize = -1 }, []string{pmVirtualMaxBytes}},
+		{func(d *processMetricsData) { d.netRx, d.netTx = -1, -1 }, []string{pmNetReceive, pmNetTransmit}},
+	} {
+		one := d
+		tc.fail(&one)
+		served := map[string]bool{}
+		for _, f := range processFamiliesOf(g, &one) {
+			served[f.Name] = true
 		}
-	}
-	if !served[pmStartTime] || !served[pmUptime] || !served[pmGCDuration] {
-		t.Error("a failed /proc read dropped a family that does not read /proc")
+		for _, name := range procNames {
+			if want := !slices.Contains(tc.gone, name); served[name] != want {
+				t.Errorf("with %v failed, %s served = %v, want %v", tc.gone, name, served[name], want)
+			}
+		}
+		if !served[pmStartTime] || !served[pmUptime] || !served[pmGCDuration] {
+			t.Errorf("with %v failed, a family that does not read /proc was dropped", tc.gone)
+		}
 	}
 }

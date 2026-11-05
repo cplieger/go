@@ -689,9 +689,9 @@ func TestWriteProcess_LinuxFDsEmitted(t *testing.T) {
 	if !gotMax {
 		t.Fatal("missing process_max_fds line")
 	}
-	// process_max_fds is either a positive integer (a finite limit) or the
-	// unlimited sentinel rendered as float64(math.MaxUint64)
-	// ("1.8446744073709552e+19"), so parse it as a float rather than an int.
+	// process_max_fds is a positive integer for a finite limit, or
+	// float64(math.MaxUint64) ("1.8446744073709552e+19") for an unlimited one,
+	// so parse it as a float rather than an int.
 	if n, err := strconv.ParseFloat(maxVal, 64); err != nil || n <= 0 {
 		t.Errorf("process_max_fds = %q, want a positive number", maxVal)
 	}
