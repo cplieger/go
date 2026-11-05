@@ -1,7 +1,6 @@
 package measure
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -20,14 +19,16 @@ type Desc struct {
 	err    error
 	owner  *Collector // set by NewCollector; nil until then
 	name   string     // prefixed by the registry at registration
+	base   string     // the declared name, never written after construction
 	help   string
 	typ    Type
 	labels []string
 }
 
 // NewGaugeDesc declares a gauge family for a [Collector]. Unlike the
-// instruments, a collector family takes any number of labels. An invalid,
-// reserved or duplicate name is captured and surfaces at [Registry.Register].
+// instruments, a collector family takes any number of labels. An invalid
+// metric name, or an invalid, reserved or duplicate label name, is captured and
+// surfaces at [Registry.Register].
 func NewGaugeDesc(name, help string, labels []string) *Desc {
 	return newDesc(TypeGauge, name, help, labels)
 }
@@ -45,7 +46,7 @@ func newDesc(typ Type, name, help string, labels []string) *Desc {
 	if err == nil {
 		err = lerr
 	}
-	return &Desc{err: err, name: name, help: sanitizeHelp(name, help), typ: typ, labels: owned}
+	return &Desc{err: err, name: name, base: name, help: sanitizeHelp(name, help), typ: typ, labels: owned}
 }
 
 // Collector emits families whose values are read when Prometheus scrapes, not
@@ -87,6 +88,8 @@ func (c *Collector) adopt(descs []*Desc) error {
 		switch {
 		case d == nil:
 			return errors.New("measure: NewCollector called with a nil desc")
+		case d.typ != TypeGauge && d.typ != TypeCounter:
+			return errors.New("measure: desc was not built with NewGaugeDesc or NewCounterDesc")
 		case d.err != nil:
 			return d.err
 		case seen[d.name]:
@@ -113,6 +116,9 @@ func (c *Collector) registerInto(r *Registry) error {
 	if c.err != nil {
 		return c.err
 	}
+	if c.collect == nil || len(c.descs) == 0 {
+		return errors.New("measure: Collector was not built with NewCollector")
+	}
 	if !c.registered.CompareAndSwap(false, true) {
 		return errors.New("measure: collector already registered")
 	}
@@ -131,6 +137,7 @@ func (c *Collector) registerInto(r *Registry) error {
 		d.name = names[i]
 	}
 	r.collectors = append(r.collectors, c)
+	r.collectorFamilies += len(c.descs)
 	return nil
 }
 
@@ -160,9 +167,11 @@ func (e *Emitter) Emit(d *Desc, value float64, labelValues ...string) {
 	}
 	switch {
 	case d == nil || d.owner != e.c:
+		// Another collector's desc may be renamed by its own registration right
+		// now, so only its declared name is read.
 		name := "<nil>"
 		if d != nil {
-			name = d.name
+			name = d.base
 		}
 		e.problems[problemKey{name, problemUndeclared}]++
 		return
@@ -270,33 +279,36 @@ func (c *Collector) run(ctx context.Context) ([]Family, error) {
 }
 
 // logTransitions logs a problem once when a scrape first sees it and once
-// when a later scrape no longer does, never on every scrape.
+// when a later scrape no longer does, never on every scrape. It logs after
+// releasing c.mu, so a log handler that scrapes the registry cannot deadlock.
 func (c *Collector) logTransitions(seen map[problemKey]int) {
+	var appeared, cleared []problemKey
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k, n := range seen {
+	for k := range seen {
 		if !c.active[k] {
 			c.active[k] = true
-			slog.Warn("measure: collector problem", "family", k.family, "problem", k.kind.String(), "count", n)
+			appeared = append(appeared, k)
 		}
 	}
 	for k := range c.active {
 		if _, still := seen[k]; !still {
 			delete(c.active, k)
-			slog.Info("measure: collector problem cleared", "family", k.family, "problem", k.kind.String())
+			cleared = append(cleared, k)
 		}
+	}
+	c.mu.Unlock()
+	for _, k := range appeared {
+		slog.Warn("measure: collector problem", "family", k.family, "problem", k.kind.String(), "count", seen[k])
+	}
+	for _, k := range cleared {
+		slog.Info("measure: collector problem cleared", "family", k.family, "problem", k.kind.String())
 	}
 }
 
 // compareLabelValues orders samples by their label values, as the labeled
 // instruments order their series.
 func compareLabelValues(a, b Sample) int {
-	for i := range min(len(a.Labels), len(b.Labels)) {
-		if c := strings.Compare(a.Labels[i].Value, b.Labels[i].Value); c != 0 {
-			return c
-		}
-	}
-	return cmp.Compare(len(a.Labels), len(b.Labels))
+	return slices.CompareFunc(a.Labels, b.Labels, func(x, y Label) int { return strings.Compare(x.Value, y.Value) })
 }
 
 // pageFamily renders a collector family into the exposition IR: labels sorted
@@ -317,12 +329,12 @@ func pageFamily(f *Family) (metricFamily, bool) {
 	return metricFamily{name: f.Name, typ: typ, help: f.Help, samples: samples}, true
 }
 
-// renderLabels builds the sorted, spec-escaped label content of one sample.
+// renderLabels builds the spec-escaped label content of one sample, sorted by
+// label name. It sorts labels in place.
 func renderLabels(labels []Label) string {
-	sorted := slices.Clone(labels)
-	slices.SortFunc(sorted, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(labels, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
 	var sb strings.Builder
-	for i, l := range sorted {
+	for i, l := range labels {
 		if i > 0 {
 			sb.WriteByte(',')
 		}

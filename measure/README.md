@@ -94,6 +94,8 @@ func instrument(route string, next http.Handler) http.Handler {
 }
 ```
 
+Label by the route you registered, never by the raw request path. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
+
 To serve values read when Prometheus scrapes, declare their families and register a collector. Every scrape calls the function with the request's context:
 
 ```go
@@ -107,8 +109,6 @@ func init() {
 	}, depth))
 }
 ```
-
-Label by the route you registered, never by the raw request path. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
 
 ## API
 
@@ -135,7 +135,7 @@ A metric that carries a construction error records nothing and never reaches the
 `Handler` serves Prometheus text exposition format 0.0.4, the plain-text format every Prometheus server can scrape.
 
 - Label values escape only `\`, `"` and newline. HELP text escapes only `\` and newline.
-- Invalid UTF-8 in a label value or HELP text is replaced with U+FFFD and never panics. A label value logs one warning per new series, and HELP text one warning per metric.
+- Invalid UTF-8 in a label value or HELP text is replaced with U+FFFD and never panics. On an instrument, a label value logs one warning per new series, and HELP text one warning per metric. A collector logs it once when it appears and once when it clears.
 - Every histogram has a `+Inf` bucket equal to its `_count`.
 - Whole numbers render as bare integers such as `42`, other values in the shortest form that reads back exactly, and non-finite values as `+Inf`, `-Inf` and `NaN`.
 
@@ -155,7 +155,7 @@ measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page giv
 
 ## Documentation
 
-- [How measure works](docs/how-it-works.md) covers each metric type, the registry, label values, HTTP instrumentation, process metrics and the low-level writers.
+- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather`, label values, HTTP instrumentation, process metrics and the low-level writers.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 
 ## Credits

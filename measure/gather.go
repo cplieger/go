@@ -80,7 +80,7 @@ func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 	r.mu.RLock()
 	fams := make([]Family, 0,
 		len(r.labeledCounters)+len(r.counters)+len(r.labeledGauges)+
-			len(r.gauges)+len(r.histograms)+len(r.labeledHistograms)+len(processFamilyNames))
+			len(r.gauges)+len(r.histograms)+len(r.labeledHistograms)+r.collectorFamilies+len(processFamilyNames))
 	for _, lc := range r.labeledCounters {
 		fams = append(fams, lc.gather())
 	}
@@ -182,8 +182,8 @@ func histogramValue(h *Histogram) *HistogramValue {
 	return &HistogramValue{Buckets: buckets, Count: uint64(max(count, 0)), Sum: sum}
 }
 
-// processGather reads the process families as structured values. It lists the
-// same families, under the same conditions, as processFamilies.
+// processGather reads the process families as structured values; the page
+// renders this same list (processFamilies).
 func processGather() []Family {
 	var d processMetricsData
 	collectProcessMetrics(&d)
@@ -204,11 +204,7 @@ func processGather() []Family {
 	if d.hasOpenFDs() {
 		fams = append(fams, scalarFamily(pmOpenFDs, helpOpenFDs, TypeGauge, float64(d.openFDs)))
 		if d.hasMaxFDs() {
-			maxFDs := float64(d.maxFDs)
-			if d.maxFDs == unlimitedMaxFDs {
-				maxFDs = float64(math.MaxUint64)
-			}
-			fams = append(fams, scalarFamily(pmMaxFDs, helpMaxFDs, TypeGauge, maxFDs))
+			fams = append(fams, scalarFamily(pmMaxFDs, helpMaxFDs, TypeGauge, maxFDsValue(d.maxFDs)))
 		}
 	}
 	return fams

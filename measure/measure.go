@@ -86,6 +86,7 @@ type Registry struct {
 	histograms        []*Histogram
 	labeledHistograms []*LabeledHistogram
 	collectors        []*Collector
+	collectorFamilies int // descs across collectors, for slice capacities
 	mu                sync.RWMutex
 }
 
@@ -179,10 +180,13 @@ var errNilMetric = errors.New("measure: Register called with nil metric")
 
 // Register adds a metric to the registry. It returns the error the metric
 // captured at construction (invalid metric name, invalid/reserved/duplicate
-// label name, more than 8 labels, bad histogram buckets), an error when the
+// label name, more than 8 labels on a labeled instrument, bad histogram buckets), an error when the
 // metric is already registered, an error when the metric's exposition
 // family name collides with an already-registered one, or an error when m is
-// nil. On error the metric is not attached and the registry is unchanged.
+// nil. A collector also returns the errors NewCollector captured (no descs, a
+// nil desc, a nil collect, a repeated family name, a desc another collector
+// holds, or a desc's invalid name or label). On error the metric is not
+// attached and the registry is unchanged.
 // After a family-name collision the metric itself is left unregistered and
 // intact, so it can still be registered with a different registry (or with
 // this one once the colliding name is freed); a construction error is

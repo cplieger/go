@@ -40,7 +40,7 @@ A histogram uses `DefaultBuckets` unless you pass `WithBuckets`. Both presets re
 
 `Register(m)` accepts any of the six metric types and a collector. It returns an error in each of these cases:
 
-- The metric captured a construction error, described in the next section.
+- The metric captured a construction error, described in [Construction errors](#construction-errors).
 - The metric is already registered.
 - The metric's name collides with a registered metric or with a process metric name. A histogram also claims its `_bucket`, `_sum` and `_count` names.
 - The metric is nil.
@@ -54,9 +54,9 @@ On an error the metric is not attached and the registry is unchanged. A metric r
 A collector serves values your code reads when Prometheus scrapes, such as rows in a store, the age of a file or the state of a device, instead of values recorded as they happen.
 
 - Declare each family with `NewGaugeDesc(name, help, labels)` or `NewCounterDesc(name, help, labels)`. A collector family takes any number of labels. A collector counter holds a `float64`, because it reports a total read elsewhere.
-- `NewCollector(collect, descs...)` builds the collector, and `Register` adds it. Registration prefixes each family name and reserves it like any other metric's, so a collector family cannot take a name another metric or a process metric holds. No descs, a nil desc, a nil `collect`, two descs with one name and a desc another collector holds are construction errors that surface at `Register`.
-- Every scrape and every `Gather` calls `collect` with that request's context, and `collect` calls `Emitter.Emit(desc, value, labelValues...)` for each sample. Two concurrent scrapes call `collect` concurrently, each with its own `Emitter`, so guard anything `collect` shares. An `Emit` after `collect` returned records nothing.
-- A sample for a desc the collector did not declare, with the wrong number of label values, with a label set already emitted in that scrape, or with a negative or NaN counter value is dropped. The first one stands for a repeated label set. The scrape still answers with the samples that survived, and `Gather` returns the drops as an error.
+- `NewCollector(collect, descs...)` builds the collector, and `Register` adds it. Registration prefixes each family name and reserves it like any other metric's, so a collector family cannot take a name another metric or a process metric holds. No descs, a nil desc, a nil `collect`, two descs with one name and a desc another collector holds are construction errors that surface at `Register`, and so are a zero `Collector` or `Desc` not built by their constructors.
+- Every scrape and every `Gather` calls `collect` with that request's context, and `collect` calls `Emitter.Emit(desc, value, labelValues...)` for each sample. Two concurrent scrapes call `collect` concurrently, each with its own `Emitter`, so guard anything `collect` shares. An `Emit` after `collect` returned records nothing. The scrape waits for `collect`, so return promptly once `ctx` is done; a panic in `collect` fails that scrape.
+- A sample for a desc the collector did not declare, with the wrong number of label values, with a label set already emitted in that scrape, or with a negative or NaN counter value is dropped. The first one stands for a repeated label set. Label values are repaired before that check, so two raw values that repair to the same string are one label set, and the second is dropped. The scrape still answers with the samples that survived, and `Gather` returns the drops as an error.
 - A drop logs one warning through `log/slog` when a scrape first sees it, naming the family and the problem, and one info line when a later scrape no longer does. A problem present on every scrape logs once. A family emitting 1,000 or more series, and invalid UTF-8 in a label value, which is repaired with U+FFFD, follow the same rule without dropping anything.
 - The page lists collector families after the instruments and before the process metrics, in registration order, with samples sorted by label values. A family with no samples is left off the page.
 
@@ -127,6 +127,6 @@ Recording and scraping are safe to run from many goroutines at once, and both ar
 
 ## Low-level writers
 
-`WriteCounter`, `WriteGauge`, `WriteLabeledCounter`, `WriteLabeledGauge`, `WriteHistogram`, `WriteLabeledHistogram` and `WriteProcess` append one metric, or the process metrics, to a `*strings.Builder` in the same format `Handler` serves. Use them to build a custom handler. A metric carrying a construction error writes nothing.
+`WriteCounter`, `WriteGauge`, `WriteLabeledCounter`, `WriteLabeledGauge`, `WriteHistogram`, `WriteLabeledHistogram` and `WriteProcess` append one metric, or the process metrics, to a `*strings.Builder` in the same format `Handler` serves. Use them to build a custom handler. A metric carrying a construction error writes nothing. A collector has no writer: only `Handler` serves it and `Gather` reads it.
 
 Finish every `Register` and `MustRegister` call before a custom handler built on these writers starts serving. The writers read a metric's name without the registry's lock, and registration sets the prefixed name.

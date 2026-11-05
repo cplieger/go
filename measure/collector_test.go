@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // staticCollector returns a collector that emits the same samples on every run.
@@ -31,7 +34,7 @@ func TestCollectorServesItsFamiliesOnThePage(t *testing.T) {
 	r := NewRegistry("app")
 	queue := NewGaugeDesc("queue_depth", "Items waiting", []string{"queue"})
 	done := NewCounterDesc("jobs_done_total", "Jobs finished", nil)
-	r.MustRegister(staticCollector(func(e *Emitter) {
+	r.MustRegister(NewGauge("instrument", "h"), staticCollector(func(e *Emitter) {
 		e.Emit(queue, 3, "b")
 		e.Emit(queue, 1.5, "a")
 		e.Emit(done, 42)
@@ -44,8 +47,8 @@ func TestCollectorServesItsFamiliesOnThePage(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Errorf("page lacks the collector's families in order:\n%s\nwant:\n%s", out, want)
 	}
-	if strings.Index(out, "app_jobs_done_total") > strings.Index(out, pmGoroutines) {
-		t.Error("collector families must come before the process families")
+	if inst, coll, proc := strings.Index(out, "# TYPE app_instrument "), strings.Index(out, "# TYPE app_queue_depth "), strings.Index(out, "# TYPE "+pmGoroutines+" "); inst >= coll || coll >= proc {
+		t.Errorf("page order: instrument at %d, collector at %d, process at %d; want instruments, then collectors, then process families", inst, coll, proc)
 	}
 }
 
@@ -89,15 +92,17 @@ func TestCollectorConstructionErrorsSurfaceAtRegister(t *testing.T) {
 		c    *Collector
 		want string
 	}{
-		"bad name":      {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("1bad", "h", nil)), "invalid metric name"},
-		"bad label":     {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("g", "h", []string{"__x"})), "reserved"},
-		"dup label":     {NewCollector(func(context.Context, *Emitter) {}, NewCounterDesc("c", "h", []string{"a", "a"})), "duplicate label"},
-		"no descs":      {NewCollector(func(context.Context, *Emitter) {}), "no descs"},
-		"nil desc":      {NewCollector(func(context.Context, *Emitter) {}, nil), "nil desc"},
-		"nil collect":   {NewCollector(nil, ok()), "nil collect"},
-		"same name":     {NewCollector(func(context.Context, *Emitter) {}, ok(), ok()), "declares \"ok\" twice"},
-		"shared desc":   {NewCollector(func(context.Context, *Emitter) {}, shared), "another collector"},
-		"desc repeated": {NewCollector(func(context.Context, *Emitter) {}, twice, twice), "twice"},
+		"bad name":       {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("1bad", "h", nil)), "invalid metric name"},
+		"bad label":      {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("g", "h", []string{"__x"})), "reserved"},
+		"dup label":      {NewCollector(func(context.Context, *Emitter) {}, NewCounterDesc("c", "h", []string{"a", "a"})), "duplicate label"},
+		"no descs":       {NewCollector(func(context.Context, *Emitter) {}), "no descs"},
+		"nil desc":       {NewCollector(func(context.Context, *Emitter) {}, nil), "nil desc"},
+		"nil collect":    {NewCollector(nil, ok()), "nil collect"},
+		"same name":      {NewCollector(func(context.Context, *Emitter) {}, ok(), ok()), "declares \"ok\" twice"},
+		"shared desc":    {NewCollector(func(context.Context, *Emitter) {}, shared), "another collector"},
+		"desc repeated":  {NewCollector(func(context.Context, *Emitter) {}, twice, twice), "twice"},
+		"zero desc":      {NewCollector(func(context.Context, *Emitter) {}, &Desc{}), "not built with NewGaugeDesc"},
+		"zero collector": {&Collector{}, "not built with NewCollector"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := NewRegistry("")
@@ -160,6 +165,9 @@ func TestCollectorDropsBadSamplesAndReportsThem(t *testing.T) {
 		"nil desc":         {func(e *Emitter, _, _ *Desc) { e.Emit(nil, 1) }, "does not declare"},
 		"label count":      {func(e *Emitter, g, _ *Desc) { e.Emit(g, 1, "a", "b") }, "wrong number of label values"},
 		"duplicate labels": {func(e *Emitter, g, _ *Desc) { e.Emit(g, 1, "a"); e.Emit(g, 2, "a") }, "already emitted"},
+		"labels equal once repaired": {
+			func(e *Emitter, g, _ *Desc) { e.Emit(g, 1, "a\xff"); e.Emit(g, 2, "a\xfe") }, "already emitted",
+		},
 		"negative counter": {func(e *Emitter, _, c *Desc) { e.Emit(c, -1) }, "negative or NaN"},
 		"NaN counter":      {func(e *Emitter, _, c *Desc) { e.Emit(c, math.NaN()) }, "negative or NaN"},
 	} {
@@ -180,16 +188,29 @@ func TestCollectorDropsBadSamplesAndReportsThem(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Gather error = %v, want one naming %q", err, tc.want)
 			}
-			if name == "duplicate labels" {
+			if name == "duplicate labels" || name == "labels equal once repaired" {
 				if f := findFamily(t, fams, "g"); len(f.Samples) != 1 || f.Samples[0].Value != 1 {
 					t.Errorf("g = %+v, want the first sample to stand", f.Samples)
 				}
 			}
-			if n := strings.Count(logs.String(), "measure: collector problem\""); n != 1 {
+			if n := droppedWarnings(logs.String()); n != 1 {
 				t.Errorf("%d warnings over four runs with the same problem, want 1:\n%s", n, logs)
 			}
 		})
 	}
+}
+
+// droppedWarnings counts the warnings for dropped samples, leaving out the
+// warning-only problems (repaired label values, the series threshold).
+func droppedWarnings(logs string) int {
+	n := 0
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, `level=WARN msg="measure: collector problem"`) &&
+			!strings.Contains(line, "invalid UTF-8") && !strings.Contains(line, "or more series") {
+			n++
+		}
+	}
+	return n
 }
 
 func TestCollectorLogsAProblemOnceAndItsClearingOnce(t *testing.T) {
@@ -380,8 +401,17 @@ func TestGatherReadsEveryInstrumentAsStructuredValues(t *testing.T) {
 	}
 }
 
-func TestGatherListsTheSameProcessFamiliesAsThePage(t *testing.T) {
+func TestGatherListsTheSameFamiliesInThePagesOrder(t *testing.T) {
 	r := NewRegistry("")
+	lc := NewLabeledCounter("lc_total", "h", []string{"k"})
+	lg := NewLabeledGauge("lg", "h", []string{"k"})
+	lh := NewLabeledHistogram("lh", "h", []string{"k"})
+	d := NewGaugeDesc("coll", "h", nil)
+	r.MustRegister(NewCounter("c_total", "h"), NewGauge("g", "h"), NewHistogram("h", "h"), lc, lg, lh,
+		staticCollector(func(e *Emitter) { e.Emit(d, 1) }, d))
+	lc.Inc("a")
+	lg.Set(1, "a")
+	lh.Observe(1, "a")
 	fams, err := r.Gather(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -424,12 +454,16 @@ func TestCollectorRaceWithScrapesAndRecording(t *testing.T) {
 	g := NewGaugeDesc("g", "h", []string{"k"})
 	lc := NewLabeledCounter("lc_total", "h", []string{"k"})
 	r := NewRegistry("")
+	var runs atomic.Int32
 	r.MustRegister(lc, NewCollector(func(_ context.Context, e *Emitter) {
 		var wg sync.WaitGroup
 		for i := range 4 {
 			wg.Go(func() { e.Emit(g, float64(i), fmt.Sprint(i)) })
 		}
 		wg.Wait()
+		if runs.Add(1)%2 == 0 {
+			e.Emit(g, 0, "0") // every other run has a problem, so problem state flips under concurrent scrapes
+		}
 	}, g))
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -438,8 +472,8 @@ func TestCollectorRaceWithScrapesAndRecording(t *testing.T) {
 				lc.Inc(fmt.Sprint(j % 5))
 				if i%2 == 0 {
 					body(t, r)
-				} else if _, err := r.Gather(t.Context()); err != nil {
-					t.Error(err)
+				} else {
+					_, _ = r.Gather(t.Context())
 				}
 			}
 		})
@@ -472,4 +506,50 @@ func describeFamily(f Family) string {
 		}
 	}
 	return sb.String() + "}"
+}
+
+// gatherOnLog is a slog handler that reads the registry from inside Handle.
+type gatherOnLog struct {
+	r     *Registry
+	calls atomic.Int32
+}
+
+func (*gatherOnLog) Enabled(context.Context, slog.Level) bool { return true }
+func (h *gatherOnLog) WithAttrs([]slog.Attr) slog.Handler     { return h }
+func (h *gatherOnLog) WithGroup(string) slog.Handler          { return h }
+func (h *gatherOnLog) Handle(ctx context.Context, _ slog.Record) error {
+	if h.calls.Add(1) == 1 {
+		_, _ = h.r.Gather(ctx)
+	}
+	return nil
+}
+
+func TestCollectorLogsOutsideItsLock(t *testing.T) {
+	captureDebugLogs(t) // restores the default logger after the test
+	g := NewGaugeDesc("g", "h", []string{"k"})
+	r := NewRegistry("")
+	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(g, 1) }, g))
+	slog.SetDefault(slog.New(&gatherOnLog{r: r}))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = r.Gather(t.Context())
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Gather deadlocked: a log handler that reads the registry blocked on the collector's lock")
+	}
+}
+
+func TestEmitOfAnotherCollectorsDescRacesNothing(t *testing.T) {
+	foreign := NewGaugeDesc("foreign", "h", nil)
+	owner := NewCollector(func(context.Context, *Emitter) {}, foreign)
+	g := NewGaugeDesc("g", "h", nil)
+	r := NewRegistry("")
+	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(foreign, 1) }, g))
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = NewRegistry("other").Register(owner) })
+	wg.Go(func() { _, _ = r.Gather(t.Context()) })
+	wg.Wait()
 }

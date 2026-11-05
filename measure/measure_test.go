@@ -362,6 +362,7 @@ func TestRegistry_RegisterNilMetricErrors(t *testing.T) {
 		{"typed-nil LabeledGauge", (*LabeledGauge)(nil)},
 		{"typed-nil Histogram", (*Histogram)(nil)},
 		{"typed-nil LabeledHistogram", (*LabeledHistogram)(nil)},
+		{"typed-nil Collector", (*Collector)(nil)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

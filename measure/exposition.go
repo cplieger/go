@@ -192,7 +192,7 @@ func (r *Registry) collect(ctx context.Context) []metricFamily {
 	r.mu.RLock()
 	fams := make([]metricFamily, 0,
 		len(r.labeledCounters)+len(r.counters)+len(r.labeledGauges)+
-			len(r.gauges)+len(r.histograms)+len(r.labeledHistograms)+len(processFamilyNames))
+			len(r.gauges)+len(r.histograms)+len(r.labeledHistograms)+r.collectorFamilies+len(processFamilyNames))
 	for _, lc := range r.labeledCounters {
 		if f, ok := lc.family(); ok {
 			fams = append(fams, f)

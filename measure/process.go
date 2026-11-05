@@ -94,7 +94,7 @@ func parseAuxvClkTck(data []byte, wordSize int) int64 {
 // /proc/self/limits reports the soft "Max open files" limit as the literal
 // token "unlimited". It is distinct from 0 (the absent/read-failure value) so
 // an unlimited limit is treated as a successful reading and exposed as
-// float64(math.MaxUint64), matching client_golang (see formatMaxFDs), rather
+// float64(math.MaxUint64), matching client_golang (see maxFDsValue), rather
 // than silently dropped.
 const unlimitedMaxFDs int64 = -1
 
@@ -213,34 +213,11 @@ func collectProcessMetrics(d *processMetricsData) {
 // Linux-only; on other platforms they are silently omitted. CPU time is
 // divided by USER_HZ (see userHZ).
 func processFamilies() []metricFamily {
-	var d processMetricsData
-	collectProcessMetrics(&d)
-
-	gauge := func(name, help, value string) metricFamily {
-		return metricFamily{name: name, typ: typeGauge, help: help, samples: []sample{{value: value}}}
-	}
-	counter := func(name, help, value string) metricFamily {
-		return metricFamily{name: name, typ: typeCounter, help: help, samples: []sample{{value: value}}}
-	}
-
-	fams := make([]metricFamily, 0, len(processFamilyNames))
-	fams = append(fams,
-		gauge(pmGoroutines, helpGoroutines, strconv.Itoa(d.goroutines)),
-		gauge(pmHeapAllocBytes, helpHeapAlloc, strconv.FormatUint(d.heapAlloc, 10)),
-		counter(pmGCPauseTotal, helpGCPause, formatValue(d.gcPause)),
-		gauge(pmUptime, helpUptime, formatValue(d.uptime)),
-		gauge(pmStartTime, helpStartTime, formatValue(d.startTime)),
-	)
-	if d.hasCPU() {
-		fams = append(fams, counter(pmCPUTotal, helpCPU, formatValue(d.cpuSeconds)))
-	}
-	if d.hasRSS() {
-		fams = append(fams, gauge(pmResidentBytes, helpResident, strconv.FormatInt(d.rss, 10)))
-	}
-	if d.hasOpenFDs() {
-		fams = append(fams, gauge(pmOpenFDs, helpOpenFDs, strconv.Itoa(d.openFDs)))
-		if d.hasMaxFDs() {
-			fams = append(fams, gauge(pmMaxFDs, helpMaxFDs, formatMaxFDs(d.maxFDs)))
+	gathered := processGather()
+	fams := make([]metricFamily, 0, len(gathered))
+	for i := range gathered {
+		if f, ok := pageFamily(&gathered[i]); ok {
+			fams = append(fams, f)
 		}
 	}
 	return fams
@@ -471,16 +448,15 @@ func parseProcLimitsMaxFDs(data []byte) int64 {
 	return 0
 }
 
-// formatMaxFDs renders the soft "Max open files" limit as a Prometheus gauge
-// value. The unlimitedMaxFDs sentinel renders as
-// float64(math.MaxUint64) (the token "1.8446744073709552e+19"), matching what
-// client_golang emits for an unlimited limit; every other value is its decimal
-// form.
-func formatMaxFDs(maxFDs int64) string {
+// maxFDsValue is the soft "Max open files" limit as a gauge value. The
+// unlimitedMaxFDs sentinel becomes float64(math.MaxUint64) (rendered
+// "1.8446744073709552e+19"), matching what client_golang emits for an
+// unlimited limit.
+func maxFDsValue(maxFDs int64) float64 {
 	if maxFDs == unlimitedMaxFDs {
-		return formatValue(float64(math.MaxUint64))
+		return float64(math.MaxUint64)
 	}
-	return strconv.FormatInt(maxFDs, 10)
+	return float64(maxFDs)
 }
 
 // openFDCount converts the raw /proc/self/fd entry list into the number of
