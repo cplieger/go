@@ -350,10 +350,9 @@ func TestProbeWritableInRoot(t *testing.T) {
 	})
 }
 
-// TestProbeData covers the two stages that run while the probe file is
-// open, at probeData rather than ProbeWritable: neither is constructible
-// on a healthy directory the test owns (a write failure needs /dev/full, a
-// sync failure needs a pipe).
+// TestProbeData covers the stages that run while the probe file is open, at
+// probeData rather than ProbeWritable: a failure is not constructible on a
+// healthy directory the test owns. The sync failure is in probe_unix_test.go.
 func TestProbeData(t *testing.T) {
 	t.Parallel()
 
@@ -374,10 +373,6 @@ func TestProbeData(t *testing.T) {
 				return f
 			},
 			wantStage: ProbeStageWrite,
-		},
-		"unflushable_handle_fails_at_sync": {
-			open:      openUnflushable,
-			wantStage: ProbeStageSync,
 		},
 	}
 	for name, tc := range cases {
@@ -404,19 +399,6 @@ func openProbeTemp(t *testing.T) *os.File {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 	return f
-}
-
-// openUnflushable returns the write end of a pipe: it accepts a write
-// but Sync fails with EINVAL, standing in for a network filesystem that
-// defers its error to fsync.
-func openUnflushable(t *testing.T) *os.File {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
-	return w
 }
 
 // TestProbeTearDown covers the two teardown stages and the leak

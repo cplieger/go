@@ -18,6 +18,8 @@ if id.Changed(info) {
 }
 ```
 
+On Windows, `os.Stat` reads a file's identity lazily, by path, the first time `os.SameFile` compares it. `Identify` reads it at once, so it records the file at the path when `Identify` runs. Call it right after the stat that describes the copy you loaded.
+
 ## Why both checks are needed
 
 Two different ways of writing a file change its content, and each one defeats half of a single check.
