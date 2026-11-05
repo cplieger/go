@@ -12,10 +12,10 @@ import (
 // produced, not one go-yaml constructed. Load classifies the decode error
 // before WithErrorPassthrough's predicate sees it, so a caller claims its own
 // errors by type and never one of go-yaml's. Load wraps only when every entry
-// came from the config type, and not when the method's error wraps a go-yaml
-// error or reads like one of go-yaml's messages. Err is the method's error,
-// or errors.Join of several in document order; Error returns its text
-// unchanged. Only Load constructs it, always with a non-nil Err.
+// came from the config type and none wraps or carries go-yaml's error text,
+// even copied with %v. Err is the method's error, or errors.Join of several
+// in document order; Error returns its text unchanged. Only Load constructs
+// it, always with a non-nil Err.
 type UnmarshalerError struct {
 	// Err is the error the config type's UnmarshalYAML returned, unchanged.
 	Err error
@@ -47,9 +47,11 @@ func WithLookupEnv(lookup func(name string) (string, bool)) LoadOption {
 	return func(o *loadOptions) { o.lookup = lookup }
 }
 
-// WithSanitizeOptions forwards SanitizeOptions (e.g. WithUnknownKeyEcho(true))
-// to every SanitizeDecodeError call Load makes, so the caller sets its
-// sanitization policy once for the whole pipeline.
+// WithSanitizeOptions forwards SanitizeOptions to every error Load
+// sanitizes, so the caller sets its policy once for the whole pipeline.
+// WithUnknownKeyEcho(true) reaches the raw-bytes unknown-key check only: the
+// decode after expansion always redacts a key, because a config type that
+// strict-loads its own node there sees expanded values.
 func WithSanitizeOptions(opts ...SanitizeOption) LoadOption {
 	return func(o *loadOptions) { o.sanitize = append(o.sanitize, opts...) }
 }
@@ -98,7 +100,8 @@ func Load(data []byte, out any, allow func(name string) bool, opts ...LoadOption
 	if doc == nil {
 		return nil, nil // empty document: out keeps its pre-set defaults
 	}
-	if err := checkUnknownKeysFiltered(data, rv.Type().Elem(), o); err != nil {
+	cfgType := rv.Type().Elem()
+	if err := checkUnknownKeysFiltered(data, doc, cfgType, o); err != nil {
 		return nil, err
 	}
 	unresolved = ExpandWith(doc, allow, o.lookup)
@@ -108,9 +111,22 @@ func Load(data []byte, out any, allow func(name string) bool, opts ...LoadOption
 				return unresolved, classified
 			}
 		}
-		return unresolved, SanitizeDecodeError(err, o.sanitize...)
+		so := o.sanitizeOptions(cfgType, doc)
+		so.echoUnknownKey = false
+		return unresolved, sanitize(err, so)
 	}
 	return unresolved, nil
+}
+
+// sanitizeOptions applies the caller's SanitizeOptions and attaches what Load
+// knows about cfgType and doc.
+func (o loadOptions) sanitizeOptions(cfgType reflect.Type, doc *yaml.Node) sanitizeOptions {
+	var so sanitizeOptions
+	for _, opt := range o.sanitize {
+		opt(&so)
+	}
+	so.src = newProvenance(cfgType, doc)
+	return so
 }
 
 // classifyDecodeError wraps a decode failure in *UnmarshalerError when every
@@ -162,7 +178,8 @@ func unmarshalerCause(e *yaml.LoadError) error {
 // pre-expansion artifacts the post-expansion decode owns: a wrong-type entry,
 // or a custom UnmarshalYAML rejecting a still-literal ${VAR}. A probe go-yaml
 // stopped early (a single *LoadError) reports nothing; the decode re-raises it.
-func checkUnknownKeysFiltered(data []byte, cfgType reflect.Type, o loadOptions) error {
+// doc must be unexpanded, so an echoed key is the one the operator wrote.
+func checkUnknownKeysFiltered(data []byte, doc *yaml.Node, cfgType reflect.Type, o loadOptions) error {
 	errs, ok := errors.AsType[*yaml.LoadErrors](CheckUnknownKeys(data, reflect.New(cfgType).Interface()))
 	if !ok {
 		return nil
@@ -176,5 +193,5 @@ func checkUnknownKeysFiltered(data []byte, cfgType reflect.Type, o loadOptions) 
 	if len(unknown) == 0 {
 		return nil
 	}
-	return SanitizeDecodeError(&yaml.LoadErrors{Errors: unknown}, o.sanitize...)
+	return sanitize(&yaml.LoadErrors{Errors: unknown}, o.sanitizeOptions(cfgType, doc))
 }

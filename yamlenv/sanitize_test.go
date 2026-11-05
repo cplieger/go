@@ -89,8 +89,12 @@ func TestSanitizeDecodeErrorFallbacks(t *testing.T) {
 			want: "decode errors: " + entryWithheld,
 		},
 		"entry with no position": {
+			err:  loadErrors(constructEntry(0, 0, "field "+secret+" not found in type main.cfg")),
+			want: "decode errors: unknown configuration key <redacted>",
+		},
+		"duplicate key with no position": {
 			err:  loadErrors(constructEntry(0, 0, "mapping key \""+secret+"\" already defined at line 1")),
-			want: "decode errors: mapping key <redacted> already defined at line 1",
+			want: "decode errors: " + entryWithheld,
 		},
 	}
 	for name, tt := range tests {
@@ -223,6 +227,26 @@ func TestSanitizeDecodeErrorDuplicateKey(t *testing.T) {
 		"tail that is not a line number": {
 			msg:  `mapping key "x" already defined at line 1 leaked-tail`,
 			want: "decode errors: line 3, column 1: " + entryWithheld,
+		},
+		"first definition on the entry's own line": {
+			msg:  `mapping key "x" already defined at line 3`,
+			want: "decode errors: line 3, column 1: mapping key <redacted> already defined at line 3",
+		},
+		"first definition after the entry's line": {
+			msg:  `mapping key "x" already defined at line 4`,
+			want: "decode errors: line 3, column 1: " + entryWithheld,
+		},
+		"line zero": {
+			msg:  `mapping key "x" already defined at line 0`,
+			want: "decode errors: line 3, column 1: " + entryWithheld,
+		},
+		"line past the int range": {
+			msg:  `mapping key "x" already defined at line 99999999999999999999`,
+			want: "decode errors: line 3, column 1: " + entryWithheld,
+		},
+		"leading zeros are not kept": {
+			msg:  `mapping key "x" already defined at line 02`,
+			want: "decode errors: line 3, column 1: mapping key <redacted> already defined at line 2",
 		},
 	}
 	for name, tt := range tests {

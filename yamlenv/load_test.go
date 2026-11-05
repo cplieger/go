@@ -328,6 +328,104 @@ type scriptedConfig struct {
 	H scriptedHook `yaml:"h"`
 }
 
+// copyingHook is a config type whose UnmarshalYAML runs a go-yaml call and
+// returns copyErr's copy of its error. Its zero value, the one the unknown-key
+// probe decodes into, accepts anything.
+type copyingHook struct {
+	call    func(*yaml.Node) error
+	copyErr func(error) error
+}
+
+// UnmarshalYAML runs the preset call and returns its error's copy.
+func (h *copyingHook) UnmarshalYAML(value *yaml.Node) error {
+	if h.call == nil {
+		return nil
+	}
+	if err := h.call(value); err != nil {
+		return h.copyErr(err)
+	}
+	return nil
+}
+
+// copyingConfig holds a copyingHook.
+type copyingConfig struct {
+	H copyingHook `yaml:"h"`
+}
+
+// echoingHook is a config type whose UnmarshalYAML fails with its node's
+// value between a preset prefix and suffix, so its error can put an expanded
+// secret where go-yaml's wording keeps a value-free part.
+type echoingHook struct{ prefix, suffix string }
+
+// UnmarshalYAML fails with the value inside the preset wording.
+func (h *echoingHook) UnmarshalYAML(value *yaml.Node) error {
+	return errors.New(h.prefix + value.Value + h.suffix)
+}
+
+// echoingConfig holds an echoingHook beside an int, so int is a type the
+// config reaches.
+type echoingConfig struct {
+	H    echoingHook `yaml:"h"`
+	Port int         `yaml:"port"`
+}
+
+// strictHook is a config type whose UnmarshalYAML strict-loads its mapping
+// once no literal ${ remains, the way go-yaml v4's Node.Load docs suggest for
+// hooks. The unknown-key probe sees the literal and passes.
+type strictHook struct {
+	S struct {
+		A string `yaml:"a"`
+	}
+}
+
+// UnmarshalYAML skips a pre-expansion node and strict-loads an expanded one.
+func (h *strictHook) UnmarshalYAML(value *yaml.Node) error {
+	if hasLiteralRef(value) {
+		return nil
+	}
+	return value.Load(&h.S, yaml.WithKnownFields())
+}
+
+// hasLiteralRef reports whether any scalar under n, an alias's target
+// included, still holds a literal ${.
+func hasLiteralRef(n *yaml.Node) bool {
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		return hasLiteralRef(n.Alias)
+	}
+	if strings.Contains(n.Value, "${") {
+		return true
+	}
+	return slices.ContainsFunc(n.Content, hasLiteralRef)
+}
+
+// strictHookConfig holds a strictHook under sub, beside the anchor it aliases.
+type strictHookConfig struct {
+	Anchor string     `yaml:"anchor"`
+	Sub    strictHook `yaml:"sub"`
+}
+
+// forgedUnknownKey is a config type whose UnmarshalYAML always fails with its
+// node's value in go-yaml's unknown-field wording, so the pre-expansion probe
+// sees a hook-authored message in the shape the unknown-key echo keeps.
+type forgedUnknownKey struct{}
+
+// UnmarshalYAML fails with the value worded as an unknown field.
+func (forgedUnknownKey) UnmarshalYAML(value *yaml.Node) error {
+	return fmt.Errorf("field %s not found in type main.cfg", value.Value)
+}
+
+// forgedConfig holds a forgedUnknownKey beside a real key.
+type forgedConfig struct {
+	Name string           `yaml:"name"`
+	H    forgedUnknownKey `yaml:"h"`
+}
+
+// treeNode is a recursive config type, so the walk over the types a config
+// reaches must stop on a revisit.
+type treeNode struct {
+	Children []treeNode `yaml:"children"`
+}
+
 // TestLoadClassifiesUnmarshalerErrors pins the typed classification of the
 // decode step: a failure produced only by the config type's own UnmarshalYAML
 // is claimable as *yamlenv.UnmarshalerError with the app's message verbatim,
@@ -443,16 +541,66 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 
 	t.Run("a hook error spelled like go-yaml's is never claimable", func(t *testing.T) {
 		t.Parallel()
-		cfg := scriptedConfig{H: scriptedHook{msg: "cannot construct !!str `hunter2` into int"}}
+		cfg := scriptedConfig{H: scriptedHook{msg: "cannot construct !!str `hunter2` into hunter2-SECRET-into-LEAKVALUE"}}
 		_, err := yamlenv.Load([]byte("h: x\n"), &cfg, allowAppPrefix,
 			yamlenv.WithErrorPassthrough(claimUnmarshaler))
 		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
 			t.Errorf("a go-yaml-shaped hook error was classified app-owned: %v", err)
 		}
-		if want := "decode errors: line 1, column 4: cannot construct !!str <redacted> into int"; err == nil || err.Error() != want {
+		if want := "decode errors: line 1, column 4: cannot construct !!str <redacted> into <redacted>"; err == nil || err.Error() != want {
 			t.Errorf("err = %v, want %q", err, want)
 		}
 	})
+
+	// A config type's error copying go-yaml's text has lost the *LoadError
+	// chain, so only the text says it is go-yaml's; claiming it would return
+	// go-yaml's excerpt of the value.
+	shortSecret := yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": "shortsec"}))
+	decodeInt := func(n *yaml.Node) error { var i int; return n.Decode(&i) }
+	decodeAny := func(n *yaml.Node) error { var v any; return n.Decode(&v) }
+	loadAnchorRef := func(n *yaml.Node) error { var v any; return yaml.Load([]byte("x: *"+n.Value), &v) }
+	loadValue := func(n *yaml.Node) error { var v any; return yaml.Load([]byte(n.Value), &v) }
+	withContext := func(err error) error { return fmt.Errorf("ctx: %v", err) }
+	byText := func(err error) error { return errors.New(err.Error()) }
+	byMessage := func(err error) error {
+		if le, ok := errors.AsType[*yaml.LoadError](err); ok {
+			return errors.New(le.Message)
+		}
+		return err
+	}
+	verbatim := func(err error) error { return err }
+	for name, tc := range map[string]struct {
+		doc     string
+		call    func(*yaml.Node) error
+		copyErr func(error) error
+	}{
+		"%v of a wrong-type decode":             {doc: "h: ${APP_SECRET}\n", call: decodeInt, copyErr: withContext},
+		"Error() text of a wrong-type decode":   {doc: "h: ${APP_SECRET}\n", call: decodeInt, copyErr: byText},
+		"Message of a wrong-type decode":        {doc: "h: ${APP_SECRET}\n", call: decodeInt, copyErr: byMessage},
+		"Message of a resolver error":           {doc: "h: !!int shortsec\n", call: decodeAny, copyErr: byMessage},
+		"Message of an unhashable key":          {doc: "h: {[shortsec]: 1}\n", call: decodeAny, copyErr: byMessage},
+		"Message of an unknown anchor":          {doc: "h: ${APP_SECRET}\n", call: loadAnchorRef, copyErr: byMessage},
+		"%v of a nested load error":             {doc: "h: ${APP_SECRET}\n", call: loadAnchorRef, copyErr: withContext},
+		"go-yaml's no-documents error relayed":  {doc: "h: '# shortsec'\n", call: loadValue, copyErr: verbatim},
+		"%v of go-yaml's no-documents error":    {doc: "h: '# shortsec'\n", call: loadValue, copyErr: withContext},
+		"Error() text of a nested load failure": {doc: "h: ${APP_SECRET}\n", call: loadAnchorRef, copyErr: byText},
+	} {
+		t.Run("a copy of go-yaml's error is never claimable: "+name, func(t *testing.T) {
+			t.Parallel()
+			cfg := copyingConfig{H: copyingHook{call: tc.call, copyErr: tc.copyErr}}
+			_, err := yamlenv.Load([]byte(tc.doc), &cfg, allowAppPrefix, shortSecret,
+				yamlenv.WithErrorPassthrough(claimUnmarshaler))
+			if err == nil {
+				t.Fatal("Load = nil, want a decode error")
+			}
+			if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
+				t.Errorf("a copy of go-yaml's error was classified app-owned: %v", err)
+			}
+			if strings.Contains(err.Error(), "shortsec") {
+				t.Errorf("err = %q, leaked the value", err)
+			}
+		})
+	}
 
 	t.Run("without a passthrough the classification stays fail-closed", func(t *testing.T) {
 		t.Parallel()
@@ -480,6 +628,10 @@ func TestLoadErrorShapes(t *testing.T) {
 		"parse error keeps only its position": {
 			doc:  "api_key: a\n\thunter2: b\n",
 			want: "line 2, column 1: " + withheld,
+		},
+		"unterminated quote keeps where the scanner stopped": {
+			doc:  "api_key: a\nport: \"hunter2\n",
+			want: "line 3, column 1: " + withheld,
 		},
 		"unknown anchor keeps only its position": {
 			doc:  "api_key: *hunter2\n",
@@ -510,6 +662,146 @@ func TestLoadErrorShapes(t *testing.T) {
 			_, err := yamlenv.Load([]byte(tt.doc), &cfg, allowAppPrefix, tt.opts...)
 			if err == nil || err.Error() != tt.want {
 				t.Errorf("Load = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoadKeepsOnlyVouchedParts pins that Load keeps a rebuilt entry's
+// value-free part only when the config type or the document vouches for it:
+// a config type's own error worded like go-yaml's cannot smuggle a value
+// through the part go-yaml fills with a type name, a key or a line number.
+func TestLoadKeepsOnlyVouchedParts(t *testing.T) {
+	t.Parallel()
+	const secret = "hunter2-SECRET-into-LEAKVALUE" //gitleaks:allow (planted fixture; the test asserts it never survives)
+	lookup := yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": secret}))
+	echo := yamlenv.WithSanitizeOptions(yamlenv.WithUnknownKeyEcho(true))
+	claim := yamlenv.WithErrorPassthrough(claimUnmarshaler)
+
+	tests := map[string]struct {
+		doc  string
+		out  any
+		opts []yamlenv.LoadOption
+		want string
+	}{
+		"hook wrong-type wording with the value as the type": {
+			doc:  "h: ${APP_SECRET}\n",
+			out:  &echoingConfig{H: echoingHook{prefix: "cannot construct !!str into "}},
+			want: "decode errors: line 1, column 4: cannot construct !!str into <redacted>",
+		},
+		"the same under the recommended passthrough": {
+			doc:  "h: ${APP_SECRET}\n",
+			out:  &echoingConfig{H: echoingHook{prefix: "cannot construct !!str into "}},
+			opts: []yamlenv.LoadOption{claim},
+			want: "decode errors: line 1, column 4: cannot construct !!str into <redacted>",
+		},
+		"hook TextUnmarshaler wording with the value as the type": {
+			doc:  "h: ${APP_SECRET}\n",
+			out:  &echoingConfig{H: echoingHook{prefix: "cannot construct !!map into ", suffix: " (TextUnmarshaler)"}},
+			want: "decode errors: line 1, column 4: cannot construct !!map into <redacted>",
+		},
+		"hook duplicate-key wording at a value's position": {
+			doc:  "h: ${APP_SECRET}\n",
+			out:  &echoingConfig{H: echoingHook{prefix: `mapping key "`, suffix: `" already defined at line 1`}},
+			want: "decode errors: line 1, column 4: " + entryWithheld,
+		},
+		"hook unknown-field wording in the probe under the echo": {
+			doc:  "name: n\nh: hunter2-pasted\n",
+			out:  &forgedConfig{},
+			opts: []yamlenv.LoadOption{echo},
+			want: "decode errors: line 2, column 4: unknown configuration key <redacted>",
+		},
+		"hook unknown-field wording naming a real key under the echo": {
+			doc:  "name: n\nh: name\n",
+			out:  &forgedConfig{},
+			opts: []yamlenv.LoadOption{echo},
+			want: "decode errors: line 2, column 4: unknown configuration key <redacted>",
+		},
+		"hook strict-loading expanded keys under the echo": {
+			doc:  "anchor: &k ${APP_SECRET}\nsub:\n  a: ${APP_SECRET}\n  *k : 1\n",
+			out:  &strictHookConfig{},
+			opts: []yamlenv.LoadOption{echo},
+			want: "decode errors: line 4, column 3: unknown configuration key <redacted>",
+		},
+		"go-yaml's wrong type into the config's own int": {
+			doc:  "h: ok\nport: ${APP_SECRET}\n",
+			out:  &echoingConfig{H: echoingHook{prefix: "", suffix: ""}},
+			want: "decode errors: line 1, column 4: " + entryWithheld + "; line 2, column 7: cannot construct !!str <redacted> into int",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := yamlenv.Load([]byte(tt.doc), tt.out, allowAppPrefix, append([]yamlenv.LoadOption{lookup}, tt.opts...)...)
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("Load = %v, want %q", err, tt.want)
+			}
+			if err != nil && strings.Contains(err.Error(), "hunter2") {
+				t.Errorf("err = %q, leaked the value", err)
+			}
+		})
+	}
+}
+
+// TestLoadKeepsReachableTypes pins the other side of the vouching: go-yaml's
+// own wrong-type entry keeps every Go type the config type reaches, through
+// pointers, slices, arrays, map keys and values, nested and recursive structs,
+// and a TextUnmarshaler destination.
+func TestLoadKeepsReachableTypes(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		doc  string
+		out  any
+		want string
+	}{
+		"map value": {
+			doc: "m: {a: hunter2}\n", out: &struct {
+				M map[string]int `yaml:"m"`
+			}{},
+			want: "cannot construct !!str <redacted> into int",
+		},
+		"map key": {
+			doc: "m: {hunter2: a}\n", out: &struct {
+				M map[int]string `yaml:"m"`
+			}{},
+			want: "cannot construct !!str <redacted> into int",
+		},
+		"slice element": {
+			doc: "s: [hunter2]\n", out: &struct {
+				S []bool `yaml:"s"`
+			}{},
+			want: "cannot construct !!str <redacted> into bool",
+		},
+		"array element": {
+			doc: "a: [hunter2]\n", out: &struct {
+				A [1]float64 `yaml:"a"`
+			}{},
+			want: "cannot construct !!str <redacted> into float64",
+		},
+		"pointer": {
+			doc: "p: hunter2\n", out: &struct {
+				P *uint8 `yaml:"p"`
+			}{},
+			want: "cannot construct !!str <redacted> into uint8",
+		},
+		"TextUnmarshaler": {
+			doc: "t: {a: hunter2}\n", out: &struct {
+				T time.Time `yaml:"t"`
+			}{},
+			want: "cannot construct !!map into time.Time (TextUnmarshaler)",
+		},
+		"recursive type": {
+			doc:  "children: [{children: hunter2}]\n",
+			out:  &treeNode{},
+			want: "cannot construct !!str <redacted> into []yamlenv_test.treeNode",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := yamlenv.Load([]byte(tt.doc), tt.out, allowAppPrefix)
+			if err == nil || !strings.HasSuffix(err.Error(), ": "+tt.want) {
+				t.Errorf("Load = %v, want it to end in %q", err, tt.want)
 			}
 		})
 	}
@@ -579,7 +871,7 @@ func TestLoadNeverLeaksSecrets(t *testing.T) {
 		}
 	})
 
-	t.Run("expanded secret into a custom-tagged node", func(t *testing.T) {
+	t.Run("expanded secret into an explicitly !!str-tagged node", func(t *testing.T) {
 		var cfg loadConfig
 		_, err := yamlenv.Load([]byte("port: !!str ${APP_SECRET}\n"), &cfg, allowAppPrefix, lookup)
 		if err == nil {

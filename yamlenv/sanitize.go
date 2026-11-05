@@ -26,7 +26,17 @@ const (
 	unknownKeyInType = " not found in type "
 	fieldSetInType   = " already set in type "
 	v3HookMarker     = "cannot invoke v3 Node hooks"
+	textUnmarshaler  = " (TextUnmarshaler)"
 )
+
+// goYAMLMarkers are fragments of go-yaml's own error text: its Error()
+// wrappers and the fixed words of every message that embeds document text. A
+// config type's error that copies go-yaml's with %v or errors.New loses the
+// *LoadError chain, so these words are all that is left to recognise it by.
+var goYAMLMarkers = []string{
+	"go-yaml load error", ": yaml: ", wrongTypePrefix, dupKeyDefinedAt, unknownKeyInType,
+	fieldSetInType, " as a map key", "unknown anchor '", "alias-data", v3HookMarker,
+}
 
 // coreTags are the tags go-yaml names on its own. A wrong-type entry repeats
 // the node's tag as the document wrote it, so any other tag is document text.
@@ -51,6 +61,10 @@ type SanitizeOption func(*sanitizeOptions)
 
 // sanitizeOptions carries the sanitizer's policy switches.
 type sanitizeOptions struct {
+	// src is set by Load only. A config type's own error can be worded like
+	// go-yaml's, so with src a rebuilt entry keeps a type name, an echoed key
+	// or a line number only when the config type or the document has it.
+	src            *provenance
 	echoUnknownKey bool
 }
 
@@ -70,17 +84,22 @@ func WithUnknownKeyEcho(echo bool) SanitizeOption {
 // document value survives, because Expand can put a secret where go-yaml's
 // errors quote one. A *yaml.LoadErrors keeps each entry's position and, for a
 // wrong-type, duplicate-key or unknown-key entry, its value-free structure
-// (the key only under WithUnknownKeyEcho(true)); any other entry becomes a
-// fixed message. Another *yaml.LoadError keeps only its position, anything
-// else becomes a fixed message, and nil returns nil. The result never wraps
-// err, so no Unwrap or errors.As reaches the withheld text.
+// (the key only under WithUnknownKeyEcho(true)); anything else keeps at most
+// a position. nil returns nil, and the result never wraps err. Called directly
+// it trusts go-yaml's wording, so a caller's own error worded like go-yaml's
+// keeps its text after " into ", and under the echo its key; Load checks both.
 func SanitizeDecodeError(err error, opts ...SanitizeOption) error {
-	if err == nil {
-		return nil
-	}
 	var o sanitizeOptions
 	for _, opt := range opts {
 		opt(&o)
+	}
+	return sanitize(err, o)
+}
+
+// sanitize is SanitizeDecodeError with its options applied.
+func sanitize(err error, o sanitizeOptions) error {
+	if err == nil {
+		return nil
 	}
 	if errs, ok := errors.AsType[*yaml.LoadErrors](err); ok && len(errs.Errors) > 0 {
 		entries := make([]string, 0, len(errs.Errors))
@@ -111,23 +130,48 @@ func rebuildMessage(e *yaml.LoadError, o sanitizeOptions) string {
 		return entryWithheldMessage
 	}
 	if rest, ok := strings.CutPrefix(e.Message, dupKeyPrefix); ok {
-		if _, line, ok := strings.CutLast(rest, dupKeyDefinedAt); ok && allDigits(line) {
-			return dupKeyPrefix + redacted + dupKeyDefinedAt + line
-		}
-		return entryWithheldMessage
+		return rebuildDuplicateKey(e.Mark, rest, o.src)
 	}
 	if key, ok := unknownKey(e.Message); ok {
-		if o.echoUnknownKey {
+		if o.echoUnknownKey && o.src.vouchesKey(e.Mark, key) {
 			return fmt.Sprintf("unknown configuration key %q", key)
 		}
 		return "unknown configuration key " + redacted
 	}
 	if rest, ok := strings.CutPrefix(e.Message, wrongTypePrefix); ok {
 		if source, dest, ok := strings.CutLast(rest, wrongTypeInto); ok {
+			if !o.src.vouchesType(dest) {
+				dest = redacted
+			}
 			return wrongTypePrefix + keptSource(source) + wrongTypeInto + dest
 		}
 	}
 	return entryWithheldMessage
+}
+
+// rebuildDuplicateKey rebuilds a duplicate-key entry from the message text
+// after its prefix, keeping only the first definition's line.
+func rebuildDuplicateKey(at yaml.Mark, rest string, src *provenance) string {
+	if _, line, ok := strings.CutLast(rest, dupKeyDefinedAt); ok {
+		if first, ok := firstDefinition(at, line, src); ok {
+			return dupKeyPrefix + redacted + dupKeyDefinedAt + strconv.Itoa(first)
+		}
+	}
+	return entryWithheldMessage
+}
+
+// firstDefinition parses a duplicate-key entry's first-definition line.
+// go-yaml names an earlier key of the same mapping, so the line is never
+// after the entry's own; with src, keys must sit at both positions.
+func firstDefinition(at yaml.Mark, line string, src *provenance) (int, bool) {
+	if !allDigits(line) {
+		return 0, false
+	}
+	first, err := strconv.Atoi(line)
+	if err != nil || first < 1 || first > at.Line {
+		return 0, false
+	}
+	return first, src.vouchesDuplicate(at, first)
 }
 
 // keptSource rebuilds a wrong-type entry's "<tag>" or "<tag> `<excerpt>`"
@@ -158,16 +202,17 @@ func unknownKey(msg string) (key string, ok bool) {
 	return key, true
 }
 
-// isGoYAMLMessage reports whether msg has the shape of a message go-yaml's
-// constructor builds itself, as opposed to one a config type's UnmarshalYAML
-// returned.
+// isGoYAMLMessage reports whether msg carries go-yaml's own error text,
+// whole or copied into a config type's error, as opposed to text the config
+// type's UnmarshalYAML wrote itself.
 func isGoYAMLMessage(msg string) bool {
-	switch {
-	case strings.HasPrefix(msg, wrongTypePrefix) && strings.Contains(msg, wrongTypeInto),
-		strings.HasPrefix(msg, dupKeyPrefix) && strings.Contains(msg, dupKeyDefinedAt),
-		strings.HasPrefix(msg, fieldPrefix) && (strings.Contains(msg, unknownKeyInType) || strings.Contains(msg, fieldSetInType)),
-		strings.Contains(msg, v3HookMarker):
+	if strings.HasPrefix(msg, "yaml: ") {
 		return true
+	}
+	for _, m := range goYAMLMarkers {
+		if strings.Contains(msg, m) {
+			return true
+		}
 	}
 	return false
 }
