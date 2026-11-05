@@ -6,11 +6,13 @@
 // HTTP-based counterpart for containers wrapping a third-party server.
 //
 // If the marker directory is not writable (e.g. compose's
-// `read_only: true` without a `tmpfs: /tmp` mount), or a marker already
-// there cannot be opened for writing, the constructor enters degraded
-// mode: Set and Cleanup become no-ops, and the probe reports healthy
-// rather than restart-looping a container whose only broken piece is
-// the signaling channel.
+// `read_only: true` without a `tmpfs: /tmp` mount), or something already
+// at the marker path is not a regular file the process can write, the
+// constructor enters degraded mode: Set and Cleanup become no-ops, and
+// the probe reports healthy rather than restart-looping a container
+// whose only broken piece is the signaling channel. A marker path
+// os.Stat cannot read at all, such as a symlink loop, is not degraded
+// mode: the probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -95,10 +97,19 @@ func markerWritable(path string) error {
 	if _, err := os.Stat(path); err != nil { // #nosec G703 -- trusted caller-supplied marker path, existence check only
 		return nil
 	}
-	if err := openMarker(path, 0); !errors.Is(err, fs.ErrNotExist) {
+	if err := openMarker(path, 0); !errors.Is(err, fs.ErrNotExist) && !transient(err) {
 		return err
 	}
 	return nil
+}
+
+// transient reports an open error that can clear on its own, which Set
+// retries rather than degraded mode giving up on: EAGAIN from a lease another
+// process holds (a non-blocking open does not wait for it to break), EINTR,
+// and running out of file descriptors.
+func transient(err error) bool {
+	var t interface{ Temporary() bool }
+	return errors.As(err, &t) && t.Temporary()
 }
 
 // cannotSignal returns why Set cannot change the marker at path (its
@@ -363,10 +374,10 @@ const (
 	// MarkerUnreadable is a marker whose stat failed for a reason other than
 	// absence (permission, symlink loop, I/O) in a usable directory.
 	MarkerUnreadable
-	// MarkerDirUnavailable is degraded mode: the marker's directory, or the
-	// marker, cannot be written, so the app has no way to signal through the
-	// filesystem: the marker is absent, unreadable or past a deadline nothing
-	// can refresh.
+	// MarkerDirUnavailable is degraded mode: the folder cannot be written (the
+	// marker is then absent, unreadable or past a deadline), or a marker stat
+	// can read is not a regular file Set can refresh (it is then past a
+	// deadline nothing can refresh).
 	// The probe treats this as healthy; see RunProbe.
 	MarkerDirUnavailable
 )
@@ -540,25 +551,19 @@ func (m *Marker) recordSuccess() bool {
 // such a file), and with O_TRUNC, which refreshes its mtime, the contract an
 // armed WithMaxAge deadline reads (TestHealthMarker_SetTrue_refreshesMtime).
 func writeMarker(path string) error {
-	if err := openMarker(path, os.O_TRUNC); !errors.Is(err, fs.ErrNotExist) {
-		return err
+	err := openMarker(path, os.O_TRUNC)
+	if errors.Is(err, fs.ErrNotExist) {
+		err = openMarker(path, os.O_CREATE|os.O_TRUNC)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|oNonblock, 0o666) // #nosec G302 G304 G703 -- trusted caller-supplied marker path, os.Create's mode
-	if err != nil {
-		return err
-	}
-	if closeErr := f.Close(); closeErr != nil {
-		return fmt.Errorf("close: %w", closeErr)
-	}
-	return nil
+	return err
 }
 
-// openMarker opens an existing marker write-only with flag added, and never
-// blocks: a FIFO with no reader fails with ENXIO instead of hanging. It
-// refuses anything but a regular file, whose time an open with O_TRUNC
-// refreshes.
+// openMarker opens the marker write-only with flag added, and never blocks:
+// a FIFO with no reader fails with ENXIO instead of hanging. It refuses
+// anything but a regular file, whose time an open with O_TRUNC refreshes, and
+// creates one with os.Create's mode when flag holds O_CREATE.
 func openMarker(path string, flag int) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|oNonblock|flag, 0) // #nosec G304 G703 -- trusted caller-supplied marker path
+	f, err := os.OpenFile(path, os.O_WRONLY|oNonblock|flag, 0o666) // #nosec G302 G304 G703 -- trusted caller-supplied marker path, os.Create's mode
 	if err != nil {
 		return err
 	}

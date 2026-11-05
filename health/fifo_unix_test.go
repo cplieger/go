@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix && !aix && !solaris
 
 package health
 
@@ -83,5 +83,21 @@ func TestAFIFOWithAReaderIsNotAMarker(t *testing.T) {
 	}
 	if err := writeMarker(path); err == nil {
 		t.Error("writeMarker on a FIFO with a reader: want an error")
+	}
+}
+
+func TestTransient(t *testing.T) {
+	for err, want := range map[error]bool{
+		&os.PathError{Op: "open", Err: syscall.EAGAIN}: true,
+		&os.PathError{Op: "open", Err: syscall.EINTR}:  true,
+		&os.PathError{Op: "open", Err: syscall.EMFILE}: true,
+		&os.PathError{Op: "open", Err: syscall.EACCES}: false,
+		&os.PathError{Op: "open", Err: syscall.ENXIO}:  false,
+		&os.PathError{Op: "open", Err: errNotRegular}:  false,
+		nil: false,
+	} {
+		if got := transient(err); got != want {
+			t.Errorf("transient(%v) = %v, want %v", err, got, want)
+		}
 	}
 }

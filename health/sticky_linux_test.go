@@ -1,6 +1,7 @@
 package health
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -90,5 +91,32 @@ func TestSetRefreshesAnotherUsersMarkerInAStickyFolder(t *testing.T) {
 	}
 	if got := Inspect(path, WithMaxAge(time.Hour)).State; got != MarkerFresh {
 		t.Errorf("after Set(true): Inspect = %v, want MarkerFresh", got)
+	}
+}
+
+// TestALeaseDoesNotDegradeTheMarker: a read lease another open holds on the
+// marker makes Set's non-blocking open fail with EAGAIN instead of waiting for
+// the lease to break. That clears on its own, so it must not put the marker
+// in degraded mode for the life of the process.
+func TestALeaseDoesNotDegradeTheMarker(t *testing.T) {
+	const fSetLease, fRdLck, fUnLck = 1024, 0, 2
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, _, e := syscall.Syscall(syscall.SYS_FCNTL, r.Fd(), fSetLease, fRdLck); e != 0 {
+		t.Skipf("F_SETLEASE: %v", e)
+	}
+	defer func() { _, _, _ = syscall.Syscall(syscall.SYS_FCNTL, r.Fd(), fSetLease, fUnLck) }()
+	if err := openMarker(path, 0); !errors.Is(err, syscall.EAGAIN) {
+		t.Skipf("a held lease does not refuse this open here (%v); nothing to pin", err)
+	}
+	if m := NewMarker(path); m.degraded {
+		t.Error("a marker under a lease: want no degraded mode, the lease breaks on its own")
 	}
 }
