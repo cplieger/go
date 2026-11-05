@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -32,6 +33,10 @@ func TestCheckHandler_writesTheFleetBody(t *testing.T) {
 		"unhealthy": {Handler(stubSignal{healthy: false}), http.StatusServiceUnavailable, `{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}`},
 		"nil":       {Handler(nil), http.StatusServiceUnavailable, `{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}`},
 		"no checks": {CheckHandler(), http.StatusOK, `{"status":"ok"}`},
+		"empty reason": {
+			CheckHandler(Check{Signal: stubSignal{healthy: false}}), http.StatusServiceUnavailable,
+			`{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}`,
+		},
 		"two failing of three": {CheckHandler(
 			Check{Signal: stubSignal{healthy: false}, Reason: "the store is not writable"},
 			Check{Signal: stubSignal{healthy: true}, Reason: "the listener has not started"},
@@ -101,22 +106,53 @@ func TestMarkerWithin(t *testing.T) {
 }
 
 // TestMarkerWithinAgreesWithTheProbe pins the promise that the probe's lease and
-// the handler's agree for the same duration.
+// the handler's give one verdict for a marker in a writable directory, at every
+// age, a future modification time and a disabled lease included.
 func TestMarkerWithinAgreesWithTheProbe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
+	for _, lease := range []time.Duration{time.Hour, 0, -time.Second} {
+		if got, probe := m.Within(lease).Healthy(), ProbeCheck(path, WithMaxAge(lease)) == 0; got || probe {
+			t.Errorf("absent marker, lease %v: Within = %v, probe healthy = %v, want both unhealthy", lease, got, probe)
+		}
+	}
 	m.Set(true)
-	for _, age := range []time.Duration{0, 30 * time.Minute, 90 * time.Minute} {
+	for _, age := range []time.Duration{0, 30 * time.Minute, 90 * time.Minute, -24 * time.Hour} {
 		at := time.Now().Add(-age)
 		if err := os.Chtimes(path, at, at); err != nil {
 			t.Fatal(err)
 		}
-		lease := time.Hour
-		probe := ProbeCheck(path, WithMaxAge(lease)) == 0
-		if got := m.Within(lease).Healthy(); got != probe {
-			t.Errorf("marker %v old: Within = %v, probe healthy = %v", age, got, probe)
+		for _, lease := range []time.Duration{time.Hour, 0, -time.Second} {
+			probe := ProbeCheck(path, WithMaxAge(lease)) == 0
+			if got := m.Within(lease).Healthy(); got != probe {
+				t.Errorf("marker %v old, lease %v: Within = %v, probe healthy = %v", age, lease, got, probe)
+			}
 		}
 	}
+}
+
+// TestMarkerWithinAtTheDeadline pins the boundary: a marker exactly d old is
+// still healthy, for Within and the probe alike.
+func TestMarkerWithinAtTheDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), ".healthy")
+		m := NewMarker(path)
+		m.Set(true)
+		at := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+		if !m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+			t.Error("a marker exactly one lease old: want Within and the probe both healthy")
+		}
+		later := at.Add(-time.Nanosecond)
+		if err := os.Chtimes(path, later, later); err != nil {
+			t.Fatal(err)
+		}
+		if m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) == 0 {
+			t.Error("a marker one nanosecond past the lease: want Within and the probe both unhealthy")
+		}
+	})
 }
 
 // TestCheckHandler_onTheMuxRoute pins what "GET /healthz" registration gives:

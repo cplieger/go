@@ -359,6 +359,33 @@ func TestHealthMarker_HealthyDegraded(t *testing.T) {
 	if m.Healthy() {
 		t.Error("Healthy() = true in degraded mode, want false (strict os.Stat)")
 	}
+	if m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+		t.Error("absent marker in degraded mode: want Within unhealthy and the probe healthy")
+	}
+}
+
+// TestHealthMarker_DegradedWithALeftoverMarker: a fresh marker left in an
+// unwritable directory is healthy for Within and the probe alike.
+func TestHealthMarker_DegradedWithALeftoverMarker(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ".healthy")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	m := NewMarker(path)
+	if !m.degraded {
+		t.Skip("test environment bypasses directory mode; skipping")
+	}
+	if !m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+		t.Error("leftover fresh marker in degraded mode: want Within and the probe both healthy")
+	}
 }
 
 // TestHealthMarker_ConcurrentSetCleanupHealthy exercises concurrent

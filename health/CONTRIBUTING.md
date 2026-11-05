@@ -4,7 +4,7 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 ## Rules
 
-- A change to what degraded mode reports updates the package comment, the `CheckHealthy`, `RunProbe`, `ProbeCheck` and `Handler` comments, the README's degraded-mode section and `docs/file-marker.md` together. A missed one tells callers the opposite of what the code does.
+- A change to what degraded mode reports updates the package comment, the `CheckHealthy`, `Within`, `RunProbe`, `ProbeCheck` and `Handler` comments, the README's degraded-mode section and `docs/file-marker.md` together. A missed one tells callers the opposite of what the code does.
 
 ## Checks
 

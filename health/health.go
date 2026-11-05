@@ -190,32 +190,38 @@ func (m *Marker) CheckHealthy() bool {
 // per call, not a field read.
 func (m *Marker) Healthy() bool { return m.CheckHealthy() }
 
-// Within returns a Signal that is healthy while the marker exists and, for a
-// positive d, was last refreshed no more than d ago: the rule [WithMaxAge]
-// applies to the probe. A non-positive d checks existence only, as Healthy
-// does. Pass the same [Lease.Duration] to both, so the Docker probe and an
-// HTTP handler cannot disagree. Like Healthy, it reports unhealthy in
-// degraded mode, and costs one os.Stat per call.
+// Within returns a Signal for a marker os.Stat can read: healthy when d is
+// non-positive or the marker is no older than d, the comparison [WithMaxAge]
+// gives the probe, so a future modification time is fresh. Any stat error is
+// unhealthy. Pass the same [Lease.Duration] to both, so a present marker gets
+// one verdict from the probe and the handler. An absent marker in an
+// unwritable directory (degraded mode) is unhealthy here, as for Healthy,
+// while the probe reports healthy. It costs one os.Stat per call.
 func (m *Marker) Within(d time.Duration) Signal {
-	return markerWithin{m: m, d: d}
+	if m == nil {
+		return markerWithin{}
+	}
+	return markerWithin{path: m.path, d: d, set: true}
 }
 
-// markerWithin is the Signal Within returns.
+// markerWithin is the Signal Within returns; set is false for a nil marker.
 type markerWithin struct {
-	m *Marker
-	d time.Duration
+	path string
+	d    time.Duration
+	set  bool
 }
 
 func (w markerWithin) Healthy() bool {
-	if w.m == nil {
+	if !w.set {
 		return false
 	}
-	info, err := os.Stat(w.m.path)
-	if err != nil {
-		return false
-	}
-	return w.d <= 0 || time.Since(info.ModTime()) <= w.d
+	info, err := os.Stat(w.path)
+	return err == nil && !stale(time.Since(info.ModTime()), w.d)
 }
+
+// stale is the lease rule the probe and Within share: a positive maxAge
+// that the marker's age exceeds.
+func stale(age, maxAge time.Duration) bool { return maxAge > 0 && age > maxAge }
 
 // ProbeOption configures the probe-side health decision (RunProbe and
 // ProbeCheck). Without options the probe checks marker existence only.
@@ -403,7 +409,7 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 	if statErr == nil {
 		age := time.Since(info.ModTime())
 		state := MarkerFresh
-		if cfg.maxAge > 0 && age > cfg.maxAge {
+		if stale(age, cfg.maxAge) {
 			state = MarkerStale
 		}
 		return Freshness{State: state, Age: age, MaxAge: cfg.maxAge}

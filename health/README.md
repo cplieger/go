@@ -82,7 +82,7 @@ The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/c
 
 `NewMarker` checks that the marker's folder is writable. When it is not, for example under compose's `read_only: true` with no tmpfs at `/tmp`, the marker enters degraded mode. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the tmpfs mount to add.
 
-In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler` and `CheckHealthy` report unhealthy, because no marker was ever written. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
+In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler`, `CheckHealthy` and `Within` report unhealthy, because no marker was ever written. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
 
 To run read-only with a working signal, mount a tmpfs at `/tmp`:
 
