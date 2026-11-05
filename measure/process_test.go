@@ -539,10 +539,10 @@ func TestParseProcLimitsMaxFDs(t *testing.T) {
 	}
 }
 
-// TestFormatMaxFDs pins the exposition rendering: the unlimited sentinel becomes
+// TestMaxFDsValue pins the exposition rendering: the unlimited sentinel becomes
 // float64(math.MaxUint64) ("1.8446744073709552e+19", what client_golang emits
 // for an unlimited limit); every other value is decimal.
-func TestFormatMaxFDs(t *testing.T) {
+func TestMaxFDsValue(t *testing.T) {
 	tests := []struct {
 		name string
 		in   int64
@@ -554,8 +554,8 @@ func TestFormatMaxFDs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := formatMaxFDs(tc.in); got != tc.want {
-				t.Errorf("formatMaxFDs(%d) = %q, want %q", tc.in, got, tc.want)
+			if got := formatValue(maxFDsValue(tc.in)); got != tc.want {
+				t.Errorf("formatValue(maxFDsValue(%d)) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -674,11 +674,11 @@ func TestWriteProcess_uptimeAndStartTimeReconcile(t *testing.T) {
 // TestWriteProcess_LinuxFDsEmitted pins the Linux-only fd emit wiring in
 // processFamilies: when /proc/self/fd and /proc/self/limits are readable,
 // WriteProcess emits process_open_fds and process_max_fds, the latter
-// rendered through formatMaxFDs (a positive integer, or the
+// rendered through maxFDsValue (a positive integer, or the
 // float64(math.MaxUint64) sentinel for an unlimited soft limit). The
 // always-present-metric assertions in TestWriteProcess
 // never check these two series, so the hasOpenFDs/hasMaxFDs emit composition and
-// the formatMaxFDs call site are otherwise unexercised end-to-end.
+// the maxFDsValue call site are otherwise unexercised end-to-end.
 func TestWriteProcess_LinuxFDsEmitted(t *testing.T) {
 	if runtime.GOOS != goosLinux {
 		t.Skip("process fd metrics are Linux-only (/proc/self/fd, /proc/self/limits)")
