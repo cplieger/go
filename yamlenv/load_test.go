@@ -3,6 +3,7 @@ package yamlenv_test
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -558,6 +559,10 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 	decodeAny := func(n *yaml.Node) error { var v any; return n.Decode(&v) }
 	loadAnchorRef := func(n *yaml.Node) error { var v any; return yaml.Load([]byte("x: *"+n.Value), &v) }
 	loadValue := func(n *yaml.Node) error { var v any; return yaml.Load([]byte(n.Value), &v) }
+	loadCycle := func(n *yaml.Node) error {
+		var v any
+		return yaml.Load([]byte("&"+n.Value+" [*"+n.Value+"]"), &v)
+	}
 	withContext := func(err error) error { return fmt.Errorf("ctx: %v", err) }
 	byText := func(err error) error { return errors.New(err.Error()) }
 	byMessage := func(err error) error {
@@ -582,6 +587,7 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 		"go-yaml's no-documents error relayed":  {doc: "h: '# shortsec'\n", call: loadValue, copyErr: verbatim},
 		"%v of go-yaml's no-documents error":    {doc: "h: '# shortsec'\n", call: loadValue, copyErr: withContext},
 		"Error() text of a nested load failure": {doc: "h: ${APP_SECRET}\n", call: loadAnchorRef, copyErr: byText},
+		"Message of an alias cycle":             {doc: "h: ${APP_SECRET}\n", call: loadCycle, copyErr: byMessage},
 	} {
 		t.Run("a copy of go-yaml's error is never claimable: "+name, func(t *testing.T) {
 			t.Parallel()
@@ -599,6 +605,75 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 			}
 		})
 	}
+
+	// A hook that loads its expanded value as YAML gets go-yaml messages that
+	// quote a character, a byte, a count or a key of that value.
+	mergeConflict, optErr := yaml.OptsYAML("plugin: {merge-key: {conflicts: error}}")
+	if optErr != nil {
+		t.Fatalf("OptsYAML: %v", optErr)
+	}
+	loadArray := func(n *yaml.Node) error { var a [2]int; return yaml.Load([]byte(n.Value), &a) }
+	loadMerge := func(n *yaml.Node) error {
+		var v any
+		doc := "a: &a {" + n.Value + ": 1}\nb:\n  <<: [*a, {" + n.Value + ": 2}]\n"
+		return yaml.Load([]byte(doc), &v, mergeConflict)
+	}
+	for name, tc := range map[string]struct {
+		secret string
+		call   func(*yaml.Node) error
+		leak   string
+	}{
+		"tag character":      {secret: "!aZ{q", call: loadValue, leak: "'{'"},
+		"control character":  {secret: "a\x01b", call: loadValue, leak: "(value: 1)"},
+		"invalid UTF-8":      {secret: "\xffzz", call: loadValue, leak: "(value: 255)"},
+		"array length":       {secret: "[1, 2, 3]", call: loadArray, leak: "got 3"},
+		"merge-key conflict": {secret: "mergesec", call: loadMerge, leak: "mergesec"},
+	} {
+		t.Run("a copy of go-yaml's value-quoting message is never claimable: "+name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.call(&yaml.Node{Kind: yaml.ScalarNode, Value: tc.secret}); err == nil ||
+				!strings.Contains(err.Error(), tc.leak) {
+				t.Fatalf("precondition: go-yaml's message %v does not quote %q", err, tc.leak)
+			}
+			cfg := copyingConfig{H: copyingHook{call: tc.call, copyErr: byMessage}}
+			_, err := yamlenv.Load([]byte("h: ${APP_SECRET}\n"), &cfg, allowAppPrefix,
+				yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": tc.secret})),
+				yamlenv.WithErrorPassthrough(claimUnmarshaler))
+			if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok {
+				t.Errorf("a copy of go-yaml's message was classified app-owned: %v", err)
+			}
+			const want = "decode errors: line 1, column 4: value rejected (details withheld: they may embed an expanded secret)"
+			if err == nil || err.Error() != want {
+				t.Errorf("err = %v, want %q", err, want)
+			}
+		})
+	}
+
+	t.Run("the app's own error type claims nothing else", func(t *testing.T) {
+		t.Parallel()
+		claimPort := func(err error) bool { _, ok := errors.AsType[*portError](err); return ok }
+		secret := yamlenv.WithLookupEnv(mapLookup(map[string]string{"APP_SECRET": "hunter2-addr"}))
+		load := func(doc string, pred func(error) bool) error {
+			var cfg struct {
+				Port port       `yaml:"port"`
+				Addr netip.Addr `yaml:"addr"`
+			}
+			_, err := yamlenv.Load([]byte(doc), &cfg, allowAppPrefix, secret, yamlenv.WithErrorPassthrough(pred))
+			if err == nil {
+				t.Fatalf("Load(%q) = nil (port %d, addr %v), want a decode error", doc, cfg.Port.n, cfg.Addr)
+			}
+			return err
+		}
+		if err := load("port: ${APP_SECRET}\n", claimPort); err.Error() != "port: must be a port number from 1 to 65535" {
+			t.Errorf("app error = %q, want the app's text", err)
+		}
+		if err := load("addr: ${APP_SECRET}\n", claimUnmarshaler); !strings.Contains(err.Error(), "hunter2-addr") {
+			t.Errorf("err = %q: netip's echo no longer reaches an *UnmarshalerError predicate; update the WithErrorPassthrough godoc", err)
+		}
+		if err := load("addr: ${APP_SECRET}\n", claimPort); strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("err = %q, the app-type predicate passed netip's echo of the value", err)
+		}
+	})
 
 	t.Run("without a passthrough the classification stays fail-closed", func(t *testing.T) {
 		t.Parallel()

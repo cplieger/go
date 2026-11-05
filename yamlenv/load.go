@@ -8,14 +8,14 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-// UnmarshalerError is a decode failure the config type's own UnmarshalYAML
-// produced, not one go-yaml constructed. Load classifies the decode error
-// before WithErrorPassthrough's predicate sees it, so a caller claims its own
-// errors by type and never one of go-yaml's. Load wraps only when every entry
-// came from the config type and none wraps or carries go-yaml's error text,
-// even copied with %v. Err is the method's error, or errors.Join of several
-// in document order; Error returns its text unchanged. Only Load constructs
-// it, always with a non-nil Err.
+// UnmarshalerError is a decode failure Load attributes to the config type's
+// own UnmarshalYAML, the classification WithErrorPassthrough's predicate sees:
+// every entry came from the config type, and none wraps a go-yaml error or
+// carries the fixed words of a go-yaml message that quotes input. Load cannot
+// vouch for other text a hook writes, so claim the app's own error type, not
+// this one. Err is the method's error, or errors.Join of several in document
+// order; Error returns its text unchanged. Only Load constructs it, always
+// with a non-nil Err.
 type UnmarshalerError struct {
 	// Err is the error the config type's UnmarshalYAML returned, unchanged.
 	Err error
@@ -57,13 +57,13 @@ func WithSanitizeOptions(opts ...SanitizeOption) LoadOption {
 }
 
 // WithErrorPassthrough returns a decode error unchanged instead of sanitized
-// when pred reports true, for config types whose UnmarshalYAML speaks an
-// app-owned, value-safe vocabulary. pred sees the classified error, so
-// errors.AsType[*UnmarshalerError] is the predicate that can never claim one
-// of go-yaml's errors. go-yaml relays an encoding.TextUnmarshaler failure like
-// UnmarshalYAML's, so a field type whose error echoes its input (netip.Addr,
-// time.Time) passes through unsanitized under it. Parse errors and
-// unknown-key findings never reach pred.
+// when pred reports true. pred sees the classified error: claim the app's own
+// error type (errors.AsType[*myconfig.Error]), whose text the app controls; it
+// matches only inside an *UnmarshalerError. A hook error that copies go-yaml's
+// text is withheld only when it matches a marker of the go-yaml release the
+// tests pin, and a TextUnmarshaler field's error (netip.Addr) can echo its
+// input; a predicate claiming every *UnmarshalerError passes both. Parse
+// errors and unknown-key findings never reach pred.
 func WithErrorPassthrough(pred func(error) bool) LoadOption {
 	return func(o *loadOptions) { o.passthrough = pred }
 }

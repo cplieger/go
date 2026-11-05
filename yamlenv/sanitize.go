@@ -29,13 +29,29 @@ const (
 	textUnmarshaler  = " (TextUnmarshaler)"
 )
 
-// goYAMLMarkers are fragments of go-yaml's own error text: its Error()
-// wrappers and the fixed words of every message that embeds document text. A
-// config type's error that copies go-yaml's with %v or errors.New loses the
-// *LoadError chain, so these words are all that is left to recognise it by.
+// goYAMLMarkers are go-yaml v4.0.0's Error() wrappers and the fixed words of
+// each of its messages that formats document input. A config type's error
+// that copies one with %v or errors.New loses the *LoadError chain, so these
+// words are all that is left to recognise it by. Sources are under
+// internal/libyaml unless named. TestGoYAMLMarkersAudited fails on any other
+// go-yaml version until this list is re-audited.
 var goYAMLMarkers = []string{
-	"go-yaml load error", ": yaml: ", wrongTypePrefix, dupKeyDefinedAt, unknownKeyInType,
-	fieldSetInType, " as a map key", "unknown anchor '", "alias-data", v3HookMarker,
+	"go-yaml load error",                // errors.go:71,74, plugin/errorformat/v4
+	": yaml: ",                          // errors.go:239, plugin/errorformat/v3, after context
+	wrongTypePrefix,                     // constructor.go:123,142,951, resolver.go:121
+	fieldSetInType,                      // constructor.go:744
+	unknownKeyInType,                    // constructor.go:767
+	" as a map key",                     // constructor.go:810
+	"anchor '",                          // constructor.go:483, composer.go:242
+	"invalid array: want ",              // constructor.go:592
+	v3HookMarker,                        // constructor.go:851
+	dupKeyDefinedAt,                     // plugin_merge_key.go:252
+	"merge-key: ",                       // internal/plugin/mergekey/merge.go:48
+	"alias-data",                        // composer.go:238, alias_data_path.go:36, plugin/aliasdata
+	" event but got ",                   // composer.go:402
+	"that is not allowed in a YAML tag", // scanner.go:3037
+	"(value: ",                          // reader.go:126,161,184,237,262,304
+	"input error: ",                     // reader.go:430
 }
 
 // coreTags are the tags go-yaml names on its own. A wrong-type entry repeats

@@ -3,6 +3,7 @@ package yamlenv
 import (
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
@@ -85,6 +86,18 @@ func TestClassifyDecodeError(t *testing.T) {
 		"duplicate key after context":     `ctx: mapping key "a" already defined at line 1`,
 		"unknown field after context":     "ctx: field a not found in type T",
 		"field already set after context": "ctx: field a already set in type T",
+		"alias cycle":                     "anchor 'x' value contains itself",
+		"tag character":                   "found character '{' that is not allowed in a YAML tag",
+		"leading UTF-8 octet":             "invalid leading UTF-8 octet (value: 255)",
+		"trailing UTF-8 octet":            "invalid trailing UTF-8 octet (value: 65)",
+		"invalid Unicode character":       "invalid Unicode character (value: 65534)",
+		"unexpected low surrogate":        "unexpected low surrogate area (value: 56320)",
+		"expected low surrogate":          "expected low surrogate area (value: 65)",
+		"control character":               "control characters are not allowed (value: 1)",
+		"input error":                     "input error: read failed",
+		"array length":                    "invalid array: want 2 elements but got 3",
+		"merge-key conflict":              `merge-key: conflicting key "x"`,
+		"composer event":                  "expected MAPPING_START event but got SCALAR",
 	} {
 		tests["copied go-yaml message: "+name] = tc{err: hookErrors(msg)}
 	}
@@ -96,6 +109,73 @@ func TestClassifyDecodeError(t *testing.T) {
 		}
 		if !wrapped && got != tt.err {
 			t.Errorf("%s: classifyDecodeError changed an unclaimed error: %v", name, got)
+		}
+	}
+}
+
+// goYAMLModule at auditedGoYAML is the release whose value-quoting messages
+// goYAMLMarkers was checked against.
+const (
+	goYAMLModule  = "go.yaml.in/yaml/v4"
+	auditedGoYAML = "v4.0.0"
+)
+
+// goYAMLAuditDrift returns why deps do not build goYAMLModule at
+// auditedGoYAML, or "" when they do.
+func goYAMLAuditDrift(deps []*debug.Module) string {
+	for _, dep := range deps {
+		if dep.Path != goYAMLModule {
+			continue
+		}
+		switch {
+		case dep.Replace != nil:
+			return fmt.Sprintf("%s is replaced by %s %s", goYAMLModule, dep.Replace.Path, dep.Replace.Version)
+		case dep.Version != auditedGoYAML:
+			return fmt.Sprintf("yamlenv builds against %s %s", goYAMLModule, dep.Version)
+		}
+		return ""
+	}
+	return goYAMLModule + " is not in the build information"
+}
+
+// TestGoYAMLMarkersAudited fails when yamlenv builds against a go-yaml other
+// than the one goYAMLMarkers was audited on: a value-quoting message that
+// release adds would pass isGoYAMLMessage and reach a passthrough predicate.
+func TestGoYAMLMarkersAudited(t *testing.T) {
+	t.Parallel()
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("debug.ReadBuildInfo: the test binary has no build information")
+	}
+	if drift := goYAMLAuditDrift(bi.Deps); drift != "" {
+		t.Fatalf("%s, but goYAMLMarkers was audited on %s. Redo the audit: walk every fmt.Sprintf, "+
+			"fmt.Errorf and errors.New in the new release's root package, internal/libyaml, internal/plugin "+
+			"and plugin that formats document input, add a goYAMLMarkers entry and a TestClassifyDecodeError "+
+			"row for each message that quotes it, then set auditedGoYAML to the new version in the same change.",
+			drift, auditedGoYAML)
+	}
+}
+
+// TestGoYAMLAuditDrift pins the tripwire's comparison on synthetic build
+// information, so a bump, a replace or a missing entry cannot pass.
+func TestGoYAMLAuditDrift(t *testing.T) {
+	t.Parallel()
+	other := &debug.Module{Path: "example.com/other", Version: auditedGoYAML}
+	tests := map[string]struct {
+		deps []*debug.Module
+		ok   bool
+	}{
+		"audited":     {deps: []*debug.Module{other, {Path: goYAMLModule, Version: auditedGoYAML}}, ok: true},
+		"patch bump":  {deps: []*debug.Module{{Path: goYAMLModule, Version: "v4.0.1"}}},
+		"pre-release": {deps: []*debug.Module{{Path: goYAMLModule, Version: auditedGoYAML + "-rc.1"}}},
+		"replaced": {deps: []*debug.Module{
+			{Path: goYAMLModule, Version: auditedGoYAML, Replace: &debug.Module{Path: "../go-yaml"}},
+		}},
+		"absent": {deps: []*debug.Module{other}},
+	}
+	for name, tt := range tests {
+		if drift := goYAMLAuditDrift(tt.deps); (drift == "") != tt.ok {
+			t.Errorf("%s: goYAMLAuditDrift = %q, want ok=%v", name, drift, tt.ok)
 		}
 	}
 }
