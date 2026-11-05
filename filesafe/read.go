@@ -18,15 +18,12 @@ func saturateAdd(a, b int64) int64 {
 	return sum
 }
 
-// ReadBounded opens path, validates its size against maxBytes, and reads it
-// via an io.LimitReader. Returns ErrFileTooLarge if the file exceeds
-// maxBytes, including if it grows past the limit during the read. ctx is
-// checked before the open and before the read.
-//
-// Unlike the write primitives, ReadBounded does NOT refuse symlink targets:
-// os.Open follows symlinks. Callers reading from a directory writable by a
-// less-trusted principal should confine the path themselves: open through an
-// *os.Root and read with ReadBoundedFile.
+// ReadBounded opens path and reads at most maxBytes from it, returning
+// ErrFileTooLarge if the file exceeds maxBytes, including if it grows past
+// the limit during the read. ctx is checked before the open and before the
+// read. It follows symlinks, unlike the write primitives: a caller reading
+// from a directory a less-trusted principal can write uses ReadBoundedInRoot.
+// On Windows its open handle does not block a filesafe write of the file.
 func ReadBounded(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
 	cleanPath, err := validateAbsClean(path)
 	if err != nil {
@@ -35,7 +32,7 @@ func ReadBounded(ctx context.Context, path string, maxBytes int64) ([]byte, erro
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, fmt.Errorf("filesafe: %w", ctxErr)
 	}
-	f, err := os.Open(cleanPath)
+	f, err := openRead(cleanPath)
 	if err != nil {
 		return nil, err
 	}
@@ -43,15 +40,12 @@ func ReadBounded(ctx context.Context, path string, maxBytes int64) ([]byte, erro
 	return ReadBoundedFile(ctx, f, maxBytes)
 }
 
-// ReadBoundedFile reads up to maxBytes from an already-open file, applying
-// the same size validation as ReadBounded: returns ErrFileTooLarge if the
-// file exceeds maxBytes, including if it grows past the limit during the
-// read. ctx is checked before the size stat and before the read. The caller
-// owns f; ReadBoundedFile does not close it.
-//
-// This is the seam for a caller that must open the file itself, most notably
-// through an *os.Root to confine the path, which ReadBounded cannot do
-// because os.Open follows symlinks.
+// ReadBoundedFile is ReadBounded for a file the caller opened itself, for
+// example through an *os.Root to confine the path: it reads at most maxBytes
+// from f and returns ErrFileTooLarge if the file exceeds maxBytes, including
+// if it grows past the limit during the read. ctx is checked before the size
+// stat and before the read. The caller owns f; ReadBoundedFile does not close
+// it.
 func ReadBoundedFile(ctx context.Context, f *os.File, maxBytes int64) ([]byte, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, fmt.Errorf("filesafe: %w", ctxErr)

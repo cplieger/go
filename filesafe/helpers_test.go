@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 )
 
@@ -19,16 +18,23 @@ import (
 // mode bits are not meaningful.
 func isWindows() bool { return runtime.GOOS == "windows" }
 
+// skipModeOptions skips t on Windows, where WithMode and WithMkdirMode return
+// ErrModeUnsupported before anything is created.
+func skipModeOptions(t testing.TB) {
+	t.Helper()
+	if isWindows() {
+		t.Skip("WithMode and WithMkdirMode return ErrModeUnsupported on Windows")
+	}
+}
+
 // Log messages asserted by the best-effort logging tests; sharing the
 // literals keeps the tests in lockstep with the production strings they pin.
 // msgStaleRemoved and msgStaleRemoveFail pin the ABSENCE of two lines
-// CleanupStaleTemps no longer emits, so a regression re-adding either is caught.
+// CleanupStaleTemps must not emit (SweepResult carries the counts).
 const (
 	msgRemoveTempFailed = "filesafe: temp file cleanup failed"
 	msgStaleRemoved     = "filesafe.CleanupStaleTemps: removed stale temps"
 	msgStaleRemoveFail  = "filesafe.CleanupStaleTemps: some stale temps could not be removed"
-
-	msgPrivateDirRepaired = "filesafe: created directory did not keep the requested mode; repaired"
 )
 
 // replaceWithNonEmptyDir deletes the file at path and puts a non-empty
@@ -69,16 +75,6 @@ func assertContent(t *testing.T, path, want string) {
 	if string(got) != want {
 		t.Errorf("file content = %q, want %q", got, want)
 	}
-}
-
-// stubFsyncRootDir replaces the package fsyncRootDir seam with one that
-// returns err, restoring the original on test end. Every write entry point
-// commits through this seam. Callers must not use t.Parallel: package state.
-func stubFsyncRootDir(t *testing.T, err error) {
-	t.Helper()
-	orig := fsyncRootDir
-	t.Cleanup(func() { fsyncRootDir = orig })
-	fsyncRootDir = func(*os.Root, string) error { return err }
 }
 
 // openTestRoot makes a temp dir, opens it as an *os.Root, and registers the
@@ -211,55 +207,6 @@ func (h *captureHandler) CountLevel(level slog.Level) int {
 		}
 	}
 	return n
-}
-
-// recordFsyncRootDir replaces the package fsyncRootDir seam with one that
-// records every dir it is asked to sync and then runs the original,
-// restoring it on test end. Returns a function reporting the recorded dirs
-// in call order. Callers must not use t.Parallel: package state.
-func recordFsyncRootDir(t *testing.T) func() []string {
-	t.Helper()
-	orig := fsyncRootDir
-	t.Cleanup(func() { fsyncRootDir = orig })
-	var mu sync.Mutex
-	var seen []string
-	fsyncRootDir = func(root *os.Root, dir string) error {
-		mu.Lock()
-		seen = append(seen, dir)
-		mu.Unlock()
-		return orig(root, dir)
-	}
-	return func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return slices.Clone(seen)
-	}
-}
-
-// withUmask sets the process umask for the test's duration and restores it
-// after. Process-global, so callers must not use t.Parallel. Needed because a
-// mode passed to mkdir(2) is only a REQUEST that umask narrows, and a test
-// run under the usual 022 can't tell an enforced mode from a requested one.
-func withUmask(t *testing.T, mask int) {
-	t.Helper()
-	prev := syscall.Umask(mask)
-	t.Cleanup(func() { syscall.Umask(prev) })
-}
-
-// assertDirMode fails t unless the directory at path stores exactly want in the
-// bits chmod(2) can set.
-func assertDirMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(%q) = %v", path, err)
-	}
-	if !fi.IsDir() {
-		t.Fatalf("Stat(%q) is not a directory (mode %s)", path, fi.Mode())
-	}
-	if got := chmodBits(fi.Mode()); got != want {
-		t.Errorf("mode of %q = %#o, want %#o", path, got, want)
-	}
 }
 
 // captureWarn returns a logger that records Warn and above into a buffer,

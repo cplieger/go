@@ -10,15 +10,15 @@ import (
 	"pgregory.net/rapid"
 )
 
-// WriteFile must round-trip arbitrary byte payloads with or without WithMode,
-// publish an enforced mode exactly and an ordinary file within 0666, and
-// leave no temp artifact behind on success.
+// WriteFile must round-trip arbitrary byte payloads with or without WithMode
+// (Unix only), publish an enforced mode exactly and an ordinary file within
+// 0666, and leave no temp artifact behind on success.
 func TestWriteFile_RapidRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	var counter int
 	rapid.Check(t, func(t *rapid.T) {
 		data := rapid.SliceOf(rapid.Byte()).Draw(t, "data")
-		modeSet := rapid.Bool().Draw(t, "modeSet")
+		modeSet := rapid.Bool().Draw(t, "modeSet") && !isWindows()
 		mode := rapid.SampledFrom([]os.FileMode{0o600, 0o644, 0o755}).Draw(t, "mode")
 
 		counter++

@@ -49,6 +49,19 @@ var (
 	// ErrAborted is returned by PendingFile.Commit when the pending file was
 	// already aborted by a prior Cleanup.
 	ErrAborted = errors.New("filesafe: pending file aborted")
+	// ErrFileBusy is returned on Windows when the replace was refused through
+	// every retry, or the context ended while waiting to retry. It arrives
+	// inside a *WriteError with PhaseRename, wrapping the last refusal's
+	// syscall.Errno (and the context error, if any): ERROR_SHARING_VIOLATION
+	// or ERROR_LOCK_VIOLATION means another handle held the file, while
+	// ERROR_ACCESS_DENIED is either such a handle or an ACL refusal, which
+	// Windows reports the same way. Match with errors.Is.
+	ErrFileBusy = errors.New("filesafe: target in use or access denied")
+	// ErrModeUnsupported is returned on Windows by EnforceMode,
+	// EnsurePrivateDir and any write or probe given WithMode or WithMkdirMode,
+	// before anything is created: Go's chmod there only sets the read-only
+	// attribute. Match with errors.Is.
+	ErrModeUnsupported = errors.New("filesafe: file modes are not supported on this platform")
 )
 
 // WritePhase identifies which step of an atomic write failed. Each value

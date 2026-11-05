@@ -105,17 +105,20 @@ func (r ProbeResult) Writable() bool {
 }
 
 // ProbeWritable proves dir is writable by doing what an atomic write does
-// (create a temp, write and flush a byte, close, unlink) and reports the first
-// stage that failed in the ProbeResult; err != nil only means the probe could
-// not start (empty dir, done ctx). The probe file is a TempName, so a leftover
-// is reclaimed by CleanupStaleTemps. A missing dir fails at ProbeStageCreate
-// unless WithMkdirMode creates it; dir may be relative. Under WithMode the
-// probe must prove an owner-only staging file, as a write would. ctx is
-// checked once; a probe that has begun always runs its own cleanup.
+// (create a TempName file, write and flush a byte, close, unlink) and reports
+// the first failed stage in the ProbeResult; a non-nil error means the probe
+// could not start (empty dir, done ctx, a refused mode option). dir may be
+// relative; a missing dir fails at ProbeStageCreate unless WithMkdirMode
+// creates it. WithMode makes it prove an owner-only staging file; on Windows
+// either mode option returns ErrModeUnsupported. ctx is checked once, a
+// started probe always cleans up, and CleanupStaleTemps reclaims a leftover.
 func ProbeWritable(ctx context.Context, dir string, opts ...Option) (ProbeResult, error) {
 	c := buildCfg(opts)
 	if dir == "" {
 		return ProbeResult{}, ErrEmptyPath
+	}
+	if modeErr := c.modeOptionsErr(); modeErr != nil {
+		return ProbeResult{}, modeErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ProbeResult{}, fmt.Errorf("filesafe: %w", ctxErr)
@@ -150,6 +153,9 @@ func ProbeWritableInRoot(ctx context.Context, root *os.Root, name string, opts .
 	clean, err := validateRootName(name)
 	if err != nil {
 		return ProbeResult{}, err
+	}
+	if modeErr := c.modeOptionsErr(); modeErr != nil {
+		return ProbeResult{}, modeErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ProbeResult{}, fmt.Errorf("filesafe: %w", ctxErr)

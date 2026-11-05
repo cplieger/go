@@ -16,8 +16,8 @@ This page maps each job to the filesafe call that does it and lists every option
 | Walk a tree that other writers can modify | `WalkDirInRoot` |
 | Remove a file in such a tree | `RemoveFileInRoot` |
 | Act twice on one name and know it is the same file both times | `OpenParentInRoot` |
-| Set a mode and prove the filesystem stored it | `EnforceMode` |
-| Create a directory only your user can enter | `EnsurePrivateDir` |
+| Set a mode and prove the filesystem stored it (not on Windows) | `EnforceMode` |
+| Create a directory only your user can enter (not on Windows) | `EnsurePrivateDir` |
 | Check that a directory takes writes before relying on it | `ProbeWritable`, `ProbeWritableInRoot` |
 | Reclaim temp files left by a crash | `CleanupStaleTemps`, `CleanupStaleTempsInRoot` |
 | Name your own file so the sweeps reclaim it | `TempName`, `IsPackageTemp` |
@@ -38,7 +38,7 @@ Every write returns `(Result, error)`. [Durability and errors](durability.md) ex
 
 A `WithMaxBytes` cap is enforced as you write. `BytesWritten()` reports the count, `Truncate` re-syncs it, and a call that would cross the cap is rejected whole. `Commit` checks the cap again against the staged file's real size. Bytes written outside that stream, through `WriteAt`, `Write` after `Seek` or a reopen of the temp by path, cannot publish an over-cap file either.
 
-`NewPendingFileInRoot` runs the temp, the rename and the directory sync through your `*os.Root`, which you keep open until `Commit` or `Cleanup`. A `PendingFile` is not safe for concurrent use, so keep each one on one goroutine.
+`NewPendingFileInRoot` runs the temp, the rename and the sync after it through your `*os.Root`, which you keep open until `Commit` or `Cleanup`. A `PendingFile` is not safe for concurrent use, so keep each one on one goroutine.
 
 ## Checking a path before writing
 
@@ -54,11 +54,11 @@ Every write, sweep and probe accepts options. Each call ignores the options that
 
 | Option | Applies to | Effect |
 | --- | --- | --- |
-| `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins |
-| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it a missing parent is an error |
+| `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins. On Windows it fails with `ErrModeUnsupported` |
+| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it a missing parent is an error. On Windows a nonzero mode fails with `ErrModeUnsupported` |
 | `WithMaxBytes(n)` | writes | Caps staged content at `n` bytes, checked while staging and before the rename. Over-cap writes match `ErrFileTooLarge`. `n <= 0` means no cap |
 | `WithLogger(l)` | every call that logs | The `*slog.Logger` for diagnostics. Default `slog.Default()` |
 | `WithRecursive(recursive)` | stale-temp sweeps | `true` descends into subdirectories. The default sweeps one directory |
 | `WithRepairOwnedDir(repair)` | `EnsurePrivateDir` | `true` repairs a too-open pre-existing directory the effective user owns, instead of refusing it |
 
-Without `WithMode`, the file is created like `os.Create`, at 0666 through the umask and inherited ACLs, and its mode is never checked. [File modes and private directories](file-modes.md) explains when to pass it.
+Without `WithMode`, the file is created like `os.Create`, at 0666 through the umask and inherited ACLs, and its mode is never checked. [File modes and private directories](file-modes.md) explains when to pass it. On Windows the file takes the ACL it inherits from its directory.

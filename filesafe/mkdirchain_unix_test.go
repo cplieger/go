@@ -1,3 +1,5 @@
+//go:build !windows
+
 package filesafe
 
 import (
@@ -12,9 +14,9 @@ import (
 	"testing"
 )
 
-// The durability property WithMkdirMode used to break: a directory ENTRY that
-// has never been fsynced into its own parent can vanish in a crash, taking the
-// whole subtree with it — including a file the write just fsynced and renamed.
+// A directory ENTRY that has never been fsynced into its own parent can vanish
+// in a crash, taking the whole subtree with it, including a file the write just
+// fsynced and renamed.
 // So every level the write CREATES must have its parent fsynced, not only the
 // file's immediate parent.
 //
@@ -185,9 +187,6 @@ func TestMkdirMode_CreatedDirFsyncFailure_ReportsNotDurable(t *testing.T) {
 //
 // Serial (no t.Parallel): umask is process state.
 func TestMkdirMode_EnforcesTheRequestedMode(t *testing.T) {
-	if isWindows() {
-		t.Skip("POSIX mode bits")
-	}
 	withUmask(t, 0o077)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a", "b", "f.txt")
@@ -204,9 +203,6 @@ func TestMkdirMode_EnforcesTheRequestedMode(t *testing.T) {
 // the mode enforcement is licensed by mkdir(2) having just handed this process a
 // name nobody else ever held, and a directory somebody else made is theirs.
 func TestMkdirMode_LeavesAPreExistingDirectoryAlone(t *testing.T) {
-	if isWindows() {
-		t.Skip("POSIX mode bits")
-	}
 	root, dir := openTestRoot(t)
 	if err := root.Mkdir("a", 0o700); err != nil {
 		t.Fatalf("Mkdir() = %v", err)
@@ -222,14 +218,10 @@ func TestMkdirMode_LeavesAPreExistingDirectoryAlone(t *testing.T) {
 }
 
 // A non-directory occupying a level of the chain reports ENOTDIR, the error
-// os.MkdirAll gives for the same shape, so a caller's errors.Is does not change
-// with the new implementation.
-//
-// Reached by calling mkdirAllInRoot directly, because the write entry points
-// cannot get here: the guard sequence Lstats the TARGET before the mkdir runs,
-// and that Lstat traverses the same blocked component and fails first (with the
-// same ENOTDIR — TestMkdirMode_BlockedByFile pins that path). The arm exists for
-// the race where the blocker appears between the two.
+// os.MkdirAll gives for the same shape. Called directly because the write
+// entry points Lstat the target first and fail there with the same ENOTDIR
+// (TestMkdirMode_BlockedByFile); this arm serves the race where the blocker
+// appears between the two.
 func TestMkdirAllInRoot_NonDirectoryInChain(t *testing.T) {
 	t.Parallel()
 	root, dir := openTestRoot(t)
@@ -346,4 +338,80 @@ func TestMkdirAllAbs_FollowsAnExistingSymlinkedAncestor(t *testing.T) {
 		t.Fatalf("WriteFile(through an existing symlinked ancestor) = %v, want nil", err)
 	}
 	assertContent(t, filepath.Join(target, "b", "f.txt"), "payload")
+}
+
+func TestMkdirMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("WriteFile_creates_dirs", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "a", "b", "file.txt")
+		if _, err := WriteFile(t.Context(), path, []byte("nested"), WithMkdirMode(0o755)); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != "nested" {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("WriteFile_no_mkdir_by_default", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "x", "y", "file.txt")
+		if _, err := WriteFile(t.Context(), path, []byte("data")); err == nil {
+			t.Fatal("expected error without MkdirMode")
+		}
+	})
+}
+
+func TestMkdirMode_BlockedByFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("I am a file"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// A regular file in the parent chain makes MkdirAll fail ENOTDIR.
+	path := filepath.Join(blocker, "sub", "file.txt")
+	_, err := WriteFile(t.Context(), path, []byte("data"), WithMkdirMode(0o755))
+	if err == nil {
+		t.Fatal("expected error when the parent chain is blocked by a file")
+	}
+	assertNoTempLeak(t, dir)
+}
+
+// TestWriteFile_MkdirMode_ParentNotWritable_WrapsError pins the MkdirAll
+// failure contract: a traversable but non-writable parent makes MkdirAll
+// fail EACCES, so the error wraps os.ErrPermission, never a *WriteError.
+// Non-root only; not parallel, matching the sibling permission tests.
+func TestWriteFile_MkdirMode_ParentNotWritable_WrapsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses EACCES")
+	}
+	dir := t.TempDir()
+	ro := filepath.Join(dir, "ro")
+	if err := os.Mkdir(ro, 0o555); err != nil { // traversable (x), not writable (no w)
+		t.Fatalf("mkdir ro: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o755) })
+
+	path := filepath.Join(ro, "sub", "file.txt")
+	_, err := WriteFile(t.Context(), path, []byte("data"), WithMkdirMode(0o755))
+
+	if err == nil {
+		t.Fatal("expected error creating a parent directory under a non-writable dir")
+	}
+	if !strings.Contains(err.Error(), "create parent directory") {
+		t.Errorf("error = %q, want it to mention %q", err.Error(), "create parent directory")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("error = %v, want it to wrap os.ErrPermission", err)
+	}
+	if we, ok := errors.AsType[*WriteError](err); ok {
+		t.Errorf("error is *WriteError{Phase=%v}, want a plain wrapped error", we.Phase)
+	}
+	assertNoTempLeak(t, dir)
 }

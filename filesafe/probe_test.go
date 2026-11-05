@@ -97,6 +97,7 @@ func TestProbeWritable(t *testing.T) {
 
 	t.Run("missing_dir_with_mkdir_mode_succeeds", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		created := filepath.Join(t.TempDir(), "sub", "deeper")
 
 		res, err := ProbeWritable(t.Context(), created, WithMkdirMode(0o750))
@@ -118,6 +119,7 @@ func TestProbeWritable(t *testing.T) {
 
 	t.Run("mkdir_failure_reports_the_mkdir_stage", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		// A regular file in the parent chain makes MkdirAll fail without
 		// permission trickery, so the stage is reachable as root too.
 		blocker := filepath.Join(t.TempDir(), "file")
@@ -263,6 +265,7 @@ func TestProbeWritableInRoot(t *testing.T) {
 
 	t.Run("missing_subdirectory_with_mkdir_mode_succeeds", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		root, dir := openTestRoot(t)
 
 		res, err := ProbeWritableInRoot(t.Context(), root, "made/here", WithMkdirMode(0o755))
@@ -299,6 +302,9 @@ func TestProbeWritableInRoot(t *testing.T) {
 		}
 		for name, tc := range cases {
 			t.Run(name, func(t *testing.T) {
+				if tc.opts != nil {
+					skipModeOptions(t)
+				}
 				res, probeErr := ProbeWritableInRoot(t.Context(), root, "../escaped", tc.opts...)
 				if probeErr != nil {
 					t.Fatalf("ProbeWritableInRoot(escaping) = err %v, want nil (the root refuses it as a stage failure)", probeErr)

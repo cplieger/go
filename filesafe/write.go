@@ -19,28 +19,25 @@ type Result struct {
 	// functions it is root.Name() joined with the cleaned relative name.
 	Path string
 	// Durable reports whether the write is guaranteed to survive a crash:
-	// true only when the file and every directory its path depends on were
-	// fsynced. False means the data is present at Path but may not survive
-	// an immediate power loss, and the failure is logged at Warn.
+	// true only when the file and every directory entry its path depends on
+	// were flushed (docs/durability.md, per platform). False means the data
+	// is present at Path but may not survive an immediate power loss, and
+	// the cause is logged.
 	Durable bool
 }
 
-// openParentRoot validates and cleans path, honors ctx, optionally creates
-// the parent directory chain, and opens the parent directory as an *os.Root
-// so every subsequent operation runs through the root-confined engine
-// (openTempForRoot / writeAtomicInRoot / commitTempInRoot).
-//
-// An OpenRoot failure is tagged PhaseTempCreate, the same class a
-// temp-creation failure surfaces. The caller owns the returned root and must
-// close it.
-//
-// dirSyncFailed reports that a directory the mkdir step created could not be
-// fsynced into its own parent (see mkdirAllInRoot); the engine folds this
-// into Result.Durable.
+// openParentRoot validates and cleans path, refuses unsupported mode
+// options, honors ctx, optionally creates the parent directory chain, and
+// opens the parent as an *os.Root the caller must close. An OpenRoot failure
+// is a PhaseTempCreate WriteError. dirSyncFailed reports that a created
+// directory could not be fsynced into its parent (see mkdirAllInRoot).
 func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, base string, dirSyncFailed bool, err error) {
 	cleanPath, err := validateAbsClean(path)
 	if err != nil {
 		return nil, "", false, err
+	}
+	if modeErr := c.modeOptionsErr(); modeErr != nil {
+		return nil, "", false, modeErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, "", false, fmt.Errorf("filesafe: %w", ctxErr)
@@ -61,18 +58,11 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 }
 
 // mkdirAllAbs creates the absolute directory dir and every missing ancestor
-// at mode, running the creation inside an *os.Root opened on the deepest
-// ancestor that already exists.
-//
-// os.MkdirAll cannot serve here: it reports only success, and the durability
-// fix needs to know which levels are new. Ancestors that already existed
-// when deepestExistingDir ran are resolved ambiently (symlinks included);
-// every level BELOW that point runs through the root, so a name found
-// missing that a racing writer then plants as an escaping symlink is
-// refused instead of followed.
-//
-// dirSyncFailed mirrors mkdirAllInRoot's inverted durable: true when a
-// created directory's parent could not be fsynced.
+// at mode, inside an *os.Root opened on the deepest existing ancestor, so a
+// missing level a racing writer plants as an escaping symlink is refused
+// rather than followed. os.MkdirAll would not say which levels are new,
+// which the parent fsyncs need. dirSyncFailed is mkdirAllInRoot's durable,
+// inverted.
 func mkdirAllAbs(dir string, mode os.FileMode, logger *slog.Logger) (dirSyncFailed bool, err error) {
 	base, rel, err := deepestExistingDir(dir)
 	if err != nil {
@@ -92,13 +82,9 @@ func mkdirAllAbs(dir string, mode os.FileMode, logger *slog.Logger) (dirSyncFail
 
 // deepestExistingDir splits the absolute, cleaned dir into the deepest
 // ancestor that already exists and the relative remainder still to be
-// created. rel is "." when dir itself exists. A non-directory on the way up
-// is ENOTDIR, matching os.MkdirAll.
-//
-// This is the one ambient path resolution the absolute-path family cannot
-// avoid — read-only (os.Stat only), and the directories it hands back are
-// re-resolved once by os.OpenRoot, after which every operation is
-// openat-relative.
+// created (rel is "." when dir exists). A non-directory on the way up is
+// ENOTDIR, as os.MkdirAll gives. It is the absolute-path family's one
+// ambient resolution, read-only; everything after it runs through a root.
 func deepestExistingDir(dir string) (base, rel string, err error) {
 	rel = "."
 	for cur := dir; ; {
@@ -128,7 +114,8 @@ func deepestExistingDir(dir string) (base, rel string, err error) {
 // finalizeTempFile runs the temp-side barrier on a staged temp: check a
 // WithMaxBytes cap against the fstat size (so bytes staged outside the
 // streaming interfaces cannot publish), enforce WithMode's mode when given,
-// fsync, close. On an error it closes the file; the caller removes the temp.
+// fsync, then closeTempBeforeRename. On an error it closes the file; the
+// caller removes the temp.
 func finalizeTempFile(ctx context.Context, tmp *os.File, c *cfg) error {
 	if err := ctx.Err(); err != nil {
 		tmp.Close()
@@ -159,10 +146,7 @@ func finalizeTempFile(ctx context.Context, tmp *os.File, c *cfg) error {
 		tmp.Close()
 		return fmt.Errorf("filesafe: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		return &WriteError{Phase: PhaseTempClose, Err: err}
-	}
-	return nil
+	return closeTempBeforeRename(tmp)
 }
 
 // writeAtomic adapts an absolute-path write onto the root-confined engine:
@@ -302,27 +286,12 @@ const (
 )
 
 // PendingFile is a temp file open for writing, destined to atomically
-// replace a target on Commit. It embeds *os.File, so callers get the full
-// io.Writer/io.ReaderFrom/fmt.Fprintf surface, and the embedded Name()
-// reports the temp's path so the staged file can be handed to external
-// verifiers before Commit.
-//
-// A PendingFile is written as an append-only stream: Write, WriteString, and
-// ReadFrom maintain a byte count (BytesWritten) that Truncate re-syncs, and
-// a WithMaxBytes cap is enforced on exactly that stream. Operations on the
-// embedded *os.File that step outside the stream model (WriteAt, Write
-// after Seek) bypass the accounting, but not the cap: Commit re-verifies the
-// staged file's actual size against the cap at the durability barrier.
-//
-// Every filesystem operation runs through an *os.Root: the caller's root
-// for NewPendingFileInRoot, or a root of the target's parent directory that
-// NewPendingFile opens and owns. An owned root is closed when the
-// PendingFile reaches a terminal state (Commit called, or Cleanup
-// succeeded).
-//
-// A PendingFile is not safe for concurrent use: Commit and Cleanup mutate
-// unsynchronized lifecycle state. Confine each PendingFile to a single
-// goroutine.
+// replace a target on Commit. It embeds *os.File; Name reports the temp's
+// path, so the staged file can be checked before Commit. Write, WriteString
+// and ReadFrom enforce WithMaxBytes and count BytesWritten; other writes
+// through the embedded file escape the count but not the cap, which Commit
+// re-checks. NewPendingFile owns the root it opens and closes it at Commit or
+// a successful Cleanup. A PendingFile is not safe for concurrent use.
 type PendingFile struct {
 	*os.File
 	cfg     *cfg
@@ -469,10 +438,10 @@ func (p *PendingFile) closeOwnedRoot() {
 }
 
 // Commit runs the durability barrier (WithMaxBytes size check, WithMode
-// enforcement, fsync, close), renames the temp into place and fsyncs the
-// parent directory. It is idempotent; after Cleanup it returns ErrAborted, and
-// after it Cleanup is a no-op. ctx is checked through close (a cancelled
-// context aborts and removes the temp), not between close and rename.
+// enforcement, fsync) and publishes the temp at the target as WriteFile does.
+// It is idempotent; after Cleanup it returns ErrAborted, and after it Cleanup
+// is a no-op. A ctx cancelled before the rename aborts and removes the temp;
+// on Windows it also ends the retry of a busy target with ErrFileBusy.
 func (p *PendingFile) Commit(ctx context.Context) (Result, error) {
 	switch p.state {
 	case pendingCommitted:
@@ -497,7 +466,7 @@ func (p *PendingFile) commit(ctx context.Context) (Result, error) {
 		return Result{}, fErr
 	}
 	committed = true
-	durable, cErr := commitTempInRoot(p.root, p.tmpName, p.name, p.dir, p.cfg)
+	durable, cErr := commitTempInRoot(ctx, p.root, p.File, p.tmpName, p.name, p.dir, p.cfg)
 	if cErr != nil {
 		return Result{}, cErr
 	}

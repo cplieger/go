@@ -16,7 +16,7 @@ A finalizer would unlink with no ordering against a live `Commit`, so abandonmen
 
 A sweep reclaims only files of the package's exact temp shape, `.atomicfile-<digits>.tmp`, older than `maxAge`. A file that only shares the prefix or suffix, such as `.atomicfile-notes.tmp` or `config.tmp-backup`, is never touched. Each candidate is checked again right before removal, so a fresh temp file created during the sweep is spared. A missing directory is not an error. The sweep stops once `ctx` is done and returns `ctx.Err()` with the counts so far.
 
-The result is a `SweepResult` with three counts. `Removed` counts reclaimed files. `Failed` counts temp files that were found but could not be removed, so orphans are piling up. `Unreadable` counts subdirectories the sweep could not enter, which may hide orphans nobody counted.
+The result is a `SweepResult` with three counts. `Removed` counts reclaimed files. `Failed` counts temp files that were found but could not be removed, so orphans are piling up. `Unreadable` counts subdirectories the sweep could not enter, which may hide orphans nobody counted. On Windows a temp file another process holds open without delete sharing cannot be removed, so it counts in `Failed` and a later sweep reclaims it.
 
 A sweep covers one directory unless you pass `WithRecursive(true)`. A temp file sits in the same directory as its target, so a write to `out/example.com/cert.pfx` leaves its orphan in `out/example.com`, where a flat sweep of `out` does not look.
 
@@ -38,7 +38,7 @@ A `maxAge` of zero or less skips the sweep with a `Warn` instead of removing eve
 
 ## Probing a directory
 
-`ProbeWritable(ctx, dir)` proves a directory takes writes by doing what a write does. It creates a temp file, writes and syncs one byte, closes the file and removes it, then reports which stage failed. `dir` may be relative, and `WithMkdirMode` creates it first. Under `WithMode` the probe must also prove an owner-only staging file, as a write would.
+`ProbeWritable(ctx, dir)` proves a directory takes writes by doing what a write does. It creates a temp file, writes and syncs one byte, closes the file and removes it, then reports which stage failed. `dir` may be relative, and `WithMkdirMode` creates it first. Under `WithMode` the probe must also prove an owner-only staging file, as a write would. On Windows either mode option makes the probe return `ErrModeUnsupported` before it creates anything.
 
 `ProbeWritableInRoot(ctx, root, name)` runs the same probe through an `*os.Root` you already hold, with `"."` for the root itself. A name that escapes the root is refused.
 
@@ -54,7 +54,7 @@ type ProbeResult struct {
 
 Reading the mode bits does not answer the question. An NFS or FUSE mount, a read-only bind mount and a Docker volume owned by another UID all show a directory that looks writable and refuses the first write. The stages are `ProbeStageMkdir`, `ProbeStageCreate`, `ProbeStageWrite`, `ProbeStageSync`, `ProbeStageClose` and `ProbeStageRemove`, because a filesystem can fail at any one of them.
 
-The policy stays with you. A failed stage is reported in the `ProbeResult`, never as the error return. A non-nil error means only that the probe could not start, for an empty `dir` or a cancelled context. `res.OK()` reports that every stage passed. `res.Writable()` is true when only teardown failed, at `ProbeStageClose` or later, because the directory still took the bytes. A caller can then warn and keep running.
+The policy stays with you. A failed stage is reported in the `ProbeResult`, never as the error return. A non-nil error means only that the probe could not start, for an empty `dir`, a cancelled context or a refused mode option. `res.OK()` reports that every stage passed. `res.Writable()` is true when only teardown failed, at `ProbeStageClose` or later, because the directory still took the bytes. A caller can then warn and keep running.
 
 The probe file is named with `TempName()`, so a probe file orphaned by a crash, or left by a directory that refuses the unlink, is reclaimed by `CleanupStaleTemps` like any other temp file.
 

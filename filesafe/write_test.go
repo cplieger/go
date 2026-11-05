@@ -7,9 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -86,9 +84,7 @@ func TestWriteFile(t *testing.T) {
 
 	t.Run("respects_file_permissions", func(t *testing.T) {
 		t.Parallel()
-		if runtime.GOOS == "windows" {
-			t.Skip("file mode not meaningful on Windows")
-		}
+		skipModeOptions(t)
 		dir := t.TempDir()
 		path := filepath.Join(dir, "perms.txt")
 		if _, err := WriteFile(t.Context(), path, []byte("x"), WithMode(0o600)); err != nil {
@@ -156,49 +152,6 @@ func TestWriteFile_Durable(t *testing.T) {
 	})
 }
 
-func TestWriteFile_ro_dir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX mode bits")
-	}
-	if u, err := user.Current(); err == nil && u.Uid == "0" {
-		t.Skip("root bypasses EACCES")
-	}
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatalf("Chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	path := filepath.Join(dir, "out.txt")
-	_, err := WriteFile(t.Context(), path, []byte("data"))
-	if err == nil {
-		t.Fatal("expected error for read-only dir")
-	}
-	we, ok := errors.AsType[*WriteError](err)
-	if !ok {
-		t.Fatalf("error = %T, want *WriteError", err)
-	}
-	if we.Phase != PhaseTempCreate {
-		t.Errorf("WriteError.Phase = %v, want PhaseTempCreate", we.Phase)
-	}
-}
-
-func TestWriteFile_ZeroPerm(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file mode not meaningful on Windows")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "noperm.txt")
-	if _, err := WriteFile(t.Context(), path, []byte("secret"), WithMode(0o000)); err != nil {
-		t.Fatalf("WriteFile(0o000): %v", err)
-	}
-	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0o000 {
-		t.Errorf("mode = %o, want 0000", fi.Mode().Perm())
-	}
-	_ = os.Chmod(path, 0o644)
-}
-
 // The rename-failure branch on a single-call write, reached the only way
 // that survives the pre-write target guard: a reader that plants a
 // directory at the target as a side effect of Read lands between the guard
@@ -264,9 +217,7 @@ func TestWriteReader(t *testing.T) {
 
 	t.Run("respects_mode_via_WithMode", func(t *testing.T) {
 		t.Parallel()
-		if runtime.GOOS == "windows" {
-			t.Skip("file mode not meaningful on Windows")
-		}
+		skipModeOptions(t)
 		dir := t.TempDir()
 		path := filepath.Join(dir, "mode.txt")
 		r := strings.NewReader("x")
@@ -300,6 +251,7 @@ func TestWriteReader(t *testing.T) {
 
 	t.Run("mkdir_mode", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		dir := t.TempDir()
 		path := filepath.Join(dir, "sub", "deep", "file.txt")
 		if _, err := WriteReader(t.Context(), path, strings.NewReader("nested"), WithMkdirMode(0o755)); err != nil {
@@ -410,85 +362,6 @@ func TestWriteReader_NilReader(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Error("no target file should exist after nil-reader error")
-	}
-	assertNoTempLeak(t, dir)
-}
-
-func TestMkdirMode(t *testing.T) {
-	t.Parallel()
-
-	t.Run("WriteFile_creates_dirs", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		path := filepath.Join(dir, "a", "b", "file.txt")
-		if _, err := WriteFile(t.Context(), path, []byte("nested"), WithMkdirMode(0o755)); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-		got, _ := os.ReadFile(path)
-		if string(got) != "nested" {
-			t.Errorf("got %q", got)
-		}
-	})
-
-	t.Run("WriteFile_no_mkdir_by_default", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		path := filepath.Join(dir, "x", "y", "file.txt")
-		if _, err := WriteFile(t.Context(), path, []byte("data")); err == nil {
-			t.Fatal("expected error without MkdirMode")
-		}
-	})
-}
-
-func TestMkdirMode_BlockedByFile(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	blocker := filepath.Join(dir, "blocker")
-	if err := os.WriteFile(blocker, []byte("I am a file"), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	// A regular file in the parent chain makes MkdirAll fail ENOTDIR.
-	path := filepath.Join(blocker, "sub", "file.txt")
-	_, err := WriteFile(t.Context(), path, []byte("data"), WithMkdirMode(0o755))
-	if err == nil {
-		t.Fatal("expected error when the parent chain is blocked by a file")
-	}
-	assertNoTempLeak(t, dir)
-}
-
-// TestWriteFile_MkdirMode_ParentNotWritable_WrapsError pins the MkdirAll
-// failure contract: a traversable but non-writable parent makes MkdirAll
-// fail EACCES, so the error wraps os.ErrPermission, never a *WriteError.
-// Non-root only; not parallel, matching the sibling permission tests.
-func TestWriteFile_MkdirMode_ParentNotWritable_WrapsError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX mode bits")
-	}
-	if os.Getuid() == 0 {
-		t.Skip("root bypasses EACCES")
-	}
-	dir := t.TempDir()
-	ro := filepath.Join(dir, "ro")
-	if err := os.Mkdir(ro, 0o555); err != nil { // traversable (x), not writable (no w)
-		t.Fatalf("mkdir ro: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(ro, 0o755) })
-
-	path := filepath.Join(ro, "sub", "file.txt")
-	_, err := WriteFile(t.Context(), path, []byte("data"), WithMkdirMode(0o755))
-
-	if err == nil {
-		t.Fatal("expected error creating a parent directory under a non-writable dir")
-	}
-	if !strings.Contains(err.Error(), "create parent directory") {
-		t.Errorf("error = %q, want it to mention %q", err.Error(), "create parent directory")
-	}
-	if !errors.Is(err, os.ErrPermission) {
-		t.Errorf("error = %v, want it to wrap os.ErrPermission", err)
-	}
-	if we, ok := errors.AsType[*WriteError](err); ok {
-		t.Errorf("error is *WriteError{Phase=%v}, want a plain wrapped error", we.Phase)
 	}
 	assertNoTempLeak(t, dir)
 }

@@ -20,3 +20,7 @@ stryker-setup-*.js
 # Editors
 .idea/
 .vscode/
+
+# Local git worktrees. A worktree is a full checkout of this repo, so without
+# this a `git add` of a directory could stage another branch's whole tree.
+.worktrees/

@@ -22,15 +22,19 @@ Writes also refuse a target occupied by anything else that is not a regular file
 
 The check reads the target before the rename, because `rename(2)` has no mode that replaces only a regular file. It refuses the states that are there to be found. It does not win a race against a writer that swaps the target in between.
 
+On Windows a symlink at the target is refused with `ErrSymlinkTarget` too. A junction, a cloud-sync placeholder or any other reparse point is not a regular file there, so it is refused with `ErrNotRegular`. A target with the read-only attribute is refused with an error matching `fs.ErrPermission`, because a replace can never overwrite it.
+
 ## Symlinks on read
 
-`ReadBounded` follows symlinks by design, because `os.Open` resolves them. When you read from a directory a less-trusted user can write to, use `ReadBoundedInRoot` instead.
+`ReadBounded` follows symlinks by design. When you read from a directory a less-trusted user can write to, use `ReadBoundedInRoot` instead.
 
 Three openers return the open descriptor together with the `FileInfo` of that same descriptor. A caller streaming the file through a decoder or decryptor needs the descriptor. A caller caching the file needs the `FileInfo` the bytes came from to record a [`FileIdentity`](reload-staleness.md).
 
 - `OpenRegularInRoot(root, name)` opens the name through the root, read-only and non-blocking, and reads the mode from the open handle rather than the pathname. It refuses a directory, FIFO, device node or socket with `ErrNotRegular`. It resolves an in-root symlink at the final component. `ReadBoundedInRoot` is exactly this plus `ReadBoundedFile`.
 - `OpenRegularInRootNoFollow(root, name)` refuses a symlink at the final component with `ErrSymlinkTarget`. `os.Root` resolves in-root symlinks before it opens the last component, so `O_NOFOLLOW` has no effect through it. The refusal comes from `Root.Lstat` instead, and the descriptor is checked against that result. A name repointed in between returns `ErrRaced`.
-- `OpenRegular(path)` takes a full path into a directory you trust. `O_NOFOLLOW` makes the kernel refuse a symlink at the final component with `ErrSymlinkTarget`, which no check-then-open sequence can do without a race. The path itself must pass `ValidatePath`.
+- `OpenRegular(path)` takes a full path into a directory you trust. `O_NOFOLLOW` makes the kernel refuse a symlink at the final component with `ErrSymlinkTarget`, which no check-then-open sequence can do without a race. On Windows `FILE_FLAG_OPEN_REPARSE_POINT` opens the link itself instead of its target, and the mode of that open handle decides: a symlink is `ErrSymlinkTarget`, a junction is `ErrNotRegular`. The path itself must pass `ValidatePath`.
+
+On Windows every one of these handles, and the one `ReadBounded` opens, shares delete access, so holding one open never blocks a filesafe write of the same file.
 
 You own the returned file and close it. None of the three pins the ancestor directories of the name. `OpenParentInRoot` does that.
 
@@ -48,7 +52,7 @@ The returned root is always a fresh handle you close. For a name directly under 
 
 ## Walking a shared tree
 
-`WalkDirInRoot(ctx, root, fn)` walks a confined tree and never descends into a symlinked directory. It reads each directory in batches of 256 entries rather than one full sorted listing. A large or hostile directory is never held in memory before the callback can refuse it. It keeps one directory handle open at a time and opens each one with `O_DIRECTORY`. A named pipe planted where a directory was is refused instead of blocking the walk.
+`WalkDirInRoot(ctx, root, fn)` walks a confined tree and never descends into a symlinked directory. It reads each directory in batches of 256 entries rather than one full sorted listing. A large or hostile directory is never held in memory before the callback can refuse it. It keeps one directory handle open at a time and opens each one with `O_DIRECTORY`. A named pipe planted where a directory was is refused instead of blocking the walk. Windows filesystems hold no named pipes, so there each opened handle is checked to be a directory instead.
 
 The callback is an `fs.WalkDirFunc`, called the way `fs.WalkDir` calls one. The root comes first as `"."`, then each entry in pre-order. A directory that cannot be opened or finished is reported through the callback for its own path, and `fs.SkipDir` and `fs.SkipAll` work as in `fs.WalkDir`.
 

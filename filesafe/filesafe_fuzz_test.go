@@ -204,10 +204,13 @@ func FuzzValidateRootName(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, name string) {
 		// Oracle for current validateRootName behavior: reject empty,
-		// null-bearing and absolute names, else accept the cleaned relative
-		// form. An internal ".." is allowed here since *os.Root refuses
-		// escapes at operation time.
-		wantErr := name == "" || strings.ContainsRune(name, 0) || filepath.IsAbs(name)
+		// null-bearing and non-relative names (absolute, or on Windows rooted
+		// or carrying a volume), else accept the cleaned relative form. An
+		// internal ".." is allowed here since *os.Root refuses escapes at
+		// operation time.
+		notRelative := filepath.IsAbs(name) || filepath.VolumeName(name) != "" ||
+			(name != "" && os.IsPathSeparator(name[0]))
+		wantErr := name == "" || strings.ContainsRune(name, 0) || notRelative
 		wantClean := filepath.Clean(name)
 
 		clean, err := validateRootName(name)
@@ -437,8 +440,12 @@ func FuzzWriteFileInRoot(f *testing.F) {
 		}
 		defer root.Close()
 
-		res, err := WriteFileInRoot(t.Context(), root, name, content,
-			append(fuzzModeOpts(withMode), WithMkdirMode(0o755))...)
+		withMode = withMode && !isWindows()
+		opts := fuzzModeOpts(withMode)
+		if !isWindows() {
+			opts = append(opts, WithMkdirMode(0o755))
+		}
+		res, err := WriteFileInRoot(t.Context(), root, name, content, opts...)
 		if err != nil {
 			return
 		}
@@ -499,7 +506,9 @@ func FuzzProbeWritable(f *testing.F) {
 		}
 		dir := filepath.Join(baseDir, base)
 
-		opts := fuzzModeOpts(withMode)
+		// Windows refuses both mode options as an argument error (ErrModeUnsupported).
+		mkdir = mkdir && !isWindows()
+		opts := fuzzModeOpts(withMode && !isWindows())
 		if mkdir {
 			opts = append(opts, WithMkdirMode(0o750))
 		}

@@ -1,3 +1,5 @@
+//go:build !windows
+
 package filesafe
 
 import (
@@ -140,4 +142,44 @@ func TestPendingFile_Commit_IdempotentAfterDirSyncFailure(t *testing.T) {
 		t.Fatalf("second Commit() = %+v, want identical recorded result %+v", second, first)
 	}
 	assertContent(t, path, "payload")
+}
+
+// TestWriteFileInRoot_DirFsyncFailureNotDurable mutates the fsyncRootDir
+// seam, so it must not run in parallel.
+func TestWriteFileInRoot_DirFsyncFailureNotDurable(t *testing.T) {
+	stubFsyncRootDir(t, errors.New("injected dir fsync failure"))
+	root, dir := openTestRoot(t)
+	h := &captureHandler{}
+	res, err := WriteFileInRoot(t.Context(), root, "f", []byte("x"), WithLogger(slog.New(h)))
+	if err != nil {
+		t.Fatalf("WriteFileInRoot = %v; a post-rename fsync failure is not a hard error", err)
+	}
+	if res.Durable {
+		t.Errorf("Durable = true, want false when the parent-dir fsync fails")
+	}
+	assertContent(t, filepath.Join(dir, "f"), "x")
+	// The non-durable Warn must carry both root and path so an operator
+	// using multiple roots can identify which on-disk file is not durable.
+	var found bool
+	for _, r := range h.Records() {
+		if r.Level != slog.LevelWarn {
+			continue
+		}
+		var hasRoot, hasPath bool
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "root":
+				hasRoot = a.Value.String() == root.Name()
+			case "path":
+				hasPath = a.Value.String() == "f"
+			}
+			return true
+		})
+		if hasRoot && hasPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("non-durable Warn missing root=%q and path=%q attributes", root.Name(), "f")
+	}
 }

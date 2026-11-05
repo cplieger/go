@@ -2,6 +2,7 @@ package filesafe
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -41,6 +42,60 @@ func TestWriteError_Unwrap_PreservesChain(t *testing.T) {
 	if got := we.Unwrap(); got != sentinel {
 		t.Errorf("WriteError.Unwrap() = %v, want %v", got, sentinel)
 	}
+}
+
+func TestPlatformSentinels_Messages(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err  error
+		name string
+		want string
+	}{
+		{ErrFileBusy, "file_busy", "filesafe: target in use or access denied"},
+		{ErrModeUnsupported, "mode_unsupported", "filesafe: file modes are not supported on this platform"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrFileBusy_MatchesThroughWriteError(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("sharing violation")
+	err := error(&WriteError{
+		Phase: PhaseRename,
+		Err:   fmt.Errorf("%w: %d attempts: %w", ErrFileBusy, 7, cause),
+	})
+	t.Run("sentinel", func(t *testing.T) {
+		t.Parallel()
+		if !errors.Is(err, ErrFileBusy) {
+			t.Errorf("errors.Is(%v, ErrFileBusy) = false, want true", err)
+		}
+	})
+	t.Run("cause", func(t *testing.T) {
+		t.Parallel()
+		if !errors.Is(err, cause) {
+			t.Errorf("errors.Is(%v, cause) = false, want true", err)
+		}
+	})
+	t.Run("phase", func(t *testing.T) {
+		t.Parallel()
+		var we *WriteError
+		if !errors.As(err, &we) || we.Phase != PhaseRename {
+			t.Errorf("errors.As(%v) phase = %v, want %v", err, we, PhaseRename)
+		}
+	})
+	t.Run("distinct_from_mode_unsupported", func(t *testing.T) {
+		t.Parallel()
+		if errors.Is(err, ErrModeUnsupported) {
+			t.Errorf("errors.Is(%v, ErrModeUnsupported) = true, want false", err)
+		}
+	})
 }
 
 func TestWriteError_Error_FormatsPhasePrefix(t *testing.T) {

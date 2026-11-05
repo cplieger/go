@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 )
 
 // walkReadDirBatch bounds one ReadDir call's memory: fs.WalkDir reads and
@@ -19,40 +18,14 @@ import (
 // configurable — a caller that wants to stop early returns fs.SkipAll from fn.
 const walkReadDirBatch = 256
 
-// WalkDirInRoot enumerates root's tree and hands every entry to fn,
-// root-relative, confined to root's tree: every step is an openat-relative
-// syscall, no ambient path is ever constructed, and a symlinked directory is
-// never descended.
-//
-// Compared to fs.WalkDir over root.FS(): entries are read in fixed batches
-// (walkReadDirBatch) rather than one materialized+sorted inventory per
-// directory; exactly ONE directory handle is open at a time (a queue of
-// NAMES between directories, so descriptor use cannot exhaust on a deep
-// tree); and each directory is opened O_DIRECTORY, so a named pipe swapped
-// in for a directory is refused with ENOTDIR instead of blocking the calling
-// goroutine forever in open(2).
-//
-// # Callback contract
-//
-// fn is an fs.WalkDirFunc, called exactly as fs.WalkDir calls one: the root
-// itself first as ".", then each entry pre-order, with a directory that
-// cannot be opened or finished reported through fn for ITS OWN path (d nil,
-// err set). fs.SkipDir and fs.SkipAll mean what they mean in fs.WalkDir.
-// Whether a read failure below the root is fatal is the callback's call:
-// return the error to abort, or nil to count it and continue.
-//
-// # Two deliberate differences from fs.WalkDir
-//
-// Entries arrive in DIRECTORY order, sorted only within a batch — do not
-// build a decision on the order. A directory's own entries are all visited
-// before the walk descends into its subdirectories.
-//
-// # Cancellation
-//
-// The walk stops between batches once ctx is done (at most one batch of
-// entries); a caller wanting per-entry cancellation checks ctx in fn.
-//
-// The caller owns root; WalkDirInRoot does not close it.
+// WalkDirInRoot hands every entry of root's tree to fn, root-relative, as
+// fs.WalkDir does (the root first as ".", then pre-order; a directory that
+// cannot be read is reported for its own path; fs.SkipDir and fs.SkipAll as
+// usual). It never descends a symlinked directory, refuses a non-directory
+// swapped in for one, and keeps one directory handle open. Unlike fs.WalkDir,
+// a directory's entries all arrive before its subdirectories are walked, in
+// directory order sorted only within a batch of 256; the walk stops between
+// batches once ctx is done. The caller owns root (docs/confinement.md).
 func WalkDirInRoot(ctx context.Context, root *os.Root, fn fs.WalkDirFunc) error {
 	if root == nil {
 		return errors.New("filesafe: nil root")
@@ -143,9 +116,7 @@ func (w *rootWalk) run() error {
 // the subdirectories found under it. The handle is closed before any of
 // them is opened.
 func (w *rootWalk) streamDir(dir string) ([]string, error) {
-	// O_DIRECTORY, not root.Open: a reader-less FIFO would block a plain
-	// O_RDONLY open(2) forever. O_NONBLOCK covers the same hazard again.
-	handle, err := w.root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	handle, err := openDirInRoot(w.root, dir)
 	if err != nil {
 		return nil, w.reportDirFailure(dir, err)
 	}
