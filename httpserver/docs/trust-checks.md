@@ -111,4 +111,4 @@ The configured secret is hashed with SHA-256 once, at construction. `Verify` has
 
 An empty configured secret fails closed. `Verify` then returns false for every value, the empty string included. Otherwise `sha256("")` would equal `sha256("")`, and an unset secret would admit a client presenting nothing. Treat an empty configured value as "auth not configured", never as "no credential required".
 
-This checks one shared secret, not user identities. Per-user credentials, password hashing and sessions belong to the [auth](https://github.com/cplieger/auth) library.
+This checks one shared secret, not user identities. Per-user credentials, password hashing and sessions belong to the [access](https://github.com/cplieger/access) library.

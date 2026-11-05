@@ -124,7 +124,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 
 - [httpclient](https://github.com/cplieger/go/tree/main/httpclient) makes the requests your service sends out survive flaky servers. httpserver handles the requests coming in.
 - [health](https://github.com/cplieger/go/tree/main/health) is the container liveness probe for a Docker `HEALTHCHECK`. `ReadinessHandler` answers a load balancer instead.
-- [auth](https://github.com/cplieger/auth) handles user logins and sessions. `NewStaticTokenVerifier` checks one configured machine credential.
+- [access](https://github.com/cplieger/access) handles user logins and sessions. `NewStaticTokenVerifier` checks one configured machine credential.
 
 ## Documentation
 

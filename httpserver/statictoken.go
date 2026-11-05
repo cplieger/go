@@ -11,7 +11,7 @@ import (
 // bearer token, a basic-auth user or password — where exactly one expected
 // value comes from configuration. It verifies one shared secret, not user
 // identities: per-user credential stores, password hashing, and session
-// management belong to the auth library (github.com/cplieger/auth), not here.
+// management belong to the access library (github.com/cplieger/access), not here.
 //
 // Construct it once with NewStaticTokenVerifier and reuse it for every
 // request. The configured secret is hashed with SHA-256 at construction;
