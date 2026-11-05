@@ -13,13 +13,13 @@ measure is built for Go services whose set of metrics is fixed when the program 
 - Counters, gauges and histograms each have a labeled variant, plus a timer and a `RecordHTTP` hook for middleware.
 - A bad name, label set or bucket layout never panics at construction. `Register` returns the error, and `MustRegister` panics at startup naming the metric.
 - The handler writes valid Prometheus text format 0.0.4, with invalid UTF-8 replaced by U+FFFD.
-- Every registry adds Go and process metrics. On Linux, it also adds CPU time, resident memory and file descriptors when their `/proc` reads succeed.
+- Every registry adds the Go and process metrics that client_golang's default collectors serve, under the same names, so stock Go dashboards work. On Linux, the `/proc` ones appear when their reads succeed.
 - A labeled metric logs one warning when it reaches 1,000 series, so a runaway label shows in your logs.
 - A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, with any number of labels.
 - `Gather` reads a registry as structured values, so a test can check a metric without parsing the page.
 - Recording and scraping are safe from many goroutines at once.
 
-Consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Prometheus project's Go client, if you need summaries, exemplars, native histograms or a third-party `prometheus.Collector`. Consider [VictoriaMetrics/metrics](https://github.com/VictoriaMetrics/metrics) if you push metrics to remote storage.
+Consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Prometheus project's Go client, if you need summary instruments, exemplars, native histograms or a third-party `prometheus.Collector`. Consider [VictoriaMetrics/metrics](https://github.com/VictoriaMetrics/metrics) if you push metrics to remote storage.
 
 ## Install
 
@@ -139,13 +139,13 @@ A metric that carries a construction error records nothing and never reaches the
 - Every histogram has a `+Inf` bucket equal to its `_count`.
 - Whole numbers render as bare integers such as `42`, other values in the shortest form that reads back exactly, and non-finite values as `+Inf`, `-Inf` and `NaN`.
 
-The process metrics are `go_goroutines`, `go_memstats_heap_alloc_bytes`, `process_gc_pause_seconds_total`, `process_uptime_seconds` and `process_start_time_seconds`. On Linux, `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_open_fds` and `process_max_fds` are added when their `/proc` reads succeed. The goroutine and heap names match `client_golang`'s, so dashboards built on those two names keep working.
+Every registry serves the families client_golang's default Go and process collectors serve, by the same names and types: the `go_memstats_*` families, `go_gc_duration_seconds` (a summary of recent GC pauses), the GOGC, GOMEMLIMIT and GOMAXPROCS settings, `go_goroutines`, `go_threads` and `go_info`. On Linux it adds CPU time, resident and virtual memory, file descriptors and network traffic from `/proc` when their reads succeed. Two families are measure's own: `process_gc_pause_seconds_total` and `process_uptime_seconds`. [Process metrics](docs/how-it-works.md#process-metrics) lists them all.
 
 ## Unsupported by design
 
 measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page gives the reason for each.
 
-- The summary metric type. Use a histogram.
+- Summary instruments. Use a histogram. The one summary on the page is the Go runtime's `go_gc_duration_seconds`.
 - OpenMetrics and protobuf exposition, and the content negotiation between formats.
 - Exemplars and native histograms.
 - Pushing metrics or remote write.
@@ -160,7 +160,7 @@ measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page giv
 
 ## Credits
 
-Two designs follow [prometheus/client_golang](https://github.com/prometheus/client_golang). A construction error is captured into the metric value, and `MustRegister` panics on the first registration error. No code is taken from it.
+Three designs follow [prometheus/client_golang](https://github.com/prometheus/client_golang). A construction error is captured into the metric value, `MustRegister` panics on the first registration error, and the Go and process families take its default collectors' names and value mappings. No code is taken from it.
 
 ## Contributing
 

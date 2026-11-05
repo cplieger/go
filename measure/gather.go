@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
+	"strings"
 )
 
 // Type is a family's metric type, as the "# TYPE" line names it.
@@ -14,8 +16,8 @@ const (
 	TypeCounter   Type = "counter"
 	TypeGauge     Type = "gauge"
 	TypeHistogram Type = "histogram"
-	// TypeSummary is reserved for runtime summaries the registry adds itself;
-	// no instrument or collector produces one yet.
+	// TypeSummary is the type of go_gc_duration_seconds, the one runtime
+	// summary every registry adds; no instrument or collector produces one.
 	TypeSummary Type = "summary"
 )
 
@@ -70,12 +72,12 @@ type SummaryValue struct {
 type Quantile struct{ Quantile, Value float64 }
 
 // Gather reads the whole registry as structured families: the instruments,
-// then the collectors' families, then the process families, in the order the
-// page shows them. Unlike the page, it lists a declared family that has no
-// series yet, with no samples. It runs every collector with ctx, and returns
-// every sample a collector dropped as one error naming the family; the
-// families it returns hold what survived. A counter instrument's int64 value
-// becomes a float64, exact up to 2^53.
+// then the collectors' families, then the Go and process families sorted by
+// name, in the order the page shows them. Unlike the page, it lists a
+// declared family that has no series yet, with no samples. It runs every
+// collector with ctx, and returns every sample a collector dropped as one
+// error naming the family; the families it returns hold what survived. A
+// counter instrument's int64 value becomes a float64, exact up to 2^53.
 func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 	r.mu.RLock()
 	fams := make([]Family, 0,
@@ -182,30 +184,43 @@ func histogramValue(h *Histogram) *HistogramValue {
 	return &HistogramValue{Buckets: buckets, Count: uint64(max(count, 0)), Sum: sum}
 }
 
-// processGather reads the process families as structured values; the page
-// renders this same list (processFamilies).
+// processGather reads the Go and process families as structured values,
+// sorted by name as client_golang's registry sorts them; the page renders
+// this same list (processFamilies).
 func processGather() []Family {
 	var d processMetricsData
 	collectProcessMetrics(&d)
-	fams := make([]Family, 0, len(processFamilyNames))
+	return processFamiliesOf(readGoRuntime(), &d)
+}
+
+// processFamiliesOf builds processGather's families from one read of the Go
+// runtime and of /proc; a /proc family whose read failed is left out.
+func processFamiliesOf(g *goRuntime, d *processMetricsData) []Family {
+	fams := g.families(make([]Family, 0, len(processFamilyNames)))
 	fams = append(fams,
-		scalarFamily(pmGoroutines, helpGoroutines, TypeGauge, float64(d.goroutines)),
-		scalarFamily(pmHeapAllocBytes, helpHeapAlloc, TypeGauge, float64(d.heapAlloc)),
-		scalarFamily(pmGCPauseTotal, helpGCPause, TypeCounter, d.gcPause),
+		scalarFamily(pmGCPauseTotal, helpGCPause, TypeCounter, g.gc.PauseTotal.Seconds()),
 		scalarFamily(pmUptime, helpUptime, TypeGauge, d.uptime),
 		scalarFamily(pmStartTime, helpStartTime, TypeGauge, d.startTime),
 	)
-	if d.hasCPU() {
-		fams = append(fams, scalarFamily(pmCPUTotal, helpCPU, TypeCounter, d.cpuSeconds))
-	}
-	if d.hasRSS() {
-		fams = append(fams, scalarFamily(pmResidentBytes, helpResident, TypeGauge, float64(d.rss)))
-	}
-	if d.hasOpenFDs() {
-		fams = append(fams, scalarFamily(pmOpenFDs, helpOpenFDs, TypeGauge, float64(d.openFDs)))
-		if d.hasMaxFDs() {
-			fams = append(fams, scalarFamily(pmMaxFDs, helpMaxFDs, TypeGauge, maxFDsValue(d.maxFDs)))
+	for _, o := range [...]struct {
+		name, help string
+		typ        Type
+		ok         bool
+		value      float64
+	}{
+		{pmCPUTotal, helpCPU, TypeCounter, d.hasCPU(), d.cpuSeconds},
+		{pmResidentBytes, helpResident, TypeGauge, d.hasRSS(), float64(d.rss)},
+		{pmOpenFDs, helpOpenFDs, TypeGauge, d.hasOpenFDs(), float64(d.openFDs)},
+		{pmMaxFDs, helpMaxFDs, TypeGauge, d.hasMaxFDs(), limitValue(d.maxFDs)},
+		{pmVirtualBytes, helpVirtual, TypeGauge, d.hasVirtual(), d.vsize},
+		{pmVirtualMaxBytes, helpVirtualMax, TypeGauge, d.hasMaxVirtual(), limitValue(d.maxVsize)},
+		{pmNetReceive, helpNetRx, TypeCounter, d.hasNetwork(), d.netRx},
+		{pmNetTransmit, helpNetTx, TypeCounter, d.hasNetwork(), d.netTx},
+	} {
+		if o.ok {
+			fams = append(fams, scalarFamily(o.name, o.help, o.typ, o.value))
 		}
 	}
+	slices.SortFunc(fams, func(a, b Family) int { return strings.Compare(a.Name, b.Name) })
 	return fams
 }

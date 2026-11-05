@@ -65,7 +65,7 @@ A collector serves values your code reads when Prometheus scrapes, such as rows 
 `Gather(ctx)` returns every family as a `Family`: its name, HELP text, `Type` and samples, with numbers rather than rendered text. A test can check a metric without parsing the page.
 
 - Families come in the page's order. A declared family with no series yet, a labeled metric or a collector family, is listed with no samples, which the page omits.
-- Each `Sample` has its labels in declared order. A counter or gauge sets `Value`, which for a counter is its `int64` count converted to `float64`, exact up to 2^53. A histogram sets `Histogram`, with cumulative buckets in ascending order; the `+Inf` bucket's count is `Count`. `Summary` and `TypeSummary` are defined for summary families, and no metric produces one.
+- Each `Sample` has its labels in declared order. A counter or gauge sets `Value`, which for a counter is its `int64` count converted to `float64`, exact up to 2^53. A histogram sets `Histogram`, with cumulative buckets in ascending order; the `+Inf` bucket's count is `Count`. A summary sets `Summary`, with its quantiles in ascending order; only the Go runtime's `go_gc_duration_seconds` is one.
 - `Gather` runs every collector with `ctx`, and returns every sample a collector dropped as one error naming each family. The families it returns hold what survived.
 
 ## Construction errors
@@ -96,21 +96,23 @@ With [httpserver](https://github.com/cplieger/go/tree/main/httpserver), adapt th
 
 ## Process metrics
 
-Every registry serves these metrics without any registration:
+Every registry serves these families without any registration. They are the families client_golang's default Go and process collectors serve, with the same names and types, so dashboards built for client_golang read them. Two are measure's own.
 
-| Metric | Platforms |
-| --- | --- |
-| `go_goroutines` | all |
-| `go_memstats_heap_alloc_bytes` | all |
-| `process_gc_pause_seconds_total` | all |
-| `process_uptime_seconds` | all |
-| `process_start_time_seconds` | all |
-| `process_cpu_seconds_total` | Linux |
-| `process_resident_memory_bytes` | Linux |
-| `process_open_fds` | Linux |
-| `process_max_fds` | Linux |
+| Families | Source | Platforms |
+| --- | --- | --- |
+| The 21 `go_memstats_*` families other than `go_memstats_last_gc_time_seconds`, such as `go_memstats_heap_alloc_bytes` and `go_memstats_alloc_bytes_total` | `runtime/metrics`, mapped as client_golang maps them | all |
+| `go_gc_gogc_percent`, `go_gc_gomemlimit_bytes` and `go_sched_gomaxprocs_threads`, the GOGC, GOMEMLIMIT and GOMAXPROCS settings | `runtime/metrics` | all |
+| `go_gc_duration_seconds`, a summary with the 0, 0.25, 0.5, 0.75 and 1 quantiles of recent GC pauses, and `go_memstats_last_gc_time_seconds` | `runtime/debug.ReadGCStats` | all |
+| `go_goroutines`, `go_threads` and `go_info`, whose `version` label is the Go release that built the program | `runtime` | all |
+| `process_start_time_seconds` | `/proc/self/stat` and `/proc/stat`, or the time the package loaded | all |
+| `process_gc_pause_seconds_total` and `process_uptime_seconds`, measure's own | `runtime/debug.ReadGCStats` and the start time | all |
+| `process_cpu_seconds_total`, `process_virtual_memory_bytes` | `/proc/self/stat` | Linux |
+| `process_resident_memory_bytes` | `/proc/self/status` | Linux |
+| `process_open_fds` | `/proc/self/fd` | Linux |
+| `process_max_fds` and `process_virtual_memory_max_bytes`, the soft limits | `/proc/self/limits` | Linux |
+| `process_network_receive_bytes_total` and `process_network_transmit_bytes_total`, the traffic of the process's network namespace, as client_golang counts it | `/proc/self/net/netstat` | Linux |
 
-The Linux metrics come from `/proc/self`, and each appears only when its read succeeds. `go_goroutines` and `go_memstats_heap_alloc_bytes` have the names `client_golang` uses. All nine names are reserved in every registry, so a metric of yours cannot take one.
+No read stops the world: measure never calls `runtime.ReadMemStats`. A `runtime/metrics` name that a Go release drops would read as 0, and a test fails on the Go update that drops one. Each Linux family appears only when its read succeeds, and the registry logs a warning when the set of failing reads changes and one line when they all recover. The families are sorted by name. Their names, and the summary's `_sum` and `_count` series, are reserved in every registry, so a metric of yours cannot take one.
 
 ## Output format
 

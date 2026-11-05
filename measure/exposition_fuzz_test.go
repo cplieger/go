@@ -97,6 +97,10 @@ func FuzzRegistryFullExposition(f *testing.F) {
 				typ := parts[len(parts)-1]
 				switch typ {
 				case "counter", "gauge", "histogram":
+				case "summary":
+					if parts[2] != pmGCDuration {
+						t.Fatalf("summary type on %q, which only %s carries", parts[2], pmGCDuration)
+					}
 				default:
 					t.Fatalf("unknown type %q in line: %q", typ, line)
 				}

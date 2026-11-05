@@ -4,7 +4,7 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 
 | Left out | Reason |
 | --- | --- |
-| Summary metric type | Use a histogram. Prometheus's guide recommends histograms whenever you aggregate across instances, and a summary needs a windowed-quantile implementation |
+| Summary instruments | Use a histogram. Prometheus's guide recommends histograms whenever you aggregate across instances, and a summary needs a windowed-quantile implementation. The one summary on the page is the Go runtime's `go_gc_duration_seconds`, whose quantiles the runtime computes |
 | OpenMetrics exposition and content negotiation | `Handler` serves Prometheus text format 0.0.4, which both of Prometheus's default scrape-format lists include |
 | Exemplars | They need a tracing integration and OpenMetrics or protobuf exposition |
 | Pushing metrics or remote write | measure serves a pull endpoint for Prometheus to scrape |
@@ -16,4 +16,4 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 | Gzip compression of the response | Wrap `Handler` in standard HTTP middleware |
 | `Gauge.SetToCurrentTime()` | Call `g.Set(float64(time.Now().Unix()))` |
 
-If you need summaries, exemplars, native histograms or a third-party `prometheus.Collector`, consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Go client of the Prometheus project.
+If you need summary instruments, exemplars, native histograms or a third-party `prometheus.Collector`, consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Go client of the Prometheus project.

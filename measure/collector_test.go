@@ -107,7 +107,7 @@ func TestCollectorConstructionErrorsSurfaceAtRegister(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := NewRegistry("")
 			mustRegisterError(t, r, tc.c, tc.want)
-			if len(r.collectors) != 0 || len(r.names) != len(processFamilyNames) {
+			if len(r.collectors) != 0 || len(r.names) != len(processFamilyNames)+len(processSummarySeries) {
 				t.Error("a refused collector changed the registry")
 			}
 		})

@@ -360,20 +360,31 @@ func compareLabelValues(a, b Sample) int {
 	return slices.CompareFunc(a.Labels, b.Labels, func(x, y Label) int { return strings.Compare(x.Value, y.Value) })
 }
 
-// pageFamily renders a collector family into the exposition IR: labels sorted
-// by name and escaped as the instruments' are. ok is false for a family with
-// no samples, which the page omits.
+// pageFamily renders a collector or runtime family into the exposition IR:
+// labels sorted by name and escaped as the instruments' are. A summary series
+// expands into its quantile, _sum and _count lines; histograms never come
+// here, because only instruments make them. ok is false for a family with no
+// samples, which the page omits.
 func pageFamily(f *Family) (metricFamily, bool) {
 	if len(f.Samples) == 0 {
 		return metricFamily{}, false
 	}
 	typ := typeGauge
-	if f.Type == TypeCounter {
+	switch f.Type {
+	case TypeCounter:
 		typ = typeCounter
+	case TypeSummary:
+		typ = typeSummary
 	}
-	samples := make([]sample, len(f.Samples))
+	samples := make([]sample, 0, len(f.Samples))
 	for i := range f.Samples {
-		samples[i] = sample{labels: renderLabels(f.Samples[i].Labels), value: formatValue(f.Samples[i].Value)}
+		s := &f.Samples[i]
+		labels := renderLabels(s.Labels)
+		if f.Type == TypeSummary {
+			samples = summarySamples(samples, labels, s.Summary)
+			continue
+		}
+		samples = append(samples, sample{labels: labels, value: formatValue(s.Value)})
 	}
 	return metricFamily{name: f.Name, typ: typ, help: f.Help, samples: samples}, true
 }
