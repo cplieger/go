@@ -12,10 +12,10 @@ import (
 // own code, the only error WithErrorPassthrough's predicate sees: it wraps no
 // go-yaml error and carries none of a go-yaml message's fixed words (listed in
 // the README). Load cannot vouch for other text a hook writes, so claim the
-// app's own error type, not this one. The predicate gets one per problem; a
-// passed-through error joins every claimed one (errors.Join) in document
-// order. Error returns Err's text unchanged. Only Load constructs it, always
-// with a non-nil Err.
+// app's own error type, not this one. Each predicate call gets one holding a
+// single problem; a passed-through error joins every claimed one
+// (errors.Join) in document order. Error returns Err's text unchanged. Only
+// Load constructs it, always with a non-nil Err.
 type UnmarshalerError struct {
 	// Err is the config type's own error for one problem, or errors.Join of
 	// several in document order.
