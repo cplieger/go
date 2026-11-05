@@ -326,9 +326,11 @@ func (c *Collector) logTransitions(seen map[problemKey]int) {
 	c.logging = true
 	c.mu.Unlock()
 	drained := false
-	defer func() { // a panicking log handler must not leave the queue owned forever
+	var rest []logEntry
+	defer func() { // a panicking handler loses only its own entry and frees the queue
 		if !drained {
 			c.mu.Lock()
+			c.pending = slices.Concat(rest, c.pending)
 			c.logging = false
 			c.mu.Unlock()
 		}
@@ -344,9 +346,11 @@ func (c *Collector) logTransitions(seen map[problemKey]int) {
 			return
 		}
 		c.mu.Unlock()
-		for _, e := range batch {
+		for i, e := range batch {
+			rest = batch[i+1:]
 			e.log()
 		}
+		rest = nil
 	}
 }
 

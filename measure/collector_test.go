@@ -554,21 +554,22 @@ func TestEmitOfAnotherCollectorsDescRacesNothing(t *testing.T) {
 	wg.Wait()
 }
 
-// orderHandler records log messages and, while holding, parks a Warn until an
-// Info has been logged, so a run that logs late shows up out of order.
+// orderHandler records log messages. Its first Warn parks in Enabled until the
+// test releases it, so a run that logs late shows up out of order.
 type orderHandler struct {
-	infoDone chan struct{}
+	parked   chan struct{}
+	release  chan struct{}
 	msgs     []string
 	mu       sync.Mutex
-	hold     atomic.Bool
+	parkOnce sync.Once
 }
 
 func (h *orderHandler) Enabled(_ context.Context, l slog.Level) bool {
-	if l == slog.LevelWarn && h.hold.Load() {
-		select {
-		case <-h.infoDone:
-		case <-time.After(300 * time.Millisecond):
-		}
+	if l == slog.LevelWarn {
+		h.parkOnce.Do(func() {
+			close(h.parked)
+			<-h.release
+		})
 	}
 	return true
 }
@@ -578,21 +579,14 @@ func (h *orderHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	h.msgs = append(h.msgs, r.Message)
 	h.mu.Unlock()
-	if r.Level == slog.LevelInfo {
-		select {
-		case <-h.infoDone:
-		default:
-			close(h.infoDone)
-		}
-	}
 	return nil
 }
 
 type badScrape struct{}
 
-// TestCollectorLogsTransitionsInStateOrder: scrape A sees a problem and scrape B,
-// running beside it, does not. The state ends cleared, so the last line logged
-// for the problem must be its clearing.
+// TestCollectorLogsTransitionsInStateOrder: scrape A sees a problem and parks
+// before logging it; scrape B then runs to completion without the problem. The
+// state ends cleared, so the clearing must be logged after the warning.
 func TestCollectorLogsTransitionsInStateOrder(t *testing.T) {
 	captureDebugLogs(t) // restores the default logger after the test
 	g := NewGaugeDesc("g", "h", []string{"k"})
@@ -603,18 +597,84 @@ func TestCollectorLogsTransitionsInStateOrder(t *testing.T) {
 			e.Emit(g, 2, "a")
 		}
 	}, g))
-	h := &orderHandler{infoDone: make(chan struct{})}
-	h.hold.Store(true)
+	h := &orderHandler{parked: make(chan struct{}), release: make(chan struct{})}
 	slog.SetDefault(slog.New(h))
 	var wg sync.WaitGroup
 	wg.Go(func() { _, _ = r.Gather(context.WithValue(t.Context(), badScrape{}, true)) })
-	time.Sleep(100 * time.Millisecond)
-	wg.Go(func() { _, _ = r.Gather(t.Context()) })
+	<-h.parked
+	_, _ = r.Gather(t.Context())
+	close(h.release)
 	wg.Wait()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if want := []string{"measure: collector problem", "measure: collector problem cleared"}; !slices.Equal(h.msgs, want) {
 		t.Errorf("log order %q, want %q", h.msgs, want)
+	}
+}
+
+// panicOnFirstWarn panics on its first Warn and records every later message.
+type panicOnFirstWarn struct {
+	msgs     []string
+	mu       sync.Mutex
+	panicked bool
+}
+
+func (*panicOnFirstWarn) Enabled(context.Context, slog.Level) bool { return true }
+func (h *panicOnFirstWarn) WithAttrs([]slog.Attr) slog.Handler     { return h }
+func (h *panicOnFirstWarn) WithGroup(string) slog.Handler          { return h }
+func (h *panicOnFirstWarn) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r.Level == slog.LevelWarn && !h.panicked {
+		h.panicked = true
+		panic("log handler failed")
+	}
+	h.msgs = append(h.msgs, r.Message+" "+fmt.Sprint(r.NumAttrs()))
+	return nil
+}
+
+// TestCollectorRecoversFromAPanickingLogHandler: the panicking entry is lost, the
+// rest of its batch is logged by the next run, and the queue is not left owned.
+func TestCollectorRecoversFromAPanickingLogHandler(t *testing.T) {
+	captureDebugLogs(t)
+	g1 := NewGaugeDesc("g1", "h", []string{"k"})
+	g2 := NewGaugeDesc("g2", "h", []string{"k"})
+	var mu sync.Mutex
+	bad := true
+	r := NewRegistry("")
+	r.MustRegister(staticCollector(func(e *Emitter) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, d := range []*Desc{g1, g2} {
+			e.Emit(d, 1, "a")
+			if bad {
+				e.Emit(d, 2, "a")
+			}
+		}
+	}, g1, g2))
+	h := &panicOnFirstWarn{}
+	slog.SetDefault(slog.New(h))
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = r.Gather(t.Context())
+	}()
+	mu.Lock()
+	bad = false
+	mu.Unlock()
+	_, _ = r.Gather(t.Context())
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	warns, clears := 0, 0
+	for _, m := range h.msgs {
+		switch {
+		case strings.HasPrefix(m, "measure: collector problem cleared"):
+			clears++
+		case strings.HasPrefix(m, "measure: collector problem"):
+			warns++
+		}
+	}
+	if warns != 1 || clears != 2 {
+		t.Errorf("after a panicking handler: %d warnings and %d clearings logged, want the requeued warning and both clearings: %q", warns, clears, h.msgs)
 	}
 }
 
@@ -653,6 +713,13 @@ func TestNewCollectorClaimsADescOnce(t *testing.T) {
 	wg.Wait()
 	if wins.Load() != 0 {
 		t.Errorf("%d collectors claimed a desc another collector holds", wins.Load())
+	}
+	a := NewGaugeDesc("a", "h", nil)
+	if NewCollector(func(context.Context, *Emitter) {}, a, d).err == nil {
+		t.Fatal("a collector claimed a desc another collector holds")
+	}
+	if err := NewCollector(func(context.Context, *Emitter) {}, a).err; err != nil {
+		t.Errorf("the refused collector did not release %q: %v", "a", err)
 	}
 	free := NewGaugeDesc("free", "h", nil)
 	for range 8 {
