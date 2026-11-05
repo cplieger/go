@@ -52,7 +52,7 @@ The returned root is always a fresh handle you close. For a name directly under 
 
 ## Walking a shared tree
 
-`WalkDirInRoot(ctx, root, fn)` walks a confined tree and never descends into a symlinked directory. It reads each directory in batches of 256 entries rather than one full sorted listing. A large or hostile directory is never held in memory before the callback can refuse it. It keeps one directory handle open at a time and opens each one with `O_DIRECTORY`. A named pipe planted where a directory was is refused instead of blocking the walk. Windows filesystems hold no named pipes, so there each opened handle is checked to be a directory instead.
+`WalkDirInRoot(ctx, root, fn)` walks a confined tree and never descends into a symlinked directory. It reports root-relative, slash-separated paths on every OS, as `fs.WalkDir` does. It reads each directory in batches of 256 entries rather than one full sorted listing. A large or hostile directory is never held in memory before the callback can refuse it. It keeps one directory handle open at a time and opens each one with `O_DIRECTORY`. A named pipe planted where a directory was is refused instead of blocking the walk. Windows filesystems hold no named pipes, so there each opened handle is checked to be a directory instead.
 
 The callback is an `fs.WalkDirFunc`, called the way `fs.WalkDir` calls one. The root comes first as `"."`, then each entry in pre-order. A directory that cannot be opened or finished is reported through the callback for its own path, and `fs.SkipDir` and `fs.SkipAll` work as in `fs.WalkDir`.
 

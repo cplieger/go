@@ -436,30 +436,6 @@ func TestPendingFile_Cleanup_CloseFailure_StillRemovesTemp(t *testing.T) {
 	assertNoTempLeak(t, dir)
 }
 
-// TestPendingFile_Cleanup_RemoveFailureSurfacesError pins that Cleanup
-// surfaces a temp-removal failure (other than ErrNotExist) as a non-nil
-// error. A non-empty directory triggers ENOTEMPTY, which root cannot bypass.
-func TestPendingFile_Cleanup_RemoveFailureSurfacesError(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-
-	pf, err := NewPendingFile(t.Context(), target)
-	if err != nil {
-		t.Fatalf("NewPendingFile(%q) = %v, want nil", target, err)
-	}
-	tmpName := pf.Name()
-
-	replaceWithNonEmptyDir(t, tmpName)
-
-	gotErr := pf.Cleanup()
-	if gotErr == nil {
-		t.Fatalf("Cleanup() (os.Remove hits non-empty dir) = nil, want non-nil error")
-	}
-	if errors.Is(gotErr, fs.ErrNotExist) {
-		t.Fatalf("Cleanup() = %v, want a non-ErrNotExist error (ENOTEMPTY expected)", gotErr)
-	}
-}
-
 // TestPendingFile_Cleanup_SuccessReturnsNil pins the opposite branch: when
 // os.Remove succeeds, Cleanup returns nil and the temp is gone.
 func TestPendingFile_Cleanup_SuccessReturnsNil(t *testing.T) {

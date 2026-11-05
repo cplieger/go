@@ -72,7 +72,7 @@ func TestWalkDirInRoot_streams_a_directory_larger_than_one_batch(t *testing.T) {
 	if len(got.failed) != 0 {
 		t.Errorf("WalkDirInRoot reported failures %v on a clean tree, want none", got.failed)
 	}
-	for _, rel := range []string{".", "entry-0000", "entry-0292", "nested", filepath.Join("nested", "deep-4")} {
+	for _, rel := range []string{".", "entry-0000", "entry-0292", "nested", "nested/deep-4"} {
 		if n := got.countVisits(rel); n != 1 {
 			t.Errorf("WalkDirInRoot visited %q %d times, want exactly 1", rel, n)
 		}
@@ -103,13 +103,13 @@ func TestWalkDirInRoot_does_not_descend_a_symlinked_directory(t *testing.T) {
 	if !got.has("link") {
 		t.Errorf("WalkDirInRoot did not report the symlink itself; visited %v", got.visited)
 	}
-	if !got.has(filepath.Join("real", "inside")) {
+	if !got.has("real/inside") {
 		t.Errorf("WalkDirInRoot did not reach the real directory's entry; visited %v", got.visited)
 	}
-	if got.has(filepath.Join("link", "inside")) {
+	if got.has("link/inside") {
 		t.Errorf("WalkDirInRoot descended a symlinked directory and reported %q: a file must never be"+
 			" enumerated under a path whose ancestors do not physically hold it; visited %v",
-			filepath.Join("link", "inside"), got.visited)
+			"link/inside", got.visited)
 	}
 }
 
@@ -196,7 +196,7 @@ func TestWalkDirInRoot_continues_past_a_directory_that_vanished_mid_walk(t *test
 	if len(got.failed) != 1 || got.failed[0] != "a-dir" {
 		t.Errorf("WalkDirInRoot reported failures %v, want exactly [\"a-dir\"]", got.failed)
 	}
-	if !got.has(filepath.Join("b-dir", "inside")) {
+	if !got.has("b-dir/inside") {
 		t.Errorf("WalkDirInRoot visited %v after a sub-path it could not enter, want the rest of the"+
 			" tree too: a partial enumeration is what the callback asked for by answering nil", got.visited)
 	}
@@ -228,7 +228,7 @@ func TestWalkDirInRoot_aborts_when_the_callback_refuses_a_directory_failure(t *t
 	if !errors.Is(err, sentinel) {
 		t.Errorf("WalkDirInRoot(callback refused a directory failure) = %v, want the callback's own error", err)
 	}
-	if got.has(filepath.Join("b-dir", "inside")) {
+	if got.has("b-dir/inside") {
 		t.Errorf("WalkDirInRoot visited %v after the callback refused the failure, want the walk"+
 			" stopped there", got.visited)
 	}
@@ -274,10 +274,10 @@ func TestWalkDirInRoot_honours_the_walk_sentinels(t *testing.T) {
 		if err != nil {
 			t.Fatalf("WalkDirInRoot(SkipDir on a directory) = %v, want nil", err)
 		}
-		if got.has(filepath.Join("a-dir", "child")) {
+		if got.has("a-dir/child") {
 			t.Errorf("SkipDir on %q still descended into it; visited %v", "a-dir", got.visited)
 		}
-		if !got.has(filepath.Join("b-dir", "child")) {
+		if !got.has("b-dir/child") {
 			t.Errorf("SkipDir on %q also skipped a sibling subtree; visited %v", "a-dir", got.visited)
 		}
 	})
@@ -320,7 +320,7 @@ func TestWalkDirInRoot_honours_the_walk_sentinels(t *testing.T) {
 		if err != nil {
 			t.Fatalf("WalkDirInRoot(SkipAll) = %v, want nil: the sentinel is an instruction, not a failure", err)
 		}
-		if got.has(filepath.Join("a-dir", "child")) || got.has("d-file") {
+		if got.has("a-dir/child") || got.has("d-file") {
 			t.Errorf("SkipAll did not stop the walk; visited %v", got.visited)
 		}
 	})

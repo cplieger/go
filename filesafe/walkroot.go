@@ -7,7 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
 )
@@ -18,13 +18,13 @@ import (
 // configurable — a caller that wants to stop early returns fs.SkipAll from fn.
 const walkReadDirBatch = 256
 
-// WalkDirInRoot hands every entry of root's tree to fn, root-relative, as
-// fs.WalkDir does (the root first as ".", then pre-order; a directory that
-// cannot be read is reported for its own path; fs.SkipDir and fs.SkipAll as
-// usual). It never descends a symlinked directory, refuses a non-directory
-// swapped in for one, and keeps one directory handle open. Unlike fs.WalkDir,
-// a directory's entries all arrive before its subdirectories are walked, in
-// directory order sorted only within a batch of 256; the walk stops between
+// WalkDirInRoot hands every entry of root's tree to fn as fs.WalkDir does:
+// root-relative, slash-separated on every OS, the root first as ".", then
+// pre-order; an unreadable directory is reported for its own path; fs.SkipDir
+// and fs.SkipAll as usual. It never descends a symlinked directory, refuses a
+// non-directory swapped in for one, and keeps one directory handle open.
+// Unlike fs.WalkDir, a directory's entries all arrive before its subdirectories
+// are walked, sorted only within a batch of 256, and the walk stops between
 // batches once ctx is done. The caller owns root (docs/confinement.md).
 func WalkDirInRoot(ctx context.Context, root *os.Root, fn fs.WalkDirFunc) error {
 	if root == nil {
@@ -154,7 +154,7 @@ func (w *rootWalk) visitBatch(dir string, entries []fs.DirEntry) (subdirs []stri
 	for _, entry := range entries {
 		rel := entry.Name()
 		if dir != "." {
-			rel = filepath.Join(dir, entry.Name())
+			rel = path.Join(dir, entry.Name())
 		}
 		act, cbErr := classifyWalkAnswer(w.fn(rel, entry, nil))
 		switch {

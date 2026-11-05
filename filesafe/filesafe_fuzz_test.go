@@ -47,8 +47,14 @@ func FuzzWriteFile(f *testing.F) {
 		if err != nil {
 			t.Fatalf("EvalSymlinks: %v", err)
 		}
-		if !strings.HasPrefix(real, baseDir) {
-			t.Fatalf("file escaped temp dir: %q not under %q", real, baseDir)
+		// The temp dir itself can sit behind a symlink (/var on macOS) or an
+		// 8.3 short name (RUNNER~1 on Windows), so it is resolved too.
+		realBase, err := filepath.EvalSymlinks(baseDir)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) = %v", baseDir, err)
+		}
+		if !strings.HasPrefix(real, realBase) {
+			t.Fatalf("file escaped temp dir: %q not under %q", real, realBase)
 		}
 		got, err := os.ReadFile(path)
 		if err != nil {
