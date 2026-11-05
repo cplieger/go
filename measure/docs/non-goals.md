@@ -5,7 +5,7 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 | Left out | Reason |
 | --- | --- |
 | Summary instruments | Use a histogram. Prometheus's guide recommends histograms whenever you aggregate across instances, and a summary needs a windowed-quantile implementation. The one summary on the page is the Go runtime's `go_gc_duration_seconds`, whose quantiles the runtime computes |
-| OpenMetrics exposition and content negotiation | `Handler` serves Prometheus text format 0.0.4, which both of Prometheus's default scrape-format lists include |
+| OpenMetrics exposition and content negotiation | `Handler` serves Prometheus text format 0.0.4, which both of Prometheus's default scrape-format lists include. Any of these reopens OpenMetrics 2.0: its spec publishes 2.0.0 without `-rc`, Prometheus adds 2.0 to its default `scrape_protocols`, Grafana Alloy or the OpenTelemetry Collector lists a 2.0 protocol, or measure takes on a feature that needs 2.0 |
 | Exemplars | They need a tracing integration and OpenMetrics or protobuf exposition |
 | Pushing metrics or remote write | measure serves a pull endpoint for Prometheus to scrape |
 | Protobuf exposition | Prometheus asks for protobuf first only when native histograms are on, and protobuf needs the protobuf runtime module as a dependency |
