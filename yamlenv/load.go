@@ -17,7 +17,8 @@ import (
 // order. Error returns Err's text unchanged. Only Load constructs it, always
 // with a non-nil Err.
 type UnmarshalerError struct {
-	// Err is the error the config type's UnmarshalYAML returned, unchanged.
+	// Err is the config type's own error for one problem, or errors.Join of
+	// several in document order.
 	Err error
 }
 
@@ -57,13 +58,13 @@ func WithSanitizeOptions(opts ...SanitizeOption) LoadOption {
 }
 
 // WithErrorPassthrough returns a decode error unchanged instead of sanitized
-// when pred claims every problem in it. Load calls pred once per problem, as
-// an *UnmarshalerError holding that problem alone, and only when every problem
-// came from the config type: parse errors, unknown-key findings and a decode
-// error where go-yaml found a problem too never reach it. Claim the app's own
-// error type (errors.AsType[*myconfig.Error]): a TextUnmarshaler field's error
-// (netip.Addr) counts as the config type's and can echo its input, and a hook
-// copying go-yaml's text is withheld only when it matches a pinned marker.
+// when every problem in it came from the config type and pred claims each;
+// any other error never reaches pred. Load calls pred once per problem, in
+// document order, stopping at the first it refuses, as an *UnmarshalerError
+// holding that problem alone. Claim the app's own type, as with
+// errors.AsType[*myconfig.Error]: a TextUnmarshaler field's error counts as the
+// config type's and can echo its input (netip.Addr), and a hook copying
+// go-yaml's text is withheld only when it matches a pinned marker.
 func WithErrorPassthrough(pred func(error) bool) LoadOption {
 	return func(o *loadOptions) { o.passthrough = pred }
 }

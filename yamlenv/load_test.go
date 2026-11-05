@@ -756,6 +756,28 @@ func TestLoadClassifiesUnmarshalerErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("the predicate is not asked again after it refuses a problem", func(t *testing.T) {
+		t.Parallel()
+		var calls []error
+		record := func(err error) bool {
+			calls = append(calls, err)
+			_, ok := errors.AsType[*portError](err)
+			return ok
+		}
+		var cfg struct {
+			Addr  netip.Addr `yaml:"addr"`
+			Port  port       `yaml:"port"`
+			Admin port       `yaml:"admin"`
+		}
+		_, err := yamlenv.Load([]byte("addr: y\nport: x\nadmin: z\n"), &cfg, allowAppPrefix, yamlenv.WithErrorPassthrough(record))
+		if _, ok := errors.AsType[*yamlenv.UnmarshalerError](err); ok || err == nil {
+			t.Fatalf("Load = %v (addr %v, ports %d, %d), want it sanitized", err, cfg.Addr, cfg.Port.n, cfg.Admin.n)
+		}
+		if len(calls) != 1 {
+			t.Fatalf("predicate called %d times with %v, want once, for the refused addr problem", len(calls), calls)
+		}
+	})
+
 	// go-yaml found a problem beside the hook's, so the error is not the
 	// config type's own and no predicate may claim it, whatever go-yaml's
 	// error types let errors.As reach.
