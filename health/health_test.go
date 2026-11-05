@@ -1045,13 +1045,19 @@ func TestNewMarker_degradedOnAnUnwritableMarker(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o444); err != nil {
 		t.Fatal(err)
 	}
+	// Decide the skip from the environment, never from the code under test:
+	// root opens a 0444 file for writing.
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		_ = f.Close()
+		t.Skip("test environment bypasses file mode; skipping")
+	}
 	buf := captureLogs(t)
 	m := NewMarker(path)
 	if !m.degraded {
-		t.Skip("test environment bypasses file mode; skipping")
+		t.Fatal("a marker this process cannot open for writing: want degraded mode")
 	}
 	logged := buf.String()
-	if strings.Count(logged, "health marker not writable") != 1 || !strings.Contains(logged, "another user") {
+	if strings.Count(logged, "health marker not writable") != 1 || !strings.Contains(logged, "another user") || !strings.Contains(logged, "permission denied") {
 		t.Errorf("want one WARN naming the leftover marker; log:\n%s", logged)
 	}
 	if m.CheckHealthy() || m.SetChecked(true) != nil {
@@ -1100,6 +1106,61 @@ func TestMarkerWritableLeavesTheMarkerAlone(t *testing.T) {
 	}
 	if markerWritable(blocked) == nil || !NewMarker(blocked).degraded {
 		t.Error("a directory at the marker path: want an error and a degraded marker, for root too")
+	}
+}
+
+// TestSetRefreshesAWriteOnlyMarker: Set(true) opens an existing marker
+// write-only, without O_CREATE, so a marker this process may write but not
+// read (mode 0222) is refreshed rather than refused, and is not degraded.
+// os.Create's O_RDWR needed read permission and failed every Set here.
+func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.WriteFile(path, nil, 0o222); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMarker(path)
+	if m.degraded {
+		t.Fatal("a marker this process can write: want no degraded mode")
+	}
+	if err := m.SetChecked(true); err != nil {
+		t.Fatalf("SetChecked(true) on a 0222 marker: %v", err)
+	}
+	if got := Inspect(path, WithMaxAge(time.Hour)); got.State != MarkerFresh {
+		t.Errorf("after Set(true): Inspect = %+v, want MarkerFresh (the mtime refreshed)", got)
+	}
+}
+
+// TestDegradedMarkerMeansAHealthyProbe: whatever is at the marker path, a
+// marker NewMarker calls degraded is one the probe reports healthy, even
+// past its lease, so the app's warning ("will report healthy") is true.
+func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
+	old := time.Now().Add(-2 * time.Hour)
+	for name, setup := range map[string]func(path string) error{
+		"directory": func(path string) error { return os.Mkdir(path, 0o755) },
+		"read-only": func(path string) error { return os.WriteFile(path, nil, 0o444) },
+		"symlink loop": func(path string) error {
+			return os.Symlink(path, path)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".healthy")
+			if err := setup(path); err != nil {
+				t.Skip(err)
+			}
+			_ = os.Chtimes(path, old, old) // fails on the loop, which stat cannot read
+			m := NewMarker(path)
+			f := Inspect(path, WithMaxAge(time.Hour))
+			if m.degraded && !f.Healthy() {
+				t.Errorf("NewMarker is degraded but Inspect = %+v, so the probe would restart the container", f)
+			}
+			if name == "symlink loop" && (m.degraded || f.State != MarkerUnreadable) {
+				t.Errorf("symlink loop: degraded %v, Inspect %v; want not degraded and MarkerUnreadable, as the probe sees it", m.degraded, f.State)
+			}
+		})
 	}
 }
 

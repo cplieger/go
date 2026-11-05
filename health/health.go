@@ -61,9 +61,9 @@ type Marker struct {
 
 // NewMarker constructs a marker for path and checks that Set can change
 // it: the parent directory must be writable, and a marker already there
-// must open for writing. On failure it logs a single Warn with a fix hint
-// and returns a marker in degraded mode; callers need not branch on the
-// result.
+// must be a regular file Set can refresh. On failure it logs a single Warn
+// with a fix hint and returns a marker in degraded mode; callers need not
+// branch on the result.
 func NewMarker(path string) *Marker {
 	m := &Marker{path: path}
 	if err := probeHealthDir(path); err != nil {
@@ -80,24 +80,25 @@ func NewMarker(path string) *Marker {
 			"container will report healthy in degraded mode",
 			"path", path,
 			"error", err,
-			"hint", "remove the marker left by an earlier run as another user, "+
-				"or run as its owner")
+			"hint", "remove what is at the marker path, such as a marker an "+
+				"earlier run as another user left, a directory or a FIFO")
 	}
 	return m
 }
 
-// markerWritable returns nil when no marker exists at path or this process
-// can open it for writing, so Set can refresh it, and the open's error
-// otherwise. It opens without truncating, so the marker's time is unchanged.
+// markerWritable returns why Set could not refresh the marker at path, or
+// nil when it can. It opens the marker as writeMarker does, without O_TRUNC,
+// so the marker's content and time are unchanged. A path os.Stat cannot read
+// is nil here: Inspect classifies it from the stat error (absent or
+// unreadable), so the app and the probe agree on degraded mode.
 func markerWritable(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0) // #nosec G304 G703 -- trusted caller-supplied marker path
-	if errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(path); err != nil { // #nosec G703 -- trusted caller-supplied marker path, existence check only
 		return nil
 	}
-	if err != nil {
+	if err := openMarker(path, 0); !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return f.Close()
+	return nil
 }
 
 // cannotSignal returns why Set cannot change the marker at path (its
@@ -393,8 +394,9 @@ func (s MarkerState) String() string {
 // the age and needs stale distinguished from absent to avoid calling a cold
 // start a wedge.
 type Freshness struct {
-	// Err is the underlying stat or directory-probe error for MarkerUnreadable
-	// and MarkerDirUnavailable, nil otherwise.
+	// Err is the underlying stat error for MarkerUnreadable, the
+	// directory-probe or marker-open error for MarkerDirUnavailable, and nil
+	// otherwise.
 	Err error
 	// Age is how long ago the marker was last written: set for MarkerFresh,
 	// MarkerStale, and MarkerDirUnavailable when a stale marker was found;
@@ -406,7 +408,7 @@ type Freshness struct {
 }
 
 // Healthy reports whether this reading is the probe's healthy verdict: a
-// fresh marker, or a directory the app cannot signal through at all.
+// fresh marker, or degraded mode (a folder or marker the app cannot write).
 func (f Freshness) Healthy() bool {
 	return f.State == MarkerFresh || f.State == MarkerDirUnavailable
 }
@@ -532,12 +534,16 @@ func (m *Marker) recordSuccess() bool {
 	return recovered
 }
 
-// writeMarker atomically touches the marker file. A fresh os.Create is
-// sufficient: the file is empty, and O_TRUNC on an existing file
-// refreshes its mtime, which is the contract an armed WithMaxAge
-// deadline reads. TestHealthMarker_SetTrue_refreshesMtime pins it.
+// writeMarker refreshes the marker at path, or creates it. An existing
+// marker opens without O_CREATE, so one another user left in a sticky folder
+// opens on its mode alone (fs.protected_regular refuses only O_CREAT opens of
+// such a file), and with O_TRUNC, which refreshes its mtime, the contract an
+// armed WithMaxAge deadline reads (TestHealthMarker_SetTrue_refreshesMtime).
 func writeMarker(path string) error {
-	f, err := os.Create(path) // #nosec G304 -- caller-supplied trusted path
+	if err := openMarker(path, os.O_TRUNC); !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|oNonblock, 0o666) // #nosec G302 G304 G703 -- trusted caller-supplied marker path, os.Create's mode
 	if err != nil {
 		return err
 	}
@@ -546,6 +552,32 @@ func writeMarker(path string) error {
 	}
 	return nil
 }
+
+// openMarker opens an existing marker write-only with flag added, and never
+// blocks: a FIFO with no reader fails with ENXIO instead of hanging. It
+// refuses anything but a regular file, whose time an open with O_TRUNC
+// refreshes.
+func openMarker(path string, flag int) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|oNonblock|flag, 0) // #nosec G304 G703 -- trusted caller-supplied marker path
+	if err != nil {
+		return err
+	}
+	info, statErr := f.Stat()
+	closeErr := f.Close()
+	switch {
+	case statErr != nil:
+		return statErr
+	case !info.Mode().IsRegular():
+		return &fs.PathError{Op: "open", Path: path, Err: errNotRegular}
+	case closeErr != nil:
+		return fmt.Errorf("close: %w", closeErr)
+	}
+	return nil
+}
+
+// errNotRegular is openMarker's error for a marker path that holds something
+// other than a regular file, such as a FIFO a reader holds open.
+var errNotRegular = errors.New("not a regular file")
 
 // probeHealthDir verifies the marker's parent directory is writable by
 // creating and deleting a temp file. Returns the underlying error on
