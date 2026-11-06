@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -484,6 +485,24 @@ func NoStore() Middleware {
 	}
 }
 
+// RouteDeadline gives h's request context a deadline d and runs h on the
+// request's own goroutine. It writes no status of its own, so h must write the
+// one its outcome calls for (net/http answers 200 if h writes nothing): the
+// choice over RouteTimeout for a handler that changes state. A call that
+// watches the context returns at the deadline; nothing else ends at d, so the
+// client can wait past it, and h must check the context before committing. A
+// non-positive d returns h unwrapped. docs/middleware.md has the full contract.
+func RouteDeadline(h http.Handler, d time.Duration) http.Handler {
+	if d <= 0 {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // jsonTimeoutWriter labels a 503 response that carries no Content-Type as JSON,
 // so the timeout envelope written by http.TimeoutHandler is served as
 // application/json (with nosniff) instead of being content-sniffed as
@@ -503,52 +522,24 @@ func (w *jsonTimeoutWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// RouteTimeout wraps h with http.TimeoutHandler so a handler that runs longer
-// than d is cut off with a 503, but replaces net/http's plain-text/HTML timeout
-// body with a JSON ErrorResponse ({"error":msg,"code":"timeout"}) served as
-// application/json. An empty msg defaults to "request timed out".
-//
-// A non-positive d disables the timeout: h is returned unwrapped, so its
-// response passes through untouched with no 503 relabeling. (http.TimeoutHandler
-// with a zero or negative duration would otherwise fire the timeout
-// immediately.)
-//
-// The JSON relabeling keys on status alone: any 503 that reaches the client
-// WITHOUT a Content-Type already set is served as application/json, because the
-// wrapper cannot tell http.TimeoutHandler's own timeout envelope apart from a
-// downstream handler's intentional 503. A handler that emits its own 503 must
-// therefore set an explicit Content-Type, or it will be relabeled
-// application/json (its body bytes are left unchanged; only the headers are
-// added).
-//
-// It CANNOT wrap streaming or hijacking handlers: http.TimeoutHandler buffers
-// the entire response in memory to be able to discard it on timeout, so SSE,
-// WebSocket upgrades, and other long-lived or flushing responses do not work
-// through it. Apply RouteTimeout only to bounded request/response handlers, and
-// use per-request deadlines (http.ResponseController.SetWriteDeadline) for
-// streaming routes instead.
-//
-// That buffering writer is also not unwrappable, so a handler under it cannot
-// reach the ResponseWriter net/http gave the request: on a body-reading route,
-// LimitBody's over-limit read still fails with a *http.MaxBytesError but net/http
-// is never told to close the connection (see LimitBody).
-//
-// The timeout envelope follows the package's universal request-id correlation
-// scheme, exactly like WriteError: it is rendered per request, so when the
-// request context carries an id (RouteTimeout composed under Logging /
-// RequestLogger) the 503 body includes request_id, and when it does not the
-// field is omitted. http.TimeoutHandler requires the body pre-rendered at
-// construction, which is why the handler is assembled per request around the
-// request-scoped envelope.
+// RouteTimeout answers 503 with a JSON ErrorResponse (code "timeout", msg or
+// "request timed out", and the request id when the context has one) once h has
+// run longer than d; a non-positive d returns h unwrapped. It does not stop h:
+// h keeps running with its request context cancelled and can still commit
+// after the 503, so never wrap a handler that changes state; use RouteDeadline
+// for that one. It buffers the whole response, so it cannot wrap a
+// streaming or hijacking handler, and it labels any 503 without a Content-Type
+// as JSON. docs/middleware.md in the module has the full contract.
 func RouteTimeout(h http.Handler, d time.Duration, msg string) http.Handler {
 	if d <= 0 {
-		// A non-positive timeout means "no timeout": return h unwrapped so its
-		// response is untouched.
+		// http.TimeoutHandler with a non-positive d would answer 503 at once.
 		return h
 	}
 	if msg == "" {
 		msg = "request timed out"
 	}
+	// http.TimeoutHandler takes its body at construction, so it is built per
+	// request to carry that request's id.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		th := http.TimeoutHandler(h, d, errorBodyJSON(r, "timeout", msg))
 		th.ServeHTTP(&jsonTimeoutWriter{ResponseWriter: w}, r)
