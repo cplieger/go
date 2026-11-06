@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
-	"syscall"
 	"testing"
 )
 
@@ -46,9 +45,9 @@ func TestReadBounded(t *testing.T) {
 
 	t.Run("returns_error_for_missing_file", func(t *testing.T) {
 		t.Parallel()
-		_, err := ReadBounded(t.Context(), "/nonexistent/path.txt", 1024)
-		if err == nil {
-			t.Fatal("expected error for missing file")
+		_, err := ReadBounded(t.Context(), filepath.Join(t.TempDir(), "missing.txt"), 1024)
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("ReadBounded(missing) = %v, want errors.Is fs.ErrNotExist", err)
 		}
 	})
 
@@ -190,12 +189,9 @@ func TestReadBounded_NegativeMax(t *testing.T) {
 
 func TestReadBounded_GrowsPastLimitDuringRead(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("FIFO not supported on Windows")
-	}
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "pipe")
-	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+	if err := MkfifoForTest(fifo); err != nil {
 		t.Skipf("Mkfifo unsupported: %v", err)
 	}
 	// A FIFO reports Size()==0 from Stat, so only the post-read length

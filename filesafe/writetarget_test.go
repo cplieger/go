@@ -5,15 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
 
 // A target already occupied by something that is not a regular file is
-// refused before anything is staged: a FIFO, socket or device node used to
-// be silently REPLACED (rename(2) overwrites any non-directory) and the
-// write reported Durable, and a directory used to fail only at
-// PhaseRename after a complete staged write and both fsyncs.
+// refused before anything is staged: rename(2) would silently replace a FIFO,
+// socket or device node, and a directory would fail only at PhaseRename after
+// a complete staged write.
 func TestWriteTarget_RefusesANonRegularOccupant(t *testing.T) {
 	t.Parallel()
 
@@ -21,7 +19,7 @@ func TestWriteTarget_RefusesANonRegularOccupant(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		fifo := filepath.Join(dir, "pipe")
-		if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		if err := MkfifoForTest(fifo); err != nil {
 			t.Skipf("mkfifo unsupported: %v", err)
 		}
 		_, err := WriteFile(t.Context(), fifo, []byte("payload"))
@@ -101,9 +99,7 @@ func TestWriteTarget_RefusesANonRegularOccupant(t *testing.T) {
 }
 
 // A name that cleans to something naming no ENTRY is refused up front rather
-// than at the rename. Before the shared check, WriteFileInRoot(root, "sub/..")
-// staged a temp, wrote it, chmod'ed it, fsynced it and closed it before
-// failing at PhaseRename with "file exists".
+// than at the rename, after a whole staged write.
 func TestWriteTarget_RefusesANameThatNamesNoEntry(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{".", "..", "sub/..", "a/b/../.."} {

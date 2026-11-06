@@ -97,6 +97,7 @@ func TestProbeWritable(t *testing.T) {
 
 	t.Run("missing_dir_with_mkdir_mode_succeeds", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		created := filepath.Join(t.TempDir(), "sub", "deeper")
 
 		res, err := ProbeWritable(t.Context(), created, WithMkdirMode(0o750))
@@ -118,6 +119,7 @@ func TestProbeWritable(t *testing.T) {
 
 	t.Run("mkdir_failure_reports_the_mkdir_stage", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		// A regular file in the parent chain makes MkdirAll fail without
 		// permission trickery, so the stage is reachable as root too.
 		blocker := filepath.Join(t.TempDir(), "file")
@@ -263,6 +265,7 @@ func TestProbeWritableInRoot(t *testing.T) {
 
 	t.Run("missing_subdirectory_with_mkdir_mode_succeeds", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		root, dir := openTestRoot(t)
 
 		res, err := ProbeWritableInRoot(t.Context(), root, "made/here", WithMkdirMode(0o755))
@@ -299,6 +302,9 @@ func TestProbeWritableInRoot(t *testing.T) {
 		}
 		for name, tc := range cases {
 			t.Run(name, func(t *testing.T) {
+				if tc.opts != nil {
+					skipModeOptions(t)
+				}
 				res, probeErr := ProbeWritableInRoot(t.Context(), root, "../escaped", tc.opts...)
 				if probeErr != nil {
 					t.Fatalf("ProbeWritableInRoot(escaping) = err %v, want nil (the root refuses it as a stage failure)", probeErr)
@@ -344,10 +350,9 @@ func TestProbeWritableInRoot(t *testing.T) {
 	})
 }
 
-// TestProbeData covers the two stages that run while the probe file is
-// open, at probeData rather than ProbeWritable: neither is constructible
-// on a healthy directory the test owns (a write failure needs /dev/full, a
-// sync failure needs a pipe).
+// TestProbeData covers the stages that run while the probe file is open, at
+// probeData rather than ProbeWritable: a failure is not constructible on a
+// healthy directory the test owns. The sync failure is in probe_unix_test.go.
 func TestProbeData(t *testing.T) {
 	t.Parallel()
 
@@ -368,10 +373,6 @@ func TestProbeData(t *testing.T) {
 				return f
 			},
 			wantStage: ProbeStageWrite,
-		},
-		"unflushable_handle_fails_at_sync": {
-			open:      openUnflushable,
-			wantStage: ProbeStageSync,
 		},
 	}
 	for name, tc := range cases {
@@ -398,19 +399,6 @@ func openProbeTemp(t *testing.T) *os.File {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 	return f
-}
-
-// openUnflushable returns the write end of a pipe: it accepts a write
-// but Sync fails with EINVAL, standing in for a network filesystem that
-// defers its error to fsync.
-func openUnflushable(t *testing.T) *os.File {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
-	return w
 }
 
 // TestProbeTearDown covers the two teardown stages and the leak

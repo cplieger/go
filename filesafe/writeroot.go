@@ -17,15 +17,10 @@ import (
 )
 
 // validateRootName checks that name is a non-empty, relative, null-byte-free
-// path for use as a key into an *os.Root, returning the cleaned form. Unlike
-// validateAbsClean it does NOT reject "..": an *os.Root already confines
-// every operation to its tree and rejects names that escape it, so
-// "a/../b" (which stays inside) is allowed while "../escape" is refused by
-// the Root itself when the operation runs.
-//
-// It accepts a name that cleans to "." — a legitimate DIRECTORY name inside
-// a root, which ProbeWritableInRoot takes. An operation that needs name to
-// be an ENTRY uses validateRootEntry.
+// path for use as a key into an *os.Root, returning the cleaned form. It
+// allows "..": the root itself refuses a name that escapes its tree. A name
+// cleaning to "." is a directory ProbeWritableInRoot takes; an operation
+// that needs an entry uses validateRootEntry.
 func validateRootName(name string) (string, error) {
 	if name == "" {
 		return "", ErrEmptyPath
@@ -33,7 +28,9 @@ func validateRootName(name string) (string, error) {
 	if strings.ContainsRune(name, 0) {
 		return "", fmt.Errorf("%w: contains null byte", ErrUnsafePath)
 	}
-	if filepath.IsAbs(name) {
+	// A Windows rooted (\x) or drive-relative (C:x) name is not IsAbs, yet
+	// it is not relative to the root either.
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" || os.IsPathSeparator(name[0]) {
 		return "", fmt.Errorf("%w: not relative: %q", ErrUnsafePath, name)
 	}
 	return filepath.Clean(name), nil
@@ -97,20 +94,11 @@ func createTempInRoot(root *os.Root, dir string, c *cfg) (*os.File, string, erro
 	}
 }
 
-// checkWriteTargetInRoot refuses a target name already occupied by
-// something an atomic write must not replace. A missing target is fine.
-//
-// A symlink is refused with ErrSymlinkTarget: the rename would replace the
-// link rather than follow it. Anything else that is not a REGULAR file is
-// refused with ErrNotRegular, the same verdict ReadBoundedInRoot and
-// RemoveFileInRoot give. Without this check, a write whose target was a
-// FIFO succeeded and reported Durable, because rename(2) happily replaces a
-// pipe, socket or device node with a regular file — so a co-mounting writer
-// could get this package to destroy an object it never created.
-//
-// This is a check-then-act and cannot be otherwise: rename(2) has no "only
-// if the destination is a regular file" mode. Its value is refusing the
-// states that are there to be found, not winning a race.
+// checkWriteTargetInRoot refuses a target an atomic write must not replace:
+// a symlink (ErrSymlinkTarget, the rename would replace the link), anything
+// else not regular (ErrNotRegular, since rename(2) replaces a FIFO, socket or
+// device node), and a target refuseReadOnlyTarget refuses. A missing target
+// is fine. It is a check-then-act: rename(2) has no "only if regular" mode.
 func checkWriteTargetInRoot(root *os.Root, name string) error {
 	fi, err := root.Lstat(name)
 	if err != nil {
@@ -125,16 +113,13 @@ func checkWriteTargetInRoot(root *os.Root, name string) error {
 	case !fi.Mode().IsRegular():
 		return notRegular(name, fi.Mode())
 	}
-	return nil
+	return refuseReadOnlyTarget(name, fi.Mode())
 }
 
 // fsyncRootDir fsyncs a directory inside root so a prior rename survives a
 // crash. It is a package var so tests can inject a failure.
-//
-// O_DIRECTORY, not root.Open: a reader-less FIFO would block a plain
-// O_RDONLY open(2) indefinitely. O_NONBLOCK covers the same hazard again.
 var fsyncRootDir = func(root *os.Root, dir string) error {
-	d, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	d, err := openDirInRoot(root, dir)
 	if err != nil {
 		return err
 	}
@@ -144,17 +129,10 @@ var fsyncRootDir = func(root *os.Root, dir string) error {
 
 // mkdirAllInRoot creates dir and every missing ancestor inside root at mode,
 // enforcing the mode on each directory it creates and fsyncing that
-// directory's PARENT so the new directory entry is durable rather than
-// merely present.
-//
-// os.Root.MkdirAll is not enough here: a directory entry never fsynced into
-// its own parent can vanish in a crash, taking every descendant with it —
-// including the file this write is about to fsync and rename. So the chain
-// is made durable level by level, and only directories THIS call created
-// are touched; a pre-existing directory is left exactly as found.
-//
-// durable is false when a created directory's parent could not be fsynced,
-// which degrades Result.Durable instead of failing the write.
+// directory's parent. os.Root.MkdirAll would not do: an entry never fsynced
+// into its parent can vanish in a crash with every descendant. Pre-existing
+// directories are left as found. durable is false when a created
+// directory's parent could not be fsynced.
 func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, logger *slog.Logger) (durable bool, err error) {
 	if dir == "." {
 		return true, nil
@@ -208,7 +186,7 @@ func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode) (created b
 // enforceDirMode opens a directory this process just created inside root
 // and proves the filesystem stored the requested mode.
 func enforceDirMode(root *os.Root, dir string, mode os.FileMode) error {
-	d, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	d, err := openDirInRoot(root, dir)
 	if err != nil {
 		return err
 	}
@@ -223,24 +201,6 @@ func removeTempInRoot(root *os.Root, tmpName string, logger *slog.Logger) {
 	if rmErr := root.Remove(tmpName); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 		logger.Debug("filesafe: temp file cleanup failed", "path", tmpName, "error", rmErr)
 	}
-}
-
-// commitTempInRoot finalizes a synced, closed temp file inside root:
-// atomically rename it to name, then fsync the parent directory. A
-// pre-rename failure removes the temp and returns an error. Once the rename
-// succeeds the data is at name; a subsequent parent-dir fsync failure is
-// logged at Warn and reported as durable=false with a nil error.
-func commitTempInRoot(root *os.Root, tmpName, name, dir string, c *cfg) (durable bool, err error) {
-	if rnErr := root.Rename(tmpName, name); rnErr != nil {
-		removeTempInRoot(root, tmpName, c.logger)
-		return false, &WriteError{Phase: PhaseRename, Err: rnErr}
-	}
-	if syncErr := fsyncRootDir(root, dir); syncErr != nil {
-		c.logger.Warn("filesafe: parent-directory fsync failed; write is not durable",
-			"root", root.Name(), "path", name, "error", syncErr)
-		return false, nil
-	}
-	return true, nil
 }
 
 // stagedTemp is what the pre-barrier preamble produces: the open temp file
@@ -263,8 +223,9 @@ type stagedTemp struct {
 // the relative name, honor ctx, refuse a target already occupied by
 // something a write must not replace, optionally create the parent
 // directory chain, and create the temp file inside root. The guard sequence
-// (nil-root -> validateRootEntry -> ctx -> checkWriteTargetInRoot -> mkdir
-// -> createTempInRoot) must not be reordered.
+// (nil-root -> validateRootEntry -> modeOptionsErr -> ctx ->
+// checkWriteTargetInRoot -> mkdir -> createTempInRoot) must not be
+// reordered.
 func openTempForRoot(ctx context.Context, root *os.Root, name string, c *cfg) (stagedTemp, error) {
 	if root == nil {
 		return stagedTemp{}, fmt.Errorf("%w: nil root", ErrUnsafePath)
@@ -272,6 +233,9 @@ func openTempForRoot(ctx context.Context, root *os.Root, name string, c *cfg) (s
 	cleanName, err := validateRootEntry(name)
 	if err != nil {
 		return stagedTemp{}, err
+	}
+	if modeErr := c.modeOptionsErr(); modeErr != nil {
+		return stagedTemp{}, modeErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return stagedTemp{}, fmt.Errorf("filesafe: %w", ctxErr)
@@ -326,7 +290,7 @@ func writeAtomicInRoot(ctx context.Context, root *os.Root, name string, c *cfg, 
 		return Result{}, fErr
 	}
 	committed = true
-	durable, cErr := commitTempInRoot(root, st.tmpName, st.name, st.dir, c)
+	durable, cErr := commitTempInRoot(ctx, root, st.file, st.tmpName, st.name, st.dir, c)
 	if cErr != nil {
 		return Result{}, cErr
 	}

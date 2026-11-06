@@ -69,6 +69,7 @@ func BenchmarkPendingFileCommit(b *testing.B) {
 // BenchmarkMkdirChain separates the two WithMkdirMode paths: only the
 // level-creating one pays for per-level mode enforcement and directory fsync.
 func BenchmarkMkdirChain(b *testing.B) {
+	skipModeOptions(b)
 	b.Run("existing_parent", func(b *testing.B) {
 		dir := b.TempDir()
 		ctx := b.Context()

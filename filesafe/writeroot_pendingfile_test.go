@@ -133,9 +133,6 @@ func TestNewPendingFileInRoot(t *testing.T) {
 	})
 
 	t.Run("refuses_symlink_target", func(t *testing.T) {
-		if isWindows() {
-			t.Skip("symlink semantics differ on Windows")
-		}
 		t.Parallel()
 		root, dir := openTestRoot(t)
 		if err := os.WriteFile(filepath.Join(dir, "real"), []byte("real"), 0o644); err != nil {
@@ -151,6 +148,7 @@ func TestNewPendingFileInRoot(t *testing.T) {
 
 	t.Run("mkdir_mode_creates_parents_inside_root", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		root, dir := openTestRoot(t)
 		pf, err := NewPendingFileInRoot(t.Context(), root, "nested/deep/out.txt", WithMkdirMode(0o755))
 		if err != nil {

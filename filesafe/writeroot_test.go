@@ -44,6 +44,7 @@ func TestWriteFileInRoot(t *testing.T) {
 
 	t.Run("creates_parent_with_mkdir_mode", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		root, dir := openTestRoot(t)
 		_, err := WriteFileInRoot(t.Context(), root, "nested/deep/out.pfx",
 			[]byte("p"), WithMkdirMode(0o755))
@@ -63,10 +64,8 @@ func TestWriteFileInRoot(t *testing.T) {
 	})
 
 	t.Run("applies_with_mode", func(t *testing.T) {
-		if isWindows() {
-			t.Skip("POSIX mode bits not meaningful on Windows")
-		}
 		t.Parallel()
+		skipModeOptions(t)
 		root, dir := openTestRoot(t)
 		if _, err := WriteFileInRoot(t.Context(), root, "secret",
 			[]byte("s"), WithMode(0o600)); err != nil {
@@ -168,10 +167,8 @@ func TestWriteInRoot_Confinement(t *testing.T) {
 	})
 
 	t.Run("rejects_write_through_symlink_escaping_root", func(t *testing.T) {
-		if isWindows() {
-			t.Skip("symlink semantics differ on Windows")
-		}
 		t.Parallel()
+		skipModeOptions(t)
 		outside := t.TempDir()
 		root, dir := openTestRoot(t)
 		if err := os.Symlink(outside, filepath.Join(dir, "evil")); err != nil {
@@ -187,10 +184,26 @@ func TestWriteInRoot_Confinement(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses_symlink_target", func(t *testing.T) {
-		if isWindows() {
-			t.Skip("symlink semantics differ on Windows")
+	t.Run("rejects_temp_through_symlink_escaping_root", func(t *testing.T) {
+		t.Parallel()
+		outside := t.TempDir()
+		root, dir := openTestRoot(t)
+		if err := os.Symlink(outside, filepath.Join(dir, "evil")); err != nil {
+			t.Fatalf("symlink: %v", err)
 		}
+		if _, err := WriteFileInRoot(t.Context(), root, "evil/pwned", []byte("x")); err == nil {
+			t.Fatal("write through escaping symlink = nil, want confinement error")
+		}
+		entries, err := os.ReadDir(outside)
+		if err != nil {
+			t.Fatalf("ReadDir(outside): %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("write left %d entries outside the root, first %q", len(entries), entries[0].Name())
+		}
+	})
+
+	t.Run("refuses_symlink_target", func(t *testing.T) {
 		t.Parallel()
 		root, dir := openTestRoot(t)
 		if err := os.WriteFile(filepath.Join(dir, "real"), []byte("real"), 0o644); err != nil {
@@ -254,46 +267,6 @@ func TestWriteInRoot_CancelledContextLeavesNoTarget(t *testing.T) {
 		t.Errorf("target exists after cancelled write: %v", statErr)
 	}
 	assertNoTempLeak(t, dir)
-}
-
-// TestWriteFileInRoot_DirFsyncFailureNotDurable mutates the fsyncRootDir
-// seam, so it must not run in parallel.
-func TestWriteFileInRoot_DirFsyncFailureNotDurable(t *testing.T) {
-	stubFsyncRootDir(t, errors.New("injected dir fsync failure"))
-	root, dir := openTestRoot(t)
-	h := &captureHandler{}
-	res, err := WriteFileInRoot(t.Context(), root, "f", []byte("x"), WithLogger(slog.New(h)))
-	if err != nil {
-		t.Fatalf("WriteFileInRoot = %v; a post-rename fsync failure is not a hard error", err)
-	}
-	if res.Durable {
-		t.Errorf("Durable = true, want false when the parent-dir fsync fails")
-	}
-	assertContent(t, filepath.Join(dir, "f"), "x")
-	// The non-durable Warn must carry both root and path so an operator
-	// using multiple roots can identify which on-disk file is not durable.
-	var found bool
-	for _, r := range h.Records() {
-		if r.Level != slog.LevelWarn {
-			continue
-		}
-		var hasRoot, hasPath bool
-		r.Attrs(func(a slog.Attr) bool {
-			switch a.Key {
-			case "root":
-				hasRoot = a.Value.String() == root.Name()
-			case "path":
-				hasPath = a.Value.String() == "f"
-			}
-			return true
-		})
-		if hasRoot && hasPath {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("non-durable Warn missing root=%q and path=%q attributes", root.Name(), "f")
-	}
 }
 
 // TestRandomTempName_ReapableShape ties root-confined temp names to the

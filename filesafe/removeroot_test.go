@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/cplieger/go/filesafe"
@@ -125,8 +124,8 @@ func TestOpenParentInRoot_refuses_a_redirected_component(t *testing.T) {
 			name: filepath.Join("pipe", "leaf.pfx"),
 			plant: func(t *testing.T, dir string) {
 				t.Helper()
-				if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600); err != nil {
-					t.Fatalf("setup: Mkfifo: %v", err)
+				if err := filesafe.MkfifoForTest(filepath.Join(dir, "pipe")); err != nil {
+					t.Skipf("mkfifo unsupported here: %v", err)
 				}
 			},
 		},

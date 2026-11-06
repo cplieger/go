@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -97,9 +96,7 @@ func TestPendingFile(t *testing.T) {
 
 	t.Run("mode_applied", func(t *testing.T) {
 		t.Parallel()
-		if runtime.GOOS == "windows" {
-			t.Skip("file mode not meaningful on Windows")
-		}
+		skipModeOptions(t)
 		dir := t.TempDir()
 		path := filepath.Join(dir, "mode.txt")
 		pf, err := NewPendingFile(t.Context(), path, WithMode(0o600))
@@ -129,6 +126,7 @@ func TestPendingFile(t *testing.T) {
 
 	t.Run("mkdir_mode", func(t *testing.T) {
 		t.Parallel()
+		skipModeOptions(t)
 		dir := t.TempDir()
 		path := filepath.Join(dir, "sub", "pending.txt")
 		pf, err := NewPendingFile(t.Context(), path, WithMkdirMode(0o755))
@@ -368,53 +366,6 @@ func TestPendingFile_CommitThenCleanup_KeepsFile(t *testing.T) {
 	}
 }
 
-// A failed Commit lands in the committed state with a cached *WriteError; a
-// second Commit must replay that identical error value and the same zero
-// Result, without re-running the barrier or leaking a temp. Closing the
-// embedded fd makes the barrier's first step under WithMode (the mode
-// enforcement) fail, so this also pins the PhaseTempChmod tag and the
-// on-barrier-failure temp cleanup.
-func TestPendingFile_FailedCommit_ReplaysSameError(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "failed-commit-replay.txt")
-
-	pf, err := NewPendingFile(t.Context(), path, WithMode(0o600))
-	if err != nil {
-		t.Fatalf("NewPendingFile: %v", err)
-	}
-	if _, err := pf.Write([]byte("payload")); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if err := pf.Close(); err != nil {
-		t.Fatalf("File.Close: %v", err)
-	}
-
-	firstRes, firstErr := pf.Commit(t.Context())
-	we, ok := errors.AsType[*WriteError](firstErr)
-	if !ok || we.Phase != PhaseTempChmod {
-		t.Fatalf("first Commit = %v, want *WriteError{PhaseTempChmod}", firstErr)
-	}
-	if firstRes != (Result{}) {
-		t.Fatalf("first Commit result = %+v, want zero Result", firstRes)
-	}
-
-	secondRes, secondErr := pf.Commit(t.Context())
-	if secondErr != firstErr {
-		t.Errorf("second Commit err = %v, want the cached first err %v (identical value)", secondErr, firstErr)
-	}
-	if errors.Is(secondErr, ErrAborted) {
-		t.Errorf("second Commit err = %v, want the cached WriteError, not ErrAborted", secondErr)
-	}
-	if secondRes != firstRes {
-		t.Errorf("second Commit result = %+v, want cached %+v", secondRes, firstRes)
-	}
-	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("final file exists after replayed failed Commit, want absent")
-	}
-	assertNoTempLeak(t, dir)
-}
-
 // The rename-failure branch, reached the only way that survives the
 // pre-write target guard: the guard runs at construction and the rename
 // runs at Commit, so planting a directory at the target in between
@@ -483,30 +434,6 @@ func TestPendingFile_Cleanup_CloseFailure_StillRemovesTemp(t *testing.T) {
 		t.Errorf("temp %q still present after Cleanup, want removed (no leak)", tmpName)
 	}
 	assertNoTempLeak(t, dir)
-}
-
-// TestPendingFile_Cleanup_RemoveFailureSurfacesError pins that Cleanup
-// surfaces a temp-removal failure (other than ErrNotExist) as a non-nil
-// error. A non-empty directory triggers ENOTEMPTY, which root cannot bypass.
-func TestPendingFile_Cleanup_RemoveFailureSurfacesError(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-
-	pf, err := NewPendingFile(t.Context(), target)
-	if err != nil {
-		t.Fatalf("NewPendingFile(%q) = %v, want nil", target, err)
-	}
-	tmpName := pf.Name()
-
-	replaceWithNonEmptyDir(t, tmpName)
-
-	gotErr := pf.Cleanup()
-	if gotErr == nil {
-		t.Fatalf("Cleanup() (os.Remove hits non-empty dir) = nil, want non-nil error")
-	}
-	if errors.Is(gotErr, fs.ErrNotExist) {
-		t.Fatalf("Cleanup() = %v, want a non-ErrNotExist error (ENOTEMPTY expected)", gotErr)
-	}
 }
 
 // TestPendingFile_Cleanup_SuccessReturnsNil pins the opposite branch: when

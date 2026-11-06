@@ -169,6 +169,44 @@ func TestFileIdentityDetectsTimestampPreservingReplacement(t *testing.T) {
 	}
 }
 
+// TestFileIdentityRecordsFileHeldOpen pins that Identify records the file
+// while another handle holds it open, so a later timestamp-preserving replace
+// still reads as Changed. On Windows os.SameFile loads the file ID with an
+// open that requests no data access, which no sharing check refuses
+// ([MS-FSA] 2.1.5.1.2.2,
+// https://learn.microsoft.com/openspecs/windows_protocols/ms-fsa/8c0e3f4f-0729-49f4-a14d-7f7add593819).
+func TestFileIdentityRecordsFileHeldOpen(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f")
+	if err := os.WriteFile(path, []byte("aaaaa"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	before := statOrFail(t, path)
+	id := Identify(before)
+	if err := held.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := WriteFile(t.Context(), path, []byte("bbbbb")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	after := statOrFail(t, path)
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("the replacement changed mtime; the test no longer isolates the identity leg")
+	}
+	if !id.Changed(after) {
+		t.Error("Changed(replacement after an Identify under an open handle) = false, want true")
+	}
+}
+
 // TestFileIdentityDetectsOlderMtime pins that the comparison is equality, not
 // ordering: a replacement carrying an OLDER timestamp is still a change, so a
 // rollback or an out-of-order restore reloads rather than being treated as

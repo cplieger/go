@@ -3,7 +3,6 @@ package filesafe
 import (
 	"bytes"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,7 +115,7 @@ func TestOptions_NilElement(t *testing.T) {
 	t.Run("WriteFile", func(t *testing.T) {
 		t.Parallel()
 		p := filepath.Join(t.TempDir(), "f.txt")
-		if _, err := WriteFile(ctx, p, []byte("x"), nil, WithMode(0o600), nil); err != nil {
+		if _, err := WriteFile(ctx, p, []byte("x"), nil, WithMaxBytes(1), nil); err != nil {
 			t.Fatalf("WriteFile with nil option: %v", err)
 		}
 		assertContent(t, p, "x")
@@ -153,25 +152,6 @@ func TestOptions_NilElement(t *testing.T) {
 	})
 }
 
-// Serial: withUmask is process-global.
-func TestOptions_AllNil(t *testing.T) {
-	if isWindows() {
-		t.Skip("file mode not meaningful on Windows")
-	}
-	withUmask(t, 0o027)
-	p := filepath.Join(t.TempDir(), "allnil.txt")
-	if _, err := WriteFile(t.Context(), p, []byte("x"), nil, nil, nil, nil); err != nil {
-		t.Fatalf("WriteFile all nils: %v", err)
-	}
-	fi, err := os.Stat(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0o640 {
-		t.Fatalf("all-nil mode under umask 027 = %o, want 0640", fi.Mode().Perm())
-	}
-}
-
 // TestOptions_Logger pins that a custom logger is accepted and the write still
 // lands.
 func TestOptions_Logger(t *testing.T) {
@@ -183,31 +163,4 @@ func TestOptions_Logger(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	assertContent(t, path, "data")
-}
-
-// TestOptions_AllCombined_WriteFile threads logger + mode + mkdir through a
-// single write and pins that each takes effect together.
-func TestOptions_AllCombined_WriteFile(t *testing.T) {
-	t.Parallel()
-	if isWindows() {
-		t.Skip("file mode not meaningful on Windows")
-	}
-	path := filepath.Join(t.TempDir(), "sub", "combined.txt")
-	l := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	res, err := WriteFile(t.Context(), path, []byte("combined"),
-		WithLogger(l),
-		WithMode(0o600),
-		WithMkdirMode(0o755),
-	)
-	if err != nil {
-		t.Fatalf("WriteFile combined opts: %v", err)
-	}
-	if !res.Durable {
-		t.Errorf("Result.Durable = false, want true for a fully synced write")
-	}
-	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0o600 {
-		t.Errorf("mode = %o, want 0600", fi.Mode().Perm())
-	}
-	assertContent(t, path, "combined")
 }

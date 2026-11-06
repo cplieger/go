@@ -2,6 +2,8 @@
 
 This page explains how filesafe sets file and directory modes, and how `EnsurePrivateDir` sets up a directory only one user may enter, for a developer writing credentials, configuration or backups.
 
+None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A write without them creates the file with the directory's inherited ACL.
+
 ## Ordinary and enforced modes
 
 Pass `WithMode` for any file whose readers must be restricted, such as credentials, configuration and backups. The staging file is created 0600 and proven owner-only before any data lands in it, so the payload is never staged in a file others can open. The final file is set to the requested mode and proven to hold it. A filesystem that stores anything else fails the write with `ErrModeNotStored` rather than publish a file wider than asked.

@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
@@ -215,7 +214,7 @@ func TestOpenRegularInRoot(t *testing.T) {
 	t.Run("fifo_is_refused_without_blocking", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		if err := syscall.Mkfifo(filepath.Join(dir, "pipe.pem"), 0o600); err != nil {
+		if err := filesafe.MkfifoForTest(filepath.Join(dir, "pipe.pem")); err != nil {
 			t.Skipf("mkfifo unsupported here: %v", err)
 		}
 		root := openTestRoot(t, dir)
@@ -381,7 +380,7 @@ func TestOpenRegular(t *testing.T) {
 	t.Run("fifo_is_refused_without_blocking", func(t *testing.T) {
 		t.Parallel()
 		fifo := filepath.Join(t.TempDir(), "pipe.pem")
-		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		if err := filesafe.MkfifoForTest(fifo); err != nil {
 			t.Skipf("mkfifo unsupported here: %v", err)
 		}
 
@@ -577,7 +576,7 @@ func TestNotRegularError_EveryProducerCarriesTheMode(t *testing.T) {
 
 	newFIFO := func(t *testing.T, dir, name string) {
 		t.Helper()
-		if err := syscall.Mkfifo(filepath.Join(dir, name), 0o600); err != nil {
+		if err := filesafe.MkfifoForTest(filepath.Join(dir, name)); err != nil {
 			t.Skipf("mkfifo unavailable: %v", err)
 		}
 	}

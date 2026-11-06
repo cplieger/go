@@ -5,35 +5,29 @@ import (
 	"time"
 )
 
-// FileIdentity records WHICH generation of a file a reader currently holds, so
-// a cache can answer "is what I loaded still what is on disk?" from a stat
-// alone, without re-reading the bytes.
-//
-// Matches compares mtime equality AND os.SameFile identity, and both legs are
-// load-bearing: an IN-PLACE writer keeps the same inode but may not advance
-// the mtime (inode times come from a coarse clock tick, so two writes inside
-// one tick can share an mtime), while a PUBLISH-BY-RENAME writer (every write
-// in this package) installs a different inode but can carry an OLD timestamp
-// forward (a backup restore, rsync -t). Neither leg alone catches both cases.
-// Size is a third leg this type does not hold: it is what catches an
-// in-place rewrite that changes the file's LENGTH without advancing its
-// mtime; a caller whose file may be rewritten in place should keep its own
-// size comparison beside Changed.
-//
-// The zero value records nothing, which reports Changed — the fail direction
-// a cache wants, since a spurious reload costs one read while a missed
-// reload serves stale data indefinitely.
-//
-// FileIdentity is a comparison primitive, not a policy: what to do about a
-// changed file, and when to re-stat, stay with the caller.
+// FileIdentity records which generation of a file a reader holds, so a cache
+// can tell from a stat alone whether its copy is still current. Matches needs
+// both an equal mtime and os.SameFile: an in-place write can keep the mtime,
+// and a publish by rename can carry an old one. It does not compare size; a
+// caller whose file is also rewritten in place keeps its own size check
+// (docs/reload-staleness.md). The zero value records nothing and reports
+// Changed. What to do about a change stays with the caller.
 type FileIdentity struct {
 	info os.FileInfo
 }
 
 // Identify captures the identity of the file described by info, as returned by
 // os.Stat, os.Lstat, or (*os.File).Stat. A nil info records nothing, so the
-// result reports Changed against every later stat.
+// result reports Changed against every later stat. On Windows it records the
+// file at the path when Identify runs, so call it right after the stat.
 func Identify(info os.FileInfo) FileIdentity {
+	if info != nil {
+		// On Windows an os.Stat result reads its file ID by path at its first
+		// os.SameFile (os/types_windows.go loadFileId), which would identify
+		// whatever file a later Matches finds there. Comparing it with itself
+		// loads the ID now.
+		_ = os.SameFile(info, info)
+	}
 	return FileIdentity{info: info}
 }
 
@@ -43,8 +37,8 @@ func (id FileIdentity) Recorded() bool { return id.info != nil }
 
 // Matches reports whether info describes the same file generation this identity
 // captured: an equal modification time AND the same file (os.SameFile, which
-// compares the underlying device and inode). An unrecorded identity matches
-// nothing, and a nil info — no file observed — matches nothing.
+// compares device and inode, or volume and file index on Windows). An unrecorded identity matches
+// nothing, and a nil info (no file observed) matches nothing.
 func (id FileIdentity) Matches(info os.FileInfo) bool {
 	if id.info == nil || info == nil {
 		return false

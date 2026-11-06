@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -102,7 +101,7 @@ func TestReadBoundedInRoot(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		fifo := filepath.Join(dir, "pipe.pem")
-		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		if err := filesafe.MkfifoForTest(fifo); err != nil {
 			t.Skipf("mkfifo unsupported here: %v", err)
 		}
 		root, err := os.OpenRoot(dir)
