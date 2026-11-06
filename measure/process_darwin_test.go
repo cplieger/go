@@ -97,7 +97,7 @@ func TestLogProcTransition_darwin(t *testing.T) {
 	if !strings.Contains(out, "cpu_ok=false") || !strings.Contains(out, "max_vsize_ok=true") {
 		t.Errorf("Warn line %q does not name the macOS families' states", out)
 	}
-	for _, key := range []string{"rss_ok", "vsize_ok=", "network_ok"} {
+	for _, key := range []string{" rss_ok=", " vsize_ok=", " network_ok="} {
 		if strings.Contains(out, key) {
 			t.Errorf("Warn line %q names %s, a family macOS does not serve", out, key)
 		}
