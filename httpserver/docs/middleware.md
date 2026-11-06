@@ -89,7 +89,7 @@ The max-age rule also catches a common unit mistake. A bare `31536000` assigned 
 
 `RouteTimeout(h, d, msg)` wraps `h` with `http.TimeoutHandler`, so `h` gets at most `d` before the client is answered. Once `d` passes, the client gets a 503 with a JSON `ErrorResponse` whose code is `timeout`. An empty `msg` becomes `request timed out`. The body carries the request id when the context has one.
 
-`RouteTimeout` does not stop the handler. `http.TimeoutHandler` runs the handler on a goroutine of its own and answers 503 when `d` passes, while the handler keeps running with its request context cancelled, and the handler's later writes fail with `http.ErrHandlerTimeout`. So a 503 does not mean nothing happened: a handler that writes to a store can commit after the client got its 503. Use `RouteTimeout` only on handlers that change no state. For a handler that does, set the deadline inside it, with `context.WithTimeout` on `r.Context()` passed to every call that can block, and answer from what it committed. A client that gets a 503 or loses the connection on a write still cannot know the outcome, so it should resend under the same `Idempotency-Key`, and the server must dedup that key.
+`RouteTimeout` does not stop the handler. `http.TimeoutHandler` runs the handler on a goroutine of its own and answers 503 when `d` passes, while the handler keeps running with its request context cancelled, and the handler's later writes fail with `http.ErrHandlerTimeout`. So a 503 does not mean nothing happened: a handler that writes to a store can commit after the client got its 503. Use `RouteTimeout` only on handlers that change no state. For a handler that does, use `RouteDeadline`. A client that gets a 503 or loses the connection on a write still cannot know the outcome, so it should resend under the same `Idempotency-Key`, and the server must dedup that key.
 
 A non-positive `d` returns `h` unwrapped, so a configured zero means no timeout.
 
@@ -98,6 +98,12 @@ The JSON relabelling keys on the status alone. A downstream 503 that reaches the
 `http.TimeoutHandler` buffers the entire response. So `RouteTimeout` cannot wrap SSE, WebSocket upgrades or any other streaming or hijacking handler. For those, set per-request deadlines with `http.ResponseController.SetWriteDeadline`.
 
 That buffering writer cannot be unwrapped either. Under it, `LimitBody` still fails an over-limit read, but it cannot ask `net/http` to close the connection.
+
+## RouteDeadline
+
+`RouteDeadline(h, d)` gives the request context a deadline `d` and runs `h` on the request's own goroutine. It never answers for `h`, so the status the client gets is the one `h` chose from its own outcome. That makes it the choice for a handler that changes state.
+
+Every call `h` makes with `r.Context()` stops at the deadline. A store or client call that ignores its context does not, so check `r.Context().Err()` before committing, and answer from what was committed. A non-positive `d` returns `h` unwrapped. Because the writer is the one `net/http` gave the request, streaming, hijacking and `LimitBody`'s connection close all work under it.
 
 ## RateLimiter
 

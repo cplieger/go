@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -484,6 +485,22 @@ func NoStore() Middleware {
 	}
 }
 
+// RouteDeadline gives h's request context a deadline d and runs h on the
+// request's own goroutine. It never answers for h, so h answers from its own
+// outcome: the choice over RouteTimeout for a handler that changes state.
+// Every call h makes with the context stops at the deadline, and h must check
+// it before committing. A non-positive d returns h unwrapped.
+func RouteDeadline(h http.Handler, d time.Duration) http.Handler {
+	if d <= 0 {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // jsonTimeoutWriter labels a 503 response that carries no Content-Type as JSON,
 // so the timeout envelope written by http.TimeoutHandler is served as
 // application/json (with nosniff) instead of being content-sniffed as
@@ -507,8 +524,8 @@ func (w *jsonTimeoutWriter) WriteHeader(code int) {
 // "request timed out", and the request id when the context has one) once h has
 // run longer than d; a non-positive d returns h unwrapped. It does not stop h:
 // h keeps running with its request context cancelled and can still commit
-// after the 503, so never wrap a handler that changes state; give that one its
-// own context deadline. It buffers the whole response, so it cannot wrap a
+// after the 503, so never wrap a handler that changes state; use RouteDeadline
+// for that one. It buffers the whole response, so it cannot wrap a
 // streaming or hijacking handler, and it labels any 503 without a Content-Type
 // as JSON. docs/middleware.md in the module has the full contract.
 func RouteTimeout(h http.Handler, d time.Duration, msg string) http.Handler {

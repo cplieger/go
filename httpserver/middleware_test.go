@@ -744,6 +744,61 @@ func TestRouteTimeout_doesNotStopTheHandler(t *testing.T) {
 	}
 }
 
+// TestRouteDeadline_handlerAnswersFromItsOutcome: the handler sees a context
+// deadline of d, and after it passes the client gets the handler's own answer,
+// written straight through, never a 503 of the wrapper's.
+func TestRouteDeadline_handlerAnswersFromItsOutcome(t *testing.T) {
+	const d = 20 * time.Millisecond
+	var deadlineIn time.Duration
+	h := httpserver.RouteDeadline(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dl, ok := r.Context().Deadline()
+		if !ok {
+			t.Error("the handler's context has no deadline")
+		}
+		deadlineIn = time.Until(dl)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+			t.Error("the handler's context never ended")
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusConflict) // the handler rolled back and says so
+		_, _ = w.Write([]byte("rolled back"))
+	}), d)
+
+	rr := serve(h, http.MethodPost, "/", nil)
+	if rr.Code != http.StatusConflict || rr.Body.String() != "rolled back" || rr.Header().Get("Content-Type") != "text/plain" {
+		t.Errorf("response = %d %q %q, want the handler's own 409", rr.Code, rr.Header().Get("Content-Type"), rr.Body.String())
+	}
+	if deadlineIn <= 0 || deadlineIn > d {
+		t.Errorf("deadline %v ahead at entry, want within (0, %v]", deadlineIn, d)
+	}
+}
+
+// TestRouteDeadline_writesGoStraightThrough: the handler gets the writer the
+// server passed in, so Flush and Unwrap reach it, which RouteTimeout's
+// buffering writer cannot offer.
+func TestRouteDeadline_writesGoStraightThrough(t *testing.T) {
+	rec := httptest.NewRecorder()
+	h := httpserver.RouteDeadline(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if w != http.ResponseWriter(rec) {
+			t.Errorf("the handler got %T, want the server's own writer", w)
+		}
+	}), time.Second)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
+}
+
+func TestRouteDeadline_nonPositiveDurationReturnsHandlerUnwrapped(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		h := httpserver.RouteDeadline(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if _, ok := r.Context().Deadline(); ok {
+				t.Errorf("d=%v: the handler's context has a deadline, want none", d)
+			}
+		}), d)
+		serve(h, http.MethodGet, "/", nil)
+	}
+}
+
 func TestRouteTimeout_emptyMsgDefaults(t *testing.T) {
 	slow := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()

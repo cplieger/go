@@ -93,7 +93,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 
 ## API
 
-- Middleware: `Chain`, `Recoverer`, `SecurityHeaders`, `Gzip`, `Logging`, `RouteTimeout`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
+- Middleware: `Chain`, `Recoverer`, `SecurityHeaders`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
 - Logging and metrics: `RequestLogger` and its options, request-id helpers, `RouteMetricLabels`, `StatusRecorder`.
 - Trust checks: `ClientIP`, `ResolveClient`, `ParseCIDRs`, `ParseHostList` and `HostPolicy`, `CanonicalHost`, `LoopbackOnly`, `ClassifyBind`, `NewStaticTokenVerifier`.
 - Requests and responses: `WriteJSON`, `WriteError` and `ErrorCode`, `DecodeBody`, `DecodeJSONInto`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `CanonicalRequestPath`.
@@ -110,7 +110,7 @@ Place a `HostPolicy` before any cross-origin or CSRF check. In a DNS rebinding a
 
 `SecurityHeaders` always sends `X-Content-Type-Options: nosniff`, and by default `X-Frame-Options: DENY` and `Referrer-Policy: strict-origin-when-cross-origin`. It builds no Content-Security-Policy and sends no HSTS until you pass `WithCSP` or `WithHSTS`. Enable HSTS only for a service reached over HTTPS alone. A browser that has seen the header refuses plain-HTTP and untrusted-certificate connections to the host for the whole max-age.
 
-`RouteTimeout` buffers the whole response, so never wrap a streaming or hijacking handler with it. It answers 503 at its deadline without stopping the handler, so never wrap a handler that changes state with it either. [Middleware](docs/middleware.md) has each option and default.
+`RouteTimeout` buffers the whole response, so never wrap a streaming or hijacking handler with it. It answers 503 at its deadline without stopping the handler, so never wrap a handler that changes state with it either; use `RouteDeadline` for that one. [Middleware](docs/middleware.md) has each option and default.
 
 Behind a proxy, `ClientIP` is safe only when the trusted set holds every proxy hop. It reads at most 64 entries of each forwarding header and treats a longer header as invalid. `LoopbackOnly` is not authentication, because a proxy on the same loopback interface that removes every forwarding header passes it. An empty `NewStaticTokenVerifier` secret denies every value. When a page carries inline scripts, treat an empty `InlineScriptHashes` result as a startup error and never fall back to `'unsafe-inline'`.
 

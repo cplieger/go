@@ -1,7 +1,7 @@
 // Package httpserver is server-side HTTP plumbing on top of net/http: request-id
 // and bounded access logging (RequestLogger, Logging), a transparent
 // StatusRecorder, composable middleware (Chain, Recoverer, SecurityHeaders,
-// Gzip, RouteTimeout, RateLimiter and its presets, NoStore), a spoof-aware
+// Gzip, RouteTimeout, RouteDeadline, RateLimiter and its presets, NoStore), a spoof-aware
 // ClientIP and ResolveClient, a Host allowlist against DNS rebinding
 // (HostPolicy, CanonicalHost), an embedded StaticHandler, JSON envelope
 // helpers (WriteJSON, WriteError), request preludes (LimitBody, RequireMethod,
