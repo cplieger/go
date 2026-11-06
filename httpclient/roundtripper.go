@@ -55,16 +55,15 @@ type TransportConfig struct {
 	// ResponseHeaderTimeout) and the whole call with the request context.
 	// Zero means no ceiling.
 	MaxElapsedTime time.Duration
-	// RetryNonIdempotent extends retries from the safe methods to every
-	// method (POST, PUT, PATCH, DELETE and the rest).
+	// RetryNonIdempotent extends retries from the safe methods and keyed
+	// requests to every method (POST, PUT, PATCH, DELETE and the rest).
 	RetryNonIdempotent bool
 }
 
-// RetryRoundTripper implements http.RoundTripper with automatic retry.
-//
-// By default only the safe methods (GET, HEAD, OPTIONS, TRACE) are retried;
-// TransportConfig.RetryNonIdempotent extends that to every method. Either way
-// a request whose body has no GetBody to rewind it is sent once.
+// RetryRoundTripper implements http.RoundTripper with automatic retry: of the
+// safe methods, of any request carrying a non-empty Idempotency-Key header,
+// and with TransportConfig.RetryNonIdempotent of every request. A request
+// whose body has no GetBody to rewind it is sent once.
 //
 // Unlike hashicorp/go-retryablehttp, it takes a plain *http.Request and counts
 // total attempts (TransportConfig.MaxAttempts), not retries.
@@ -98,6 +97,10 @@ func NewRetryRoundTripper(next http.RoundTripper, cfg TransportConfig) *RetryRou
 	}
 }
 
+// idempotencyKeyHeader is the header a client sets so its server can dedup
+// a repeated non-idempotent request (draft-ietf-httpapi-idempotency-key-header).
+const idempotencyKeyHeader = "Idempotency-Key"
+
 // isSafeMethod reports a safe method (RFC 9110 section 9.2.1); an empty
 // method is GET.
 func isSafeMethod(method string) bool {
@@ -109,9 +112,10 @@ func isSafeMethod(method string) bool {
 }
 
 // canRetry reports whether this request may be sent more than once: its
-// method allows it, and a body it carries can be rewound through GetBody.
+// method or its idempotency key allows it, and a body it carries can be
+// rewound through GetBody.
 func (rt *RetryRoundTripper) canRetry(req *http.Request) bool {
-	if !isSafeMethod(req.Method) && !rt.retryNonIdempotent {
+	if !isSafeMethod(req.Method) && !rt.retryNonIdempotent && req.Header.Get(idempotencyKeyHeader) == "" {
 		return false
 	}
 	return req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
