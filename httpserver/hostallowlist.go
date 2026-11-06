@@ -162,8 +162,10 @@ type hostPolicyConfig struct {
 	loopbackExempt bool
 }
 
-// maxLoggedHost bounds the Host a refusal line records. net/http refuses a
-// Host with invalid bytes, but not a long one.
+// maxLoggedHost bounds the Host a refusal line records. r.Host is
+// caller-chosen and has no length bound, and on HTTP/2 or an absolute-form
+// request line it skips net/http's Host byte check, so the slog handler quotes
+// it.
 const maxLoggedHost = 128
 
 // WithLoopbackExempt selects whether a request is admitted when BOTH its socket
@@ -208,8 +210,8 @@ func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
 }
 
 // WithHostAllowlistLogger sets the slog.Logger Middleware reports each refusal
-// to; nil, the default, means slog.Default(). Pass a logger with a discarding
-// handler to silence it.
+// to. Nil, the default, means slog.Default() as it is when ParseHostList runs.
+// Pass a logger with a discarding handler to silence it.
 func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.logger = l }
 }
@@ -332,11 +334,11 @@ func (p *HostPolicy) Allows(r *http.Request) bool {
 // Middleware returns the allowlist as httpserver middleware. An inactive or nil
 // policy returns the next handler unwrapped, the "off" contract RateLimiter and
 // RouteTimeout share. An active policy answers a disallowed Host with a 403 via
-// WriteError (see WithHostAllowlistError) before the next handler runs, and logs
-// one Warn naming the reason (missing host, malformed host or host not in
-// allowlist), host, remote, hint and request_id (see WithHostAllowlistLogger). Put it outermost among request-authorization
-// middleware: a DNS-rebinding request makes Origin and Host agree, so only the
-// exact-Host check breaks it (CWE-346).
+// WriteError (see WithHostAllowlistError) before the next handler runs, and
+// logs one Warn with the reason, host, remote, hint and, when the context has
+// one, request_id (see WithHostAllowlistLogger). Put it outermost among
+// request-authorization middleware: a DNS-rebinding request makes Origin and
+// Host agree, so only the exact-Host check breaks it (CWE-346).
 func (p *HostPolicy) Middleware() Middleware {
 	if p == nil || !p.active {
 		return func(next http.Handler) http.Handler { return next }
@@ -430,8 +432,8 @@ func isLoopbackPeer(remoteAddr string) bool {
 
 // logRefusal writes the refusal line. It carries no path, which can hold a
 // token; the access line, correlated by request_id, carries the routed path.
-// The Host is empty when the request named none, which net/http admits on
-// HTTP/1.0.
+// The Host is empty when the request named none: HTTP/1.0 without Host,
+// HTTP/1.1 with an empty Host header, or HTTP/2 without :authority or Host.
 func (p *HostPolicy) logRefusal(r *http.Request) {
 	reason := "host not in allowlist"
 	switch {

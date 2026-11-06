@@ -496,6 +496,11 @@ func TestHostPolicyMiddleware_LogsRefusal(t *testing.T) {
 			{"long host is cut", long, "", map[string]any{
 				"reason": "malformed host", "host": long[:128] + "...(truncated)",
 			}},
+			// "é" is two bytes, so byte 128 is a continuation byte and the
+			// cut steps back to the rune start at 127.
+			{"cut keeps whole runes", strings.Repeat("a", 127) + "é" + long, "", map[string]any{
+				"reason": "malformed host", "host": strings.Repeat("a", 127) + "...(truncated)",
+			}},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
