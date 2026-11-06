@@ -4,8 +4,8 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 
 | Left out | Reason |
 | --- | --- |
-| Summary instruments | Use a histogram. Prometheus's guide recommends histograms whenever you aggregate across instances, and a summary needs a windowed-quantile implementation. The one summary on the page is the Go runtime's `go_gc_duration_seconds`, whose quantiles the runtime computes |
-| OpenMetrics exposition and content negotiation | `Handler` serves Prometheus text format 0.0.4, which both of Prometheus's default scrape-format lists include |
+| Summary instruments | Use a histogram. Prometheus's guide recommends histograms whenever you aggregate across instances, and a summary needs a windowed-quantile implementation |
+| OpenMetrics exposition and content negotiation | `Handler` serves Prometheus text format 0.0.4, which both of Prometheus's default scrape-format lists include. The signals that reopen OpenMetrics 2.0 follow this table |
 | Exemplars | They need a tracing integration and OpenMetrics or protobuf exposition |
 | Pushing metrics or remote write | measure serves a pull endpoint for Prometheus to scrape |
 | Protobuf exposition | Prometheus asks for protobuf first only when native histograms are on, and protobuf needs the protobuf runtime module as a dependency |
@@ -15,5 +15,14 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 | Float counter instruments | The counter types count whole events as `int64`. A collector counter reports a `float64` total it reads elsewhere |
 | Gzip compression of the response | Wrap `Handler` in standard HTTP middleware |
 | `Gauge.SetToCurrentTime()` | Call `g.Set(float64(time.Now().Unix()))` |
+
+Any of these reopens OpenMetrics 2.0:
+
+- The OpenMetrics spec publishes 2.0.0 without `-rc`.
+- Prometheus adds 2.0 to its default `scrape_protocols`.
+- Grafana Alloy or the OpenTelemetry Collector lists a 2.0 protocol.
+- measure takes on a feature that needs 2.0.
+
+`Handler`'s page has one summary, the Go runtime's `go_gc_duration_seconds`, whose quantiles the runtime computes, so leaving out summary instruments leaves that family in place.
 
 If you need summary instruments, exemplars, native histograms or a third-party `prometheus.Collector`, consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Go client of the Prometheus project.
