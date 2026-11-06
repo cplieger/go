@@ -110,15 +110,15 @@ func init() {
 }
 ```
 
-### Patterns
+## Patterns
 
-Each of these is a runnable example in the [package reference](https://pkg.go.dev/github.com/cplieger/go/measure), so `go test` keeps it true.
+The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a runnable example of each pattern except serving `Handler` alone, which a test checks, so `go test` keeps them true.
 
-- **Seed a labeled counter at 0.** A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup.
-- **Remove a series with `Delete`.** Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
-- **Serve `Handler` alone.** Its page already includes the Go and process metrics, so adding `WriteProcess` to the same page repeats every one of them.
-- **Time each route beside `RecordHTTP`.** `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware.
-- **Publish build information** as a `LabeledGauge` with a `version` label, set to 1.
+- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup.
+- Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
+- Serve `Handler` alone. Its page already includes the Go and process metrics, so adding `WriteProcess` to the same page repeats every one of them.
+- Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.
+- Publish build information as a `LabeledGauge` with a `version` label, set to 1.
 
 ## API
 
