@@ -12,6 +12,12 @@ import (
 // procExpected is the set of process families Linux gives: all of them.
 const procExpected = procOKAll
 
+// fdDir lists the open descriptors; reading it holds one, the directory's own.
+const (
+	fdDir            = "/proc/self/fd"
+	fdListingHandles = 1
+)
+
 // defaultUserHZ is the USER_HZ fallback used when the auxiliary vector cannot
 // be read: 100 is the fixed kernel-to-userspace ABI value on all modern Linux
 // architectures, independent of the kernel's internal CONFIG_HZ.
@@ -47,7 +53,7 @@ func readPlatformProcess(d *processMetricsData) {
 	d.cpuSeconds = parseProcStatCPU(stat, userHZ())
 	d.vsize = parseProcStatVsize(stat)
 	d.rss = parseProcStatusRSS(readProcFile("/proc/self/status"))
-	d.openFDs = readOpenFDs("/proc/self/fd")
+	d.openFDs = readOpenFDs(fdDir, fdListingHandles)
 	limits := readProcFile("/proc/self/limits")
 	d.maxFDs = parseProcLimit(limits, "Max open files")
 	d.maxVsize = parseProcLimit(limits, "Max address space")

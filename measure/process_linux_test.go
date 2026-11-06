@@ -36,8 +36,8 @@ func TestAuxvClkTck_MissingFile(t *testing.T) {
 // just one: a live process always has at least its standard descriptors plus the
 // directory handle open, so the open count is >= 1.
 func TestReadOpenFDs_readsAllEntries(t *testing.T) {
-	if open := readOpenFDs("/proc/self/fd"); open < 1 {
-		t.Fatalf("readOpenFDs(/proc/self/fd) = %d, want >= 1 (must read all fd entries)", open)
+	if open := readOpenFDs(fdDir, fdListingHandles); open < 1 {
+		t.Fatalf("readOpenFDs(%s) = %d, want >= 1 (must read all fd entries)", fdDir, open)
 	}
 }
 
@@ -125,5 +125,22 @@ func TestProcExpected_linux(t *testing.T) {
 		if procOKMask(procExpected, &d) == procOKAll {
 			t.Errorf("a failed %s read leaves the Linux mask all-ok", name)
 		}
+	}
+}
+
+// TestLogProcTransition_linux checks both log lines on Linux: the Warn names
+// all seven families, and a full recovery logs the Info line alone.
+func TestLogProcTransition_linux(t *testing.T) {
+	buf := captureDebugLogs(t)
+	logProcTransition(procOKAll &^ procOKNetwork)
+	for _, kv := range []string{"cpu_ok=true", "rss_ok=true", "fds_ok=true", "max_fds_ok=true", "vsize_ok=true", "max_vsize_ok=true", "network_ok=false"} {
+		if !strings.Contains(buf.String(), kv) {
+			t.Errorf("Warn line %q lacks %s", buf.String(), kv)
+		}
+	}
+	buf.Reset()
+	logProcTransition(procOKAll)
+	if out := buf.String(); !strings.Contains(out, "recovered") || strings.Contains(out, "_ok=") {
+		t.Errorf("recovery log = %q, want the Info line with no family states", out)
 	}
 }

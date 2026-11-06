@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -284,6 +285,28 @@ func TestProcOKMask(t *testing.T) {
 	}
 }
 
+// TestProcOKAttrs pins the Warn line's attributes: only the expected families,
+// in a fixed order, each reporting its own bit.
+func TestProcOKAttrs(t *testing.T) {
+	all := []any{
+		"cpu_ok", true, "rss_ok", true, "fds_ok", true, "max_fds_ok", true,
+		"vsize_ok", true, "max_vsize_ok", true, "network_ok", true,
+	}
+	if got := procOKAttrs(procOKAll, procOKAll); !slices.Equal(got, all) {
+		t.Errorf("procOKAttrs(all, all) = %v, want %v", got, all)
+	}
+	darwinCPUFailed := []any{"cpu_ok", false, "fds_ok", true, "max_fds_ok", true, "max_vsize_ok", true}
+	if got := procOKAttrs(procOKDarwin, procOKAll&^procOKCPU); !slices.Equal(got, darwinCPUFailed) {
+		t.Errorf("procOKAttrs(darwin, cpu failed) = %v, want %v", got, darwinCPUFailed)
+	}
+	if got := procOKAttrs(procOKAll, procOKAll&^procOKNetwork); got[len(got)-1] != false {
+		t.Errorf("procOKAttrs(all, network failed) = %v, want network_ok false", got)
+	}
+	if got := procOKAttrs(0, 0); len(got) != 0 {
+		t.Errorf("procOKAttrs(none) = %v, want no attributes", got)
+	}
+}
+
 // TestUnreadProcess pins the reset collectProcessMetrics applies before the
 // platform reads: every reading lands on the sentinel its predicate rejects,
 // so a family the platform does not read is omitted rather than served as 0.
@@ -306,18 +329,21 @@ func TestUnreadProcess(t *testing.T) {
 
 func TestOpenFDCount(t *testing.T) {
 	tests := []struct {
-		name  string
-		names []string
-		want  int
+		name    string
+		names   []string
+		handles int
+		want    int
 	}{
-		{"empty listing", nil, 0},
-		{"only the dir handle", []string{"3"}, 0},
-		{"three real fds plus handle", []string{"0", "1", "2", "3"}, 3},
+		{"empty listing", nil, 1, 0},
+		{"only the dir handle", []string{"3"}, 1, 0},
+		{"three real fds plus handle", []string{"0", "1", "2", "3"}, 1, 3},
+		{"three real fds plus two handles", []string{"0", "1", "2", "3", "4"}, 2, 3},
+		{"fewer entries than handles", []string{"3"}, 2, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := openFDCount(tc.names); got != tc.want {
-				t.Errorf("openFDCount(%v) = %d, want %d", tc.names, got, tc.want)
+			if got := openFDCount(tc.names, tc.handles); got != tc.want {
+				t.Errorf("openFDCount(%v, %d) = %d, want %d", tc.names, tc.handles, got, tc.want)
 			}
 		})
 	}

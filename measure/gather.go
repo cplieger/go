@@ -194,7 +194,8 @@ func processGather() []Family {
 }
 
 // processFamiliesOf builds processGather's families from one read of the Go
-// runtime and of /proc; a /proc family whose read failed is left out.
+// runtime and one of the platform's process readings; a family whose reading
+// failed, or that the platform lacks, is left out.
 func processFamiliesOf(g *goRuntime, d *processMetricsData) []Family {
 	fams := g.families(make([]Family, 0, len(processFamilyNames)))
 	fams = append(fams,

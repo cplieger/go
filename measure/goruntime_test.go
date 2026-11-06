@@ -52,14 +52,14 @@ func readClientGolangFamilies(t *testing.T) map[string]Type {
 
 // TestProcessFamiliesMatchClientGolang is the golden check: the Go and process
 // families are client_golang's default set by name and type, plus measure's
-// own two. On Linux, where every /proc read succeeds, processFamilyNames
-// reserves exactly that set; on macOS the set drops the families client_golang
-// serves there only with cgo or not at all.
+// own two. Where every family is read (Linux), processFamilyNames reserves
+// exactly that set; on macOS the set drops the families client_golang serves
+// there only with cgo or not at all.
 func TestProcessFamiliesMatchClientGolang(t *testing.T) {
 	want := readClientGolangFamilies(t)
-	switch runtime.GOOS {
-	case "linux":
-	case "darwin":
+	switch procExpected {
+	case procOKAll:
+	case procOKDarwin:
 		for _, n := range []string{pmResidentBytes, pmVirtualBytes, pmNetReceive, pmNetTransmit} {
 			delete(want, n)
 		}
@@ -88,7 +88,7 @@ func TestProcessFamiliesMatchClientGolang(t *testing.T) {
 	if !slices.IsSorted(names) {
 		t.Errorf("process families are not sorted by name: %v", names)
 	}
-	if runtime.GOOS == "linux" && !slices.Equal(names, processFamilyNames) {
+	if procExpected == procOKAll && !slices.Equal(names, processFamilyNames) {
 		t.Errorf("processFamilyNames = %v, want the served set %v", processFamilyNames, names)
 	}
 }

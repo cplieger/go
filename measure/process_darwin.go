@@ -7,6 +7,14 @@ import "syscall"
 // procExpected is the set of process families macOS gives (procOKDarwin).
 const procExpected = procOKDarwin
 
+// fdDir lists the open descriptors. Reading it holds two: the directory's own
+// and the duplicate Go's os package hands to fdopendir, which takes ownership
+// of the descriptor it gets (internal/poll's OpenDir).
+const (
+	fdDir            = "/dev/fd"
+	fdListingHandles = 2
+)
+
 // readPlatformProcess fills the macOS readings client_golang serves without
 // cgo: CPU time from getrusage, open descriptors from /dev/fd and the two soft
 // limits from getrlimit.
@@ -15,7 +23,7 @@ func readPlatformProcess(d *processMetricsData) {
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err == nil {
 		d.cpuSeconds = float64(ru.Utime.Nano()+ru.Stime.Nano()) / 1e9
 	}
-	d.openFDs = readOpenFDs("/dev/fd")
+	d.openFDs = readOpenFDs(fdDir, fdListingHandles)
 	d.maxFDs = softLimit(syscall.RLIMIT_NOFILE)
 	d.maxVsize = softLimit(syscall.RLIMIT_AS)
 }

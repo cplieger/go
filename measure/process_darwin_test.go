@@ -66,3 +66,40 @@ func TestWriteProcess_darwin(t *testing.T) {
 		}
 	}
 }
+
+// TestProcExpected_darwin checks that each family macOS serves can degrade: a
+// failed read of any one of them changes the mask.
+func TestProcExpected_darwin(t *testing.T) {
+	healthy := processMetricsData{cpuSeconds: 1, openFDs: 1, maxFDs: 1, maxVsize: 1, vsize: -1, netRx: -1, netTx: -1}
+	for name, fail := range map[string]func(*processMetricsData){
+		"cpu":       func(d *processMetricsData) { d.cpuSeconds = -1 },
+		"open fds":  func(d *processMetricsData) { d.openFDs = -1 },
+		"max fds":   func(d *processMetricsData) { d.maxFDs = -1 },
+		"max vsize": func(d *processMetricsData) { d.maxVsize = -1 },
+	} {
+		d := healthy
+		if procOKMask(procExpected, &d) != procOKAll {
+			t.Fatalf("the healthy macOS readings %+v do not give procOKAll", d)
+		}
+		fail(&d)
+		if procOKMask(procExpected, &d) == procOKAll {
+			t.Errorf("a failed %s read leaves the macOS mask all-ok", name)
+		}
+	}
+}
+
+// TestLogProcTransition_darwin checks that the degradation Warn names only the
+// families macOS serves, so it never reports resident memory as healthy.
+func TestLogProcTransition_darwin(t *testing.T) {
+	buf := captureDebugLogs(t)
+	logProcTransition(procOKAll &^ procOKCPU)
+	out := buf.String()
+	if !strings.Contains(out, "cpu_ok=false") || !strings.Contains(out, "max_vsize_ok=true") {
+		t.Errorf("Warn line %q does not name the macOS families' states", out)
+	}
+	for _, key := range []string{"rss_ok", "vsize_ok=", "network_ok"} {
+		if strings.Contains(out, key) {
+			t.Errorf("Warn line %q names %s, a family macOS does not serve", out, key)
+		}
+	}
+}
