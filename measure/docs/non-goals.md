@@ -16,13 +16,13 @@ This page lists what measure leaves out on purpose and why, for a developer deci
 | Gzip compression of the response | Wrap `Handler` in standard HTTP middleware |
 | `Gauge.SetToCurrentTime()` | Call `g.Set(float64(time.Now().Unix()))` |
 
-The one summary on the page is the Go runtime's `go_gc_duration_seconds`, whose quantiles the runtime computes.
-
 Any of these reopens OpenMetrics 2.0:
 
-- its spec publishes 2.0.0 without `-rc`;
-- Prometheus adds 2.0 to its default `scrape_protocols`;
-- Grafana Alloy or the OpenTelemetry Collector lists a 2.0 protocol;
+- The OpenMetrics spec publishes 2.0.0 without `-rc`.
+- Prometheus adds 2.0 to its default `scrape_protocols`.
+- Grafana Alloy or the OpenTelemetry Collector lists a 2.0 protocol.
 - measure takes on a feature that needs 2.0.
+
+`Handler`'s page has one summary, the Go runtime's `go_gc_duration_seconds`, whose quantiles the runtime computes, so leaving out summary instruments leaves that family in place.
 
 If you need summary instruments, exemplars, native histograms or a third-party `prometheus.Collector`, consider [prometheus/client_golang](https://github.com/prometheus/client_golang), the Go client of the Prometheus project.
