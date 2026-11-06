@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -750,17 +751,20 @@ func TestRouteTimeout_doesNotStopTheHandler(t *testing.T) {
 func TestRouteDeadline_handlerAnswersFromItsOutcome(t *testing.T) {
 	const d = 20 * time.Millisecond
 	var deadlineIn time.Duration
+	var errAtEntry, errAtEnd error
 	h := httpserver.RouteDeadline(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dl, ok := r.Context().Deadline()
 		if !ok {
 			t.Error("the handler's context has no deadline")
 		}
 		deadlineIn = time.Until(dl)
+		errAtEntry = r.Context().Err()
 		select {
 		case <-r.Context().Done():
 		case <-time.After(5 * time.Second):
 			t.Error("the handler's context never ended")
 		}
+		errAtEnd = r.Context().Err()
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusConflict) // the handler rolled back and says so
 		_, _ = w.Write([]byte("rolled back"))
@@ -773,11 +777,55 @@ func TestRouteDeadline_handlerAnswersFromItsOutcome(t *testing.T) {
 	if deadlineIn <= 0 || deadlineIn > d {
 		t.Errorf("deadline %v ahead at entry, want within (0, %v]", deadlineIn, d)
 	}
+	if errAtEntry != nil || !errors.Is(errAtEnd, context.DeadlineExceeded) {
+		t.Errorf("context error at entry %v and at the end %v, want nil then DeadlineExceeded", errAtEntry, errAtEnd)
+	}
 }
 
-// TestRouteDeadline_writesGoStraightThrough: the handler gets the writer the
-// server passed in, so Flush and Unwrap reach it, which RouteTimeout's
-// buffering writer cannot offer.
+type ctxKey struct{}
+
+// TestRouteDeadline_derivesFromTheRequestContext: the deadline is added to the
+// request's own context, so its values and a client disconnect reach h.
+func TestRouteDeadline_derivesFromTheRequestContext(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.WithValue(t.Context(), ctxKey{}, "req-1"))
+	defer cancelParent()
+	var value any
+	var endErr error
+	h := httpserver.RouteDeadline(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		value = r.Context().Value(ctxKey{})
+		cancelParent() // the client went away
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+		endErr = r.Context().Err()
+	}), time.Hour)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(parent, http.MethodPost, "/", nil))
+	if value != "req-1" {
+		t.Errorf("request context value = %v, want req-1", value)
+	}
+	if !errors.Is(endErr, context.Canceled) {
+		t.Errorf("after the client went away the handler's context error = %v, want context.Canceled", endErr)
+	}
+}
+
+// TestRouteDeadline_panicReachesTheCaller: h runs on the caller's goroutine, so
+// a panic reaches an outer Recoverer instead of killing the process.
+func TestRouteDeadline_panicReachesTheCaller(t *testing.T) {
+	h := httpserver.RouteDeadline(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}), time.Second)
+	defer func() {
+		if p := recover(); p != "boom" {
+			t.Errorf("recovered %v, want the handler's panic", p)
+		}
+	}()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil))
+	t.Error("the handler's panic did not reach the caller")
+}
+
+// TestRouteDeadline_writesGoStraightThrough: the handler gets the writer
+// RouteDeadline was given, with no writer of its own in between.
 func TestRouteDeadline_writesGoStraightThrough(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h := httpserver.RouteDeadline(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -487,9 +487,10 @@ func NoStore() Middleware {
 
 // RouteDeadline gives h's request context a deadline d and runs h on the
 // request's own goroutine. It never answers for h, so h answers from its own
-// outcome: the choice over RouteTimeout for a handler that changes state.
-// Every call h makes with the context stops at the deadline, and h must check
-// it before committing. A non-positive d returns h unwrapped.
+// outcome: the choice over RouteTimeout for a handler that changes state. A
+// call that watches the context returns at the deadline; nothing else ends at
+// d, so the client can wait past it, and h must check the context before
+// committing. A non-positive d returns h unwrapped.
 func RouteDeadline(h http.Handler, d time.Duration) http.Handler {
 	if d <= 0 {
 		return h
