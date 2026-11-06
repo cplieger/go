@@ -146,9 +146,9 @@ func publishDurable(root *os.Root, f *os.File, name string, c *cfg) bool {
 
 // durableOn reports whether a file flush persists the file's rename. Only
 // local NTFS documents that it does ([MS-FSA] 2.1.5.7 and its note 80). A
-// remote volume reports the server's filesystem name, often NTFS (Samba's
-// default fstype), while its flush reaches only the file on the server, so
-// it reports false, as do ReFS, FAT and exFAT.
+// remote volume reports its server's filesystem name, often NTFS (Samba's
+// default fstype), whatever the server's flush persists, so it reports
+// false, as do ReFS, FAT and exFAT.
 func durableOn(fsName string, remote bool) bool { return !remote && fsName == "NTFS" }
 
 // volumeFilesystem returns the filesystem name and the volume serial number

@@ -1,9 +1,11 @@
 package filesafe
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -226,8 +228,9 @@ func TestFilesafeReaderDoesNotBlockWrite(t *testing.T) {
 
 // TestRemoteVolumeNotDurable writes through the loopback administrative share
 // of a local NTFS directory. The share reports the server volume's NTFS, but
-// a flush over SMB reaches only the file on the server, so the write must
-// report Durable false. A missing share skips off CI and fails on it.
+// what an SMB flush persists depends on the server, so the write must report
+// Durable false from the remote check, with no Warn from a failed flush or
+// query. A missing share skips off CI and fails on it.
 func TestRemoteVolumeNotDurable(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -249,12 +252,17 @@ func TestRemoteVolumeNotDurable(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	res, err := WriteFile(t.Context(), filepath.Join(unc, "target"), []byte("new"))
+	var warns bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&warns, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	res, err := WriteFile(t.Context(), filepath.Join(unc, "target"), []byte("new"), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("WriteFile over the share = %v, want nil", err)
 	}
 	if res.Durable {
 		t.Error("Durable = true over an SMB share, want false")
+	}
+	if warns.Len() != 0 {
+		t.Errorf("Warn over the share: %s; want Durable false from the remote check alone", warns.String())
 	}
 	assertContent(t, target, "new")
 	assertNoTempLeak(t, dir)
