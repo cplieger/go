@@ -4,9 +4,7 @@ import (
 	"encoding/binary"
 	"log/slog"
 	"math"
-	"math/bits"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,48 +15,16 @@ import (
 // processStartTime is captured at package init as the fallback anchor for
 // process_start_time_seconds (and, via it, process_uptime_seconds) when the
 // kernel-derived start time cannot be read. On Linux the true start time comes
-// from /proc (btime + starttime/USER_HZ, see readProcStartTime); on other
-// platforms or on any /proc parse failure this package-init instant is used
-// instead. Uptime is always reconciled as now - start so the documented
+// from /proc (see readKernelStartTime). Elsewhere, where reading it needs a
+// sysctl the standard library does not wrap, and on any /proc failure, this
+// package-init instant is used instead. Uptime is always reconciled as now - start so the documented
 // "start + uptime == now" invariant holds regardless of which source wins.
 var processStartTime = time.Now()
-
-// goosLinux is the runtime.GOOS value for Linux, the only platform where
-// /proc-based process metrics are expected to succeed.
-const goosLinux = "linux"
-
-// defaultUserHZ is the USER_HZ fallback used when the auxiliary vector cannot
-// be read: 100 is the fixed kernel-to-userspace ABI value on all modern Linux
-// architectures, independent of the kernel's internal CONFIG_HZ.
-const defaultUserHZ = 100.0
 
 // auxvClkTckTag is the ELF auxiliary-vector tag for AT_CLKTCK: the value of
 // sysconf(_SC_CLK_TCK), i.e. USER_HZ, the unit in which the Linux kernel
 // reports per-process CPU time in /proc/self/stat.
 const auxvClkTckTag = 17
-
-// userHZ returns the kernel's USER_HZ — the clock-tick unit for utime/stime in
-// /proc/self/stat and starttime scaling — read once from the process's ELF
-// auxiliary vector (AT_CLKTCK in /proc/self/auxv, pure stdlib) and memoized.
-// When the auxiliary vector is absent or unreadable (non-Linux platforms, a
-// restricted /proc) it falls back to defaultUserHZ, preserving the historical
-// assumption that is correct on every modern Linux architecture.
-var userHZ = sync.OnceValue(func() float64 {
-	if hz := auxvClkTck("/proc/self/auxv"); hz > 0 {
-		return float64(hz)
-	}
-	return defaultUserHZ
-})
-
-// auxvClkTck reads the AT_CLKTCK entry from the ELF auxiliary vector at path.
-// Returns -1 when the file is unreadable or carries no usable entry.
-func auxvClkTck(path string) int64 {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return -1
-	}
-	return parseAuxvClkTck(data, bits.UintSize/8)
-}
 
 // parseAuxvClkTck scans an ELF auxiliary vector — a sequence of (tag, value)
 // pairs of native-endian unsigned words of wordSize bytes, terminated by an
@@ -90,8 +56,8 @@ func parseAuxvClkTck(data []byte, wordSize int) int64 {
 	return -1
 }
 
-// Process-metric ok-mask bits. Each bit is set when the corresponding /proc
-// read succeeded, so the mask records WHICH process_* series are currently
+// Process-metric ok-mask bits. Each bit is set when the corresponding read
+// succeeded, so the mask records WHICH process_* series are currently
 // collectable, not just whether any read failed.
 const (
 	procOKCPU uint32 = 1 << iota
@@ -102,9 +68,14 @@ const (
 	procOKMaxVirtual
 	procOKNetwork
 
-	// procOKAll is the all-ok mask: every /proc read succeeded.
+	// procOKAll is the all-ok mask: every read succeeded.
 	procOKAll = procOKCPU | procOKRSS | procOKOpenFDs | procOKMaxFDs |
 		procOKVirtual | procOKMaxVirtual | procOKNetwork
+
+	// procOKDarwin is the set macOS gives a program without cgo, as in
+	// client_golang: resident and virtual memory need task_info, and no
+	// per-process traffic counter exists.
+	procOKDarwin = procOKCPU | procOKOpenFDs | procOKMaxFDs | procOKMaxVirtual
 )
 
 // procDegraded holds the last stored ok-mask. It starts all-ok so the first
@@ -117,8 +88,8 @@ func newProcDegradedState() *atomic.Uint32 {
 	return &s
 }
 
-// processMetricsData holds one scrape's /proc readings and start time. A
-// failed read leaves the sentinel its predicate rejects.
+// processMetricsData holds one scrape's process readings and start time. A
+// failed or unsupported read leaves the sentinel its predicate rejects.
 type processMetricsData struct {
 	startTime  float64
 	uptime     float64
@@ -143,14 +114,11 @@ func (d *processMetricsData) hasMaxVirtual() bool { return d.maxVsize >= 0 }
 func (d *processMetricsData) hasNetwork() bool    { return d.netRx >= 0 && d.netTx >= 0 }
 
 // procOKMask computes the ok-mask for process metric collection from the
-// series-presence predicates. On platforms other than Linux, where /proc-based
-// metrics are not expected, it returns procOKAll so degradation is never
-// reported.
-func procOKMask(goos string, d *processMetricsData) uint32 {
-	if goos != goosLinux {
-		return procOKAll
-	}
-	var mask uint32
+// series-presence predicates. A bit outside expected, the set the platform
+// gives (procExpected), is always set, so a family the platform lacks is never
+// reported as degraded.
+func procOKMask(expected uint32, d *processMetricsData) uint32 {
+	mask := procOKAll &^ expected
 	for _, c := range [...]struct {
 		bit uint32
 		ok  bool
@@ -178,10 +146,8 @@ func procDegradedTransition(s *atomic.Uint32, mask uint32) bool {
 	return s.Swap(mask) != mask
 }
 
-// collectProcessMetrics gathers the start time and the /proc readings. Each
-// scrape reads /proc/self/stat, status, limits and net/netstat once and lists
-// /proc/self/fd; the first scrape also reads /proc/self/stat and /proc/stat to
-// resolve the start time, and /proc/self/auxv for USER_HZ.
+// collectProcessMetrics gathers the start time and the readings the platform
+// gives (readPlatformProcess); every other reading keeps its failure sentinel.
 func collectProcessMetrics(d *processMetricsData) {
 	start := resolvedProcStartTime()
 	if start < 0 {
@@ -190,16 +156,9 @@ func collectProcessMetrics(d *processMetricsData) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	d.startTime = start
 	d.uptime = now - start
-	stat := readProcFile("/proc/self/stat")
-	d.cpuSeconds = parseProcStatCPU(stat, userHZ())
-	d.vsize = parseProcStatVsize(stat)
-	d.rss = parseProcStatusRSS(readProcFile("/proc/self/status"))
-	d.openFDs = readProcOpenFDs()
-	limits := readProcFile("/proc/self/limits")
-	d.maxFDs = parseProcLimit(limits, "Max open files")
-	d.maxVsize = parseProcLimit(limits, "Max address space")
-	d.netRx, d.netTx = parseProcNetstatOctets(readProcFile("/proc/self/net/netstat"))
-	mask := procOKMask(runtime.GOOS, d)
+	unreadProcess(d)
+	readPlatformProcess(d)
+	mask := procOKMask(procExpected, d)
 	if procDegradedTransition(procDegraded, mask) {
 		if mask != procOKAll {
 			slog.Warn("process metric collection partially failed; some process_* metrics will be omitted",
@@ -213,22 +172,15 @@ func collectProcessMetrics(d *processMetricsData) {
 	}
 }
 
-// readProcFile reads one /proc file, or returns nil. A failure is logged at
-// Debug on Linux only, where the read is expected to work.
-func readProcFile(path string) []byte {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading "+path+" failed", "error", err)
-		}
-		return nil
-	}
-	return data
+// unreadProcess sets every reading of d to its failure sentinel.
+func unreadProcess(d *processMetricsData) {
+	d.cpuSeconds, d.vsize, d.netRx, d.netTx = -1, -1, -1, -1
+	d.maxFDs, d.maxVsize, d.rss, d.openFDs = -1, -1, 0, -1
 }
 
 // processFamilies renders processGather's families for the page: the Go
-// families on every platform, and the /proc families on Linux when their
-// reads succeed. CPU time is divided by USER_HZ (see userHZ).
+// families on every platform, and the process families the platform gives
+// when their reads succeed. CPU time is divided by USER_HZ (see userHZ).
 func processFamilies() []metricFamily {
 	gathered := processGather()
 	fams := make([]metricFamily, 0, len(gathered))
@@ -292,7 +244,7 @@ func parseProcStatVsize(data []byte) float64 {
 
 // resolvedProcStartTime memoizes the kernel-derived process start time. Because
 // the start time is immutable for the process lifetime, it is resolved once via
-// readProcStartTime and reused on every subsequent scrape, avoiding the
+// readKernelStartTime and reused on every subsequent scrape, avoiding the
 // redundant per-scrape reads of /proc/self/stat and /proc/stat. The result
 // (including a -1 read failure) is captured on the first call; the caller
 // applies the package-init fallback when it is negative.
@@ -303,28 +255,9 @@ var (
 
 func resolvedProcStartTime() float64 {
 	procStartTimeOnce.Do(func() {
-		procStartTimeVal = readProcStartTime()
+		procStartTimeVal = readKernelStartTime()
 	})
 	return procStartTimeVal
-}
-
-// readProcStartTime returns the true process start time in seconds since the
-// Unix epoch, derived from the kernel: the system boot time (btime, from
-// /proc/stat) plus the process starttime (field 22 of /proc/self/stat, in clock
-// ticks after boot) divided by USER_HZ. This matches how client_golang and
-// procfs compute process_start_time_seconds. Returns -1 on any read or parse
-// failure (including non-Linux platforms, where the /proc files are absent) so
-// the caller can fall back to the package-init anchor.
-func readProcStartTime() float64 {
-	ticks := parseProcStatStartTime(readProcFile("/proc/self/stat"))
-	if ticks < 0 {
-		return -1
-	}
-	btime := parseProcStatBtime(readProcFile("/proc/stat"))
-	if btime < 0 {
-		return -1
-	}
-	return float64(btime) + float64(ticks)/userHZ()
 }
 
 // parseProcStatStartTime parses /proc/self/stat content for the process
@@ -379,22 +312,19 @@ func parseProcStatusRSS(data []byte) int64 {
 	return 0
 }
 
-// readProcOpenFDs counts the process's open file descriptors from
-// /proc/self/fd. Returns -1 on failure.
-func readProcOpenFDs() int {
-	f, err := os.Open("/proc/self/fd")
+// readOpenFDs counts the process's open file descriptors by listing dir,
+// /proc/self/fd on Linux and /dev/fd on macOS. Readdirnames calls no stat,
+// which a kqueue descriptor fails on macOS. Returns -1 on failure.
+func readOpenFDs(dir string) int {
+	f, err := os.Open(dir)
 	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: opening /proc/self/fd failed", "error", err)
-		}
+		slog.Debug("measure: opening "+dir+" failed", "error", err)
 		return -1
 	}
 	names, err := f.Readdirnames(-1)
 	_ = f.Close()
 	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/self/fd entries failed", "error", err)
-		}
+		slog.Debug("measure: reading "+dir+" entries failed", "error", err)
 		return -1
 	}
 	return openFDCount(names)
@@ -477,10 +407,10 @@ func procNetstatSection(data []byte, prefix string) (keys, vals []string, ok boo
 	return nil, nil, false
 }
 
-// openFDCount converts the raw /proc/self/fd entry list into the number of
+// openFDCount converts the raw descriptor listing into the number of
 // descriptors actually open by the process. The directory handle opened to
-// read /proc/self/fd appears in its own listing, so it is subtracted; the
-// result is floored at 0.
+// read the listing appears in it, so it is subtracted; the result is floored
+// at 0.
 func openFDCount(names []string) int {
 	return max(len(names)-1, 0)
 }

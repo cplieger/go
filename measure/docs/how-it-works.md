@@ -104,15 +104,18 @@ Every registry serves these families without any registration. They are the fami
 | `go_gc_gogc_percent`, `go_gc_gomemlimit_bytes` and `go_sched_gomaxprocs_threads`, the GOGC, GOMEMLIMIT and GOMAXPROCS settings | `runtime/metrics` | all |
 | `go_gc_duration_seconds`, a summary with the 0, 0.25, 0.5, 0.75 and 1 quantiles of recent GC pauses, and `go_memstats_last_gc_time_seconds` | `runtime/debug.ReadGCStats` | all |
 | `go_goroutines`, `go_threads` and `go_info`, whose `version` label is the Go release that built the program | `runtime` | all |
-| `process_start_time_seconds` | `/proc/self/stat` and `/proc/stat`, or the time the package loaded | all |
+| `process_start_time_seconds` | `/proc/self/stat` and `/proc/stat` on Linux; elsewhere, and when that read fails, the time the package loaded | all |
 | `process_gc_pause_seconds_total` and `process_uptime_seconds`, measure's own | `runtime/debug.ReadGCStats` and the start time | all |
-| `process_cpu_seconds_total`, `process_virtual_memory_bytes` | `/proc/self/stat` | Linux |
+| `process_cpu_seconds_total` | `/proc/self/stat` on Linux, `getrusage` on macOS | Linux, macOS |
+| `process_virtual_memory_bytes` | `/proc/self/stat` | Linux |
 | `process_resident_memory_bytes` | `/proc/self/status` | Linux |
-| `process_open_fds` | `/proc/self/fd` | Linux |
-| `process_max_fds` and `process_virtual_memory_max_bytes`, the soft limits | `/proc/self/limits` | Linux |
+| `process_open_fds` | `/proc/self/fd` on Linux, `/dev/fd` on macOS | Linux, macOS |
+| `process_max_fds` and `process_virtual_memory_max_bytes`, the soft limits | `/proc/self/limits` on Linux, `getrlimit` on macOS | Linux, macOS |
 | `process_network_receive_bytes_total` and `process_network_transmit_bytes_total`, the traffic of the process's network namespace, as client_golang counts it | `/proc/self/net/netstat` | Linux |
 
-No read stops the world: measure never calls `runtime.ReadMemStats`. A `runtime/metrics` name that a Go release drops would read as 0, and a test fails on the Go update that drops one. Each Linux family appears only when its read succeeds, and the registry logs a warning when the set of failing reads changes and one line when they all recover. The families are sorted by name. Their names, and the summary's `_sum` and `_count` series, are reserved in every registry, so a metric of yours cannot take one.
+On macOS, resident and virtual memory need `task_info` through cgo, so measure serves neither, as client_golang does in a build without cgo. Two values differ from Linux. An unlimited soft limit reads `9.223372036854776e+18`, macOS's `RLIM_INFINITY`, which is also what client_golang serves there. The start time is the time the package loaded, moments after the program started, because the `kern.proc.pid` sysctl client_golang reads has no wrapper in the standard library.
+
+No read stops the world: measure never calls `runtime.ReadMemStats`. A `runtime/metrics` name that a Go release drops would read as 0, and a test fails on the Go update that drops one. Each Linux and macOS family appears only when its read succeeds, and the registry logs a warning when the set of failing reads changes and one line when they all recover. The families are sorted by name. Their names, and the summary's `_sum` and `_count` series, are reserved in every registry, so a metric of yours cannot take one.
 
 ## Output format
 

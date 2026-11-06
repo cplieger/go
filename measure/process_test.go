@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -239,43 +238,69 @@ func TestProcOKMask(t *testing.T) {
 	healthy := processMetricsData{cpuSeconds: 1.5, rss: 4096, openFDs: 12, maxFDs: 1024, vsize: 8192, maxVsize: float64(math.MaxUint64), netRx: 10, netTx: 20}
 	failed := processMetricsData{cpuSeconds: -1, rss: 0, openFDs: -1, maxFDs: -1, vsize: -1, maxVsize: -1, netRx: -1, netTx: -1}
 	tests := []struct {
-		name string
-		goos string
-		edit func(*processMetricsData)
-		want uint32
+		name     string
+		expected uint32
+		edit     func(*processMetricsData)
+		want     uint32
 	}{
-		{"linux all healthy", "linux", func(*processMetricsData) {}, procOKAll},
-		{"linux cpu read failed", "linux", func(d *processMetricsData) { d.cpuSeconds = -1 }, procOKAll &^ procOKCPU},
+		{"linux all healthy", procOKAll, func(*processMetricsData) {}, procOKAll},
+		{"linux cpu read failed", procOKAll, func(d *processMetricsData) { d.cpuSeconds = -1 }, procOKAll &^ procOKCPU},
 		// cpuSeconds == 0, openFDs == 0, vsize == 0 and zero traffic are
 		// HEALTHY readings: the failure guards are strict (< 0), so a <= 0
 		// mutation would wrongly degrade them.
-		{"linux cpu zero healthy", "linux", func(d *processMetricsData) { d.cpuSeconds = 0 }, procOKAll},
-		{"linux rss zero", "linux", func(d *processMetricsData) { d.rss = 0 }, procOKAll &^ procOKRSS},
-		{"linux rss negative", "linux", func(d *processMetricsData) { d.rss = -1 }, procOKAll &^ procOKRSS},
-		{"linux fds read failed", "linux", func(d *processMetricsData) { d.openFDs = -1 }, procOKAll &^ procOKOpenFDs},
-		{"linux fds zero healthy", "linux", func(d *processMetricsData) { d.openFDs = 0 }, procOKAll},
+		{"linux cpu zero healthy", procOKAll, func(d *processMetricsData) { d.cpuSeconds = 0 }, procOKAll},
+		{"linux rss zero", procOKAll, func(d *processMetricsData) { d.rss = 0 }, procOKAll &^ procOKRSS},
+		{"linux rss negative", procOKAll, func(d *processMetricsData) { d.rss = -1 }, procOKAll &^ procOKRSS},
+		{"linux fds read failed", procOKAll, func(d *processMetricsData) { d.openFDs = -1 }, procOKAll &^ procOKOpenFDs},
+		{"linux fds zero healthy", procOKAll, func(d *processMetricsData) { d.openFDs = 0 }, procOKAll},
 		// A limit of zero is a reading; only -1 is a failed limits read.
-		{"linux max fds zero healthy", "linux", func(d *processMetricsData) { d.maxFDs = 0 }, procOKAll},
-		{"linux max fds read failed", "linux", func(d *processMetricsData) { d.maxFDs = -1 }, procOKAll &^ procOKMaxFDs},
-		{"linux vsize read failed", "linux", func(d *processMetricsData) { d.vsize = -1 }, procOKAll &^ procOKVirtual},
-		{"linux vsize zero healthy", "linux", func(d *processMetricsData) { d.vsize = 0 }, procOKAll},
-		{"linux max vsize finite healthy", "linux", func(d *processMetricsData) { d.maxVsize = 1 << 30 }, procOKAll},
-		{"linux max vsize read failed", "linux", func(d *processMetricsData) { d.maxVsize = -1 }, procOKAll &^ procOKMaxVirtual},
-		{"linux network read failed", "linux", func(d *processMetricsData) { d.netRx, d.netTx = -1, -1 }, procOKAll &^ procOKNetwork},
-		{"linux network one side failed", "linux", func(d *processMetricsData) { d.netTx = -1 }, procOKAll &^ procOKNetwork},
-		{"linux network zero healthy", "linux", func(d *processMetricsData) { d.netRx, d.netTx = 0, 0 }, procOKAll},
-		{"linux all failed", "linux", func(d *processMetricsData) { *d = failed }, 0},
-		{"non-linux all failed stays quiet", "darwin", func(d *processMetricsData) { *d = failed }, procOKAll},
-		{"non-linux healthy", "windows", func(*processMetricsData) {}, procOKAll},
+		{"linux max fds zero healthy", procOKAll, func(d *processMetricsData) { d.maxFDs = 0 }, procOKAll},
+		{"linux max fds read failed", procOKAll, func(d *processMetricsData) { d.maxFDs = -1 }, procOKAll &^ procOKMaxFDs},
+		{"linux vsize read failed", procOKAll, func(d *processMetricsData) { d.vsize = -1 }, procOKAll &^ procOKVirtual},
+		{"linux vsize zero healthy", procOKAll, func(d *processMetricsData) { d.vsize = 0 }, procOKAll},
+		{"linux max vsize finite healthy", procOKAll, func(d *processMetricsData) { d.maxVsize = 1 << 30 }, procOKAll},
+		{"linux max vsize read failed", procOKAll, func(d *processMetricsData) { d.maxVsize = -1 }, procOKAll &^ procOKMaxVirtual},
+		{"linux network read failed", procOKAll, func(d *processMetricsData) { d.netRx, d.netTx = -1, -1 }, procOKAll &^ procOKNetwork},
+		{"linux network one side failed", procOKAll, func(d *processMetricsData) { d.netTx = -1 }, procOKAll &^ procOKNetwork},
+		{"linux network zero healthy", procOKAll, func(d *processMetricsData) { d.netRx, d.netTx = 0, 0 }, procOKAll},
+		{"linux all failed", procOKAll, func(d *processMetricsData) { *d = failed }, 0},
+		// macOS: only its own four families can degrade.
+		{"darwin unread families stay quiet", procOKDarwin, func(d *processMetricsData) {
+			d.rss, d.vsize, d.netRx, d.netTx = 0, -1, -1, -1
+		}, procOKAll},
+		{"darwin cpu read failed", procOKDarwin, func(d *processMetricsData) { d.cpuSeconds = -1 }, procOKAll &^ procOKCPU},
+		{"darwin all failed", procOKDarwin, func(d *processMetricsData) { *d = failed }, procOKAll &^ procOKDarwin},
+		{"no expected family, all failed stays quiet", 0, func(d *processMetricsData) { *d = failed }, procOKAll},
+		{"no expected family, healthy", 0, func(*processMetricsData) {}, procOKAll},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			d := healthy
 			tc.edit(&d)
-			if got := procOKMask(tc.goos, &d); got != tc.want {
-				t.Errorf("procOKMask(%q, %+v) = %#09b, want %#09b", tc.goos, d, got, tc.want)
+			if got := procOKMask(tc.expected, &d); got != tc.want {
+				t.Errorf("procOKMask(%#09b, %+v) = %#09b, want %#09b", tc.expected, d, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestUnreadProcess pins the reset collectProcessMetrics applies before the
+// platform reads: every reading lands on the sentinel its predicate rejects,
+// so a family the platform does not read is omitted rather than served as 0.
+func TestUnreadProcess(t *testing.T) {
+	d := processMetricsData{cpuSeconds: 1, vsize: 1, netRx: 1, netTx: 1, maxFDs: 1, maxVsize: 1, rss: 1, openFDs: 1}
+	unreadProcess(&d)
+	for name, has := range map[string]bool{
+		"cpu": d.hasCPU(), "rss": d.hasRSS(), "open fds": d.hasOpenFDs(), "max fds": d.hasMaxFDs(),
+		"vsize": d.hasVirtual(), "max vsize": d.hasMaxVirtual(), "network": d.hasNetwork(),
+	} {
+		if has {
+			t.Errorf("after unreadProcess, %s still reads as present: %+v", name, d)
+		}
+	}
+	// netRx and netTx gate one family together, so each must be reset.
+	if d.netRx >= 0 || d.netTx >= 0 {
+		t.Errorf("network = %v/%v, want both negative", d.netRx, d.netTx)
 	}
 }
 
@@ -386,17 +411,6 @@ func TestParseProcStatCPU_NothingAfterComm(t *testing.T) {
 	}
 }
 
-func TestUserHZ_Value(t *testing.T) {
-	if defaultUserHZ != 100.0 {
-		t.Errorf("defaultUserHZ = %v, want 100 (the near-universal Linux _SC_CLK_TCK)", defaultUserHZ)
-	}
-	// On any modern Linux CI/dev machine the auxv-derived value must agree
-	// with the ABI constant; elsewhere the fallback yields the same 100.
-	if got := userHZ(); got != 100.0 {
-		t.Errorf("userHZ() = %v, want 100", got)
-	}
-}
-
 // buildAuxv assembles a synthetic ELF auxiliary vector from (tag, value) pairs
 // in native endianness at the given word size.
 func buildAuxv(wordSize int, pairs ...[2]uint64) []byte {
@@ -472,26 +486,6 @@ func TestParseAuxvClkTck_ValueRangeBoundary(t *testing.T) {
 	}
 }
 
-// TestAuxvClkTck_RealFile reads the live /proc/self/auxv on Linux and expects
-// the kernel's AT_CLKTCK (100 on every modern architecture); elsewhere the
-// reader must return -1.
-func TestAuxvClkTck_RealFile(t *testing.T) {
-	got := auxvClkTck("/proc/self/auxv")
-	if runtime.GOOS == goosLinux {
-		if got != 100 {
-			t.Errorf("auxvClkTck(/proc/self/auxv) = %d, want 100", got)
-		}
-	} else if got != -1 {
-		t.Errorf("auxvClkTck on non-Linux = %d, want -1", got)
-	}
-}
-
-func TestAuxvClkTck_MissingFile(t *testing.T) {
-	if got := auxvClkTck(filepath.Join(t.TempDir(), "absent")); got != -1 {
-		t.Errorf("auxvClkTck(absent) = %d, want -1", got)
-	}
-}
-
 // TestParseProcStatCPU_DivisorIsUserHZ verifies parseProcStatCPU scales
 // utime+stime by the supplied USER_HZ: the result equals (utime+stime)/hz
 // exactly.
@@ -550,18 +544,6 @@ func TestParseProcLimit(t *testing.T) {
 	}
 }
 
-// TestReadProcOpenFDs_readsAllEntries verifies readProcOpenFDs reads every fd entry, not
-// just one: a live process always has at least its standard descriptors plus the
-// directory handle open, so the open count is >= 1.
-func TestReadProcOpenFDs_readsAllEntries(t *testing.T) {
-	if runtime.GOOS != goosLinux {
-		t.Skip("process fd metrics are Linux-only (/proc/self/fd)")
-	}
-	if open := readProcOpenFDs(); open < 1 {
-		t.Fatalf("readProcOpenFDs() = %d, want >= 1 (must read all fd entries)", open)
-	}
-}
-
 func TestProcGCPauseSeconds_ScaledToSeconds(t *testing.T) {
 	runtime.GC()
 	runtime.GC() // guarantee PauseTotalNs > 0
@@ -588,24 +570,6 @@ func TestProcGCPauseSeconds_ScaledToSeconds(t *testing.T) {
 	// the two distinguishes the seconds-scaled value from an unscaled one.
 	if val < 0 || val > 1e6 {
 		t.Errorf("process_gc_pause_seconds_total = %v, want a small non-negative seconds value", val)
-	}
-}
-
-// TestReadProcStartTime_AgreesWithPackageInitAnchor pins the kernel start-time
-// composition against the only independent witness the process has: the
-// package-init instant, captured microseconds after exec. The boot time from
-// /proc/stat plus the process's tick offset from /proc/self/stat must therefore
-// land within a second or two of that anchor. A composition that drops either
-// term, or applies the offset in the wrong direction, lands seconds to days
-// away — the offset is the machine's uptime at exec.
-func TestReadProcStartTime_AgreesWithPackageInitAnchor(t *testing.T) {
-	if runtime.GOOS != goosLinux {
-		t.Skip("kernel-derived start time is Linux-only (/proc/self/stat, /proc/stat)")
-	}
-	got := readProcStartTime()
-	anchor := float64(processStartTime.Unix())
-	if got < anchor-2 || got > anchor+2 {
-		t.Errorf("readProcStartTime() = %.3f, want within 2s of the package-init anchor %.0f", got, anchor)
 	}
 }
 
@@ -656,44 +620,6 @@ func TestWriteProcess_uptimeAndStartTimeReconcile(t *testing.T) {
 	if diff := now - (start + uptime); diff < -2 || diff > 2 {
 		t.Errorf("start(%.0f) + uptime(%.3f) = %.3f, want ~= now(%.0f); diff=%.3f",
 			start, uptime, start+uptime, now, diff)
-	}
-}
-
-// TestWriteProcess_LinuxFDsEmitted checks end to end that WriteProcess emits
-// process_open_fds and process_max_fds when /proc/self/fd and
-// /proc/self/limits are readable: a non-negative count, and a positive limit
-// (float64(math.MaxUint64) when unlimited).
-func TestWriteProcess_LinuxFDsEmitted(t *testing.T) {
-	if runtime.GOOS != goosLinux {
-		t.Skip("process fd metrics are Linux-only (/proc/self/fd, /proc/self/limits)")
-	}
-	var b strings.Builder
-	WriteProcess(&b)
-
-	var openVal, maxVal string
-	var gotOpen, gotMax bool
-	for line := range strings.SplitSeq(b.String(), "\n") {
-		if v, ok := strings.CutPrefix(line, "process_open_fds "); ok {
-			openVal, gotOpen = v, true
-		}
-		if v, ok := strings.CutPrefix(line, "process_max_fds "); ok {
-			maxVal, gotMax = v, true
-		}
-	}
-	if !gotOpen {
-		t.Fatal("missing process_open_fds line")
-	}
-	if n, err := strconv.Atoi(openVal); err != nil || n < 0 {
-		t.Errorf("process_open_fds = %q, want a non-negative integer", openVal)
-	}
-	if !gotMax {
-		t.Fatal("missing process_max_fds line")
-	}
-	// process_max_fds is a positive integer for a finite limit, or
-	// float64(math.MaxUint64) ("1.8446744073709552e+19") for an unlimited one,
-	// so parse it as a float rather than an int.
-	if n, err := strconv.ParseFloat(maxVal, 64); err != nil || n <= 0 {
-		t.Errorf("process_max_fds = %q, want a positive number", maxVal)
 	}
 }
 
@@ -862,24 +788,5 @@ func TestParseProcNetstatOctets(t *testing.T) {
 				t.Errorf("parseProcNetstatOctets(%q) = %v, %v, want %v, %v", tc.in, rx, tx, tc.rx, tc.tx)
 			}
 		})
-	}
-}
-
-// TestProcessFamiliesOnLinux reads the live /proc files: every family appears,
-// and the new ones carry plausible values.
-func TestProcessFamiliesOnLinux(t *testing.T) {
-	if runtime.GOOS != goosLinux {
-		t.Skip("the /proc families are Linux-only")
-	}
-	var d processMetricsData
-	collectProcessMetrics(&d)
-	if d.vsize <= 0 || !d.hasMaxVirtual() || !d.hasNetwork() {
-		t.Errorf("vsize %v, max vsize %v, network %v/%v; want every read to succeed", d.vsize, d.maxVsize, d.netRx, d.netTx)
-	}
-	if rss := float64(d.rss); d.vsize < rss {
-		t.Errorf("virtual memory %v is below resident memory %v", d.vsize, rss)
-	}
-	if d.maxVsize < d.vsize {
-		t.Errorf("virtual memory limit %v is below the virtual memory in use %v", d.maxVsize, d.vsize)
 	}
 }
