@@ -136,7 +136,12 @@ func assertGolden(t *testing.T, name, got string) {
 }
 
 // TestGolden_PrometheusExposition locks the Prometheus 0.0.4 exposition bytes.
+// The page holds every process family, as Linux serves it;
+// TestProcessFamiliesMatchClientGolang checks the macOS set.
 func TestGolden_PrometheusExposition(t *testing.T) {
+	if procExpected != procOKAll {
+		t.Skip("the golden page holds every process family, which this platform does not serve")
+	}
 	r := goldenFixtureRegistry()
 	got := maskProcessValues(serve(t, r.Handler()))
 	assertGolden(t, "prometheus.golden", got)

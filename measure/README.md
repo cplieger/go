@@ -13,7 +13,7 @@ measure is built for Go services whose set of metrics is fixed when the program 
 - Counters, gauges and histograms each have a labeled variant, plus a timer and a `RecordHTTP` hook for middleware.
 - A bad name, label set or bucket layout never panics at construction. `Register` returns the error, and `MustRegister` panics at startup naming the metric.
 - The handler writes valid Prometheus text format 0.0.4, with invalid UTF-8 replaced by U+FFFD.
-- Every registry adds the Go and process metrics that client_golang's default collectors serve, under the same names, so stock Go dashboards work. On Linux, the `/proc` ones appear when their reads succeed.
+- Every registry adds the Go and process metrics that client_golang's default collectors serve, under the same names, so stock Go dashboards work. On Linux and macOS, the process ones the OS gives a program without cgo appear when their reads succeed.
 - A labeled metric logs one warning when it reaches 1,000 series, so a runaway label shows in your logs.
 - A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, with any number of labels.
 - `Gather` reads a registry as structured values, so a test can check a metric without parsing the page.
@@ -149,7 +149,7 @@ A metric that carries a construction error records nothing and never reaches the
 - Every histogram has a `+Inf` bucket equal to its `_count`.
 - Whole numbers render as bare integers such as `42`, other values in the shortest form that reads back exactly, and non-finite values as `+Inf`, `-Inf` and `NaN`.
 
-Every registry serves the families client_golang's default Go and process collectors serve, by the same names and types: the `go_memstats_*` families, `go_gc_duration_seconds` (a summary of recent GC pauses), the GOGC, GOMEMLIMIT and GOMAXPROCS settings, `go_goroutines`, `go_threads` and `go_info`. On Linux it adds CPU time, resident and virtual memory, file descriptors and network traffic from `/proc` when their reads succeed. Two families are measure's own: `process_gc_pause_seconds_total` and `process_uptime_seconds`. [Process metrics](docs/how-it-works.md#process-metrics) lists them all.
+Every registry serves the families client_golang's default Go and process collectors serve, by the same names and types: the `go_memstats_*` families, `go_gc_duration_seconds` (a summary of recent GC pauses), the GOGC, GOMEMLIMIT and GOMAXPROCS settings, `go_goroutines`, `go_threads` and `go_info`. On Linux it adds CPU time, resident and virtual memory, file descriptors and network traffic from `/proc` when their reads succeed. On macOS it adds CPU time, open file descriptors and the file descriptor and address space limits, the set client_golang serves there without cgo. Two families are measure's own: `process_gc_pause_seconds_total` and `process_uptime_seconds`. [Process metrics](docs/how-it-works.md#process-metrics) lists them all.
 
 ## Unsupported by design
 

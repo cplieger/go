@@ -1,13 +1,8 @@
 package measure
 
 import (
-	"encoding/binary"
 	"log/slog"
-	"math"
-	"math/bits"
 	"os"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,82 +11,15 @@ import (
 
 // processStartTime is captured at package init as the fallback anchor for
 // process_start_time_seconds (and, via it, process_uptime_seconds) when the
-// kernel-derived start time cannot be read. On Linux the true start time comes
-// from /proc (btime + starttime/USER_HZ, see readProcStartTime); on other
-// platforms or on any /proc parse failure this package-init instant is used
-// instead. Uptime is always reconciled as now - start so the documented
-// "start + uptime == now" invariant holds regardless of which source wins.
+// kernel-derived start time cannot be read. On Linux the start time comes from
+// /proc (see readKernelStartTime); on every other platform, and when that read
+// fails, this package-init instant stands in. Uptime is always reconciled as
+// now - start so the documented "start + uptime == now" invariant holds
+// regardless of which source wins.
 var processStartTime = time.Now()
 
-// goosLinux is the runtime.GOOS value for Linux, the only platform where
-// /proc-based process metrics are expected to succeed.
-const goosLinux = "linux"
-
-// defaultUserHZ is the USER_HZ fallback used when the auxiliary vector cannot
-// be read: 100 is the fixed kernel-to-userspace ABI value on all modern Linux
-// architectures, independent of the kernel's internal CONFIG_HZ.
-const defaultUserHZ = 100.0
-
-// auxvClkTckTag is the ELF auxiliary-vector tag for AT_CLKTCK: the value of
-// sysconf(_SC_CLK_TCK), i.e. USER_HZ, the unit in which the Linux kernel
-// reports per-process CPU time in /proc/self/stat.
-const auxvClkTckTag = 17
-
-// userHZ returns the kernel's USER_HZ — the clock-tick unit for utime/stime in
-// /proc/self/stat and starttime scaling — read once from the process's ELF
-// auxiliary vector (AT_CLKTCK in /proc/self/auxv, pure stdlib) and memoized.
-// When the auxiliary vector is absent or unreadable (non-Linux platforms, a
-// restricted /proc) it falls back to defaultUserHZ, preserving the historical
-// assumption that is correct on every modern Linux architecture.
-var userHZ = sync.OnceValue(func() float64 {
-	if hz := auxvClkTck("/proc/self/auxv"); hz > 0 {
-		return float64(hz)
-	}
-	return defaultUserHZ
-})
-
-// auxvClkTck reads the AT_CLKTCK entry from the ELF auxiliary vector at path.
-// Returns -1 when the file is unreadable or carries no usable entry.
-func auxvClkTck(path string) int64 {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return -1
-	}
-	return parseAuxvClkTck(data, bits.UintSize/8)
-}
-
-// parseAuxvClkTck scans an ELF auxiliary vector — a sequence of (tag, value)
-// pairs of native-endian unsigned words of wordSize bytes, terminated by an
-// AT_NULL (0) tag — for the AT_CLKTCK entry. Returns the clock-tick value, or
-// -1 when the entry is absent, zero, or the vector is malformed. wordSize must
-// be 4 or 8 (the two Linux ABI word sizes).
-func parseAuxvClkTck(data []byte, wordSize int) int64 {
-	if wordSize != 4 && wordSize != 8 {
-		return -1
-	}
-	word := func(b []byte) uint64 {
-		if wordSize == 8 {
-			return binary.NativeEndian.Uint64(b)
-		}
-		return uint64(binary.NativeEndian.Uint32(b))
-	}
-	for i := 0; i+2*wordSize <= len(data); i += 2 * wordSize {
-		tag, val := word(data[i:]), word(data[i+wordSize:])
-		switch tag {
-		case 0: // AT_NULL terminates the vector
-			return -1
-		case auxvClkTckTag:
-			if val == 0 || val > math.MaxInt64 {
-				return -1
-			}
-			return int64(val)
-		}
-	}
-	return -1
-}
-
-// Process-metric ok-mask bits. Each bit is set when the corresponding /proc
-// read succeeded, so the mask records WHICH process_* series are currently
+// Process-metric ok-mask bits. Each bit is set when the corresponding read
+// succeeded, so the mask records WHICH process_* series are currently
 // collectable, not just whether any read failed.
 const (
 	procOKCPU uint32 = 1 << iota
@@ -102,9 +30,14 @@ const (
 	procOKMaxVirtual
 	procOKNetwork
 
-	// procOKAll is the all-ok mask: every /proc read succeeded.
+	// procOKAll is the all-ok mask: every read succeeded.
 	procOKAll = procOKCPU | procOKRSS | procOKOpenFDs | procOKMaxFDs |
 		procOKVirtual | procOKMaxVirtual | procOKNetwork
+
+	// procOKDarwin is the set macOS gives a program without cgo, as in
+	// client_golang: resident and virtual memory need task_info, and no
+	// per-process traffic counter exists.
+	procOKDarwin = procOKCPU | procOKOpenFDs | procOKMaxFDs | procOKMaxVirtual
 )
 
 // procDegraded holds the last stored ok-mask. It starts all-ok so the first
@@ -117,8 +50,8 @@ func newProcDegradedState() *atomic.Uint32 {
 	return &s
 }
 
-// processMetricsData holds one scrape's /proc readings and start time. A
-// failed read leaves the sentinel its predicate rejects.
+// processMetricsData holds one scrape's process readings and start time. A
+// failed or unsupported read leaves the sentinel its predicate rejects.
 type processMetricsData struct {
 	startTime  float64
 	uptime     float64
@@ -143,14 +76,11 @@ func (d *processMetricsData) hasMaxVirtual() bool { return d.maxVsize >= 0 }
 func (d *processMetricsData) hasNetwork() bool    { return d.netRx >= 0 && d.netTx >= 0 }
 
 // procOKMask computes the ok-mask for process metric collection from the
-// series-presence predicates. On platforms other than Linux, where /proc-based
-// metrics are not expected, it returns procOKAll so degradation is never
-// reported.
-func procOKMask(goos string, d *processMetricsData) uint32 {
-	if goos != goosLinux {
-		return procOKAll
-	}
-	var mask uint32
+// series-presence predicates. A bit outside expected, the set the platform
+// gives (procExpected), is always set, so a family the platform lacks is never
+// reported as degraded.
+func procOKMask(expected uint32, d *processMetricsData) uint32 {
+	mask := procOKAll &^ expected
 	for _, c := range [...]struct {
 		bit uint32
 		ok  bool
@@ -178,10 +108,8 @@ func procDegradedTransition(s *atomic.Uint32, mask uint32) bool {
 	return s.Swap(mask) != mask
 }
 
-// collectProcessMetrics gathers the start time and the /proc readings. Each
-// scrape reads /proc/self/stat, status, limits and net/netstat once and lists
-// /proc/self/fd; the first scrape also reads /proc/self/stat and /proc/stat to
-// resolve the start time, and /proc/self/auxv for USER_HZ.
+// collectProcessMetrics gathers the start time and the readings the platform
+// gives (readPlatformProcess); every other reading keeps its failure sentinel.
 func collectProcessMetrics(d *processMetricsData) {
 	start := resolvedProcStartTime()
 	if start < 0 {
@@ -190,45 +118,60 @@ func collectProcessMetrics(d *processMetricsData) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	d.startTime = start
 	d.uptime = now - start
-	stat := readProcFile("/proc/self/stat")
-	d.cpuSeconds = parseProcStatCPU(stat, userHZ())
-	d.vsize = parseProcStatVsize(stat)
-	d.rss = parseProcStatusRSS(readProcFile("/proc/self/status"))
-	d.openFDs = readProcOpenFDs()
-	limits := readProcFile("/proc/self/limits")
-	d.maxFDs = parseProcLimit(limits, "Max open files")
-	d.maxVsize = parseProcLimit(limits, "Max address space")
-	d.netRx, d.netTx = parseProcNetstatOctets(readProcFile("/proc/self/net/netstat"))
-	mask := procOKMask(runtime.GOOS, d)
+	unreadProcess(d)
+	readPlatformProcess(d)
+	mask := procOKMask(procExpected, d)
 	if procDegradedTransition(procDegraded, mask) {
-		if mask != procOKAll {
-			slog.Warn("process metric collection partially failed; some process_* metrics will be omitted",
-				"cpu_ok", mask&procOKCPU != 0, "rss_ok", mask&procOKRSS != 0,
-				"fds_ok", mask&procOKOpenFDs != 0, "max_fds_ok", mask&procOKMaxFDs != 0,
-				"vsize_ok", mask&procOKVirtual != 0, "max_vsize_ok", mask&procOKMaxVirtual != 0,
-				"network_ok", mask&procOKNetwork != 0)
-		} else {
-			slog.Info("process metric collection recovered; process_* metrics restored")
-		}
+		logProcTransition(mask)
 	}
 }
 
-// readProcFile reads one /proc file, or returns nil. A failure is logged at
-// Debug on Linux only, where the read is expected to work.
-func readProcFile(path string) []byte {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading "+path+" failed", "error", err)
-		}
-		return nil
+// logProcTransition logs a new ok-mask: a Warn naming each expected family's
+// state, or one Info line once every read has recovered.
+func logProcTransition(mask uint32) {
+	if mask == procOKAll {
+		slog.Info("process metric collection recovered; process_* metrics restored")
+		return
 	}
-	return data
+	slog.Warn("process metric collection partially failed; some process_* metrics will be omitted",
+		procOKAttrs(procExpected, mask)...)
+}
+
+// procOKKeys names each ok-mask bit in the degradation Warn line.
+var procOKKeys = [...]struct {
+	key string
+	bit uint32
+}{
+	{"cpu_ok", procOKCPU},
+	{"rss_ok", procOKRSS},
+	{"fds_ok", procOKOpenFDs},
+	{"max_fds_ok", procOKMaxFDs},
+	{"vsize_ok", procOKVirtual},
+	{"max_vsize_ok", procOKMaxVirtual},
+	{"network_ok", procOKNetwork},
+}
+
+// procOKAttrs returns the Warn line's key-value pairs for the families in
+// expected only, so a family the platform never serves is not reported healthy.
+func procOKAttrs(expected, mask uint32) []any {
+	attrs := make([]any, 0, 2*len(procOKKeys))
+	for _, k := range procOKKeys {
+		if k.bit&expected != 0 {
+			attrs = append(attrs, k.key, mask&k.bit != 0)
+		}
+	}
+	return attrs
+}
+
+// unreadProcess sets every reading of d to its failure sentinel.
+func unreadProcess(d *processMetricsData) {
+	d.cpuSeconds, d.vsize, d.netRx, d.netTx = -1, -1, -1, -1
+	d.maxFDs, d.maxVsize, d.rss, d.openFDs = -1, -1, 0, -1
 }
 
 // processFamilies renders processGather's families for the page: the Go
-// families on every platform, and the /proc families on Linux when their
-// reads succeed. CPU time is divided by USER_HZ (see userHZ).
+// families on every platform, and the process families the platform gives
+// when their reads succeed.
 func processFamilies() []metricFamily {
 	gathered := processGather()
 	fams := make([]metricFamily, 0, len(gathered))
@@ -248,51 +191,9 @@ func WriteProcess(b *strings.Builder) {
 	appendPrometheus(b, processFamilies())
 }
 
-// procStatFields returns the /proc/self/stat fields after the comm, so index 0
-// is field 3 (state). The comm is parenthesized and may itself contain spaces
-// and parens, so the fields start after the LAST ')'. It returns nil when no
-// ')' is present.
-func procStatFields(data []byte) []string {
-	_, afterComm, ok := strings.CutLast(string(data), ")")
-	if !ok {
-		return nil
-	}
-	return strings.Fields(afterComm)
-}
-
-// parseProcStatCPU parses /proc/self/stat content for utime+stime (fields 14
-// and 15) in seconds, scaled by the given USER_HZ. Returns -1 on failure.
-func parseProcStatCPU(data []byte, hz float64) float64 {
-	fields := procStatFields(data)
-	if len(fields) < 13 {
-		return -1
-	}
-	utime, err1 := strconv.ParseInt(fields[11], 10, 64)
-	stime, err2 := strconv.ParseInt(fields[12], 10, 64)
-	if err1 != nil || err2 != nil {
-		return -1
-	}
-	return float64(utime+stime) / hz
-}
-
-// parseProcStatVsize parses /proc/self/stat content for vsize (field 23), the
-// virtual memory size in bytes. Returns -1 on failure.
-func parseProcStatVsize(data []byte) float64 {
-	const vsizeIdx = 23 - 3
-	fields := procStatFields(data)
-	if len(fields) <= vsizeIdx {
-		return -1
-	}
-	n, err := strconv.ParseUint(fields[vsizeIdx], 10, 64)
-	if err != nil {
-		return -1
-	}
-	return float64(n)
-}
-
 // resolvedProcStartTime memoizes the kernel-derived process start time. Because
 // the start time is immutable for the process lifetime, it is resolved once via
-// readProcStartTime and reused on every subsequent scrape, avoiding the
+// readKernelStartTime and reused on every subsequent scrape, avoiding the
 // redundant per-scrape reads of /proc/self/stat and /proc/stat. The result
 // (including a -1 read failure) is captured on the first call; the caller
 // applies the package-init fallback when it is negative.
@@ -303,184 +204,33 @@ var (
 
 func resolvedProcStartTime() float64 {
 	procStartTimeOnce.Do(func() {
-		procStartTimeVal = readProcStartTime()
+		procStartTimeVal = readKernelStartTime()
 	})
 	return procStartTimeVal
 }
 
-// readProcStartTime returns the true process start time in seconds since the
-// Unix epoch, derived from the kernel: the system boot time (btime, from
-// /proc/stat) plus the process starttime (field 22 of /proc/self/stat, in clock
-// ticks after boot) divided by USER_HZ. This matches how client_golang and
-// procfs compute process_start_time_seconds. Returns -1 on any read or parse
-// failure (including non-Linux platforms, where the /proc files are absent) so
-// the caller can fall back to the package-init anchor.
-func readProcStartTime() float64 {
-	ticks := parseProcStatStartTime(readProcFile("/proc/self/stat"))
-	if ticks < 0 {
-		return -1
-	}
-	btime := parseProcStatBtime(readProcFile("/proc/stat"))
-	if btime < 0 {
-		return -1
-	}
-	return float64(btime) + float64(ticks)/userHZ()
-}
-
-// parseProcStatStartTime parses /proc/self/stat content for the process
-// starttime (field 22), in clock ticks since boot. Returns -1 on failure.
-func parseProcStatStartTime(data []byte) int64 {
-	const startTimeIdx = 22 - 3
-	fields := procStatFields(data)
-	if len(fields) <= startTimeIdx {
-		return -1
-	}
-	ticks, err := strconv.ParseInt(fields[startTimeIdx], 10, 64)
-	if err != nil || ticks < 0 {
-		return -1
-	}
-	return ticks
-}
-
-// parseProcStatBtime parses /proc/stat content for the "btime <epoch>" line,
-// the system boot time in seconds since the Unix epoch. Returns -1 when the
-// line is absent or carries a malformed value.
-func parseProcStatBtime(data []byte) int64 {
-	for line := range strings.SplitSeq(string(data), "\n") {
-		after, ok := strings.CutPrefix(line, "btime ")
-		if !ok {
-			continue
-		}
-		btime, err := strconv.ParseInt(strings.TrimSpace(after), 10, 64)
-		if err != nil || btime < 0 {
-			return -1
-		}
-		return btime
-	}
-	return -1
-}
-
-// parseProcStatusRSS parses /proc/self/status content for VmRSS in bytes. Returns 0 on failure.
-func parseProcStatusRSS(data []byte) int64 {
-	for line := range strings.SplitSeq(string(data), "\n") {
-		after, ok := strings.CutPrefix(line, "VmRSS:")
-		if !ok {
-			continue
-		}
-		val := strings.TrimSpace(after)
-		val, _ = strings.CutSuffix(val, " kB")
-		val = strings.TrimSpace(val)
-		kb, err := strconv.ParseInt(val, 10, 64)
-		if err != nil {
-			return 0
-		}
-		return kb * 1024
-	}
-	return 0
-}
-
-// readProcOpenFDs counts the process's open file descriptors from
-// /proc/self/fd. Returns -1 on failure.
-func readProcOpenFDs() int {
-	f, err := os.Open("/proc/self/fd")
+// readOpenFDs counts the process's open file descriptors by listing dir
+// (fdDir), less the handles the listing itself holds (fdListingHandles).
+// Readdirnames calls no stat, which a kqueue descriptor fails on macOS.
+// Returns -1 on failure.
+func readOpenFDs(dir string, handles int) int {
+	f, err := os.Open(dir)
 	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: opening /proc/self/fd failed", "error", err)
-		}
+		slog.Debug("measure: opening "+dir+" failed", "error", err)
 		return -1
 	}
 	names, err := f.Readdirnames(-1)
 	_ = f.Close()
 	if err != nil {
-		if runtime.GOOS == goosLinux {
-			slog.Debug("measure: reading /proc/self/fd entries failed", "error", err)
-		}
+		slog.Debug("measure: reading "+dir+" entries failed", "error", err)
 		return -1
 	}
-	return openFDCount(names)
+	return openFDCount(names, handles)
 }
 
-// parseProcLimit parses /proc/self/limits content for the soft value of the
-// named limit ("Max open files", "Max address space"), which the kernel prints
-// unsigned. The literal "unlimited" reads as float64(math.MaxUint64)
-// (rendered "1.8446744073709552e+19"), what client_golang serves. Returns -1
-// when the line is absent, carries no value, or holds a malformed number.
-func parseProcLimit(data []byte, name string) float64 {
-	for line := range strings.SplitSeq(string(data), "\n") {
-		after, ok := strings.CutPrefix(line, name)
-		if !ok {
-			continue
-		}
-		fields := strings.Fields(after)
-		if len(fields) == 0 {
-			return -1
-		}
-		if strings.EqualFold(fields[0], "unlimited") {
-			return float64(math.MaxUint64)
-		}
-		n, err := strconv.ParseUint(fields[0], 10, 64)
-		if err != nil {
-			return -1
-		}
-		return float64(n)
-	}
-	return -1
-}
-
-// parseProcNetstatOctets parses /proc/self/net/netstat content for the IpExt
-// InOctets and OutOctets counters. They count the traffic of the process's
-// network namespace, as client_golang's same-named families do. Returns -1, -1
-// when either counter is missing or malformed.
-func parseProcNetstatOctets(data []byte) (rx, tx float64) {
-	keys, vals, ok := procNetstatSection(data, "IpExt:")
-	if !ok {
-		return -1, -1
-	}
-	rx, tx = -1, -1
-	for j, k := range keys {
-		if k != "InOctets" && k != "OutOctets" {
-			continue
-		}
-		n, err := strconv.ParseUint(vals[j], 10, 64)
-		if err != nil {
-			return -1, -1
-		}
-		if k == "InOctets" {
-			rx = float64(n)
-		} else {
-			tx = float64(n)
-		}
-	}
-	if rx < 0 || tx < 0 {
-		return -1, -1
-	}
-	return rx, tx
-}
-
-// procNetstatSection finds a netstat section: a line of field names, then a
-// line of as many values, both starting with prefix. ok is false when the
-// section is absent or its value line is missing or does not match.
-func procNetstatSection(data []byte, prefix string) (keys, vals []string, ok bool) {
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		names, found := strings.CutPrefix(line, prefix)
-		if !found {
-			continue
-		}
-		if i+1 == len(lines) {
-			return nil, nil, false
-		}
-		values, found := strings.CutPrefix(lines[i+1], prefix)
-		keys, vals = strings.Fields(names), strings.Fields(values)
-		return keys, vals, found && len(keys) == len(vals)
-	}
-	return nil, nil, false
-}
-
-// openFDCount converts the raw /proc/self/fd entry list into the number of
-// descriptors actually open by the process. The directory handle opened to
-// read /proc/self/fd appears in its own listing, so it is subtracted; the
-// result is floored at 0.
-func openFDCount(names []string) int {
-	return max(len(names)-1, 0)
+// openFDCount converts the raw descriptor listing into the number of
+// descriptors the process holds apart from the listing's own handles, which
+// appear in it; the result is floored at 0.
+func openFDCount(names []string, handles int) int {
+	return max(len(names)-handles, 0)
 }
