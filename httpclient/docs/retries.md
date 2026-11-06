@@ -55,6 +55,10 @@ The transport never changes your request. It clones it for each attempt. By defa
 
 It also retries a request of any method that carries a non-empty `Idempotency-Key` header, as the [Idempotency-Key draft](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) describes. Your server must store the key with the write and answer a repeat from that record, so a retried POST changes state once. Every attempt sends the same key, because each attempt clones your request. An empty header value counts as no key.
 
+net/http copies the key onto a 307 or 308 hop, so the redirect target is retried under it too. `DefaultRedirectPolicy` follows a hop to another port on the same host, which can be another service. Unless every redirect target dedups the key, give a keyed client `RefuseAllRedirects`, or `RedirectPolicyFunc(WithSameOrigin(true))` to stay on the original origin.
+
+A server that follows the draft answers 409 while the first attempt is still running. The default policy returns that 409 as final, because many servers send 409 for a real conflict. To wait it out, set `CheckRetry` to also retry a 409 whose `resp.Request` carries the key.
+
 Whatever the method, a request with a body is retried only when it has a `GetBody` function to replay the body.
 
 Each `RoundTrip` keeps its own backoff, so one `RetryRoundTripper` is safe to share between goroutines.

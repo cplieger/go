@@ -25,8 +25,8 @@ type PrepareRetry func(req *http.Request) error
 
 // TransportConfig configures a RetryRoundTripper (and, through NewRetry,
 // the retrying client). The zero value is ready to use: three total attempts,
-// one-second base delay, the default retry policy, no hooks, no elapsed ceiling, no
-// non-idempotent replay.
+// one-second base delay, the default retry policy, no hooks, no elapsed ceiling, and
+// replay of the safe methods and keyed requests only.
 type TransportConfig struct {
 	// CheckRetry overrides the retry policy. nil means the default policy:
 	// an error [IsTransient] accepts, or a status [IsRetryableStatus] accepts.
