@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -155,10 +156,15 @@ type HostAllowlistOption func(*hostPolicyConfig)
 
 // hostPolicyConfig holds resolved HostPolicy configuration.
 type hostPolicyConfig struct {
+	logger         *slog.Logger
 	code           ErrorCode
 	msg            string
 	loopbackExempt bool
 }
+
+// maxLoggedHost bounds the Host a refusal line records. net/http refuses a
+// Host with invalid bytes, but not a long one.
+const maxLoggedHost = 128
 
 // WithLoopbackExempt selects whether a request is admitted when BOTH its socket
 // peer and its Host are loopback, regardless of the allowlist — the
@@ -201,6 +207,13 @@ func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
 	}
 }
 
+// WithHostAllowlistLogger sets the slog.Logger Middleware reports each refusal
+// to; nil, the default, means slog.Default(). Pass a logger with a discarding
+// handler to silence it.
+func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
+	return func(c *hostPolicyConfig) { c.logger = l }
+}
+
 // HostPolicy is an immutable, canonicalized exact-match Host allowlist. Build
 // one with ParseHostList and apply it with Middleware; the same policy answers
 // the per-request decision through Allows. The zero value and a nil pointer are
@@ -208,6 +221,7 @@ func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
 // safe pass-through.
 type HostPolicy struct {
 	allowed        map[string]struct{}
+	logger         *slog.Logger
 	code           ErrorCode
 	msg            string
 	loopbackExempt bool
@@ -251,8 +265,12 @@ func ParseHostList(entries []string, opts ...HostAllowlistOption) (policy *HostP
 			o(c)
 		}
 	}
+	if c.logger == nil {
+		c.logger = slog.Default()
+	}
 	p := &HostPolicy{
 		allowed:        make(map[string]struct{}),
+		logger:         c.logger,
 		code:           c.code,
 		msg:            c.msg,
 		loopbackExempt: c.loopbackExempt,
@@ -311,18 +329,14 @@ func (p *HostPolicy) Allows(r *http.Request) bool {
 	return false
 }
 
-// Middleware returns the allowlist as httpserver middleware. An inactive (or nil)
-// policy returns the next handler unwrapped — the "off" contract shared with
-// RateLimiter and RouteTimeout, so a policy from unset configuration adds no
-// overhead. An active policy rejects a request whose Host is not allowed with a
-// 403 via WriteError (code and message set by WithHostAllowlistError), before
-// the next handler runs.
-//
-// Placement: put it OUTERMOST among request-authorization middleware, before a
-// cross-origin or CSRF check, so a disallowed host is rejected before any route
-// runs — a DNS-rebinding request makes Origin and Host agree, so a same-origin
-// check alone would admit it; the exact-Host allowlist is what breaks that
-// chain (CWE-346).
+// Middleware returns the allowlist as httpserver middleware. An inactive or nil
+// policy returns the next handler unwrapped, the "off" contract RateLimiter and
+// RouteTimeout share. An active policy answers a disallowed Host with a 403 via
+// WriteError (see WithHostAllowlistError) before the next handler runs, and logs
+// one Warn naming the reason (missing host, malformed host or host not in
+// allowlist), host, remote, hint and request_id (see WithHostAllowlistLogger). Put it outermost among request-authorization
+// middleware: a DNS-rebinding request makes Origin and Host agree, so only the
+// exact-Host check breaks it (CWE-346).
 func (p *HostPolicy) Middleware() Middleware {
 	if p == nil || !p.active {
 		return func(next http.Handler) http.Handler { return next }
@@ -333,6 +347,7 @@ func (p *HostPolicy) Middleware() Middleware {
 				next.ServeHTTP(w, r)
 				return
 			}
+			p.logRefusal(r)
 			WriteError(w, r, http.StatusForbidden, p.code, p.msg)
 		})
 	}
@@ -411,4 +426,28 @@ func isLoopbackPeer(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// logRefusal writes the refusal line. It carries no path, which can hold a
+// token; the access line, correlated by request_id, carries the routed path.
+// The Host is empty when the request named none, which net/http admits on
+// HTTP/1.0.
+func (p *HostPolicy) logRefusal(r *http.Request) {
+	reason := "host not in allowlist"
+	switch {
+	case r.Host == "":
+		reason = "missing host"
+	case CanonicalHost(r.Host) == "":
+		reason = "malformed host"
+	}
+	attrs := []slog.Attr{
+		slog.String("reason", reason),
+		slog.String("host", boundLoggedPath(r.Host, maxLoggedHost)),
+		slog.String("remote", r.RemoteAddr),
+		slog.String("hint", p.msg),
+	}
+	if id := RequestIDFromContext(r.Context()); id != "" {
+		attrs = append(attrs, slog.String("request_id", id))
+	}
+	p.logger.LogAttrs(r.Context(), slog.LevelWarn, "httpserver: host not allowed", attrs...)
 }

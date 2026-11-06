@@ -89,7 +89,7 @@ func main() {
 }
 ```
 
-A service that browsers reach should also refuse unknown `Host` names. Build a `HostPolicy` with `ParseHostList` and put its `Middleware()` in the chain ahead of any cross-origin or CSRF check. An API that only machines call can skip it. The examples on pkg.go.dev run under `go test`, which keeps them true.
+A service that browsers reach should also refuse unknown `Host` names. Build a `HostPolicy` with `ParseHostList` and put its `Middleware()` in the chain ahead of any cross-origin or CSRF check. Each refusal logs one Warn line naming the reason and the host. An API that only machines call can skip it. The examples on pkg.go.dev run under `go test`, which keeps them true.
 
 ## API
 

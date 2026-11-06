@@ -2,9 +2,12 @@ package httpserver_test
 
 import (
 	"encoding/json"
+	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/httpserver"
@@ -449,6 +452,106 @@ func TestHostPolicyMiddleware(t *testing.T) {
 		}
 		if env.Code != "host_denied" || env.Error != "nope" {
 			t.Errorf("envelope = {code:%q error:%q}, want {host_denied nope}", env.Code, env.Error)
+		}
+	})
+}
+
+// TestHostPolicyMiddleware_LogsRefusal pins the refusal line: one Warn per 403
+// naming the reason, the bounded host, the peer, the hint and the request id,
+// and nothing for an admitted request.
+func TestHostPolicyMiddleware_LogsRefusal(t *testing.T) {
+	serve := func(p *httpserver.HostPolicy, host, remoteAddr, requestID string) int {
+		req := httptest.NewRequest(http.MethodGet, "http://placeholder/secret-path?token=x", http.NoBody)
+		req.Host = host
+		req.RemoteAddr = remoteAddr
+		if requestID != "" {
+			req = req.WithContext(httpserver.WithRequestID(req.Context(), requestID))
+		}
+		rec := httptest.NewRecorder()
+		p.Middleware()(okHandler()).ServeHTTP(rec, req)
+		return rec.Code
+	}
+	capturing := func(t *testing.T, opts ...httpserver.HostAllowlistOption) (*httpserver.HostPolicy, *captureHandler) {
+		t.Helper()
+		h := &captureHandler{}
+		opts = append([]httpserver.HostAllowlistOption{httpserver.WithHostAllowlistLogger(slog.New(h))}, opts...)
+		p, invalid := httpserver.ParseHostList([]string{"good.example"}, opts...)
+		if len(invalid) != 0 {
+			t.Fatalf("unexpected invalid entries: %v", invalid)
+		}
+		return p, h
+	}
+
+	t.Run("refusal fields", func(t *testing.T) {
+		long := strings.Repeat("a", 300) + ".example"
+		cases := []struct {
+			name, host, requestID string
+			want                  map[string]any
+		}{
+			{"not in allowlist", "bad.example:9848", "rid-1", map[string]any{
+				"reason": "host not in allowlist", "host": "bad.example:9848", "request_id": "rid-1",
+			}},
+			{"malformed", "[::1", "", map[string]any{"reason": "malformed host", "host": "[::1"}},
+			{"missing", "", "", map[string]any{"reason": "missing host", "host": ""}},
+			{"long host is cut", long, "", map[string]any{
+				"reason": "malformed host", "host": long[:128] + "...(truncated)",
+			}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				p, h := capturing(t)
+				if got := serve(p, tc.host, "203.0.113.9:5000", tc.requestID); got != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403", got)
+				}
+				recs := h.snapshot()
+				if len(recs) != 1 {
+					t.Fatalf("got %d records, want 1", len(recs))
+				}
+				r := recs[0]
+				if r.Level != slog.LevelWarn || r.Message != "httpserver: host not allowed" {
+					t.Errorf("record = %v %q, want WARN %q", r.Level, r.Message, "httpserver: host not allowed")
+				}
+				want := map[string]any{"remote": "203.0.113.9:5000", "hint": "host not allowed"}
+				maps.Copy(want, tc.want)
+				if got := attrsOf(r); !maps.Equal(got, want) {
+					t.Errorf("attrs = %v, want %v", got, want)
+				}
+			})
+		}
+	})
+
+	t.Run("hint follows WithHostAllowlistError", func(t *testing.T) {
+		p, h := capturing(t, httpserver.WithHostAllowlistError("host_denied", "use the LAN name"))
+		serve(p, "bad.example", "203.0.113.9:5000", "")
+		recs := h.snapshot()
+		if len(recs) != 1 {
+			t.Fatalf("got %d records, want 1", len(recs))
+		}
+		if got := attrsOf(recs[0])["hint"]; got != "use the LAN name" {
+			t.Errorf("hint = %v, want %q", got, "use the LAN name")
+		}
+	})
+
+	t.Run("admitted requests log nothing", func(t *testing.T) {
+		p, h := capturing(t, httpserver.WithLoopbackExempt(true))
+		if got := serve(p, "good.example:9848", "203.0.113.9:5000", ""); got != http.StatusOK {
+			t.Fatalf("allowed host status = %d, want 200", got)
+		}
+		if got := serve(p, "127.0.0.1:9848", "127.0.0.1:5000", ""); got != http.StatusOK {
+			t.Fatalf("loopback-exempt status = %d, want 200", got)
+		}
+		if recs := h.snapshot(); len(recs) != 0 {
+			t.Errorf("got %d records, want none", len(recs))
+		}
+	})
+
+	t.Run("nil logger means slog.Default", func(t *testing.T) {
+		h := &captureHandler{}
+		swapDefaultLogger(t, slog.New(h))
+		p, _ := httpserver.ParseHostList([]string{"good.example"}, httpserver.WithHostAllowlistLogger(nil))
+		serve(p, "bad.example", "203.0.113.9:5000", "")
+		if recs := h.snapshot(); len(recs) != 1 {
+			t.Errorf("got %d records on slog.Default, want 1", len(recs))
 		}
 	})
 }
