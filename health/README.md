@@ -80,7 +80,7 @@ The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/c
 
 ## Degraded mode keeps the container healthy
 
-`NewMarker` checks that the marker's folder is writable. When it is not, for example under compose's `read_only: true` with no tmpfs at `/tmp`, the marker enters degraded mode. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the tmpfs mount to add.
+`NewMarker` checks that the marker's folder is writable, and that anything already at the marker path is a regular file `Set` can refresh. When either fails, the marker enters degraded mode. The folder fails under compose's `read_only: true` with no tmpfs at `/tmp`; the marker fails when an earlier run as another user left one in a shared `/tmp` that this user cannot write, or when the path holds a directory or a FIFO. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the fix. A marker path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the `health` subcommand reports it unhealthy and names the error.
 
 In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler`, `CheckHealthy` and `Within` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
 

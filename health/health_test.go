@@ -430,13 +430,14 @@ func TestHealthMarker_ConcurrentSetCleanupHealthy(t *testing.T) {
 func TestHealthMarker_SetWriteFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatalf("mkdir marker-as-dir: %v", err)
-	}
-
 	m := NewMarker(path)
 	if m.degraded {
 		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction: a marker NewMarker cannot write is
+	// degraded mode, and these tests exercise a failure at run time.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 
 	m.Set(true) // must not panic when os.Create fails
@@ -453,16 +454,17 @@ func TestHealthMarker_SetWriteFailure(t *testing.T) {
 func TestHealthMarker_SetRemoveFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction: a marker NewMarker cannot write is
+	// degraded mode, and these tests exercise a failure at run time.
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
 		t.Fatalf("write child: %v", err)
-	}
-
-	m := NewMarker(path)
-	if m.degraded {
-		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
 	m.Set(false) // must not panic when os.Remove fails with non-ErrNotExist
@@ -525,13 +527,14 @@ func TestCaptureLogsRestoresLogGlobals(t *testing.T) {
 func TestHealthMarker_SetWriteFailure_warnsOncePerStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatalf("mkdir marker-as-dir: %v", err)
-	}
-
 	m := NewMarker(path)
 	if m.degraded {
 		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction: a marker NewMarker cannot write is
+	// degraded mode, and these tests exercise a failure at run time.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 
 	buf := captureLogs(t)
@@ -552,13 +555,14 @@ func TestHealthMarker_SetWriteFailure_warnsOncePerStreak(t *testing.T) {
 func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatalf("mkdir marker-as-dir: %v", err)
-	}
-
 	m := NewMarker(path)
 	if m.degraded {
 		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction: a marker NewMarker cannot write is
+	// degraded mode, and these tests exercise a failure at run time.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 
 	// The marker path is a directory, so this Set(true) fails and flags the streak.
@@ -589,16 +593,17 @@ func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 func TestHealthMarker_SetRemoveFailureWarnDedup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction: a marker NewMarker cannot write is
+	// degraded mode, and these tests exercise a failure at run time.
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
 		t.Fatalf("write child: %v", err)
-	}
-
-	m := NewMarker(path)
-	if m.degraded {
-		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
 	buf := captureLogs(t)
@@ -616,16 +621,17 @@ func TestHealthMarker_SetRemoveFailureWarnDedup(t *testing.T) {
 func TestHealthMarker_CleanupRemoveFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction: a marker NewMarker cannot write is
+	// degraded mode, and these tests exercise a failure at run time.
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
 		t.Fatalf("write child: %v", err)
-	}
-
-	m := NewMarker(path)
-	if m.degraded {
-		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
 	m.Cleanup() // must not panic when os.Remove fails with non-ErrNotExist
@@ -1030,6 +1036,134 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 }
 
+// TestNewMarker_degradedOnAnUnwritableMarker: a marker Set cannot write, here a
+// read-only one in a writable directory (in production, one left in a shared
+// /tmp by an earlier run as another user), is degraded mode like an
+// unwritable directory, so a stale one cannot restart-loop the container.
+func TestNewMarker_degradedOnAnUnwritableMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.WriteFile(path, nil, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	// Decide the skip from the environment, never from the code under test:
+	// root opens a 0444 file for writing.
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		_ = f.Close()
+		t.Skip("test environment bypasses file mode; skipping")
+	}
+	buf := captureLogs(t)
+	m := NewMarker(path)
+	if !m.degraded {
+		t.Fatal("a marker this process cannot open for writing: want degraded mode")
+	}
+	logged := buf.String()
+	if strings.Count(logged, "health marker not writable") != 1 || !strings.Contains(logged, "another user") || !strings.Contains(logged, "permission denied") {
+		t.Errorf("want one WARN naming the leftover marker; log:\n%s", logged)
+	}
+	if m.CheckHealthy() || m.SetChecked(true) != nil {
+		t.Error("an unwritable marker: want CheckHealthy false and SetChecked a nil no-op")
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := Inspect(path, WithMaxAge(time.Hour)); got.State != MarkerDirUnavailable || got.Err == nil || got.Age < time.Hour {
+		t.Errorf("stale unwritable marker: Inspect = %+v, want MarkerDirUnavailable with its age and the open error", got)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := Inspect(path, WithMaxAge(time.Hour)).State; got != MarkerStale {
+		t.Errorf("stale marker the app can write: Inspect = %v, want MarkerStale", got)
+	}
+}
+
+// TestMarkerWritableLeavesTheMarkerAlone: the check opens an existing marker
+// without truncating it or changing its time, and an absent one is writable.
+func TestMarkerWritableLeavesTheMarkerAlone(t *testing.T) {
+	dir := t.TempDir()
+	if err := markerWritable(filepath.Join(dir, "absent")); err != nil {
+		t.Errorf("absent marker: %v, want nil", err)
+	}
+	path := filepath.Join(dir, ".healthy")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := markerWritable(path); err != nil {
+		t.Fatalf("writable marker: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.ModTime().Equal(old) || info.Size() != 1 {
+		t.Errorf("after the check: %v, mtime %v size %d; want %v and the content kept", err, info.ModTime(), info.Size(), old)
+	}
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if markerWritable(blocked) == nil || !NewMarker(blocked).degraded {
+		t.Error("a directory at the marker path: want an error and a degraded marker, for root too")
+	}
+}
+
+// TestSetRefreshesAWriteOnlyMarker: Set(true) opens an existing marker
+// write-only, without O_CREATE, so a marker this process may write but not
+// read (mode 0222) is refreshed rather than refused, and is not degraded.
+// os.Create's O_RDWR needed read permission and failed every Set here.
+func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.WriteFile(path, nil, 0o222); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMarker(path)
+	if m.degraded {
+		t.Fatal("a marker this process can write: want no degraded mode")
+	}
+	if err := m.SetChecked(true); err != nil {
+		t.Fatalf("SetChecked(true) on a 0222 marker: %v", err)
+	}
+	if got := Inspect(path, WithMaxAge(time.Hour)); got.State != MarkerFresh {
+		t.Errorf("after Set(true): Inspect = %+v, want MarkerFresh (the mtime refreshed)", got)
+	}
+}
+
+// TestDegradedMarkerMeansAHealthyProbe: whatever is at the marker path, a
+// marker NewMarker calls degraded is one the probe reports healthy, even
+// past its lease, so the app's warning ("will report healthy") is true.
+func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
+	old := time.Now().Add(-2 * time.Hour)
+	for name, setup := range map[string]func(path string) error{
+		"directory": func(path string) error { return os.Mkdir(path, 0o755) },
+		"read-only": func(path string) error { return os.WriteFile(path, nil, 0o444) },
+		"symlink loop": func(path string) error {
+			return os.Symlink(path, path)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".healthy")
+			if err := setup(path); err != nil {
+				t.Skip(err)
+			}
+			_ = os.Chtimes(path, old, old) // fails on the loop, which stat cannot read
+			m := NewMarker(path)
+			f := Inspect(path, WithMaxAge(time.Hour))
+			if m.degraded && !f.Healthy() {
+				t.Errorf("NewMarker is degraded but Inspect = %+v, so the probe would restart the container", f)
+			}
+			if name == "symlink loop" && (m.degraded || f.State != MarkerUnreadable) {
+				t.Errorf("symlink loop: degraded %v, Inspect %v; want not degraded and MarkerUnreadable, as the probe sees it", m.degraded, f.State)
+			}
+		})
+	}
+}
+
 // TestHealthMarker_Set_recoveryOnFalseBranchIsNotAStateChange pins the
 // Set(false) recovery (the Set(true) twin is
 // TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak): the probe reads
@@ -1081,16 +1215,16 @@ func TestHealthMarker_Set_recoveryOnFalseBranchIsNotAStateChange(t *testing.T) {
 func TestHealthMarker_SetFailureWarnDedupAlternatingBranches(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction (see TestHealthMarker_SetWriteFailure).
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
 		t.Fatalf("write child: %v", err)
-	}
-
-	m := NewMarker(path)
-	if m.degraded {
-		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
 	buf := captureLogs(t)
@@ -1154,16 +1288,16 @@ func TestHealthMarker_SetChecked(t *testing.T) {
 func TestHealthMarker_SetChecked_removeFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	// Block the path after construction (see TestHealthMarker_SetWriteFailure).
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
 		t.Fatalf("write child: %v", err)
-	}
-
-	m := NewMarker(path)
-	if m.degraded {
-		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
 	if err := m.SetChecked(false); err == nil {

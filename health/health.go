@@ -6,10 +6,13 @@
 // HTTP-based counterpart for containers wrapping a third-party server.
 //
 // If the marker directory is not writable (e.g. compose's
-// `read_only: true` without a `tmpfs: /tmp` mount), the constructor
-// enters degraded mode: Set and Cleanup become no-ops, and the probe
-// reports healthy rather than restart-looping a container whose only
-// broken piece is the signaling channel.
+// `read_only: true` without a `tmpfs: /tmp` mount), or something already
+// at the marker path is not a regular file the process can write, the
+// constructor enters degraded mode: Set and Cleanup become no-ops, and
+// the probe reports healthy rather than restart-looping a container
+// whose only broken piece is the signaling channel. A marker path
+// os.Stat cannot read at all, such as a symlink loop, is not degraded
+// mode: the probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -58,9 +61,10 @@ type Marker struct {
 	degraded       bool
 }
 
-// NewMarker constructs a marker for path and probes the parent
-// directory for writability. On failure it logs a single Warn with a
-// fix hint and returns a marker in degraded mode; callers need not
+// NewMarker constructs a marker for path and checks that Set can change
+// it: the parent directory must be writable, and a marker already there
+// must be a regular file Set can refresh. On failure it logs a single Warn
+// with a fix hint and returns a marker in degraded mode; callers need not
 // branch on the result.
 func NewMarker(path string) *Marker {
 	m := &Marker{path: path}
@@ -72,8 +76,49 @@ func NewMarker(path string) *Marker {
 			"error", err,
 			"hint", "compose.yaml with read_only:true requires "+
 				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`")
+	} else if err := markerWritable(path); err != nil {
+		m.degraded = true
+		slog.Warn("health marker not writable, "+
+			"container will report healthy in degraded mode",
+			"path", path,
+			"error", err,
+			"hint", "remove what is at the marker path, such as a marker an "+
+				"earlier run as another user left, a directory or a FIFO")
 	}
 	return m
+}
+
+// markerWritable returns why Set could not refresh the marker at path, or
+// nil when it can. It opens the marker as writeMarker does, without O_TRUNC,
+// so the marker's content and time are unchanged. A path os.Stat cannot read
+// is nil here: Inspect classifies it from the stat error (absent or
+// unreadable), so the app and the probe agree on degraded mode.
+func markerWritable(path string) error {
+	if _, err := os.Stat(path); err != nil { // #nosec G703 -- trusted caller-supplied marker path, existence check only
+		return nil
+	}
+	if err := openMarker(path, 0); !errors.Is(err, fs.ErrNotExist) && !transient(err) {
+		return err
+	}
+	return nil
+}
+
+// transient reports an open error that can clear on its own, which Set
+// retries rather than degraded mode giving up on: EAGAIN from a lease another
+// process holds (a non-blocking open does not wait for it to break), EINTR,
+// and running out of file descriptors.
+func transient(err error) bool {
+	var t interface{ Temporary() bool }
+	return errors.As(err, &t) && t.Temporary()
+}
+
+// cannotSignal returns why Set cannot change the marker at path (its
+// directory or the marker itself cannot be written), or nil.
+func cannotSignal(path string) error {
+	if err := probeHealthDir(path); err != nil {
+		return err
+	}
+	return markerWritable(path)
 }
 
 // Set touches or removes the marker for ok, from any goroutine. It logs a
@@ -193,9 +238,9 @@ func (m *Marker) Healthy() bool { return m.CheckHealthy() }
 // Within returns a Signal for a marker os.Stat can read: healthy when d is
 // non-positive or the marker is no older than d, the comparison [WithMaxAge]
 // gives the probe, so a future modification time is fresh. Any stat error is
-// unhealthy. Pass the same [Lease.Duration] to both, so a marker in a writable
-// directory gets one verdict from the probe and the handler. In degraded mode
-// (an unwritable directory) it is unhealthy whatever file is there, as
+// unhealthy. Pass the same [Lease.Duration] to both, so a marker Set can write
+// gets one verdict from the probe and the handler. In degraded mode (an
+// unwritable directory or marker) it is unhealthy whatever file is there, as
 // CheckHealthy is, while the probe reports healthy. It costs one os.Stat per
 // call.
 func (m *Marker) Within(d time.Duration) Signal {
@@ -320,18 +365,19 @@ type MarkerState int
 const (
 	// MarkerFresh is a marker present and, when a deadline is armed, inside it.
 	MarkerFresh MarkerState = iota
-	// MarkerStale is a marker present but older than the armed deadline, in a
-	// directory the app can write. Only reachable with WithMaxAge; without it a
-	// present marker is always fresh.
+	// MarkerStale is a marker present but older than the armed deadline, one
+	// the app can write in a directory it can write. Only reachable with
+	// WithMaxAge; without it a present marker is always fresh.
 	MarkerStale
 	// MarkerAbsent is a marker that does not exist in a usable directory.
 	MarkerAbsent
 	// MarkerUnreadable is a marker whose stat failed for a reason other than
 	// absence (permission, symlink loop, I/O) in a usable directory.
 	MarkerUnreadable
-	// MarkerDirUnavailable is degraded mode: the marker's directory cannot be
-	// written, so the app has no way to signal through the filesystem at all:
-	// the marker is absent, unreadable or past a deadline nothing can refresh.
+	// MarkerDirUnavailable is degraded mode: the folder cannot be written (the
+	// marker is then absent, unreadable or past a deadline), or a marker stat
+	// can read is not a regular file Set can refresh (it is then past a
+	// deadline nothing can refresh).
 	// The probe treats this as healthy; see RunProbe.
 	MarkerDirUnavailable
 )
@@ -359,8 +405,9 @@ func (s MarkerState) String() string {
 // the age and needs stale distinguished from absent to avoid calling a cold
 // start a wedge.
 type Freshness struct {
-	// Err is the underlying stat or directory-probe error for MarkerUnreadable
-	// and MarkerDirUnavailable, nil otherwise.
+	// Err is the underlying stat error for MarkerUnreadable, the
+	// directory-probe or marker-open error for MarkerDirUnavailable, and nil
+	// otherwise.
 	Err error
 	// Age is how long ago the marker was last written: set for MarkerFresh,
 	// MarkerStale, and MarkerDirUnavailable when a stale marker was found;
@@ -372,7 +419,7 @@ type Freshness struct {
 }
 
 // Healthy reports whether this reading is the probe's healthy verdict: a
-// fresh marker, or a directory the app cannot signal through at all.
+// fresh marker, or degraded mode (a folder or marker the app cannot write).
 func (f Freshness) Healthy() bool {
 	return f.State == MarkerFresh || f.State == MarkerDirUnavailable
 }
@@ -412,11 +459,11 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 		if !stale(age, cfg.maxAge) {
 			return Freshness{State: MarkerFresh, Age: age, MaxAge: cfg.maxAge}
 		}
-		// A stale marker nothing can refresh, in an unwritable directory, is
-		// degraded mode: failing it would restart-loop a container a restart
-		// cannot fix.
-		if dirErr := probeHealthDir(path); dirErr != nil {
-			return Freshness{State: MarkerDirUnavailable, Age: age, MaxAge: cfg.maxAge, Err: dirErr}
+		// A stale marker nothing can refresh, in an unwritable directory or
+		// itself unwritable, is degraded mode: failing it would restart-loop
+		// a container a restart cannot fix.
+		if err := cannotSignal(path); err != nil {
+			return Freshness{State: MarkerDirUnavailable, Age: age, MaxAge: cfg.maxAge, Err: err}
 		}
 		return Freshness{State: MarkerStale, Age: age, MaxAge: cfg.maxAge}
 	}
@@ -433,10 +480,10 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 
 // RunProbe runs in the separate `health` subcommand process. It exits
 // 0 if the marker is present (and fresh, when WithMaxAge is armed) or
-// the marker directory is unwritable (degraded mode: the long-running
-// process cannot signal through the filesystem, so the probe falls
-// back to "alive"). It exits 1 when the marker, in a writable
-// directory, is absent or stale past an armed deadline; the stderr
+// the marker directory or the marker is unwritable (degraded mode: the
+// long-running process cannot signal through the filesystem, so the
+// probe falls back to "alive"). It exits 1 when a marker the app can
+// write is absent or stale past an armed deadline; the stderr
 // diagnostic names the underlying stat failure when the cause is
 // something other than absence.
 func RunProbe(path string, opts ...ProbeOption) {
@@ -498,20 +545,44 @@ func (m *Marker) recordSuccess() bool {
 	return recovered
 }
 
-// writeMarker atomically touches the marker file. A fresh os.Create is
-// sufficient: the file is empty, and O_TRUNC on an existing file
-// refreshes its mtime, which is the contract an armed WithMaxAge
-// deadline reads. TestHealthMarker_SetTrue_refreshesMtime pins it.
+// writeMarker refreshes the marker at path, or creates it. An existing
+// marker opens without O_CREATE, so one another user left in a sticky folder
+// opens on its mode alone (fs.protected_regular refuses only O_CREAT opens of
+// such a file), and with O_TRUNC, which refreshes its mtime, the contract an
+// armed WithMaxAge deadline reads (TestHealthMarker_SetTrue_refreshesMtime).
 func writeMarker(path string) error {
-	f, err := os.Create(path) // #nosec G304 -- caller-supplied trusted path
+	err := openMarker(path, os.O_TRUNC)
+	if errors.Is(err, fs.ErrNotExist) {
+		err = openMarker(path, os.O_CREATE|os.O_TRUNC)
+	}
+	return err
+}
+
+// openMarker opens the marker write-only with flag added, and never blocks:
+// a FIFO with no reader fails with ENXIO instead of hanging. It refuses
+// anything but a regular file, whose time an open with O_TRUNC refreshes, and
+// creates one with os.Create's mode when flag holds O_CREATE.
+func openMarker(path string, flag int) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|oNonblock|flag, 0o666) // #nosec G302 G304 G703 -- trusted caller-supplied marker path, os.Create's mode
 	if err != nil {
 		return err
 	}
-	if closeErr := f.Close(); closeErr != nil {
+	info, statErr := f.Stat()
+	closeErr := f.Close()
+	switch {
+	case statErr != nil:
+		return statErr
+	case !info.Mode().IsRegular():
+		return &fs.PathError{Op: "open", Path: path, Err: errNotRegular}
+	case closeErr != nil:
 		return fmt.Errorf("close: %w", closeErr)
 	}
 	return nil
 }
+
+// errNotRegular is openMarker's error for a marker path that holds something
+// other than a regular file, such as a FIFO a reader holds open.
+var errNotRegular = errors.New("not a regular file")
 
 // probeHealthDir verifies the marker's parent directory is writable by
 // creating and deleting a temp file. Returns the underlying error on

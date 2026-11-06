@@ -30,7 +30,7 @@ When the marker cannot be read, written or removed, `Set` logs the failure once 
 
 ## Degraded mode
 
-`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it. When that fails, the marker enters degraded mode and logs one warning with the folder, the error and the tmpfs mount to add. Callers do not need to branch on the result.
+`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that anything already at the marker path is a regular file `Set` can refresh, without changing it. When either fails, the marker enters degraded mode and logs one warning with the path, the error and the fix: a tmpfs mount for the folder, or removing what is at the marker path, such as a marker an earlier run as another user left behind, a directory or a FIFO. A path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the probe reports it unhealthy and names the stat error. Callers do not need to branch on the result.
 
 In degraded mode:
 
