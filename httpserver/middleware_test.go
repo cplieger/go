@@ -709,6 +709,33 @@ func TestRouteTimeout_slowHandlerTimesOut(t *testing.T) {
 	}
 }
 
+// TestRouteTimeout_doesNotStopTheHandler pins the godoc's warning: the 503
+// goes out while the handler is still running, and the handler goes on with
+// its context cancelled, so a store call that ignores ctx would still commit.
+func TestRouteTimeout_doesNotStopTheHandler(t *testing.T) {
+	release := make(chan struct{})
+	finished := make(chan error, 1)
+	cancelled := false
+	h := httpserver.RouteTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		cancelled = r.Context().Err() != nil
+		_, err := w.Write([]byte("ok"))
+		finished <- err
+	}), 20*time.Millisecond, "")
+
+	rr := serve(h, http.MethodPost, "/", nil)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want the 503 before the handler finished", rr.Code)
+	}
+	close(release)
+	if err := <-finished; !errors.Is(err, http.ErrHandlerTimeout) {
+		t.Errorf("the handler's write after the 503 = %v, want http.ErrHandlerTimeout", err)
+	}
+	if !cancelled {
+		t.Error("the handler ran on after the 503 with a live context; want it cancelled")
+	}
+}
+
 func TestRouteTimeout_emptyMsgDefaults(t *testing.T) {
 	slow := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
