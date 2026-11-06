@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -237,6 +238,80 @@ func TestRetryRoundTripper_POST_without_GetBody_no_retry(t *testing.T) {
 	defer resp.Body.Close()
 	if got := calls.Load(); got != 1 {
 		t.Errorf("calls = %d, want 1 (no retry without GetBody)", got)
+	}
+}
+
+// TestRetryRoundTripper_keyed_request pins the Idempotency-Key rule without
+// RetryNonIdempotent: a non-empty key makes any method retryable, a body still
+// needs GetBody, and every attempt resends the same key and body.
+func TestRetryRoundTripper_keyed_request(t *testing.T) {
+	const body = "post-payload"
+	rewindable := func() io.ReadCloser { return io.NopCloser(strings.NewReader(body)) }
+	for _, tc := range []struct {
+		name      string
+		method    string
+		key       *string
+		withBody  bool
+		getBody   bool
+		wantCalls int32
+	}{
+		{"keyed POST with GetBody", http.MethodPost, new("k-1"), true, true, 3},
+		{"keyed PATCH with no body", http.MethodPatch, new("k-2"), false, false, 3},
+		{"keyed DELETE with no body", http.MethodDelete, new("k-3"), false, false, 3},
+		{"keyed POST without GetBody", http.MethodPost, new("k-4"), true, false, 1},
+		{"empty key is no key", http.MethodPost, new(""), true, true, 1},
+		{"no key", http.MethodPost, nil, true, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			var mu sync.Mutex
+			var keys, bodies []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				keys = append(keys, r.Header.Get("Idempotency-Key"))
+				bodies = append(bodies, string(b))
+				mu.Unlock()
+				if calls.Add(1) <= 2 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			rt := httpclient.NewRetryRoundTripper(srv.Client().Transport, httpclient.TransportConfig{BaseDelay: time.Millisecond, MaxAttempts: 4})
+
+			var reqBody io.Reader = http.NoBody
+			if tc.withBody {
+				reqBody = strings.NewReader(body)
+			}
+			req, _ := http.NewRequest(tc.method, srv.URL, reqBody)
+			req.GetBody = nil
+			if tc.getBody {
+				req.GetBody = func() (io.ReadCloser, error) { return rewindable(), nil }
+			}
+			if tc.key != nil {
+				req.Header.Set("Idempotency-Key", *tc.key)
+			}
+			resp, err := (&http.Client{Transport: rt}).Do(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			resp.Body.Close()
+			if got := calls.Load(); got != tc.wantCalls {
+				t.Fatalf("calls = %d, want %d", got, tc.wantCalls)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for i := range keys {
+				if tc.key != nil && keys[i] != *tc.key {
+					t.Errorf("attempt %d Idempotency-Key = %q, want %q", i+1, keys[i], *tc.key)
+				}
+				if tc.withBody && bodies[i] != body {
+					t.Errorf("attempt %d body = %q, want %q", i+1, bodies[i], body)
+				}
+			}
+		})
 	}
 }
 

@@ -49,9 +49,17 @@ Each has a different owner for the request, the body and the response. All three
 | `OnRetry` | Called before each retry, with a 1-based attempt number. The transport logs nothing, so this is where to observe it |
 | `PrepareRetry` | Changes the cloned request before each retry, for example to set a fresh token |
 | `MaxElapsedTime` | Ceiling on total time across retries, honored `Retry-After` waits included. Checked between attempts. Zero means none |
-| `RetryNonIdempotent` | Also retries every other method, POST, PUT, PATCH and DELETE among them |
+| `RetryNonIdempotent` | Also retries every other request, POST, PUT, PATCH and DELETE among them, with or without an `Idempotency-Key` |
 
-The transport never changes your request. It clones it for each attempt. By default it retries only GET, HEAD, OPTIONS and TRACE, the safe methods of RFC 9110 section 9.2.1. Whatever the method, a request with a body is retried only when it has a `GetBody` function to replay the body.
+The transport never changes your request. It clones it for each attempt. By default it retries GET, HEAD, OPTIONS and TRACE, the safe methods of RFC 9110 section 9.2.1.
+
+It also retries a request of any method that carries a non-empty `Idempotency-Key` header, as the [Idempotency-Key draft](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) describes. Your server must store the key with the write and answer a repeat from that record, so a retried POST changes state once. Every attempt sends the same key, because each attempt clones your request. An empty header value counts as no key.
+
+net/http copies the key onto a 307 or 308 hop, so the redirect target is retried under it too. `DefaultRedirectPolicy` follows a hop to another port on the same host, which can be another service. Unless every redirect target dedups the key, give a keyed client `RefuseAllRedirects`, or `RedirectPolicyFunc(WithSameOrigin(true))` to stay on the original origin.
+
+A server that follows the draft answers 409 while the first attempt is still running. The default policy returns that 409 as final, because many servers send 409 for a real conflict. To wait it out, set `CheckRetry` to also retry a 409 whose `resp.Request` carries the key.
+
+Whatever the method, a request with a body is retried only when it has a `GetBody` function to replay the body.
 
 Each `RoundTrip` keeps its own backoff, so one `RetryRoundTripper` is safe to share between goroutines.
 
@@ -78,7 +86,7 @@ A 5xx code no RFC registers is retried like a 500, as RFC 9110 section 15 asks. 
 
 The transport's default policy retries an error `IsTransient` accepts and a status `IsRetryableStatus` accepts. `GetBytes` judges each attempt the same way. Set `TransportConfig.CheckRetry` to retry a different set.
 
-`Do` never sees the request, so whether repeating it is safe is your decision. Around a POST or another non-idempotent request, `Do` repeats what `IsTransient` accepts, and a server that failed after reading the request may already have applied it (RFC 9110 section 9.2.2). Return `Permanent(err)` for a failure you must not repeat, or send the request through the transport, which checks the method.
+`Do` never sees the request, so whether repeating it is safe is your decision. Around a POST or another non-idempotent request, `Do` repeats what `IsTransient` accepts, and a server that failed after reading the request may already have applied it (RFC 9110 section 9.2.2). Return `Permanent(err)` for a failure you must not repeat, or send the request through the transport, which checks the method and the `Idempotency-Key` header.
 
 ## Waits and Retry-After
 
