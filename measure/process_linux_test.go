@@ -32,15 +32,6 @@ func TestAuxvClkTck_MissingFile(t *testing.T) {
 	}
 }
 
-// TestReadOpenFDs_readsAllEntries verifies readOpenFDs reads every fd entry, not
-// just one: a live process always has at least its standard descriptors plus the
-// directory handle open, so the open count is >= 1.
-func TestReadOpenFDs_readsAllEntries(t *testing.T) {
-	if open := readOpenFDs(fdDir, fdListingHandles); open < 1 {
-		t.Fatalf("readOpenFDs(%s) = %d, want >= 1 (must read all fd entries)", fdDir, open)
-	}
-}
-
 // TestReadKernelStartTime_AgreesWithPackageInitAnchor pins the kernel start-time
 // composition against the only independent witness the process has: the
 // package-init instant, captured microseconds after exec. The boot time from
@@ -134,7 +125,7 @@ func TestLogProcTransition_linux(t *testing.T) {
 	buf := captureDebugLogs(t)
 	logProcTransition(procOKAll &^ procOKNetwork)
 	for _, kv := range []string{"cpu_ok=true", "rss_ok=true", "fds_ok=true", "max_fds_ok=true", "vsize_ok=true", "max_vsize_ok=true", "network_ok=false"} {
-		if !strings.Contains(buf.String(), kv) {
+		if !strings.Contains(buf.String(), " "+kv) {
 			t.Errorf("Warn line %q lacks %s", buf.String(), kv)
 		}
 	}

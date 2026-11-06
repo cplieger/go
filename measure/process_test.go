@@ -299,8 +299,18 @@ func TestProcOKAttrs(t *testing.T) {
 	if got := procOKAttrs(procOKDarwin, procOKAll&^procOKCPU); !slices.Equal(got, darwinCPUFailed) {
 		t.Errorf("procOKAttrs(darwin, cpu failed) = %v, want %v", got, darwinCPUFailed)
 	}
-	if got := procOKAttrs(procOKAll, procOKAll&^procOKNetwork); got[len(got)-1] != false {
-		t.Errorf("procOKAttrs(all, network failed) = %v, want network_ok false", got)
+	// Each key reports its own family's bit: failing one family turns
+	// exactly that key's value false.
+	for key, bit := range map[string]uint32{
+		"cpu_ok": procOKCPU, "rss_ok": procOKRSS, "fds_ok": procOKOpenFDs, "max_fds_ok": procOKMaxFDs,
+		"vsize_ok": procOKVirtual, "max_vsize_ok": procOKMaxVirtual, "network_ok": procOKNetwork,
+	} {
+		got := procOKAttrs(procOKAll, procOKAll&^bit)
+		for i := 0; i+1 < len(got); i += 2 {
+			if want := got[i] != key; got[i+1] != want {
+				t.Errorf("with %s failed, %v = %v, want %v", key, got[i], got[i+1], want)
+			}
+		}
 	}
 	if got := procOKAttrs(0, 0); len(got) != 0 {
 		t.Errorf("procOKAttrs(none) = %v, want no attributes", got)

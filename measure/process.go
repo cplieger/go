@@ -13,8 +13,9 @@ import (
 // process_start_time_seconds (and, via it, process_uptime_seconds) when the
 // kernel-derived start time cannot be read. On Linux the start time comes from
 // /proc (see readKernelStartTime); on every other platform, and when that read
-// fails, this package-init instant stands in. Uptime is always reconciled as now - start so the documented
-// "start + uptime == now" invariant holds regardless of which source wins.
+// fails, this package-init instant stands in. Uptime is always reconciled as
+// now - start so the documented "start + uptime == now" invariant holds
+// regardless of which source wins.
 var processStartTime = time.Now()
 
 // Process-metric ok-mask bits. Each bit is set when the corresponding read
