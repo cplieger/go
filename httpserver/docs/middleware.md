@@ -87,9 +87,9 @@ The max-age rule also catches a common unit mistake. A bare `31536000` assigned 
 
 ## RouteTimeout
 
-`RouteTimeout(h, d, msg)` wraps `h` with `http.TimeoutHandler`, so a client waits at most `d`. Once `d` passes, the client gets a 503 with a JSON `ErrorResponse` whose code is `timeout`. An empty `msg` becomes `request timed out`. The body carries the request id when the context has one.
+`RouteTimeout(h, d, msg)` wraps `h` with `http.TimeoutHandler`, so `h` gets at most `d` before the client is answered. Once `d` passes, the client gets a 503 with a JSON `ErrorResponse` whose code is `timeout`. An empty `msg` becomes `request timed out`. The body carries the request id when the context has one.
 
-`RouteTimeout` does not stop the handler. `http.TimeoutHandler` sends the 503 from its own goroutine while the handler keeps running with its request context cancelled, and the handler's later writes fail with `http.ErrHandlerTimeout`. So a 503 does not mean nothing happened: a handler that writes to a store can commit after the client got its 503. Use `RouteTimeout` only on handlers that change no state. For a handler that does, set the deadline inside it, with `context.WithTimeout` on `r.Context()` passed to every call that can block, and answer from what it committed. A client that gets a 503 or loses the connection on a write still cannot know the outcome, so it should resend under the same `Idempotency-Key`, which the server dedups.
+`RouteTimeout` does not stop the handler. `http.TimeoutHandler` runs the handler on a goroutine of its own and answers 503 when `d` passes, while the handler keeps running with its request context cancelled, and the handler's later writes fail with `http.ErrHandlerTimeout`. So a 503 does not mean nothing happened: a handler that writes to a store can commit after the client got its 503. Use `RouteTimeout` only on handlers that change no state. For a handler that does, set the deadline inside it, with `context.WithTimeout` on `r.Context()` passed to every call that can block, and answer from what it committed. A client that gets a 503 or loses the connection on a write still cannot know the outcome, so it should resend under the same `Idempotency-Key`, and the server must dedup that key.
 
 A non-positive `d` returns `h` unwrapped, so a configured zero means no timeout.
 

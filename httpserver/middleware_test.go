@@ -723,7 +723,15 @@ func TestRouteTimeout_doesNotStopTheHandler(t *testing.T) {
 		finished <- err
 	}), 20*time.Millisecond, "")
 
-	rr := serve(h, http.MethodPost, "/", nil)
+	got := make(chan *httptest.ResponseRecorder, 1)
+	go func() { got <- serve(h, http.MethodPost, "/", nil) }()
+	var rr *httptest.ResponseRecorder
+	select {
+	case rr = <-got:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("RouteTimeout held the response until the handler returned; want the 503 at its deadline")
+	}
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want the 503 before the handler finished", rr.Code)
 	}

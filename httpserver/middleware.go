@@ -513,8 +513,7 @@ func (w *jsonTimeoutWriter) WriteHeader(code int) {
 // as JSON. docs/middleware.md in the module has the full contract.
 func RouteTimeout(h http.Handler, d time.Duration, msg string) http.Handler {
 	if d <= 0 {
-		// A non-positive timeout means "no timeout": return h unwrapped so its
-		// response is untouched.
+		// http.TimeoutHandler with a non-positive d would answer 503 at once.
 		return h
 	}
 	if msg == "" {
