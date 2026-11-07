@@ -10,6 +10,8 @@ stryker-setup-*.js
 .agents/
 
 # Go build and test output
+# wiregen's moduleTempDir: a chdir test's working directory inside the module
+_chdir-*/
 *.exe
 *.dll
 *.so

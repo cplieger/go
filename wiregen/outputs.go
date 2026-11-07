@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -83,7 +84,11 @@ func (f *genFile) locate(root *os.Root, tsDir target) (target, error) {
 		if f.name == "" {
 			return target{}, errors.New("wiregen: WithOpenAPIFiles names an empty path")
 		}
-		t, err := locate(f.name)
+		name, err := workingDirPath(f.name)
+		if err != nil {
+			return target{}, fmt.Errorf("wiregen: the %s file %q: %w", f.role, f.name, err)
+		}
+		t, err := locate(name)
 		if err != nil {
 			return target{}, fmt.Errorf("wiregen: the %s file %q: %w", f.role, f.name, err)
 		}
@@ -166,15 +171,31 @@ func (t target) below(names []string) target {
 // locate finds p's target. The names p holds past the part that exists may
 // not climb with "..", which the file system cannot resolve there.
 func locate(p string) (target, error) {
+	if runtime.GOOS == "windows" {
+		// Windows resolves ".." lexically before it opens a path, so the walk
+		// and EvalSymlinks below see the path the operating system would. A
+		// rooted (\x) or drive-relative (C:x) path is made absolute as the
+		// operating system makes it; a plain relative one keeps its walk.
+		if filepath.VolumeName(p) != "" || strings.HasPrefix(filepath.ToSlash(p), "/") {
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				return target{}, err
+			}
+			p = abs
+		} else {
+			p = filepath.Clean(p)
+		}
+	}
 	prefix := "."
+	volume := filepath.VolumeName(p)
 	if filepath.IsAbs(p) {
-		prefix = filepath.VolumeName(p) + string(filepath.Separator)
+		prefix = volume + string(filepath.Separator)
 	}
 	base, err := os.Stat(prefix)
 	if err != nil {
 		return target{}, err
 	}
-	names := splitPath(p)
+	names := splitPath(p[len(volume):])
 	// The names are joined unresolved, never through filepath.Join's
 	// lexical clean, so the operating system resolves every symlink and "..".
 	sep := string(filepath.Separator)
@@ -208,6 +229,29 @@ func locateIn(root *os.Root, name string) (target, error) {
 	return t, err
 }
 
+// workingDirPath makes a relative OpenAPI path absolute, for filesafe writes
+// only absolute paths, as the operating system resolves it. Windows resolves a
+// rooted, drive-relative or relative path lexically against its own current
+// directories, which filepath.Abs does. Unix resolves ".." physically, and
+// os.Getwd may return $PWD, which can name the working directory through a
+// symlink, so the directory is resolved first.
+func workingDirPath(p string) (string, error) {
+	if filepath.IsAbs(p) {
+		return p, nil
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Abs(p)
+	}
+	wd, err := os.Getwd()
+	if err == nil {
+		wd, err = filepath.EvalSymlinks(wd)
+	}
+	if err != nil {
+		return "", err
+	}
+	return wd + string(filepath.Separator) + p, nil
+}
+
 func splitPath(p string) []string {
 	return slices.DeleteFunc(strings.Split(filepath.ToSlash(p), "/"), func(n string) bool { return n == "" || n == "." })
 }
@@ -232,9 +276,9 @@ func writeFiles(ctx context.Context, tsDir string, files []genFile) error {
 	for _, f := range files {
 		var p *filesafe.PendingFile
 		if f.ts {
-			p, err = filesafe.NewPendingFileInRoot(ctx, root, f.name, filesafe.WithMkdirMode(0o755))
+			p, err = filesafe.NewPendingFileInRoot(ctx, root, f.name, filesafe.WithMkdirAll(true))
 		} else {
-			p, err = filesafe.NewPendingFile(ctx, f.name, filesafe.WithMkdirMode(0o755))
+			p, err = filesafe.NewPendingFile(ctx, f.name, filesafe.WithMkdirAll(true))
 		}
 		if err != nil {
 			return fmt.Errorf("wiregen: stage the %s file %s: %w", f.role, f.name, err)
