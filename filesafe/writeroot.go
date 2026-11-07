@@ -129,11 +129,12 @@ var fsyncRootDir = func(root *os.Root, dir string) error {
 
 // mkdirAllInRoot creates dir and every missing ancestor inside root at mode,
 // enforcing the mode on each directory it creates when enforce, and syncing
-// that directory's parent (syncCreatedDirParent). os.Root.MkdirAll would not do: an entry never fsynced
-// into its parent can vanish in a crash with every descendant. Pre-existing
-// directories are left as found. durable is false when a created
-// directory's parent could not be fsynced.
-func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, enforce bool, logger *slog.Logger) (durable bool, err error) {
+// that directory's parent (syncCreatedDirParent). os.Root.MkdirAll would not
+// do: an entry never fsynced into its parent can vanish in a crash with
+// every descendant. Pre-existing directories are left as found, and their
+// parents are synced too when syncExisting (a caller that saw them absent).
+// durable is false when such a parent could not be fsynced.
+func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, enforce, syncExisting bool, logger *slog.Logger) (durable bool, err error) {
 	if dir == "." {
 		return true, nil
 	}
@@ -145,7 +146,7 @@ func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, enforce bool, l
 		if levelErr != nil {
 			return false, levelErr
 		}
-		if !created {
+		if !created && !syncExisting {
 			continue
 		}
 		if syncErr := syncCreatedDirParent(root, filepath.Dir(prefix)); syncErr != nil {
@@ -249,7 +250,7 @@ func openTempForRoot(ctx context.Context, root *os.Root, name string, c *cfg) (s
 	dir := filepath.Dir(cleanName)
 	dirSyncFailed := false
 	if mode, enforce, create := c.parentDirs(); create {
-		durable, mkErr := mkdirAllInRoot(root, dir, mode, enforce, c.logger)
+		durable, mkErr := mkdirAllInRoot(root, dir, mode, enforce, false, c.logger)
 		if mkErr != nil {
 			return stagedTemp{}, fmt.Errorf("filesafe: create parent directory %q: %w", dir, mkErr)
 		}

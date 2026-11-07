@@ -19,8 +19,9 @@ type Result struct {
 	// functions it is root.Name() joined with the cleaned relative name.
 	Path string
 	// Durable reports whether the write is guaranteed to survive a crash:
-	// true only when the file and every directory entry its path depends on
-	// were flushed (docs/durability.md, per platform). False means the data
+	// true only when the file, its directory, and every directory this
+	// write created or found being created by a racing writer were flushed
+	// (docs/durability.md, per platform). False means the data
 	// is present at Path but may not survive an immediate power loss, and
 	// the cause is logged.
 	Durable bool
@@ -57,11 +58,13 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 	return root, filepath.Base(cleanPath), dirSyncFailed, nil
 }
 
-// mkdirAllAbs creates the absolute directory dir and every missing ancestor
-// at mode (proved on each when enforce), inside an *os.Root opened on the deepest existing ancestor, so a
-// missing level a racing writer plants as an escaping symlink is refused
-// rather than followed. os.MkdirAll would not say which levels are new,
-// which the parent fsyncs need. dirSyncFailed is mkdirAllInRoot's durable,
+// mkdirAllAbs creates the directory dir and every missing ancestor at mode
+// (proved on each when enforce), inside an *os.Root opened on the deepest
+// existing ancestor, so a missing level a racing writer plants as an
+// escaping symlink is refused rather than followed. os.MkdirAll would not
+// say which levels are new, which the parent fsyncs need. Every level below
+// that ancestor was absent at the stat, so one that now exists is a racing
+// writer's and is synced too. dirSyncFailed is mkdirAllInRoot's durable,
 // inverted.
 func mkdirAllAbs(dir string, mode os.FileMode, enforce bool, logger *slog.Logger) (dirSyncFailed bool, err error) {
 	base, rel, err := deepestExistingDir(dir)
@@ -76,7 +79,7 @@ func mkdirAllAbs(dir string, mode os.FileMode, enforce bool, logger *slog.Logger
 		return false, err
 	}
 	defer root.Close()
-	durable, err := mkdirAllInRoot(root, rel, mode, enforce, logger)
+	durable, err := mkdirAllInRoot(root, rel, mode, enforce, true, logger)
 	return !durable, err
 }
 
