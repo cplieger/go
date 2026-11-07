@@ -173,8 +173,18 @@ func (t target) below(names []string) target {
 func locate(p string) (target, error) {
 	if runtime.GOOS == "windows" {
 		// Windows resolves ".." lexically before it opens a path, so the walk
-		// and EvalSymlinks below see the path the operating system would.
-		p = filepath.Clean(p)
+		// and EvalSymlinks below see the path the operating system would. A
+		// rooted (\x) or drive-relative (C:x) path is made absolute as the
+		// operating system makes it; a plain relative one keeps its walk.
+		if filepath.VolumeName(p) != "" || strings.HasPrefix(filepath.ToSlash(p), "/") {
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				return target{}, err
+			}
+			p = abs
+		} else {
+			p = filepath.Clean(p)
+		}
 	}
 	prefix := "."
 	volume := filepath.VolumeName(p)
@@ -220,17 +230,20 @@ func locateIn(root *os.Root, name string) (target, error) {
 }
 
 // workingDirPath makes a relative OpenAPI path absolute, for filesafe writes
-// only absolute paths, against the directory the operating system resolves it
-// from. Unix resolves ".." physically, and os.Getwd may return $PWD, which can
-// name the working directory through a symlink, so the directory is resolved
-// first. Windows resolves ".." lexically, which locate does there, and
-// EvalSymlinks there refuses a path through a junction.
+// only absolute paths, as the operating system resolves it. Windows resolves a
+// rooted, drive-relative or relative path lexically against its own current
+// directories, which filepath.Abs does. Unix resolves ".." physically, and
+// os.Getwd may return $PWD, which can name the working directory through a
+// symlink, so the directory is resolved first.
 func workingDirPath(p string) (string, error) {
 	if filepath.IsAbs(p) {
 		return p, nil
 	}
+	if runtime.GOOS == "windows" {
+		return filepath.Abs(p)
+	}
 	wd, err := os.Getwd()
-	if err == nil && runtime.GOOS != "windows" {
+	if err == nil {
 		wd, err = filepath.EvalSymlinks(wd)
 	}
 	if err != nil {
