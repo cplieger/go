@@ -232,9 +232,9 @@ func writeFiles(ctx context.Context, tsDir string, files []genFile) error {
 	for _, f := range files {
 		var p *filesafe.PendingFile
 		if f.ts {
-			p, err = filesafe.NewPendingFileInRoot(ctx, root, f.name, filesafe.WithMkdirMode(0o755))
+			p, err = filesafe.NewPendingFileInRoot(ctx, root, f.name, filesafe.WithMkdirAll(true))
 		} else {
-			p, err = filesafe.NewPendingFile(ctx, f.name, filesafe.WithMkdirMode(0o755))
+			p, err = filesafe.NewPendingFile(ctx, f.name, filesafe.WithMkdirAll(true))
 		}
 		if err != nil {
 			return fmt.Errorf("wiregen: stage the %s file %s: %w", f.role, f.name, err)

@@ -170,6 +170,28 @@ func TestGenerateToDir(t *testing.T) {
 	}
 }
 
+// An output in a folder that does not exist yet is created with its folders,
+// a TS file named under a subfolder of the TS directory and an OpenAPI file
+// beside it alike, on every platform: Windows refuses filesafe's
+// mode-proving option, so the folders are created like os.MkdirAll.
+func TestGenerate_CreatesMissingOutputFolders(t *testing.T) {
+	r := newTestRegistry()
+	dir := t.TempDir()
+	openapi := filepath.Join(dir, "api", "v1", "openapi.json")
+	err := r.Generate(t.Context(), append(r.opts,
+		wiregen.WithTSDir(dir),
+		wiregen.WithFilenames(wiregen.Filenames{Types: "gen/wire/types.gen.ts"}),
+		wiregen.WithOpenAPIFiles(openapi))...)
+	if err != nil {
+		t.Fatalf("Generate with outputs in missing folders failed: %v", err)
+	}
+	for _, f := range []string{filepath.Join(dir, "gen", "wire", "types.gen.ts"), openapi} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("expected %s to exist: %v", f, err)
+		}
+	}
+}
+
 func TestGenerateConstants(t *testing.T) {
 	r := newTestRegistry()
 	r.Constants = []wiregen.WireConst{
