@@ -144,7 +144,7 @@ func (e *LimitError) where() string {
 
 // Is reports ErrLimit for every LimitError, so a consumer that only cares about
 // the class does not have to enumerate kinds.
-func (e *LimitError) Is(target error) bool { return target == ErrLimit }
+func (*LimitError) Is(target error) bool { return target == ErrLimit }
 
 // limitErr builds the rejection for one bound, without an offset.
 func limitErr(kind Kind, limit int) error {
@@ -175,7 +175,7 @@ func (e *ConfigError) Error() string {
 }
 
 // Unwrap returns ErrInvalidLimits.
-func (e *ConfigError) Unwrap() error { return ErrInvalidLimits }
+func (*ConfigError) Unwrap() error { return ErrInvalidLimits }
 
 // requirePositive returns a ConfigError unless n is positive.
 func requirePositive(field string, n int) error {

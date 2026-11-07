@@ -94,7 +94,7 @@ func newRecordHandler() recordHandler {
 	return recordHandler{mu: &sync.Mutex{}, records: &[]slog.Record{}}
 }
 
-func (h recordHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (recordHandler) Enabled(context.Context, slog.Level) bool { return true }
 func (h recordHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
