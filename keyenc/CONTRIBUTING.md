@@ -12,7 +12,6 @@ Open an issue first to change any key's bytes. Consumers store and compare these
 
 - Change which key the encoder writes, or which keys the decoder accepts, in Go and TypeScript in one commit, and regenerate the fixture after an encoder change. One side alone passes its tests and breaks consumers comparing keys across languages.
 - A grammar change also updates the package comment in `doc.go` and [How keyenc encodes a key](docs/how-it-works.md) in the same commit. pkg.go.dev readers and anyone reimplementing keyenc rely on them.
-- `web/.prettierrc.json` and `web/eslint.config.base.mjs` are hand-maintained copies of cplieger/ci's canonical Prettier and ESLint configs. When a canonical file changes, copy it into `web/`, and never edit the package copy on its own, because the next copy overwrites the edit.
 - `web/go.mod` is a placeholder module. It stops `go test ./...` at `web/`, where `web/node_modules` holds Go files from npm packages, and keeps the TypeScript out of the published Go module. Do not delete it.
 
 ## Releases

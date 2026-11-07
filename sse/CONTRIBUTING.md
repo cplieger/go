@@ -6,7 +6,6 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 - A change to a frame, the cursor grammar, the hello, a reset reason or a timing constant lands in Go and TypeScript in one commit. A one-sided change passes its own suite and breaks tabs talking to the other half.
 - When such a change is not additive, raise `wire` in `timing.json`, then `Wire` in `frame.go` and `WIRE` in `web/src/timing.ts` to match. Without the bump, tabs still running the old client accept the new frames and misread them.
-- `web/.prettierrc.json` and `web/eslint.config.base.mjs` are hand-maintained copies of cplieger/ci's canonical Prettier and ESLint configs. When a canonical file changes, copy it into `web/`, and never edit the package copy on its own, because the next copy overwrites the edit.
 - Keep `web/go.mod`, the placeholder module `web-ignore`. It stops `go test ./...` at `web/`, where `node_modules` holds Go files, and keeps the TypeScript tree out of the published Go module.
 
 ## Checks
