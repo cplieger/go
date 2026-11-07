@@ -563,9 +563,6 @@ export function reduce(state: ClientState, event: ClientEvent, cfg: TimingConfig
     if (eventGeneration !== g) {
       return same(state);
     }
-    if (state.kind === "open" && (event.type === "connected" || event.type === "connect_failed")) {
-      return same(state);
-    }
   }
   switch (state.kind) {
     case "connecting":

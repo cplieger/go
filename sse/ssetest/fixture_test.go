@@ -127,6 +127,15 @@ func pollUntil(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// readArrival reads the fixture's connected frame, which its OnConnect writes
+// after the hub ran the presence hook, so the stream's arrival is in the state.
+func readArrival(t *testing.T, stream *FrameReader) {
+	t.Helper()
+	if frames, err := stream.Read(1); err != nil || frames[0].Data != `{"type":"connected"}` {
+		t.Fatalf("hook frame = %+v (%v), want the connected frame, which follows the arrival", frames, err)
+	}
+}
+
 // frameFeed reads a stream on one goroutine and hands out frames one at a
 // time, so a bounded wait for the next frame never leaves a second reader on
 // the body.
@@ -358,6 +367,7 @@ func TestFixture_controlRoutes(t *testing.T) {
 			t.Errorf("frames after the hello = %+v, want connected, third and nothing after", frames)
 		}
 		pollUntil(t, "the closed stream to unregister", func() bool { return f.Hub().ClientCount() == 0 })
+		pollUntil(t, "the departure to reach the presence table", func() bool { return len(state(t, base).Events) == 2 })
 		st := state(t, base)
 		if len(st.Events) != 2 || st.Events[1].Cause != sse.PresenceDead || st.Events[1].Write != "frame" {
 			t.Errorf("events = %+v, want connected then disconnected dead on a frame write", st.Events)
@@ -366,12 +376,15 @@ func TestFixture_controlRoutes(t *testing.T) {
 
 	t.Run("state counts wire declarations", func(t *testing.T) {
 		_, base := fixtureServer(t)
-		v3, _, _ := openEvents(t, base, http.Header{"SSE-Wire": {"1"}})
+		v3, v3Stream, _ := openEvents(t, base, http.Header{"SSE-Wire": {"1"}})
 		defer v3.Body.Close()
-		legacy, _, _ := openEvents(t, base, nil)
+		readArrival(t, v3Stream)
+		legacy, legacyStream, _ := openEvents(t, base, nil)
 		defer legacy.Body.Close()
-		tagged, _, _ := openEvents(t, base, http.Header{"SSE-Wire": {"anything"}, "SSE-Client": {"tab-a"}})
+		readArrival(t, legacyStream)
+		tagged, taggedStream, _ := openEvents(t, base, http.Header{"SSE-Wire": {"anything"}, "SSE-Client": {"tab-a"}})
 		defer tagged.Body.Close()
+		readArrival(t, taggedStream)
 		st := state(t, base)
 		if st.V3Connects != 2 || st.LegacyConnects != 1 || st.Clients != 3 {
 			t.Errorf("state = v3 %d legacy %d clients %d, want 2, 1, 3", st.V3Connects, st.LegacyConnects, st.Clients)
@@ -409,8 +422,9 @@ func TestFixture_aliveRouteGrammar(t *testing.T) {
 func TestFixture_presenceGoneAtAliveWindow(t *testing.T) {
 	_, base := fixtureServer(t)
 	control(t, base, "alive-window", `{"ms":200}`)
-	resp, _, _ := openEvents(t, base, http.Header{"SSE-Client": {"tab-1"}})
+	resp, stream, _ := openEvents(t, base, http.Header{"SSE-Client": {"tab-1"}})
 	defer resp.Body.Close()
+	readArrival(t, stream)
 	st := state(t, base)
 	if len(st.Presence) != 1 || st.Presence[0].Gone || st.Presence[0].Connected != 1 || st.Transitions.Alive != 1 {
 		t.Fatalf("state right after connect = %+v %+v, want tab-1 present with one alive transition", st.Presence, st.Transitions)
@@ -488,9 +502,7 @@ func TestFixture_restartMintsNewEpoch(t *testing.T) {
 func TestFixture_presenceRowDropsOnDisconnect(t *testing.T) {
 	f, base := fixtureServer(t)
 	resp, stream, _ := openEvents(t, base, http.Header{"SSE-Client": {"tab-1"}})
-	if frames, err := stream.Read(1); err != nil || frames[0].Data != `{"type":"connected"}` {
-		t.Fatalf("hook frame = %+v (%v), want the connected frame, which follows the arrival", frames, err)
-	}
+	readArrival(t, stream)
 	if st := state(t, base); len(st.Presence) != 1 || st.Presence[0].Connected != 1 {
 		t.Fatalf("presence after connect = %+v, want tab-1 connected once", st.Presence)
 	}
@@ -538,9 +550,7 @@ func TestFixture_acknowledgementIsAliveAtTheInstantItLands(t *testing.T) {
 	_, base := fixtureServer(t)
 	resp, stream, _ := openEvents(t, base, http.Header{"SSE-Client": {"tab-1"}})
 	defer resp.Body.Close()
-	if frames, err := stream.Read(1); err != nil || frames[0].Data != `{"type":"connected"}` {
-		t.Fatalf("hook frame = %+v (%v), want the connected frame, which follows the arrival", frames, err)
-	}
+	readArrival(t, stream)
 	control(t, base, "alive-window", `{"ms":0}`)
 	before := state(t, base).Transitions
 	if status := post(t, base+"/alive", ``, http.Header{"SSE-Client": {"tab-1"}}, nil); status != http.StatusNoContent {
