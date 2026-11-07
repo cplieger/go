@@ -166,10 +166,20 @@ func (t target) below(names []string) target {
 // locate finds p's target. The names p holds past the part that exists may
 // not climb with "..", which the file system cannot resolve there.
 func locate(p string) (target, error) {
-	prefix := "."
-	if filepath.IsAbs(p) {
-		prefix = filepath.VolumeName(p) + string(filepath.Separator)
+	// A relative path is the working directory's, resolved physically as the
+	// operating system resolves it: $PWD may name it through a symlink, and
+	// filesafe writes only absolute paths.
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err == nil {
+			wd, err = filepath.EvalSymlinks(wd)
+		}
+		if err != nil {
+			return target{}, err
+		}
+		p = wd + string(filepath.Separator) + p
 	}
+	prefix := filepath.VolumeName(p) + string(filepath.Separator)
 	base, err := os.Stat(prefix)
 	if err != nil {
 		return target{}, err
@@ -188,11 +198,6 @@ func locate(p string) (target, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(join(n))
 	if err != nil {
-		return target{}, err
-	}
-	// filesafe writes only absolute paths; a relative one is the working
-	// directory's, as WithOpenAPIFiles documents.
-	if resolved, err = filepath.Abs(resolved); err != nil {
 		return target{}, err
 	}
 	t.path = filepath.Join(append([]string{resolved}, names[n:]...)...)

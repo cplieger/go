@@ -192,6 +192,24 @@ func TestGenerate_CreatesMissingOutputFolders(t *testing.T) {
 	}
 }
 
+// moduleTempDir is a fresh directory inside this package, removed at test end.
+// A test that changes the working directory stays inside the module, because
+// Generate loads the registered packages from the working directory, as the
+// go command a build-time program runs does.
+func moduleTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(".", "_chdir-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
+
 // A relative WithOpenAPIFiles path is the working directory's, as the option
 // documents, in a folder that exists or not; filesafe writes only absolute
 // paths, so wiregen resolves it first.
@@ -199,7 +217,7 @@ func TestGenerate_CreatesMissingOutputFolders(t *testing.T) {
 // Serial (no t.Parallel): t.Chdir changes process state.
 func TestGenerate_RelativeOpenAPIPathsAreTheWorkingDirectorys(t *testing.T) {
 	r := fullReg()
-	dir := t.TempDir()
+	dir := moduleTempDir(t)
 	t.Chdir(dir)
 	err := r.Generate(t.Context(), append(r.opts,
 		wiregen.WithTSDir("ts"),
@@ -211,6 +229,40 @@ func TestGenerate_RelativeOpenAPIPathsAreTheWorkingDirectorys(t *testing.T) {
 		if _, err := os.Stat(f); err != nil {
 			t.Errorf("expected %s to exist: %v", f, err)
 		}
+	}
+}
+
+// A relative OpenAPI path from a working directory reached through a symlink
+// is the directory the operating system resolves, not the one $PWD names, so
+// the collision checks see the same file the write lands in.
+//
+// Serial (no t.Parallel): t.Chdir and t.Setenv change process state.
+func TestGenerate_RelativeOpenAPIPathsResolvePhysically(t *testing.T) {
+	r := fullReg()
+	base := moduleTempDir(t)
+	real := filepath.Join(base, "real", "sub")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(link)
+	t.Setenv("PWD", link)
+	tsDir := filepath.Join(base, "ts")
+	err := r.Generate(t.Context(), append(r.opts,
+		wiregen.WithTSDir(tsDir),
+		wiregen.WithOpenAPIFiles(filepath.Join("..", "ts", "types.gen.ts")))...)
+	if err != nil {
+		t.Fatalf("Generate = %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(tsDir, "types.gen.ts"))
+	if err != nil || strings.HasPrefix(string(got), "{") {
+		t.Fatalf("the TS directory's types.gen.ts = %.40q, %v; want the TypeScript output", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "real", "ts", "types.gen.ts")); err != nil {
+		t.Fatalf("the OpenAPI file at the physical ../ts: %v", err)
 	}
 }
 

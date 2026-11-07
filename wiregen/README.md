@@ -4,7 +4,7 @@
 
 wiregen generates TypeScript types, validating JSON decoders, a typed HTTP client and an OpenAPI 3.1 document from your Go structs and endpoint table, so your TypeScript front end checks every payload your Go server sends.
 
-It replaces hand-written TypeScript interfaces, type guards and API descriptions. It runs at build time from a short Go program and depends on `golang.org/x/tools` and `github.com/cplieger/go/filesafe`. The generated TypeScript needs no npm package except fast-check, for the optional tests. It needs Go 1.27.3 or later on Linux or macOS and is licensed under Apache-2.0.
+It replaces hand-written TypeScript interfaces, type guards and API descriptions. It runs at build time from a short Go program and depends on `golang.org/x/tools` and `github.com/cplieger/go/filesafe`. The generated TypeScript needs no npm package except fast-check, for the optional tests. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
