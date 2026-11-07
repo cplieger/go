@@ -55,7 +55,7 @@ type captureHandler struct {
 	records []slog.Record
 }
 
-func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (*captureHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
@@ -138,7 +138,7 @@ type nilUnwrappingWriter struct {
 	http.ResponseWriter
 }
 
-func (n *nilUnwrappingWriter) Unwrap() http.ResponseWriter { return nil }
+func (*nilUnwrappingWriter) Unwrap() http.ResponseWriter { return nil }
 
 // pipeListener is an in-memory net.Listener over net.Pipe, plus the client that
 // dials it. It exists so a Run test can live inside a testing/synctest bubble.
@@ -178,7 +178,7 @@ func (l *pipeListener) Close() error {
 	return nil
 }
 
-func (l *pipeListener) Addr() net.Addr { return pipeAddr{} }
+func (*pipeListener) Addr() net.Addr { return pipeAddr{} }
 
 // dial hands the listener one end of a fresh pipe and returns the other.
 func (l *pipeListener) dial() (net.Conn, error) {

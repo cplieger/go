@@ -575,9 +575,9 @@ type noFlushRecorder struct {
 	status int
 }
 
-func (r *noFlushRecorder) Header() http.Header         { return r.header }
-func (r *noFlushRecorder) Write(b []byte) (int, error) { return len(b), nil }
-func (r *noFlushRecorder) WriteHeader(code int)        { r.status = code }
+func (r *noFlushRecorder) Header() http.Header       { return r.header }
+func (*noFlushRecorder) Write(b []byte) (int, error) { return len(b), nil }
+func (r *noFlushRecorder) WriteHeader(code int)      { r.status = code }
 
 func TestServe_noFlusher500LogsOnce(t *testing.T) {
 	logger, logged := captureLog()

@@ -19,7 +19,7 @@ type recorder struct {
 	keys []string // the "key" attr of each record
 }
 
-func (r *recorder) Enabled(context.Context, slog.Level) bool { return true }
+func (*recorder) Enabled(context.Context, slog.Level) bool { return true }
 
 func (r *recorder) Handle(_ context.Context, rec slog.Record) error {
 	r.mu.Lock()
