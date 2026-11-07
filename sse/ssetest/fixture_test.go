@@ -241,14 +241,16 @@ func TestFixture_controlRoutes(t *testing.T) {
 		_, base := fixtureServer(t)
 		resp, stream, hello := openEvents(t, base, nil)
 		defer resp.Body.Close()
+		// A restart before OnConnect ran resets the stream with no connected frame.
+		readArrival(t, stream)
 		var restarted restartResponse
 		post(t, base+"/control/restart", ``, nil, &restarted)
 		if restarted.Epoch == "" || restarted.Epoch == hello.Epoch {
 			t.Errorf("restart epoch = %q, want a new epoch (old %q)", restarted.Epoch, hello.Epoch)
 		}
-		frames, err := stream.Read(2)
-		if err != nil || frames[1].Event != "sse:reset" || frames[1].Data != `{"reason":"shutdown"}` {
-			t.Errorf("old stream after restart = %+v (%v), want the connected frame then sse:reset shutdown", frames, err)
+		frames, err := stream.Read(1)
+		if err != nil || frames[0].Event != "sse:reset" || frames[0].Data != `{"reason":"shutdown"}` {
+			t.Errorf("old stream after restart = %+v (%v), want sse:reset shutdown", frames, err)
 		}
 		if st := state(t, base); st.Position.Epoch != restarted.Epoch || st.Position.Head != "0" {
 			t.Errorf("state after restart = %+v, want the new epoch at head 0", st.Position)
@@ -469,13 +471,14 @@ func TestFixture_restartMintsNewEpoch(t *testing.T) {
 	if hello.Epoch != first.Epoch {
 		t.Fatalf("hello epoch = %q, want %q", hello.Epoch, first.Epoch)
 	}
+	readArrival(t, stream)
 	var restarted restartResponse
 	post(t, base+"/control/restart", ``, nil, &restarted)
 	if restarted.Epoch == first.Epoch || len(restarted.Epoch) != 16 {
 		t.Errorf("restart epoch = %q, want a new 16-hex epoch (old %q)", restarted.Epoch, first.Epoch)
 	}
-	if _, err := stream.Read(2); err != nil {
-		t.Fatalf("old stream: %v", err)
+	if frames, err := stream.Read(1); err != nil || frames[0].Event != "sse:reset" {
+		t.Fatalf("old stream = %+v (%v), want its sse:reset", frames, err)
 	}
 	if _, err := stream.Read(1); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("old stream after its reset = %v, want EOF", err)

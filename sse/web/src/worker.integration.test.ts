@@ -385,7 +385,8 @@ describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the ssetes
     expect(a.attachment.mode()).toBe("fallback");
     const row = async (t: string): Promise<{ connected: number } | undefined> =>
       (await client.state()).presence.find((p) => p.tag === t);
-    expect(await row(tag)).toMatchObject({ connected: 1 });
+    // The tab opens on the hello, which the hub flushes before it records the arrival.
+    await waitFor("row present", async () => (await row(tag))?.connected === 1);
     const held = await client.rest("chat", "fallen");
     a.attachment.observe({ kind: "chat", ref: "fallen" }, held.version, held.epoch);
     expect(a.fallbackVersions?.snapshot().held).toEqual([
@@ -427,7 +428,8 @@ describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the ssetes
     await waitFor("open", () => a.attachment.state()?.kind === "open");
     const row = async (t: string): Promise<{ connected: number } | undefined> =>
       (await client.state()).presence.find((p) => p.tag === t);
-    expect(await row(tag)).toMatchObject({ connected: 1 });
+    // The tab opens on the hello, which the hub flushes before it records the arrival.
+    await waitFor("row present", async () => (await row(tag))?.connected === 1);
     const before = (await client.state()).v3_connects;
     a.attachment.setTag(next);
     await waitFor(
@@ -471,7 +473,11 @@ describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the ssetes
     await waitFor("open", () => a.attachment.state()?.kind === "open");
     const row = async (): Promise<{ connected: number; gone: boolean } | undefined> =>
       (await client.state()).presence.find((p) => p.tag === tag);
-    expect(await row()).toMatchObject({ connected: 1, gone: false });
+    // The tab opens on the hello, which the hub flushes before it records the arrival.
+    await waitFor("row present", async () => {
+      const present = await row();
+      return present?.connected === 1 && !present.gone;
+    });
     await waitFor("acknowledgement", () => a.ofKind("alive_ack").length >= 1, 20_000);
     setHidden(true);
     await waitFor("gone at close", async () => (await row())?.gone === true, HIDDEN + 5000);
