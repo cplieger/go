@@ -314,7 +314,7 @@ describe("reducer properties", () => {
     expect(run(OPEN).at(-1)?.after.kind).toBe("open");
   });
 
-  it("connect_failed in open changes nothing", () => {
+  it("connected and connect_failed in open change nothing", () => {
     fc.assert(
       fc.property(arbSequence, (specs) => {
         for (const step of run(specs)) {
@@ -322,19 +322,21 @@ describe("reducer properties", () => {
           if (state.kind !== "open") {
             continue;
           }
-          const out = reduce(
-            state,
+          const now = T0 + 5_000_000;
+          for (const event of [
             {
               type: "connect_failed",
-              now: T0 + 5_000_000,
+              now,
               reason: { kind: "bad_hello" },
               rand: 0.5,
               generation: state.generation,
             },
-            cfg,
-          );
-          expect(out.state).toBe(state);
-          expect(out.effects).toEqual([]);
+            { type: "connected", now, hello: hello(15_000, true), generation: state.generation },
+          ] as const) {
+            const out = reduce(state, event, cfg);
+            expect(out.state).toBe(state);
+            expect(out.effects).toEqual([]);
+          }
         }
       }),
     );

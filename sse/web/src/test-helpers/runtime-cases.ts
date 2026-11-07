@@ -799,12 +799,17 @@ export function runtimeCases(get: () => CaseEnvironment): void {
     });
     const row = async (): Promise<{ connected: number; gone: boolean } | undefined> =>
       (await fixture.state()).presence.find((p) => p.tag === tag);
+    // The client opens on the hello, which the hub flushes before it records the arrival.
+    const present = async (): Promise<boolean> => {
+      const r = await row();
+      return r?.connected === 1 && !r.gone;
+    };
     app.stream.start();
     await app.waitOpen();
     await app.settle(0);
+    await waitFor("arrival recorded", present);
     let state = await fixture.state();
     expect(state.events.filter((e) => e.kind === "connected" && e.tag === tag)).toHaveLength(1);
-    expect(await row()).toMatchObject({ connected: 1, gone: false });
     const alive0 = state.transitions.alive;
     await waitFor("first acknowledgement", () => app.ofKind("alive_ack").length === 1, 20_000);
     expect(app.ofKind("alive_ack")[0]).toEqual({ kind: "alive_ack", ok: true, status: 204 });
@@ -823,7 +828,7 @@ export function runtimeCases(get: () => CaseEnvironment): void {
     await fixture.aliveWindow(1500);
     app.visibility.emit("visible");
     await app.waitOpen();
-    expect(await row()).toMatchObject({ connected: 1, gone: false });
+    await waitFor("second arrival recorded", present);
     await sleep(1700);
     state = await fixture.state();
     expect(state.clients).toBe(1);
