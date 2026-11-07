@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,6 +200,9 @@ func TestGenerate_CreatesMissingOutputFolders(t *testing.T) {
 func moduleTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp(".", "_chdir-")
+	if errors.Is(err, fs.ErrPermission) {
+		t.Skip("the module is read-only, as in the module cache:", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
