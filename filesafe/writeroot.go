@@ -171,9 +171,12 @@ func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode, enforce bo
 		}
 		if enfErr := enforceDirMode(root, prefix, mode); enfErr != nil {
 			// A refused level would pass the next write as pre-existing, so
-			// it goes; rmdir refuses one a racing writer already filled.
-			if rmErr := root.Remove(prefix); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-				enfErr = errors.Join(enfErr, rmErr)
+			// it goes while it is still a directory; removing a directory
+			// fails on one a racing writer already filled.
+			if fi, lErr := root.Lstat(prefix); lErr == nil && fi.IsDir() {
+				if rmErr := root.Remove(prefix); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+					enfErr = errors.Join(enfErr, rmErr)
+				}
 			}
 			return false, enfErr
 		}

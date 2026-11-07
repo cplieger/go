@@ -4,10 +4,12 @@ package filesafe
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -133,9 +135,10 @@ func TestMkdirAllAbs_SyncsALevelARacingWriterCreated(t *testing.T) {
 	assertFsynced(t, recorded(), []string{".", "a"})
 }
 
-// A level whose mode the filesystem refused is removed again, so a retried
-// write or a write after a refused probe cannot publish under a directory
-// that was never proved, as a pre-existing level would be accepted.
+// A level whose mode the filesystem refused is removed again while it is
+// still an empty directory, so a retried write or a write after a refused
+// probe cannot publish under a directory that was never proved, as a
+// pre-existing level would be accepted.
 //
 // Serial (no t.Parallel): the enforceMode seam is package state.
 func TestMkdirMode_ARefusedLevelIsRemoved(t *testing.T) {
@@ -156,5 +159,55 @@ func TestMkdirMode_ARefusedLevelIsRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("after the refused probe the level is %v, want it gone", err)
+	}
+}
+
+// A refused level another writer already filled stays, with its contents,
+// and the error carries both the refusal and the failed removal.
+//
+// Serial (no t.Parallel): the enforceMode seam is package state.
+func TestMkdirMode_AFilledRefusedLevelStaysAndIsReported(t *testing.T) {
+	orig := enforceMode
+	t.Cleanup(func() { enforceMode = orig })
+	enforceMode = func(f *os.File, want os.FileMode) (os.FileMode, error) {
+		// The racing writer's entry lands while the level is being proved.
+		if err := os.WriteFile(filepath.Join(f.Name(), "other"), []byte("theirs"), 0o600); err != nil {
+			t.Fatalf("plant the racing entry: %v", err)
+		}
+		return want | 0o070, fmt.Errorf("%w: %s", ErrModeNotStored, f.Name())
+	}
+	dir := t.TempDir()
+	_, err := WriteFile(t.Context(), filepath.Join(dir, "a", "f.txt"), []byte("x"), WithMkdirMode(0o750))
+	if !errors.Is(err, ErrModeNotStored) || !errors.Is(err, syscall.ENOTEMPTY) {
+		t.Fatalf("WriteFile() = %v, want ErrModeNotStored joined with ENOTEMPTY", err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "a", "other")); readErr != nil || string(got) != "theirs" {
+		t.Fatalf("the racing writer's entry = %q, %v; want it kept", got, readErr)
+	}
+}
+
+// A level the refusal window swapped for a file or a symlink is not this
+// call's directory, so it is left alone.
+//
+// Serial (no t.Parallel): the enforceMode seam is package state.
+func TestMkdirMode_ASwappedRefusedLevelIsLeftAlone(t *testing.T) {
+	orig := enforceMode
+	t.Cleanup(func() { enforceMode = orig })
+	enforceMode = func(f *os.File, want os.FileMode) (os.FileMode, error) {
+		if err := os.Remove(f.Name()); err != nil {
+			t.Fatalf("remove the fresh level: %v", err)
+		}
+		if err := os.WriteFile(f.Name(), []byte("theirs"), 0o600); err != nil {
+			t.Fatalf("plant a file at the level: %v", err)
+		}
+		return want | 0o070, fmt.Errorf("%w: %s", ErrModeNotStored, f.Name())
+	}
+	dir := t.TempDir()
+	_, err := WriteFile(t.Context(), filepath.Join(dir, "a", "f.txt"), []byte("x"), WithMkdirMode(0o750))
+	if !errors.Is(err, ErrModeNotStored) {
+		t.Fatalf("WriteFile() = %v, want ErrModeNotStored", err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "a")); readErr != nil || string(got) != "theirs" {
+		t.Fatalf("the swapped-in file = %q, %v; want it kept", got, readErr)
 	}
 }
