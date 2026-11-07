@@ -155,10 +155,10 @@ func NewRecorder() *Recorder {
 }
 
 // SetWriteDeadline always answers http.ErrNotSupported.
-func (r *Recorder) SetWriteDeadline(time.Time) error { return http.ErrNotSupported }
+func (*Recorder) SetWriteDeadline(time.Time) error { return http.ErrNotSupported }
 
 // SetReadDeadline always answers http.ErrNotSupported.
-func (r *Recorder) SetReadDeadline(time.Time) error { return http.ErrNotSupported }
+func (*Recorder) SetReadDeadline(time.Time) error { return http.ErrNotSupported }
 
 // Frames parses everything written so far.
 func (r *Recorder) Frames() ([]Frame, error) {

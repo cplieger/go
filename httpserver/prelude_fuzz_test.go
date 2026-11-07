@@ -59,7 +59,7 @@ func (c *countingBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (c *countingBody) Close() error { return nil }
+func (*countingBody) Close() error { return nil }
 
 // FuzzDecodeBody drives the REAL DecodeBody over arbitrary request-body bytes
 // and asserts, for every input:

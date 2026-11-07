@@ -383,9 +383,9 @@ type noFlushWriter struct {
 	code int
 }
 
-func (w *noFlushWriter) Header() http.Header         { return w.hdr }
-func (w *noFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (w *noFlushWriter) WriteHeader(code int)        { w.code = code }
+func (w *noFlushWriter) Header() http.Header       { return w.hdr }
+func (*noFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (w *noFlushWriter) WriteHeader(code int)      { w.code = code }
 
 func TestPresence_noEventBeforeHello(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

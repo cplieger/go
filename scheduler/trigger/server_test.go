@@ -17,9 +17,9 @@ import (
 // startTestServer wires a queue + fake executor + server on a temp socket.
 // run receives each job and owns Start/Finish; everything tears down via
 // t.Cleanup (listener close, queue close, executor drain, handler wait).
-func startTestServer(t *testing.T, run func(*Job[testPayload])) (sock string, srv *Server[testPayload]) {
+func startTestServer(t *testing.T, run func(*Job[testPayload])) string {
 	t.Helper()
-	sock = testSocketPath(t)
+	sock := testSocketPath(t)
 	q := NewQueue[testPayload](16)
 	execDone := startExecutor(q, run)
 
@@ -27,7 +27,7 @@ func startTestServer(t *testing.T, run func(*Job[testPayload])) (sock string, sr
 	if err != nil {
 		t.Fatalf("Listen() = %v", err)
 	}
-	srv = &Server[testPayload]{Queue: q}
+	srv := &Server[testPayload]{Queue: q}
 	srv.Serve(ln)
 
 	t.Cleanup(func() {
@@ -36,7 +36,7 @@ func startTestServer(t *testing.T, run func(*Job[testPayload])) (sock string, sr
 		<-execDone
 		srv.Wait()
 	})
-	return sock, srv
+	return sock
 }
 
 // runOK is the trivial executor: every job starts and finishes clean.
@@ -145,7 +145,7 @@ func TestListen_UnremovableStaleSocketFailsBoot(t *testing.T) {
 // TestServer_EventSequenceForCleanRun pins the wire contract: queued →
 // started → done{ok:true}, in that order, one done exactly.
 func TestServer_EventSequenceForCleanRun(t *testing.T) {
-	sock, _ := startTestServer(t, runOK)
+	sock := startTestServer(t, runOK)
 	dec := rawRequest(t, sock, testPayload{Repos: []string{"owner/repo"}})
 
 	if ev := nextEvent(t, dec); ev.Kind != EventQueued {
@@ -167,7 +167,7 @@ func TestServer_EventSequenceForCleanRun(t *testing.T) {
 func TestServer_PayloadReplaysExactlyToTheExecutor(t *testing.T) {
 	var mu sync.Mutex
 	var seen []testPayload
-	sock, _ := startTestServer(t, func(j *Job[testPayload]) {
+	sock := startTestServer(t, func(j *Job[testPayload]) {
 		mu.Lock()
 		seen = append(seen, j.Payload)
 		mu.Unlock()
@@ -193,7 +193,7 @@ func TestServer_PayloadReplaysExactlyToTheExecutor(t *testing.T) {
 // TestServer_FailedRunReportsNotOK pins the exit-code half of the trigger
 // contract at the wire level, including the reason passthrough.
 func TestServer_FailedRunReportsNotOK(t *testing.T) {
-	sock, _ := startTestServer(t, func(j *Job[testPayload]) {
+	sock := startTestServer(t, func(j *Job[testPayload]) {
 		j.Start()
 		j.Finish(Outcome{OK: false, Reason: "job exploded", Duration: time.Millisecond})
 	})
@@ -257,7 +257,7 @@ func TestServer_RejectsWhenQueueFull(t *testing.T) {
 // TestServer_UndecodableRequestAnswersDone pins the protocol's failure mode
 // for a malformed client: an explicit done with a reason, never a hang.
 func TestServer_UndecodableRequestAnswersDone(t *testing.T) {
-	sock, _ := startTestServer(t, runOK)
+	sock := startTestServer(t, runOK)
 	conn, err := net.DialTimeout("unix", sock, time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -390,7 +390,7 @@ func TestServer_DepartedClientDoesNotBlockRunOrShutdown(t *testing.T) {
 	proceed := make(chan struct{})
 	var release sync.Once
 	t.Cleanup(func() { release.Do(func() { close(proceed) }) }) // never leave the run held on an early exit
-	sock, _ := startTestServer(t, func(j *Job[testPayload]) {
+	sock := startTestServer(t, func(j *Job[testPayload]) {
 		close(ran)
 		<-proceed // hold job completion until the client has definitely departed
 		j.Start()
@@ -437,8 +437,8 @@ func (l *fakeListener) Accept() (net.Conn, error) {
 	}
 	return r.conn, r.err
 }
-func (l *fakeListener) Close() error   { return nil }
-func (l *fakeListener) Addr() net.Addr { return &net.UnixAddr{Name: "fake", Net: "unix"} }
+func (*fakeListener) Close() error   { return nil }
+func (*fakeListener) Addr() net.Addr { return &net.UnixAddr{Name: "fake", Net: "unix"} }
 
 // TestServe_ContinuesAfterTransientAcceptError pins the accept loop's
 // degradation contract: a transient Accept error (fd exhaustion) is logged
@@ -710,7 +710,7 @@ func TestServer_LostRequestBytesStayWarned(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := captureLogs(t)
-			sock, _ := startTestServer(t, runOK)
+			sock := startTestServer(t, runOK)
 			conn, err := net.DialTimeout("unix", sock, time.Second)
 			if err != nil {
 				t.Fatalf("dial: %v", err)

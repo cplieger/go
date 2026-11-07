@@ -137,7 +137,7 @@ type captureMessages struct {
 	records []slog.Record
 }
 
-func (h *captureMessages) Enabled(context.Context, slog.Level) bool { return true }
+func (*captureMessages) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *captureMessages) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()

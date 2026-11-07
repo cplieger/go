@@ -163,7 +163,7 @@ type captureHandler struct {
 	mu      sync.Mutex
 }
 
-func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (*captureHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
