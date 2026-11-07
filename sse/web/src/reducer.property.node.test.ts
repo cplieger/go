@@ -85,7 +85,25 @@ const arbSpec: fc.Arbitrary<Spec> = fc.record({
   resumed: fc.boolean(),
 });
 
-const arbSequence = fc.array(arbSpec, { minLength: 1, maxLength: 40 });
+// A random sequence reaches `open` only through `start` then a current-generation
+// `connected`, under 1% of the time, so a property conditioned on `open` could see none in
+// all 1000 runs and fail for want of an assertion. Half the sequences start open.
+const OPEN: readonly Spec[] = (["start", "connected"] as const).map((type) => ({
+  type,
+  dt: 0,
+  rand: 0.5,
+  retryMs: 0,
+  stale: false,
+  visible: true,
+  online: true,
+  reason: "eof",
+  keepaliveMs: 15_000,
+  resumed: false,
+}));
+
+const arbSequence = fc
+  .tuple(fc.boolean(), fc.array(arbSpec, { minLength: 1, maxLength: 40 }))
+  .map(([opened, tail]) => (opened ? [...OPEN, ...tail] : tail));
 
 function materialise(spec: Spec, state: ClientState, now: number): ClientEvent {
   const generation = spec.stale ? state.generation - 1 : state.generation;
@@ -290,6 +308,10 @@ describe("reducer properties", () => {
         }
       }),
     );
+  });
+
+  it("the open prefix opens", () => {
+    expect(run(OPEN).at(-1)?.after.kind).toBe("open");
   });
 
   it("connect_failed in open changes nothing", () => {
