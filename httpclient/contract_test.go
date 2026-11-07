@@ -28,7 +28,7 @@ import (
 // TestV3_RoundTripper_MaxAttempts_ExactCounts locks the TransportConfig
 // total-attempts model: MaxAttempts in {-1,0,1,2,3} drives EXACTLY {1,3,1,2,3}
 // transport calls against an always-retryable upstream. Zero means unset and
-// takes DefaultMaxAttempts (3); a negative value means exactly one attempt
+// takes the default of 3; a negative value means exactly one attempt
 // (v2 expressed try-once as WithRTMaxAttempts(0), but a zero struct field
 // cannot distinguish absent from zero, so v3 moves try-once to negatives).
 func TestV3_RoundTripper_MaxAttempts_ExactCounts(t *testing.T) {
@@ -37,7 +37,7 @@ func TestV3_RoundTripper_MaxAttempts_ExactCounts(t *testing.T) {
 		wantCalls   int32
 	}{
 		{-1, 1}, // negative: exactly one attempt
-		{0, 3},  // zero: unset, takes DefaultMaxAttempts
+		{0, 3},  // zero: unset, takes the default of 3
 		{1, 1},
 		{2, 2},
 		{3, 3},
@@ -180,8 +180,8 @@ func TestV3_RoundTripper_MaxElapsedTime_NotOvershot(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected max-elapsed-time error")
 	}
-	if !strings.Contains(err.Error(), "max elapsed time") {
-		t.Errorf("error = %v, want containing 'max elapsed time'", err)
+	if !errors.Is(err, httpclient.ErrMaxElapsed) {
+		t.Errorf("error = %v, want ErrMaxElapsed", err)
 	}
 	// The honored 60s Retry-After must NOT be slept; aborting on the budget
 	// returns immediately. A generous ceiling avoids CI flakes.

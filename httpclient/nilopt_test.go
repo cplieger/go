@@ -49,9 +49,9 @@ func TestDo_nil_option_is_skipped(t *testing.T) {
 	}
 }
 
-func TestRedirectPolicyFunc_nil_option_still_refuses(t *testing.T) {
+func TestRedirectPolicy_nil_option_still_refuses(t *testing.T) {
 	var nilOpt httpclient.RedirectOption
-	policy := httpclient.RedirectPolicyFunc(nilOpt)
+	policy := httpclient.RedirectPolicy(nilOpt)
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com/nilredir", http.NoBody)
 	if err := policy(req, nil); err == nil {
 		t.Fatal("nil RedirectOption should still refuse (no hosts configured)")

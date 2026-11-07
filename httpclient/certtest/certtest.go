@@ -5,9 +5,10 @@
 // wiring, and hand-rolling the crypto/x509 dance in every such test is
 // error-prone boilerplate.
 //
-// The generated certificate is a minimal ECDSA CA valid for one hour. It is
-// meant to be parsed and loaded into a pool (or fed to CATransport), never to
-// secure a real production connection.
+// The generated certificate is a minimal ECDSA CA valid from one hour before
+// it is made until one hour after, so clock skew in a test does not reject it.
+// It is meant to be parsed and loaded into a pool (or fed to CATransport),
+// never to secure a real production connection.
 //
 // This lives in its own package rather than in httpclient so the
 // certificate-generation code is never linked into a consumer's production

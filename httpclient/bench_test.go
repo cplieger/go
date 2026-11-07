@@ -514,7 +514,7 @@ func TestBackoffPrimitivesAllocations(t *testing.T) {
 		"zero":            0,
 		"negative":        -time.Second,
 		"one_nanosecond":  time.Nanosecond,
-		"base_delay":      DefaultBaseDelay,
+		"base_delay":      defaultBaseDelay,
 		"retry_after_cap": RetryAfterCap,
 		"near_overflow":   time.Duration(1) << 62,
 		"max_duration":    time.Duration(math.MaxInt64),
@@ -988,7 +988,7 @@ func TestRedactTransportErrorAllocations(t *testing.T) {
 	// ever becomes free (a cached message, a cheaper rendering), the test names
 	// what to do about it.
 	t.Run("rendering_error_is_not_free_when_the_secret_is_absent", func(t *testing.T) {
-		statusErr := &StatusError{Code: 429, URL: "https://api.example/v1/items?cmd=list"}
+		statusErr := &StatusError{Code: 429, rawURL: "https://api.example/v1/items?cmd=list"}
 		got := testing.AllocsPerRun(200, func() {
 			errSink = RedactTransportError(statusErr, "", redactSecret)
 		})
@@ -1084,7 +1084,7 @@ func TestLogSafeErrorAllocations(t *testing.T) {
 		"plain_error":        errors.New("connection refused"),
 		"url_error":          &url.Error{Op: "Get", URL: "https://u:p@api.example/x?k=v", Err: cause},
 		"url_error_no_cause": &url.Error{Op: "Get", URL: "https://api.example/x"},
-		"status_error":       &StatusError{Code: 503, URL: "https://api.example/x?apikey=secret"},
+		"status_error":       &StatusError{Code: 503, rawURL: "https://api.example/x?apikey=secret"},
 		"wrapped_url_error":  fmt.Errorf("fetch: %w", &url.Error{Op: "Get", URL: "https://api.example/x", Err: cause}),
 	}
 	for name, err := range cases {

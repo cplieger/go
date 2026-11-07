@@ -44,7 +44,7 @@
 // cap follows the order on [RedactSecretString]: redact, normalize, redact,
 // cap.
 //
-// The README lists the whole API. docs/retries.md, docs/timeouts.md,
-// docs/responses.md, docs/caching.md and docs/security-model.md hold the full
-// contracts.
+// The README groups the API by task and pkg.go.dev lists every identifier.
+// docs/retries.md, docs/timeouts.md, docs/responses.md, docs/caching.md and
+// docs/security-model.md hold the full contracts.
 package httpclient

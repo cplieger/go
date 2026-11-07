@@ -25,9 +25,9 @@ A 3xx is an ordinary `*StatusError`, so the rest of the package handles it uncha
 
 ## Error types
 
-- `*StatusError` for every non-2xx status, with the code in `Code`. It implements `Transient`, true when `IsRetryableStatus(Code)` is and the code is not 429: 408 and 500 to 599, except 501, 505, 506, 508, 510 and 511. [Retries](retries.md) gives the reason for each. Its `RetryAfter` field is the response's raw, uncapped `Retry-After`, so bound it before sleeping on it; the rate-limit options of `Do` do. From `GetBytes` its `URL` field holds the URL you passed and its `Error()` text shows that URL redacted. Do not log or serialize the `URL` field. From `CheckStatus` the field is empty and the text is `HTTP <code>`.
+- `*StatusError` for every non-2xx status, with the code in `Code`. It implements `Transient`, true when `IsRetryableStatus(Code)` is and the code is not 429: 408 and 500 to 599, except 501, 505, 506, 508, 510 and 511. [Retries](retries.md) gives the reason for each. Its `RetryAfter` field is the response's raw, uncapped `Retry-After`, so bound it before sleeping on it; the rate-limit options of `Do` do. From `GetBytes` its `Error()` text shows the URL you passed, redacted; the error exposes no field holding the original. From `CheckStatus` the text is `HTTP <code>`.
 - `*ResponseTooLargeError` means a body went over its cap. It carries `Limit`, and no body is returned with it.
-- `*PermanentError` wraps an error that must not be retried. It works with `errors.Is`, `errors.As` and `Unwrap`.
+- `Permanent(err)` marks an error that must not be retried, and `IsPermanent` reports the mark. The mark unwraps to `err`, so `errors.Is` and `errors.As` still reach what it wraps.
 - `ErrUnauthorized`, `ErrForbidden`, `ErrRateLimited` and `ErrServerError` are the sentinels a `*StatusError` matches with `errors.Is`, for 401, 403, 429 and any status of 500 or more.
 
 ## Why a request failed below HTTP
@@ -51,7 +51,6 @@ A 3xx is an ordinary `*StatusError`, so the rest of the package handles it uncha
 | Helper | What it does |
 | --- | --- |
 | `ReadLimitedBody(body, limit)` | Reads up to `limit` bytes and closes the body. Returns `*ResponseTooLargeError` instead of a cut body when there is more |
-| `LimitedBody(resp, limit)` | Wraps `resp.Body` so reads stop at `limit` bytes. Reading and overflow handling stay with you |
 | `Drain(body)` | Reads and discards up to 64 KB so the connection can be reused |
 | `DrainClose(body)` | `Drain`, then `Close` |
 

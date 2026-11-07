@@ -71,10 +71,11 @@ var (
 // response. Match a status class with errors.Is against [ErrUnauthorized],
 // [ErrForbidden], [ErrRateLimited] or [ErrServerError], or read Code.
 type StatusError struct {
-	// URL is the URL GetBytes was given, unredacted, so never log it; Error()
-	// renders it redacted. CheckStatus leaves it empty.
-	URL  string
-	Code int
+	// rawURL is the URL GetBytes was given, unredacted; Error() renders it
+	// redacted. CheckStatus leaves it empty. It is unexported so encoding/json
+	// and a caller's struct copy cannot carry its credentials into a log.
+	rawURL string
+	Code   int
 	// RetryAfter is the response's Retry-After, raw and uncapped, zero when
 	// absent or malformed. The server controls it (CWE-400): bound it before
 	// sleeping on it, as Do's rate-limit options do.
@@ -84,10 +85,10 @@ type StatusError struct {
 var _ Transient = (*StatusError)(nil)
 
 func (e *StatusError) Error() string {
-	if e.URL == "" {
+	if e.rawURL == "" {
 		return fmt.Sprintf("HTTP %d", e.Code)
 	}
-	return fmt.Sprintf("HTTP %d from %s", e.Code, redactURL(e.URL))
+	return fmt.Sprintf("HTTP %d from %s", e.Code, redactURL(e.rawURL))
 }
 
 // Is matches the sentinel for e's Code.
@@ -114,11 +115,11 @@ func (e *StatusError) IsTransient() bool {
 // newStatusError builds the *StatusError for resp, a non-2xx response to a
 // request for reqURL.
 func newStatusError(resp *http.Response, reqURL string) *StatusError {
-	return &StatusError{URL: reqURL, Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
+	return &StatusError{rawURL: reqURL, Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
 }
 
 // ResponseTooLargeError is returned by GetBytes when the response body exceeds
-// the configured maximum (WithMaxBodyBytes, default DefaultMaxBodyBytes). The
+// the configured maximum (WithMaxBodyBytes, default 10 MB). The
 // body is not returned: a truncated payload indistinguishable from a complete
 // one is a silent-corruption hazard, so GetBytes fails loud instead. Limit is
 // the cap that was exceeded, mirroring the stdlib *http.MaxBytesError shape.
@@ -130,36 +131,32 @@ func (e *ResponseTooLargeError) Error() string {
 	return fmt.Sprintf("response body exceeds %d bytes", e.Limit)
 }
 
-// --- PermanentError ---
+// --- Permanent marking ---
 
-// PermanentError wraps an error to signal that it should NOT be retried,
-// regardless of other retry policies. Mirrors cenkalti/backoff.PermanentError.
-// Use Permanent(err) to wrap.
-type PermanentError struct {
-	Err error
-}
+// permanentError wraps an error to declare it never retryable. It is
+// unexported, like the transient and attempt-timeout marks, because the mark
+// is read through [IsPermanent] and [IsTransient] rather than by type; errors.Is
+// and errors.As still reach the wrapped error through Unwrap.
+type permanentError struct{ Err error }
 
-func (e *PermanentError) Error() string { return e.Err.Error() }
-func (e *PermanentError) Unwrap() error { return e.Err }
+func (e *permanentError) Error() string { return e.Err.Error() }
+func (e *permanentError) Unwrap() error { return e.Err }
 
-// Is allows errors.Is matching against other PermanentErrors.
-func (*PermanentError) Is(target error) bool {
-	_, ok := target.(*PermanentError)
-	return ok
-}
-
-// Permanent wraps err to indicate it should never be retried.
-// Mirrors cenkalti/backoff.Permanent().
+// Permanent wraps err so that no retry door repeats it, whatever else it
+// carries: [IsTransient] reports false for it, and the rate-limit options do
+// not retry a marked 429. Returns nil for nil input. It is the mirror of
+// [AttemptTimeout], which forces the opposite verdict.
 func Permanent(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &PermanentError{Err: err}
+	return &permanentError{Err: err}
 }
 
-// IsPermanent reports whether err (or any wrapped error) is a *PermanentError.
+// IsPermanent reports whether err, or an error it wraps, was marked by
+// [Permanent].
 func IsPermanent(err error) bool {
-	_, ok := errors.AsType[*PermanentError](err)
+	_, ok := errors.AsType[*permanentError](err)
 	return ok
 }
 
@@ -268,15 +265,21 @@ func IsAttemptTimeout(err error) bool {
 
 // --- Constants ---
 
+// RetryAfterCap is the longest Retry-After wait this package honors: every
+// parser here caps a server's value at it, and a non-positive rate-limit
+// maxWait takes it. Its value is part of the v1 API, so a caller may derive
+// its own bounds from it (a server timeout covering a retry's longest wait).
+const RetryAfterCap = 60 * time.Second
+
+// The retry and body defaults are unexported so tuning one is not an API
+// change; the option and field docs state each value.
 const (
-	// DefaultBaseDelay is the production base for exponential-backoff retry.
-	DefaultBaseDelay = time.Second
-	// DefaultMaxAttempts caps the retry doors at three total attempts.
-	DefaultMaxAttempts = 3
-	// DefaultMaxBodyBytes caps response bodies at 10 MB.
-	DefaultMaxBodyBytes int64 = 10 << 20
-	// RetryAfterCap is the maximum Retry-After honor duration.
-	RetryAfterCap = 60 * time.Second
+	// defaultBaseDelay is the production base for exponential-backoff retry.
+	defaultBaseDelay = time.Second
+	// defaultMaxAttempts caps the retry doors at three total attempts.
+	defaultMaxAttempts = 3
+	// defaultMaxBodyBytes caps response bodies at 10 MB.
+	defaultMaxBodyBytes int64 = 10 << 20
 )
 
 // drainLimit caps body drain reads for connection reuse.
@@ -427,15 +430,19 @@ func ParseRetryAfter(h string) time.Duration {
 // ParseRetryAfterResponse parses the Retry-After header from an *http.Response.
 // Returns zero if absent or unparseable. Does NOT cap — preserves the raw
 // duration for [StatusError]'s RetryAfter, so callers make their own decisions.
-// For capped values suitable for retry loops, use ParseRetryAfter.
+// For capped values suitable for retry loops, use ParseRetryAfter. A nil resp
+// returns zero.
 func ParseRetryAfterResponse(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
 	return parseRetryAfterValue(resp.Header.Get("Retry-After"))
 }
 
 // --- Status checking ---
 
-// CheckStatus returns nil for a 2xx and otherwise a *[StatusError] with an
-// empty URL, so its text carries no URL into a log. A 3xx reaches it only from
+// CheckStatus returns nil for a 2xx and otherwise a *[StatusError] carrying no
+// URL, so its text carries no URL into a log. A 3xx reaches it only from
 // a client that does not follow redirects (see [RefuseAllRedirects]) and is
 // reported as a failure, not a completed request.
 func CheckStatus(resp *http.Response) error {
@@ -729,20 +736,6 @@ func DrainClose(rc io.ReadCloser) {
 	rc.Close()
 }
 
-// LimitedBody wraps resp.Body with an io.LimitReader capped at limit bytes,
-// preserving the original Close method.
-func LimitedBody(resp *http.Response, limit int64) io.ReadCloser {
-	return &limitedReadCloser{
-		Reader: io.LimitReader(resp.Body, limit),
-		Closer: resp.Body,
-	}
-}
-
-type limitedReadCloser struct {
-	io.Reader
-	io.Closer
-}
-
 // ReadLimitedBody reads body up to limit bytes, always closes body, and returns
 // the bytes read. It reads one byte past limit to detect an over-limit body and
 // returns *ResponseTooLargeError (with nil bytes) rather than a silently
@@ -750,9 +743,7 @@ type limitedReadCloser struct {
 // a corruption hazard. A limit of math.MaxInt64 means "effectively unlimited"
 // and is guarded against probe-size overflow.
 //
-// It is the read-all-with-overflow-detection companion to LimitedBody (which
-// only caps the stream and leaves reading and overflow handling to the caller),
-// and is the same cap+1 read GetBytes applies internally — exposed for callers
+// It is the same cap+1 read GetBytes applies internally, exposed for callers
 // that issue their own request and decode outside GetBytes but still want the
 // fail-loud size bound. On any error the body is already closed.
 func ReadLimitedBody(body io.ReadCloser, limit int64) ([]byte, error) {
@@ -783,27 +774,34 @@ type redirectCfg struct {
 	preserveMethod  bool
 }
 
-// RedirectOption configures a redirect policy created by RedirectPolicyFunc.
-type RedirectOption func(*redirectCfg)
+// RedirectOption configures a redirect policy built by [RedirectPolicy]. It
+// is sealed like [DoOption]: only this package's With* redirect options
+// implement it.
+type RedirectOption interface{ applyRedirect(*redirectCfg) }
+
+// redirectOptionFunc adapts a func to RedirectOption for the shipped options.
+type redirectOptionFunc func(*redirectCfg)
+
+func (f redirectOptionFunc) applyRedirect(c *redirectCfg) { f(c) }
 
 // WithAllowedHosts sets the exact hostnames allowed as redirect targets. A
 // name matches without regard to ASCII case; an IP address entry, written
 // without brackets ("2001:db8::a", "fe80::1%eth0"), matches by address, its
 // IPv6 zone exactly. An empty entry matches nothing.
 func WithAllowedHosts(hosts ...string) RedirectOption {
-	return func(c *redirectCfg) { c.allowedHosts = hosts }
+	return redirectOptionFunc(func(c *redirectCfg) { c.allowedHosts = hosts })
 }
 
 // WithAllowedSuffixes sets the domain suffixes allowed (e.g. ".docker.com").
 // A suffix matches a host name only, never an IP literal.
 func WithAllowedSuffixes(suffixes ...string) RedirectOption {
-	return func(c *redirectCfg) { c.allowedSuffixes = suffixes }
+	return redirectOptionFunc(func(c *redirectCfg) { c.allowedSuffixes = suffixes })
 }
 
 // WithMaxHops makes the policy follow at most n redirects in one request and
 // refuse the next with [RedirectTooMany]. n <= 0 means the default, 5.
 func WithMaxHops(n int) RedirectOption {
-	return func(c *redirectCfg) { c.maxHops = n }
+	return redirectOptionFunc(func(c *redirectCfg) { c.maxHops = n })
 }
 
 // WithSameHost permits a redirect whose target host equals the original
@@ -814,7 +812,7 @@ func WithMaxHops(n int) RedirectOption {
 // refused. Later options win, so a later WithSameHost(false) turns the
 // permission back off.
 func WithSameHost(same bool) RedirectOption {
-	return func(c *redirectCfg) { c.sameHost = same }
+	return redirectOptionFunc(func(c *redirectCfg) { c.sameHost = same })
 }
 
 // WithSameOrigin permits a redirect to the original request's origin: its
@@ -826,7 +824,7 @@ func WithSameHost(same bool) RedirectOption {
 // host, whatever [WithSameHost] or [WithAllowedHosts] say; the allowlist and
 // the downgrade rule judge other hosts, and a refusal is [RedirectOtherOrigin].
 func WithSameOrigin(same bool) RedirectOption {
-	return func(c *redirectCfg) { c.sameOrigin = same }
+	return redirectOptionFunc(func(c *redirectCfg) { c.sameOrigin = same })
 }
 
 // WithPreserveMethod refuses, when true, a hop that would change the request
@@ -838,7 +836,7 @@ func WithSameOrigin(same bool) RedirectOption {
 // refusals take precedence, and it grants nothing: with no allowlist,
 // [WithSameHost] or [WithSameOrigin] every redirect is still refused.
 func WithPreserveMethod(preserve bool) RedirectOption {
-	return func(c *redirectCfg) { c.preserveMethod = preserve }
+	return redirectOptionFunc(func(c *redirectCfg) { c.preserveMethod = preserve })
 }
 
 // asciiLower lowercases only ASCII letters A-Z, leaving every other byte
@@ -881,10 +879,26 @@ const (
 	RedirectTooMany
 )
 
+var redirectReasonNames = [...]string{
+	RedirectNotAllowed:  "not_allowed",
+	RedirectOtherOrigin: "other_origin",
+	RedirectDowngrade:   "downgrade",
+	RedirectTooMany:     "too_many",
+}
+
+// String returns the reason's snake_case name, as [Cause.String] does, or
+// RedirectReason(n) for a value outside the constants.
+func (r RedirectReason) String() string {
+	if r >= RedirectNotAllowed && int(r) < len(redirectReasonNames) {
+		return redirectReasonNames[r]
+	}
+	return "RedirectReason(" + strconv.Itoa(int(r)) + ")"
+}
+
 // RedirectRefusedError is a shipped redirect policy's hard refusal of one hop:
-// the hop cap, target permission and downgrade checks of a [RedirectPolicyFunc]
-// policy and [DefaultRedirectPolicy] answer one,
-// so a caller tells them apart with [errors.As] and Reason alone.
+// the hop cap, target permission and downgrade checks of a policy
+// [RedirectPolicy] builds and of [DefaultRedirectPolicy] answer one, so a
+// caller tells them apart with [errors.As] and Reason alone.
 // [RefuseAllRedirects] and a [WithPreserveMethod] refusal answer
 // [http.ErrUseLastResponse] instead. An [http.Client] returns it inside a
 // [*url.Error], and it is never transient.
@@ -1012,8 +1026,8 @@ func originKeyOf(u *url.URL) (originKey, bool) {
 	return o, true
 }
 
-// RedirectPolicyFunc returns a CheckRedirect function configured with the given
-// options. A redirect is followed only to an allowed target (a WithAllowedHosts
+// RedirectPolicy returns a [CheckRedirect] configured with the given options;
+// a nil option is skipped. A redirect is followed only to an allowed target (a WithAllowedHosts
 // entry, a WithAllowedSuffixes match, the original host under WithSameHost, the
 // original origin under WithSameOrigin) and never https->http, so a custom
 // auth header, which Go forwards across a redirect, never rides a cleartext
@@ -1021,11 +1035,11 @@ func originKeyOf(u *url.URL) (originKey, bool) {
 // is WithMaxHops. Every hard refusal is a [*RedirectRefusedError];
 // WithPreserveMethod(true) instead answers http.ErrUseLastResponse for a hop
 // that would change the method.
-func RedirectPolicyFunc(opts ...RedirectOption) func(*http.Request, []*http.Request) error {
+func RedirectPolicy(opts ...RedirectOption) CheckRedirect {
 	cfg := redirectCfg{}
 	for _, o := range opts {
 		if o != nil {
-			o(&cfg)
+			o.applyRedirect(&cfg)
 		}
 	}
 	if len(cfg.allowedHosts) == 0 && len(cfg.allowedSuffixes) == 0 && !cfg.sameHost && !cfg.sameOrigin {
@@ -1048,7 +1062,7 @@ func RedirectPolicyFunc(opts ...RedirectOption) func(*http.Request, []*http.Requ
 	return rp.check
 }
 
-// resolvedRedirect is a compiled redirect policy: RedirectPolicyFunc resolves
+// resolvedRedirect is a compiled redirect policy: RedirectPolicy resolves
 // its options into one of these once and returns its check method as the
 // http.Client CheckRedirect.
 type resolvedRedirect struct {
@@ -1184,18 +1198,18 @@ func redirectAllowed(host hostKey, allowedHosts []hostKey, normalizedSuffixes []
 // defaultRedirectPolicy is the compiled same-host policy DefaultRedirectPolicy
 // delegates to, so the same-host + downgrade logic lives in exactly one place
 // (resolvedRedirect.check) and cannot drift from
-// RedirectPolicyFunc(WithSameHost(true)).
-var defaultRedirectPolicy = RedirectPolicyFunc(WithSameHost(true))
+// RedirectPolicy(WithSameHost(true)).
+var defaultRedirectPolicy = RedirectPolicy(WithSameHost(true))
 
 // DefaultRedirectPolicy is the default redirect policy: it allows a redirect
 // only to the same host as the original request, and refuses a same-host
 // https->http scheme downgrade (which would forward a custom auth header onto a
 // cleartext hop). A cross-host redirect is refused (Go forwards a custom header
 // across a redirect, so it would leak) and an http->https upgrade is allowed.
-// It delegates to RedirectPolicyFunc(WithSameHost(true)), with one addition: a
+// It delegates to RedirectPolicy(WithSameHost(true)), with one addition: a
 // call with an empty via chain (which net/http never produces — via always
 // carries at least the original request) is allowed rather than refused. Use
-// RedirectPolicyFunc for a custom allowlist or a higher hop cap (WithMaxHops).
+// RedirectPolicy for a custom allowlist or a higher hop cap (WithMaxHops).
 func DefaultRedirectPolicy(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
@@ -1218,12 +1232,12 @@ func RefuseAllRedirects(*http.Request, []*http.Request) error {
 // CheckRedirect is the http.Client.CheckRedirect function shape. It is a type
 // alias, so values are assignable in both directions; every shipped policy
 // (DefaultRedirectPolicy, RefuseAllRedirects and anything built with
-// RedirectPolicyFunc) is a CheckRedirect.
+// RedirectPolicy) is a CheckRedirect.
 type CheckRedirect = func(req *http.Request, via []*http.Request) error
 
 // New returns an *http.Client with the given timeout and the
 // DefaultRedirectPolicy (same-host only). For a custom redirect allowlist,
-// configure CheckRedirect with RedirectPolicyFunc.
+// configure CheckRedirect with RedirectPolicy.
 func New(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:       timeout,
@@ -1253,7 +1267,11 @@ type Secret string
 
 // RedactTransportError reduces err as [LogSafeError] does, prefixes it, and
 // redacts the secret from its message. Returns nil for nil input, and never
-// nil for a non-nil one.
+// nil for a non-nil one. When the message holds the secret, the result is a
+// new error carrying only the redacted text, because every error in the chain
+// still renders the secret: errors.Is, errors.As, [IsTransient] and [CauseOf]
+// stop there, so classify err before you redact it. When the message does not
+// hold the secret, the reduced and prefixed chain is returned whole.
 // The replacement runs through RedactSecretString, whose doc comment carries the
 // ordering and representation rules for composing redaction with a normalizing
 // transform or a byte cap. An empty secret disables redaction: the (possibly
@@ -1280,7 +1298,9 @@ func RedactTransportError(err error, prefix string, secret Secret) error {
 	return errors.New(RedactSecretString(msg, secret))
 }
 
-// RedactSecret replaces occurrences of secret in err's message with "REDACTED".
+// RedactSecret replaces occurrences of secret in err's message with "REDACTED",
+// as RedactTransportError(err, "", Secret(secret)) does: a message that held
+// the secret comes back as a new error with no chain, so classify err first.
 // It funnels into RedactSecretString, whose doc comment carries the ordering and
 // representation rules the caller owns.
 func RedactSecret(err error, secret string) error {
@@ -1380,13 +1400,18 @@ func redactURL(rawURL string) string {
 	return u.Redacted()
 }
 
-// LogSafeError returns an error whose message is safe to log: every *url.Error
-// in err's chain, which renders the raw request URL, is replaced by its cause
-// until none is left, and a chain nested more than eight deep reduces to a
-// contentless "request failed". Nil returns nil, a non-nil error never reduces
-// to nil, and any other error passes through unchanged, keeping errors.Is and
-// errors.As. It equals RedactTransportError(err, "", ""), the reduction httpclient
-// applies to every transport error it logs or wraps.
+// LogSafeError returns an error whose message is safe to log. Every *url.Error
+// in err's chain, which renders the raw request URL, is replaced by its cause.
+// The marks this package renders on the fly ([Permanent], [MarkTransient],
+// [AttemptTimeout]) and each branch of an errors.Join are kept around the
+// reduced cause, so [IsPermanent], [IsTransient] and every sibling survive.
+// Any other wrapper above a *url.Error is dropped, because its message was
+// rendered with the URL in it: reduce a transport error before you wrap it with
+// your own context. An error with no *url.Error is returned unchanged, a chain
+// nested more than eight *url.Error deep reduces to a contentless "request
+// failed", nil returns nil, and a non-nil error never reduces to nil. It
+// equals RedactTransportError(err, "", ""), the empty-secret case, which is the
+// reduction httpclient applies to every transport error it logs or wraps.
 func LogSafeError(err error) error {
 	if err == nil {
 		return nil
@@ -1399,21 +1424,70 @@ func LogSafeError(err error) error {
 // its own; a *url.Error whose Err is itself never reaches a fixpoint.
 const maxURLErrorDepth = 8
 
-// reduceURLErrors replaces err by the cause of the first *url.Error in its
-// chain until none is left. A chain still holding one after maxURLErrorDepth
-// reductions reduces to errRequestFailed rather than render a URL.
+// reduceURLErrors is LogSafeError's reduction. A chain still holding a
+// *url.Error after maxURLErrorDepth replacements reduces to errRequestFailed
+// rather than render a URL.
 func reduceURLErrors(err error) error {
-	for range maxURLErrorDepth {
-		urlErr, ok := errors.AsType[*url.Error](err)
-		if !ok {
-			return err
-		}
-		err = urlErrorCause(urlErr)
-	}
-	if _, ok := errors.AsType[*url.Error](err); ok {
+	reduced := reduceURL(err, maxURLErrorDepth)
+	if reduced == errURLDepth {
 		return errRequestFailed
 	}
-	return err
+	return reduced
+}
+
+// errURLDepth is reduceURL's internal verdict that a *url.Error remained when
+// the budget ran out; reduceURLErrors turns it into errRequestFailed, so it
+// never leaves the package.
+var errURLDepth = errors.New("url error depth exceeded")
+
+// reduceURL rebuilds err with each *url.Error replaced by its cause, keeping
+// this package's marks and every errors.Join branch, and dropping any other
+// wrapper above a *url.Error. budget counts the replacements left; the result
+// is errURLDepth once a *url.Error remains when it runs out.
+func reduceURL(err error, budget int) error {
+	if _, has := errors.AsType[*url.Error](err); !has {
+		return err
+	}
+	switch e := err.(type) {
+	case *url.Error:
+		if budget == 0 {
+			return errURLDepth
+		}
+		return reduceURL(urlErrorCause(e), budget-1)
+	case *permanentError:
+		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &permanentError{Err: inner} })
+	case *transientError:
+		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &transientError{Err: inner} })
+	case *attemptTimeoutError:
+		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &attemptTimeoutError{Err: inner} })
+	case interface{ Unwrap() []error }:
+		branches := e.Unwrap()
+		kept := make([]error, 0, len(branches))
+		for _, b := range branches {
+			r := reduceURL(b, budget)
+			if r == errURLDepth {
+				return errURLDepth
+			}
+			kept = append(kept, r)
+		}
+		return errors.Join(kept...)
+	default:
+		inner := errors.Unwrap(err)
+		if inner == nil {
+			// An As method surfaced the *url.Error with no chain to descend.
+			return errRequestFailed
+		}
+		return reduceURL(inner, budget)
+	}
+}
+
+// rewrap puts a reduced inner error back under its mark, passing errURLDepth
+// through unmarked.
+func rewrap(inner error, mark func(error) error) error {
+	if inner == errURLDepth {
+		return errURLDepth
+	}
+	return mark(inner)
 }
 
 // errRequestFailed stands in for the cause of a *url.Error that has none. It

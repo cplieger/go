@@ -96,8 +96,8 @@ func TestStatusError_entry_points(t *testing.T) {
 				if se.Code != tt.code {
 					t.Errorf("Code = %d, want %d", se.Code, tt.code)
 				}
-				if se.URL != door.wantURL {
-					t.Errorf("URL = %q, want %q", se.URL, door.wantURL)
+				if got := httpclient.StatusErrorURL(se); got != door.wantURL {
+					t.Errorf("URL = %q, want %q", got, door.wantURL)
 				}
 				if se.RetryAfter != tt.wantRetryAfter {
 					t.Errorf("RetryAfter = %v, want %v", se.RetryAfter, tt.wantRetryAfter)
@@ -283,7 +283,7 @@ func TestStatusError_Error(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := (&httpclient.StatusError{Code: 503, URL: tt.url}).Error(); got != tt.want {
+			if got := httpclient.NewStatusErrorForURL(tt.url, 503).Error(); got != tt.want {
 				t.Errorf("Error() = %q, want %q", got, tt.want)
 			}
 		})
@@ -291,7 +291,7 @@ func TestStatusError_Error(t *testing.T) {
 }
 
 func TestStatusError_Is_unrelated_target_returns_false(t *testing.T) {
-	se := &httpclient.StatusError{Code: http.StatusTooManyRequests, URL: "http://example.com"}
+	se := httpclient.NewStatusErrorForURL("http://example.com", http.StatusTooManyRequests)
 	if errors.Is(se, io.EOF) {
 		t.Error("errors.Is(StatusError{429}, io.EOF) = true, want false")
 	}

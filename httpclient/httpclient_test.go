@@ -432,23 +432,60 @@ func TestDo_WithRateLimitRetry(t *testing.T) {
 	})
 }
 
-// TestDo_rate_limit_modes_mutually_exclusive pins the config error: supplying
-// both rate-limit modes fails loud before fn runs.
-func TestDo_rate_limit_modes_mutually_exclusive(t *testing.T) {
+// TestDo_rate_limit_modes_last_wins pins C16 for the two rate-limit options:
+// they set one mode, and the later option decides it. A 503 is transient, so
+// it is retried under WithRateLimitRetry and returned at once under
+// WithRateLimitOnly.
+func TestDo_rate_limit_modes_last_wins(t *testing.T) {
 	t.Parallel()
-	calls := 0
-	_, err := Do(t.Context(), func(_ context.Context) (string, error) {
-		calls++
-		return "ok", nil
-	}, WithRateLimitRetry(time.Second), WithRateLimitOnly(time.Second))
-	if err == nil {
-		t.Fatal("expected config error for mutually exclusive modes")
+	for _, tc := range []struct {
+		name      string
+		opts      []DoOption
+		wantCalls int
+	}{
+		{"retry then only", []DoOption{WithRateLimitRetry(time.Millisecond), WithRateLimitOnly(time.Millisecond)}, 1},
+		{"only then retry", []DoOption{WithRateLimitOnly(time.Millisecond), WithRateLimitRetry(time.Millisecond)}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			opts := append([]DoOption{WithMaxAttempts(3), WithBaseDelay(time.Millisecond)}, tc.opts...)
+			_, err := Do(t.Context(), func(_ context.Context) (string, error) {
+				calls++
+				return "", &StatusError{Code: http.StatusServiceUnavailable}
+			}, opts...)
+			if err == nil {
+				t.Fatal("Do = nil error, want the 503")
+			}
+			if calls != tc.wantCalls {
+				t.Errorf("fn calls = %d, want %d", calls, tc.wantCalls)
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("error = %v, want mention of mutual exclusion", err)
-	}
-	if calls != 0 {
-		t.Errorf("fn calls = %d, want 0 (config error precedes execution)", calls)
+}
+
+// TestDo_permanent_rate_limit_not_retried pins that Permanent stops a 429 under
+// both rate-limit modes: the mark is checked before the 429 branch.
+func TestDo_permanent_rate_limit_not_retried(t *testing.T) {
+	t.Parallel()
+	for name, opt := range map[string]DoOption{
+		"WithRateLimitRetry": WithRateLimitRetry(time.Millisecond),
+		"WithRateLimitOnly":  WithRateLimitOnly(time.Millisecond),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			_, err := Do(t.Context(), func(_ context.Context) (string, error) {
+				calls++
+				return "", Permanent(&StatusError{Code: http.StatusTooManyRequests})
+			}, WithMaxAttempts(3), WithBaseDelay(time.Millisecond), opt)
+			if !IsPermanent(err) {
+				t.Fatalf("Do = %v, want the Permanent error", err)
+			}
+			if calls != 1 {
+				t.Errorf("fn calls = %d, want 1", calls)
+			}
+		})
 	}
 }
 
@@ -485,8 +522,11 @@ func TestPermanentError(t *testing.T) {
 		if !errors.Is(pe, inner) {
 			t.Error("errors.Is(pe, inner) = false")
 		}
-		if _, ok := errors.AsType[*PermanentError](pe); !ok {
-			t.Error("errors.As(*PermanentError) = false")
+		if !IsPermanent(pe) {
+			t.Error("IsPermanent(Permanent(inner)) = false")
+		}
+		if errors.Is(Permanent(errors.New("a")), Permanent(errors.New("b"))) {
+			t.Error("errors.Is matched two unrelated Permanent marks")
 		}
 	})
 
@@ -861,7 +901,7 @@ func TestDoRateLimitOnly_non_positive_max_wait_clamps_to_cap(t *testing.T) {
 
 func TestDo_zero_base_delay_defaults_to_base(t *testing.T) {
 	t.Parallel()
-	// A zero base delay must be coerced to DefaultBaseDelay (1s), so the pre-retry
+	// A zero base delay must be coerced to defaultBaseDelay (1s), so the pre-retry
 	// sleep blows the 100ms deadline and surfaces the context error.
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()

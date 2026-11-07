@@ -42,7 +42,7 @@ client := httpclient.NewRetry(nil, httpclient.DefaultRedirectPolicy, httpclient.
 resp, err := client.Do(req)
 ```
 
-`NewRetry` panics on a nil redirect policy, because a nil `CheckRedirect` means net/http follows redirects to any host. Pass `DefaultRedirectPolicy`, `RefuseAllRedirects` or a `RedirectPolicyFunc` allowlist.
+`NewRetry` panics on a nil redirect policy, because a nil `CheckRedirect` means net/http follows redirects to any host. Pass `DefaultRedirectPolicy`, `RefuseAllRedirects` or a `RedirectPolicy` allowlist.
 
 Retry any operation and keep its typed result:
 
@@ -63,7 +63,7 @@ if err := httpclient.CheckStatus(resp); err != nil {
 }
 ```
 
-`GetBytes` returns an error holding the same `*StatusError`, with the URL you passed in its `URL` field. Find it with `errors.As` or match it with `errors.Is`: after retries run out it sits inside the exhaustion error.
+`GetBytes` returns an error holding the same `*StatusError`, whose text names the URL you passed with its userinfo and query values redacted. Find it with `errors.As` or match it with `errors.Is`: after retries run out it sits inside the exhaustion error.
 
 Revalidate repeated GETs, so an unchanged answer comes back as a short `304` the cache serves from memory:
 
@@ -75,14 +75,14 @@ client := &http.Client{Transport: httpclient.NewCacheRoundTripper(nil, httpclien
 
 ## API
 
-- Retry: `Do[T]`, `GetBytes`, `NewRetryRoundTripper`, `NewRetry` and `New`, with their options, `TransportConfig` and `ContextWithDefaultTimeout`.
-- Backoff and Retry-After: `JitteredBackoff`, `SafeDouble`, `SleepCtx`, `ParseRetryAfter`, `ParseRetryAfterResponse`.
-- Classification: `IsTransient`, `Permanent`, `MarkTransient`, `AttemptTimeout`, `IsRetryableStatus`, `CauseOf` with its `Cause` names, the `Transient` and `RetryAfterHint` interfaces.
+- Retry: `Do[T]`, `GetBytes`, `NewRetryRoundTripper` (the `RetryRoundTripper`), `NewRetry` and `New`, with their options (`Option`, `DoOption`, `GetOption`), `TransportConfig` with its `CheckRetry`, `OnRetry` and `PrepareRetry` hooks, `ErrMaxElapsed` and `ContextWithDefaultTimeout`.
+- Backoff and Retry-After: `JitteredBackoff`, `SafeDouble`, `SleepCtx`, `ParseRetryAfter`, `ParseRetryAfterResponse`, and `RetryAfterCap`, the 60-second cap they share.
+- Classification: `IsTransient`, `Permanent` and `IsPermanent`, `MarkTransient`, `AttemptTimeout` and `IsAttemptTimeout`, `IsRetryableStatus`, `CauseOf` with its `Cause` names, the `Transient` and `RetryAfterHint` interfaces.
 - Status and errors: `CheckStatus`, the `StatusError` type with its `ErrUnauthorized`, `ErrForbidden`, `ErrRateLimited` and `ErrServerError` sentinels, and the `ResponseTooLargeError` type.
-- Redirects: `DefaultRedirectPolicy`, `RefuseAllRedirects` and `RedirectPolicyFunc` with its options, and the `RedirectRefusedError` every hard refusal returns.
-- TLS: `CATransport` pins a private CA, `CloneDefaultTransport`, and the `certtest` package for tests.
+- Redirects: `DefaultRedirectPolicy`, `RefuseAllRedirects` and `RedirectPolicy` with its `RedirectOption` options, the `CheckRedirect` shape they share, and the `RedirectRefusedError` every hard refusal returns, whose `RedirectReason` names the rule.
+- TLS: `CATransport` pins a private CA and returns `ErrNoCertsInPEM` for PEM data holding no certificate, `CloneDefaultTransport`, and the `certtest` package for tests.
 - Redaction: `LogSafeError`, `RedactSecret`, `RedactSecretString`, `RedactTransportError`.
-- Bodies: `ReadLimitedBody`, `LimitedBody`, `Drain`, `DrainClose`.
+- Bodies: `ReadLimitedBody`, `Drain`, `DrainClose`.
 - Revalidation cache: `NewCacheRoundTripper`, `NewCache` with `Begin`, `CacheGuard`, `CacheConfig`, `HeldField`, `CacheState`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpclient).
@@ -101,9 +101,9 @@ A context deadline is the total budget and is never retried. A per-attempt timeo
 
 ## Credentials in logs and redirects
 
-Go forwards custom headers such as `X-Api-Key` across a redirect. `DefaultRedirectPolicy` follows same-host hops only, and every shipped policy refuses an `https` to `http` downgrade. Same host is not same origin: another port on that host can be another service. For a client whose key must reach only the service you configured, use `RedirectPolicyFunc(WithSameOrigin(true))`, which follows only the original scheme, host and port. Host names match without regard to ASCII case; an IP address matches by value, and its IPv6 zone must match exactly. A `RedirectPolicyFunc` allowlist follows the other hosts you name, never with a downgrade. `RefuseAllRedirects` follows none and hands the 3xx back to you, which `CheckStatus` reports as an error.
+Go forwards custom headers such as `X-Api-Key` across a redirect. `DefaultRedirectPolicy` follows same-host hops only, and every shipped policy refuses an `https` to `http` downgrade. Same host is not same origin: another port on that host can be another service. For a client whose key must reach only the service you configured, use `RedirectPolicy(WithSameOrigin(true))`, which follows only the original scheme, host and port. Host names match without regard to ASCII case; an IP address matches by value, and its IPv6 zone must match exactly. A `RedirectPolicy` allowlist follows the other hosts you name, never with a downgrade. `RefuseAllRedirects` follows none and hands the 3xx back to you, which `CheckStatus` reports as an error.
 
-In its log lines and error messages, `GetBytes` replaces a URL's userinfo and each query value with `REDACTED`. It reduces transport errors to their cause, so their text carries no raw URL. The exported `StatusError.URL` field still holds the original URL for your code, so do not log that field. URL paths are kept, so do not put a credential in a URL path you pass to `GetBytes`. `RedactSecretString` takes the secret as the `Secret` type, so swapping the two arguments does not compile.
+In its log lines and error messages, `GetBytes` replaces a URL's userinfo and each query value with `REDACTED`. It reduces transport errors to their cause, so their text carries no raw URL. URL paths are kept, so do not put a credential in a URL path you pass to `GetBytes`. `RedactSecretString` takes the secret as the `Secret` type, so swapping the two arguments does not compile.
 
 [Redirects, TLS and redaction](docs/security-model.md) covers each policy option, the pinned-CA transport and the order to redact in.
 

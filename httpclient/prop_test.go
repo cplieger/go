@@ -223,7 +223,7 @@ type testError struct{ msg string }
 
 func (e *testError) Error() string { return e.msg }
 
-func FuzzRedirectPolicyFunc(f *testing.F) {
+func FuzzRedirectPolicy(f *testing.F) {
 	f.Add("sub.docker.com", ".docker.com", "exact.host.com")
 	f.Add("maliciousdocker.com", ".docker.com", "")
 	f.Add("docker.com", "docker.com", "")
@@ -249,7 +249,7 @@ func FuzzRedirectPolicyFunc(f *testing.F) {
 			opts = append(opts, WithAllowedHosts(allowedHost))
 		}
 		opts = append(opts, WithAllowedSuffixes(suffix))
-		err = RedirectPolicyFunc(opts...)(&http.Request{URL: u}, []*http.Request{{URL: &url.URL{Host: "origin.com"}}})
+		err = RedirectPolicy(opts...)(&http.Request{URL: u}, []*http.Request{{URL: &url.URL{Host: "origin.com"}}})
 
 		// The suffix is trimmed, dot-anchored and ASCII-lowercased, and
 		// matches a name only, never an IP literal.
@@ -386,7 +386,7 @@ func FuzzRedactURL(f *testing.F) {
 
 // FuzzSameHostRedirect exercises the WithSameHost invariant against
 // specSameHost: a redirect is accepted iff its target host equals the origin
-// host AND it is not an https->http downgrade. FuzzRedirectPolicyFunc seeds
+// host AND it is not an https->http downgrade. FuzzRedirectPolicy seeds
 // an empty origin scheme, so it never drives the scheme-downgrade branch this
 // covers.
 func FuzzSameHostRedirect(f *testing.F) {
@@ -415,7 +415,7 @@ func FuzzSameHostRedirect(f *testing.F) {
 		sameHost := specSameHost(tgt.Hostname(), orig.Hostname())
 		downgrade := isSchemeDowngrade(orig.Scheme, tgt.Scheme)
 
-		gotErr := RedirectPolicyFunc(WithSameHost(true))(&http.Request{URL: tgt}, via)
+		gotErr := RedirectPolicy(WithSameHost(true))(&http.Request{URL: tgt}, via)
 		if want := sameHost && !downgrade; want != (gotErr == nil) {
 			t.Fatalf("WithSameHost %s->%s: err=%v (sameHost=%v downgrade=%v, wantAllowed=%v)", orig, tgt, gotErr, sameHost, downgrade, want)
 		}
@@ -495,7 +495,7 @@ func TestSameOriginRedirect_property(t *testing.T) {
 		target := &http.Request{URL: parse(g, "/b?k=v")}
 		want := o.scheme == g.scheme && o.host == g.host && effective(o.scheme, o.port) == effective(g.scheme, g.port)
 
-		err := RedirectPolicyFunc(WithSameOrigin(true))(target, via)
+		err := RedirectPolicy(WithSameOrigin(true))(target, via)
 		if want != (err == nil) {
 			t.Fatalf("WithSameOrigin(true) %s -> %s = %v, want followed=%v", via[0].URL, target.URL, err, want)
 		}
@@ -509,12 +509,12 @@ func TestSameOriginRedirect_property(t *testing.T) {
 				t.Fatalf("refusal = %#v, want Reason RedirectOtherOrigin, Origin %q", err, wantOrigin)
 			}
 		}
-		withHost := RedirectPolicyFunc(WithSameOrigin(true), WithSameHost(true))(target, via)
+		withHost := RedirectPolicy(WithSameOrigin(true), WithSameHost(true))(target, via)
 		if (withHost == nil) != (err == nil) {
 			t.Fatalf("adding WithSameHost(true) changed the verdict: %v, then %v", err, withHost)
 		}
 		wantHost := o.host == g.host && (o.scheme != "https" || g.scheme != "http")
-		if hostOnly := RedirectPolicyFunc(WithSameHost(true))(target, via); wantHost != (hostOnly == nil) {
+		if hostOnly := RedirectPolicy(WithSameHost(true))(target, via); wantHost != (hostOnly == nil) {
 			t.Fatalf("WithSameHost(true) %s -> %s = %v, want followed=%v", via[0].URL, target.URL, hostOnly, wantHost)
 		}
 	})
@@ -550,7 +550,7 @@ func FuzzSameOriginRedirect_host_identity(f *testing.F) {
 			}
 			return &v
 		}
-		sameOrigin := RedirectPolicyFunc(WithSameOrigin(true))
+		sameOrigin := RedirectPolicy(WithSameOrigin(true))
 		follows := func(v *url.URL) {
 			if err := sameOrigin(&http.Request{URL: v}, via); err != nil {
 				t.Fatalf("%s -> %s = %v, want followed", u, v, err)
@@ -568,7 +568,7 @@ func FuzzSameOriginRedirect_host_identity(f *testing.F) {
 			v := withHost(addr.WithZone(flipped).String())
 			for name, policy := range map[string]CheckRedirect{
 				"WithSameOrigin": sameOrigin,
-				"WithSameHost":   RedirectPolicyFunc(WithSameHost(true)),
+				"WithSameHost":   RedirectPolicy(WithSameHost(true)),
 			} {
 				var refused *RedirectRefusedError
 				if err := policy(&http.Request{URL: v}, via); !errors.As(err, &refused) || refused.Reason != RedirectOtherOrigin {

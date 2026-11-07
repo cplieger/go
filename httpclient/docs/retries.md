@@ -35,7 +35,7 @@ Each has a different owner for the request, the body and the response. All three
 | `WithHeaders(fn)` | `GetBytes` | none | Called to set headers on each request |
 | `WithMaxBodyBytes(n)` | `GetBytes` | 10 MB | Body cap. A value of zero or less takes the default |
 
-`WithRateLimitRetry` and `WithRateLimitOnly` together are a configuration error, which `Do` returns before calling your function.
+`WithRateLimitRetry` and `WithRateLimitOnly` set one mode, so when you pass both the later one wins, with its `maxWait`.
 
 ## Options for the transport
 
@@ -48,14 +48,14 @@ Each has a different owner for the request, the body and the response. All three
 | `CheckRetry` | Replaces the retry policy, `func(ctx, resp, err) (bool, error)`. A returned error stops the loop |
 | `OnRetry` | Called before each retry, with a 1-based attempt number. The transport logs nothing, so this is where to observe it |
 | `PrepareRetry` | Changes the cloned request before each retry, for example to set a fresh token |
-| `MaxElapsedTime` | Ceiling on total time across retries, honored `Retry-After` waits included. Checked between attempts. Zero means none |
+| `MaxElapsedTime` | Ceiling on total time across retries, honored `Retry-After` waits included. Checked between attempts; a stop returns `ErrMaxElapsed`. Zero means none |
 | `RetryNonIdempotent` | Also retries every other request, POST, PUT, PATCH and DELETE among them, with or without an `Idempotency-Key` |
 
 The transport never changes your request. It clones it for each attempt. By default it retries GET, HEAD, OPTIONS and TRACE, the safe methods of RFC 9110 section 9.2.1.
 
 It also retries a request of any method that carries a non-empty `Idempotency-Key` header, as the [Idempotency-Key draft](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) describes. Your server must store the key with the write and answer a repeat from that record, so a retried POST changes state once. Every attempt sends the same key, because each attempt clones your request. An empty header value counts as no key.
 
-net/http copies the key onto a 307 or 308 hop, so the redirect target is retried under it too. `DefaultRedirectPolicy` follows a hop to another port on the same host, which can be another service. Unless every redirect target dedups the key, give a keyed client `RefuseAllRedirects`, or `RedirectPolicyFunc(WithSameOrigin(true))` to stay on the original origin.
+net/http copies the key onto a 307 or 308 hop, so the redirect target is retried under it too. `DefaultRedirectPolicy` follows a hop to another port on the same host, which can be another service. Unless every redirect target dedups the key, give a keyed client `RefuseAllRedirects`, or `RedirectPolicy(WithSameOrigin(true))` to stay on the original origin.
 
 A server that follows the draft answers 409 while the first attempt is still running. The default policy returns that 409 as final, because many servers send 409 for a real conflict. To wait it out, set `CheckRetry` to also retry a 409 whose `resp.Request` carries the key.
 
@@ -109,7 +109,7 @@ A `maxWait` of zero or less becomes 60 seconds, so the wait between attempts is 
 
 ## Marking errors
 
-- `Permanent(err)` makes `IsTransient` reject `err`, so `Do` and the default transport policy never retry it. It is the same idea as cenkalti/backoff. `IsPermanent` tests for it, and `*PermanentError` works with `errors.Is`, `errors.As` and `Unwrap`.
+- `Permanent(err)` makes `IsTransient` reject `err`, so `Do` and the default transport policy never retry it. It also stops a 429 under either rate-limit option. It is the same idea as cenkalti/backoff. `IsPermanent` tests for it, and `errors.Is` and `errors.As` reach the error it wraps.
 - `MarkTransient(err)` tells `Do` to retry an error the shared rules would not, such as a server fault inside a 200 envelope. It overrides a non-transient verdict already on the error. It cannot override `Permanent`, a `*StatusError` for 401, 403 or 429, or a caller context error. For a rate limit, name a wait budget with `WithRateLimitRetry` instead.
 - `AttemptTimeout(err)` marks a timeout as the end of one attempt, so it is retried. `IsAttemptTimeout` tests for it. [Timeouts and deadlines](timeouts.md) explains when to use it.
 - Your own error type can implement `Transient`, an `error` with `IsTransient() bool`, or `RetryAfterHint`, an `error` with `RetryAfterHint() time.Duration`. Both embed `error`, so `errors.AsType[httpclient.Transient](err)` compiles.
@@ -120,7 +120,7 @@ A `maxWait` of zero or less becomes 60 seconds, so the wait between attempts is 
 
 `GetBytes` returns a nil body and an error reading `retries exhausted after <elapsed>: <last error>`, which `errors.Is` and `errors.As` can unwrap. A body over the cap is a `*ResponseTooLargeError` and returns no body. When the last attempt carried a `Retry-After`, the error also implements `RetryAfterHint` with that capped wait. It adds no `Transient` verdict of its own, so `IsTransient` reads the wrapped failure: an exhausted 408 or retryable 5xx is transient to an enclosing `Do`, and a 401, 403 or 429 is not.
 
-The transport returns the last response with a nil error, even when that response is a retryable 503. A caller that checks only `err != nil` treats an exhausted 503 as success, so check `resp.StatusCode` and close the body. Only a `MaxElapsedTime` stop returns an error.
+The transport returns the last response with a nil error, even when that response is a retryable 503. A caller that checks only `err != nil` treats an exhausted 503 as success, so check `resp.StatusCode` and close the body. Only a `MaxElapsedTime` stop returns an error, which matches `ErrMaxElapsed` and wraps the last attempt's error when there was one.
 
 ## Running GetBytes inside your own retry loop
 
