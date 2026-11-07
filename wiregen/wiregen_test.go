@@ -175,7 +175,7 @@ func TestGenerateToDir(t *testing.T) {
 // beside it alike, on every platform: Windows refuses filesafe's
 // mode-proving option, so the folders are created like os.MkdirAll.
 func TestGenerate_CreatesMissingOutputFolders(t *testing.T) {
-	r := newTestRegistry()
+	r := fullReg()
 	dir := t.TempDir()
 	openapi := filepath.Join(dir, "api", "v1", "openapi.json")
 	err := r.Generate(t.Context(), append(r.opts,
