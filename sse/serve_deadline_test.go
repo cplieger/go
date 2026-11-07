@@ -1,11 +1,13 @@
 package sse
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -24,12 +26,8 @@ const (
 	// write, and under the race detector on a loaded runner that loop alone can
 	// outlast 200ms, after which the peer is already gone and there is nothing
 	// left to reset. The deadline they run under is wide enough to still be
-	// pending when Shutdown reaches the stream, after waitForWedge's stall.
-	wedgeWriteTimeout = 2500 * time.Millisecond
-	// wedgeStall is how long the queue must stay put before waitForWedge calls
-	// the write blocked: longer than a scheduling stall on a loaded host, well
-	// inside wedgeWriteTimeout.
-	wedgeStall = 200 * time.Millisecond
+	// pending when Shutdown reaches the stream.
+	wedgeWriteTimeout = 1500 * time.Millisecond
 	// wedgeFrames of one MiB each exceeds the loopback send and receive buffers
 	// together (measured: the writer blocks after three), so a peer that stops
 	// reading wedges the writer well inside the write timeout.
@@ -70,21 +68,38 @@ func pollUntil(t *testing.T, timeout time.Duration, what string, cond func() boo
 	}
 }
 
-// waitForWedge polls until the stream goroutine has stopped pulling frames
-// off its channel for wedgeStall, which on a peer that is not reading means
-// its write blocked. One unchanged poll is not enough: on a loaded host the
-// goroutine can sit unscheduled for a tick while its writes still complete.
+// waitForWedge polls until the stream's drain goroutine is parked in a socket
+// write the peer, which never reads, cannot complete, with frames still queued
+// behind it. A queue count that holds still proves neither: on a loaded host
+// an unscheduled goroutine looks the same, and its writes then complete.
 func waitForWedge(t *testing.T, h *Hub, queued int) {
 	t.Helper()
-	last, since := -1, time.Now()
 	pollUntil(t, 5*time.Second, "the stream write to wedge", func() bool {
-		n := h.QueuedFrames()
-		if n != last {
-			last, since = n, time.Now()
-			return false
-		}
-		return n < queued && time.Since(since) >= wedgeStall
+		return h.QueuedFrames() < queued && drainParkedInWrite()
 	})
+}
+
+// drainParkedInWrite reports whether a stream's drain goroutine is parked in
+// the network poller waiting for its socket to take a write. No test in this
+// package runs in parallel, so the only stream is the calling test's.
+func drainParkedInWrite() bool {
+	buf := make([]byte, 64<<10)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for g := range bytes.SplitSeq(buf, []byte("\n\n")) {
+		if bytes.Contains(g, []byte("[IO wait")) &&
+			bytes.Contains(g, []byte("internal/poll.(*pollDesc).waitWrite")) &&
+			bytes.Contains(g, []byte("sse.(*Hub).drain(")) {
+			return true
+		}
+	}
+	return false
 }
 
 // logLineHas reports whether ONE record in a captured log carries every attr.
