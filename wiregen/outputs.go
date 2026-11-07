@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -83,7 +84,11 @@ func (f *genFile) locate(root *os.Root, tsDir target) (target, error) {
 		if f.name == "" {
 			return target{}, errors.New("wiregen: WithOpenAPIFiles names an empty path")
 		}
-		t, err := locate(f.name)
+		name, err := workingDirPath(f.name)
+		if err != nil {
+			return target{}, fmt.Errorf("wiregen: the %s file %q: %w", f.role, f.name, err)
+		}
+		t, err := locate(name)
 		if err != nil {
 			return target{}, fmt.Errorf("wiregen: the %s file %q: %w", f.role, f.name, err)
 		}
@@ -208,6 +213,27 @@ func locateIn(root *os.Root, name string) (target, error) {
 	return t, err
 }
 
+// workingDirPath makes a relative OpenAPI path absolute, for filesafe writes
+// only absolute paths, against the directory the operating system resolves it
+// from. Unix resolves ".." physically, and os.Getwd may return $PWD, which can
+// name the working directory through a symlink, so the directory is resolved
+// first. Windows resolves ".." against its own current directory lexically,
+// as the plain join does, and EvalSymlinks there refuses a path through a
+// junction.
+func workingDirPath(p string) (string, error) {
+	if filepath.IsAbs(p) {
+		return p, nil
+	}
+	wd, err := os.Getwd()
+	if err == nil && runtime.GOOS != "windows" {
+		wd, err = filepath.EvalSymlinks(wd)
+	}
+	if err != nil {
+		return "", err
+	}
+	return wd + string(filepath.Separator) + p, nil
+}
+
 func splitPath(p string) []string {
 	return slices.DeleteFunc(strings.Split(filepath.ToSlash(p), "/"), func(n string) bool { return n == "" || n == "." })
 }
@@ -232,9 +258,9 @@ func writeFiles(ctx context.Context, tsDir string, files []genFile) error {
 	for _, f := range files {
 		var p *filesafe.PendingFile
 		if f.ts {
-			p, err = filesafe.NewPendingFileInRoot(ctx, root, f.name, filesafe.WithMkdirMode(0o755))
+			p, err = filesafe.NewPendingFileInRoot(ctx, root, f.name, filesafe.WithMkdirAll(true))
 		} else {
-			p, err = filesafe.NewPendingFile(ctx, f.name, filesafe.WithMkdirMode(0o755))
+			p, err = filesafe.NewPendingFile(ctx, f.name, filesafe.WithMkdirAll(true))
 		}
 		if err != nil {
 			return fmt.Errorf("wiregen: stage the %s file %s: %w", f.role, f.name, err)
