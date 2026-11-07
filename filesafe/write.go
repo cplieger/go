@@ -20,7 +20,8 @@ type Result struct {
 	Path string
 	// Durable reports whether the write is guaranteed to survive a crash:
 	// true only when the file, its directory, and every directory this
-	// write created or found being created by a racing writer were flushed
+	// write created were flushed, and on the absolute-path writes also
+	// every level a racing writer created after the write found it missing
 	// (docs/durability.md, per platform). False means the data
 	// is present at Path but may not survive an immediate power loss, and
 	// the cause is logged.
@@ -62,15 +63,21 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 // (proved on each when enforce), inside an *os.Root opened on the deepest
 // existing ancestor, so a missing level a racing writer plants as an
 // escaping symlink is refused rather than followed. os.MkdirAll would not
-// say which levels are new, which the parent fsyncs need. Every level below
-// that ancestor was absent at the stat, so one that now exists is a racing
-// writer's and is synced too. dirSyncFailed is mkdirAllInRoot's durable,
-// inverted.
+// say which levels are new, which the parent fsyncs need
+// (mkdirBelowExisting).
 func mkdirAllAbs(dir string, mode os.FileMode, enforce bool, logger *slog.Logger) (dirSyncFailed bool, err error) {
 	base, rel, err := deepestExistingDir(dir)
 	if err != nil {
 		return false, err
 	}
+	return mkdirBelowExisting(base, rel, mode, enforce, logger)
+}
+
+// mkdirBelowExisting creates rel inside base, every level of which was
+// absent at the caller's stat, so a level that now exists is a racing
+// writer's and is synced into its parent too. dirSyncFailed is
+// mkdirAllInRoot's durable, inverted.
+func mkdirBelowExisting(base, rel string, mode os.FileMode, enforce bool, logger *slog.Logger) (dirSyncFailed bool, err error) {
 	if rel == "." {
 		return false, nil
 	}

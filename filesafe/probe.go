@@ -22,10 +22,11 @@ type ProbeStage int
 const (
 	// ProbeStageNone is the zero value: every stage passed.
 	ProbeStageNone ProbeStage = iota
-	// ProbeStageMkdir indicates the directory itself could not be created.
-	// Only reachable with WithMkdirMode or WithMkdirAll; without either a
-	// missing directory fails at ProbeStageCreate, exactly as a write to a
-	// missing parent does.
+	// ProbeStageMkdir indicates the directory could not be created, or that
+	// under WithMkdirMode a created level did not store the mode (Err matches
+	// ErrModeNotStored). Only reachable with WithMkdirMode or WithMkdirAll;
+	// without either a missing directory fails at ProbeStageCreate, exactly
+	// as a write to a missing parent does.
 	ProbeStageMkdir
 	// ProbeStageCreate indicates the probe file could not be created: the
 	// directory is missing, is not a directory, is read-only, or denies the
@@ -145,8 +146,8 @@ func ProbeWritable(ctx context.Context, dir string, opts ...Option) (ProbeResult
 // relative to root ("." for root itself) and every operation runs through
 // the *os.Root, so an escaping name is refused and reported at
 // ProbeStageCreate (ProbeStageMkdir under WithMkdirMode or WithMkdirAll).
-// Everything else, the WithMode rule included, is ProbeWritable's. The caller owns root and
-// keeps it open; a nil root returns ErrUnsafePath.
+// Everything else, the WithMode rule included, is ProbeWritable's. The
+// caller owns root and keeps it open; a nil root returns ErrUnsafePath.
 func ProbeWritableInRoot(ctx context.Context, root *os.Root, name string, opts ...Option) (ProbeResult, error) {
 	c := buildCfg(opts)
 	if root == nil {

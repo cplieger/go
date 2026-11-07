@@ -4,6 +4,7 @@ package filesafe
 
 import (
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -109,26 +110,51 @@ func TestMkdirMode_ProbesProveTheModeOnEachCreatedLevel(t *testing.T) {
 	})
 }
 
-// A level a racing writer created between the stat and the mkdir is synced
-// into its parent too, so a write that lost the race still reports Durable
-// only once that entry is flushed.
+// A level a racing writer created between mkdirAllAbs's stat and its mkdir
+// is synced into its parent too, so an absolute-path write that lost the
+// race reports Durable only once that entry is flushed.
 //
 // Serial (no t.Parallel): the fsyncRootDir seam is package state.
 func TestMkdirAllAbs_SyncsALevelARacingWriterCreated(t *testing.T) {
 	recorded := recordFsyncRootDir(t)
-	base := t.TempDir()
-	root, err := os.OpenRoot(base)
-	if err != nil {
+	dir := t.TempDir()
+	base, rel, err := deepestExistingDir(filepath.Join(dir, "a", "b"))
+	if err != nil || base != dir || rel != filepath.Join("a", "b") {
+		t.Fatalf("deepestExistingDir() = %q, %q, %v", base, rel, err)
+	}
+	// The racing writer's level appears between the stat and the mkdir.
+	if err := os.Mkdir(filepath.Join(dir, "a"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
-	// The chain was planned with "a" absent; "a" appears before the mkdir.
-	if err := os.Mkdir(filepath.Join(base, "a"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	durable, err := mkdirAllInRoot(root, filepath.Join("a", "b"), 0o777, false, true, slog.Default())
-	if err != nil || !durable {
-		t.Fatalf("mkdirAllInRoot() = %v, %v; want true, nil", durable, err)
+	dirSyncFailed, err := mkdirBelowExisting(base, rel, 0o777, false, slog.Default())
+	if err != nil || dirSyncFailed {
+		t.Fatalf("mkdirBelowExisting() = %v, %v; want false, nil", dirSyncFailed, err)
 	}
 	assertFsynced(t, recorded(), []string{".", "a"})
+}
+
+// A level whose mode the filesystem refused is removed again, so a retried
+// write or a write after a refused probe cannot publish under a directory
+// that was never proved, as a pre-existing level would be accepted.
+//
+// Serial (no t.Parallel): the enforceMode seam is package state.
+func TestMkdirMode_ARefusedLevelIsRemoved(t *testing.T) {
+	stubEnforceMode(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a", "b", "f.txt")
+	for attempt := range 3 {
+		if _, err := WriteFile(t.Context(), path, []byte("x"), WithMkdirMode(0o750)); !errors.Is(err, ErrModeNotStored) {
+			t.Fatalf("WriteFile() attempt %d = %v, want ErrModeNotStored", attempt+1, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "a")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("after attempt %d the refused level is %v, want it gone", attempt+1, err)
+		}
+	}
+	res, err := ProbeWritable(t.Context(), filepath.Join(dir, "a"), WithMkdirMode(0o750))
+	if err != nil || res.Stage != ProbeStageMkdir || !errors.Is(res.Err, ErrModeNotStored) {
+		t.Fatalf("ProbeWritable() = %+v, %v; want ProbeStageMkdir with ErrModeNotStored", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("after the refused probe the level is %v, want it gone", err)
+	}
 }
