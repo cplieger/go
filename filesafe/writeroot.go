@@ -128,12 +128,13 @@ var fsyncRootDir = func(root *os.Root, dir string) error {
 }
 
 // mkdirAllInRoot creates dir and every missing ancestor inside root at mode,
-// enforcing the mode on each directory it creates and fsyncing that
-// directory's parent. os.Root.MkdirAll would not do: an entry never fsynced
-// into its parent can vanish in a crash with every descendant. Pre-existing
-// directories are left as found. durable is false when a created
-// directory's parent could not be fsynced.
-func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, logger *slog.Logger) (durable bool, err error) {
+// enforcing the mode on each directory it creates when enforce, and syncing
+// that directory's parent (syncCreatedDirParent). os.Root.MkdirAll would not
+// do: an entry never fsynced into its parent can vanish in a crash with
+// every descendant. Pre-existing directories are left as found, and their
+// parents are synced too when syncExisting (a caller that saw them absent).
+// durable is false when such a parent could not be fsynced.
+func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, enforce, syncExisting bool, logger *slog.Logger) (durable bool, err error) {
 	if dir == "." {
 		return true, nil
 	}
@@ -141,14 +142,14 @@ func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, logger *slog.Lo
 	prefix := ""
 	for component := range strings.SplitSeq(dir, string(filepath.Separator)) {
 		prefix = filepath.Join(prefix, component)
-		created, levelErr := mkdirLevelInRoot(root, prefix, mode)
+		created, levelErr := mkdirLevelInRoot(root, prefix, mode, enforce)
 		if levelErr != nil {
 			return false, levelErr
 		}
-		if !created {
+		if !created && !syncExisting {
 			continue
 		}
-		if syncErr := fsyncRootDir(root, filepath.Dir(prefix)); syncErr != nil {
+		if syncErr := syncCreatedDirParent(root, filepath.Dir(prefix)); syncErr != nil {
 			logger.Warn("filesafe: fsync of a created directory's parent failed; write is not durable",
 				"root", root.Name(), "dir", prefix, "error", syncErr)
 			durable = false
@@ -158,15 +159,18 @@ func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, logger *slog.Lo
 }
 
 // mkdirLevelInRoot creates one level of the chain inside root and reports
-// whether THIS call created it, which licenses the mode enforcement and the
-// parent fsync. A level that already exists as a directory is left
-// untouched.
-func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode) (created bool, err error) {
+// whether THIS call created it, which licenses the mode enforcement (when
+// enforce) and the parent fsync. A level that already exists as a directory
+// is left untouched.
+func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode, enforce bool) (created bool, err error) {
 	mkErr := root.Mkdir(prefix, mode)
 	switch {
 	case mkErr == nil:
+		if !enforce {
+			return true, nil
+		}
 		if enfErr := enforceDirMode(root, prefix, mode); enfErr != nil {
-			return false, enfErr
+			return false, removeRefusedLevel(root, prefix, enfErr)
 		}
 		return true, nil
 	case errors.Is(mkErr, fs.ErrExist):
@@ -181,6 +185,21 @@ func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode) (created b
 	default:
 		return false, mkErr
 	}
+}
+
+// removeRefusedLevel removes the level this call just created and whose mode
+// was refused, which would otherwise pass the next write as pre-existing. It
+// goes only while it is still a directory, and removing a directory fails
+// on one a racing writer already filled; that failure joins refused.
+func removeRefusedLevel(root *os.Root, prefix string, refused error) error {
+	fi, err := root.Lstat(prefix)
+	if err != nil || !fi.IsDir() {
+		return refused
+	}
+	if rmErr := root.Remove(prefix); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		return errors.Join(refused, rmErr)
+	}
+	return refused
 }
 
 // enforceDirMode opens a directory this process just created inside root
@@ -245,8 +264,8 @@ func openTempForRoot(ctx context.Context, root *os.Root, name string, c *cfg) (s
 	}
 	dir := filepath.Dir(cleanName)
 	dirSyncFailed := false
-	if c.mkdirMode != 0 {
-		durable, mkErr := mkdirAllInRoot(root, dir, c.mkdirMode, c.logger)
+	if mode, enforce, create := c.parentDirs(); create {
+		durable, mkErr := mkdirAllInRoot(root, dir, mode, enforce, false, c.logger)
 		if mkErr != nil {
 			return stagedTemp{}, fmt.Errorf("filesafe: create parent directory %q: %w", dir, mkErr)
 		}

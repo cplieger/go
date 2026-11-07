@@ -55,7 +55,8 @@ Every write, sweep and probe accepts options. Each call ignores the options that
 | Option | Applies to | Effect |
 | --- | --- | --- |
 | `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins. On Windows it fails with `ErrModeUnsupported` |
-| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it a missing parent is an error. On Windows a nonzero mode fails with `ErrModeUnsupported` |
+| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it or `WithMkdirAll(true)` a missing parent is an error. On Windows a nonzero mode fails with `ErrModeUnsupported` |
+| `WithMkdirAll(create)` | writes, probes | `true` creates missing parent directories as `os.MkdirAll` does, at 0777 through the umask, and syncs each one's parent where the platform syncs directories. It sets and checks no mode, so it works on Windows too. `false` creates nothing. It and `WithMkdirMode` replace each other; the last call wins |
 | `WithMaxBytes(n)` | writes | Caps staged content at `n` bytes, checked while staging and before the rename. Over-cap writes match `ErrFileTooLarge`. `n <= 0` means no cap |
 | `WithLogger(l)` | every call that logs | The `*slog.Logger` for diagnostics. Default `slog.Default()` |
 | `WithRecursive(recursive)` | stale-temp sweeps | `true` descends into subdirectories. The default sweeps one directory |

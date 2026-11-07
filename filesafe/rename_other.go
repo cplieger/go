@@ -37,3 +37,7 @@ func commitTempInRoot(_ context.Context, root *os.Root, _ *os.File, tmpName, nam
 // refuseReadOnlyTarget accepts every mode: rename(2) replaces a target
 // whatever its permission bits.
 func refuseReadOnlyTarget(string, fs.FileMode) error { return nil }
+
+// syncCreatedDirParent fsyncs dir inside root, so a directory created in it
+// survives a crash with its entry.
+func syncCreatedDirParent(root *os.Root, dir string) error { return fsyncRootDir(root, dir) }

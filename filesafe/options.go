@@ -11,6 +11,7 @@ type cfg struct {
 	maxBytes       int64
 	mode           os.FileMode
 	mkdirMode      os.FileMode
+	mkdirAll       bool
 	modeSet        bool
 	recursive      bool
 	repairOwnedDir bool
@@ -66,9 +67,36 @@ func WithMode(mode os.FileMode) Option {
 // is WithMode's. Sweeps and EnsurePrivateDir ignore it. Result.Durable is
 // false if a created directory's parent fsync failed. On Windows a write or
 // probe given a nonzero mode returns ErrModeUnsupported before creating
-// anything; the caller creates a missing parent there.
+// anything; use WithMkdirAll there. It and WithMkdirAll replace each other;
+// the last call wins.
 func WithMkdirMode(mode os.FileMode) Option {
-	return func(c *cfg) { c.mkdirMode = mode }
+	return func(c *cfg) { c.mkdirMode, c.mkdirAll = mode, false }
+}
+
+// WithMkdirAll with create true makes a write or probe create missing
+// parent directories first, as os.MkdirAll does: 0777 through the umask and
+// any inherited ACL, with no mode chmod'ed or checked, on every platform.
+// Each created directory is synced into its parent where the platform syncs
+// directories; on Windows the write's flush of the published file persists
+// them on local NTFS, and Result.Durable is false on other volumes. Use
+// WithMkdirMode instead for a directory whose readers must be restricted.
+// WithMkdirAll(false) creates nothing. Either way it and WithMkdirMode
+// replace each other; the last call wins.
+func WithMkdirAll(create bool) Option {
+	return func(c *cfg) { c.mkdirMode, c.mkdirAll = 0, create }
+}
+
+// parentDirs reports whether a write or probe creates missing parent
+// directories, at which mode, and whether it proves that mode on each.
+func (c *cfg) parentDirs() (mode os.FileMode, enforce, create bool) {
+	switch {
+	case c.mkdirMode != 0:
+		return c.mkdirMode, true, true
+	case c.mkdirAll:
+		return 0o777, false, true
+	default:
+		return 0, false, false
+	}
 }
 
 // modeOptionsErr refuses WithMode and WithMkdirMode where the platform
