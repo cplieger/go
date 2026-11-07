@@ -192,6 +192,28 @@ func TestGenerate_CreatesMissingOutputFolders(t *testing.T) {
 	}
 }
 
+// A relative WithOpenAPIFiles path is the working directory's, as the option
+// documents, in a folder that exists or not; filesafe writes only absolute
+// paths, so wiregen resolves it first.
+//
+// Serial (no t.Parallel): t.Chdir changes process state.
+func TestGenerate_RelativeOpenAPIPathsAreTheWorkingDirectorys(t *testing.T) {
+	r := fullReg()
+	dir := t.TempDir()
+	t.Chdir(dir)
+	err := r.Generate(t.Context(), append(r.opts,
+		wiregen.WithTSDir("ts"),
+		wiregen.WithOpenAPIFiles(filepath.Join("api", "v1", "openapi.json"), "top.json"))...)
+	if err != nil {
+		t.Fatalf("Generate with relative OpenAPI paths failed: %v", err)
+	}
+	for _, f := range []string{filepath.Join(dir, "api", "v1", "openapi.json"), filepath.Join(dir, "top.json")} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("expected %s to exist: %v", f, err)
+		}
+	}
+}
+
 func TestGenerateConstants(t *testing.T) {
 	r := newTestRegistry()
 	r.Constants = []wiregen.WireConst{

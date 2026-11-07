@@ -190,6 +190,11 @@ func locate(p string) (target, error) {
 	if err != nil {
 		return target{}, err
 	}
+	// filesafe writes only absolute paths; a relative one is the working
+	// directory's, as WithOpenAPIFiles documents.
+	if resolved, err = filepath.Abs(resolved); err != nil {
+		return target{}, err
+	}
 	t.path = filepath.Join(append([]string{resolved}, names[n:]...)...)
 	return t, nil
 }
