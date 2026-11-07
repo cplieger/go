@@ -24,8 +24,12 @@ const (
 	// write, and under the race detector on a loaded runner that loop alone can
 	// outlast 200ms, after which the peer is already gone and there is nothing
 	// left to reset. The deadline they run under is wide enough to still be
-	// pending when Shutdown reaches the stream.
-	wedgeWriteTimeout = 1500 * time.Millisecond
+	// pending when Shutdown reaches the stream, after waitForWedge's stall.
+	wedgeWriteTimeout = 2500 * time.Millisecond
+	// wedgeStall is how long the queue must stay put before waitForWedge calls
+	// the write blocked: longer than a scheduling stall on a loaded host, well
+	// inside wedgeWriteTimeout.
+	wedgeStall = 200 * time.Millisecond
 	// wedgeFrames of one MiB each exceeds the loopback send and receive buffers
 	// together (measured: the writer blocks after three), so a peer that stops
 	// reading wedges the writer well inside the write timeout.
@@ -67,15 +71,19 @@ func pollUntil(t *testing.T, timeout time.Duration, what string, cond func() boo
 }
 
 // waitForWedge polls until the stream goroutine has stopped pulling frames
-// off its channel, which on a peer that is not reading means its write blocked.
+// off its channel for wedgeStall, which on a peer that is not reading means
+// its write blocked. One unchanged poll is not enough: on a loaded host the
+// goroutine can sit unscheduled for a tick while its writes still complete.
 func waitForWedge(t *testing.T, h *Hub, queued int) {
 	t.Helper()
-	last := -1
+	last, since := -1, time.Now()
 	pollUntil(t, 5*time.Second, "the stream write to wedge", func() bool {
 		n := h.QueuedFrames()
-		stable := n == last && n < queued
-		last = n
-		return stable
+		if n != last {
+			last, since = n, time.Now()
+			return false
+		}
+		return n < queued && time.Since(since) >= wedgeStall
 	})
 }
 
