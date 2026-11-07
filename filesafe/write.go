@@ -43,8 +43,8 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 		return nil, "", false, fmt.Errorf("filesafe: %w", ctxErr)
 	}
 	dir := filepath.Dir(cleanPath)
-	if c.mkdirMode != 0 {
-		failed, mkErr := mkdirAllAbs(dir, c.mkdirMode, c.logger)
+	if mode, enforce, create := c.parentDirs(); create {
+		failed, mkErr := mkdirAllAbs(dir, mode, enforce, c.logger)
 		if mkErr != nil {
 			return nil, "", false, fmt.Errorf("filesafe: create parent directory %q: %w", dir, mkErr)
 		}
@@ -58,12 +58,12 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 }
 
 // mkdirAllAbs creates the absolute directory dir and every missing ancestor
-// at mode, inside an *os.Root opened on the deepest existing ancestor, so a
+// at mode (proved on each when enforce), inside an *os.Root opened on the deepest existing ancestor, so a
 // missing level a racing writer plants as an escaping symlink is refused
 // rather than followed. os.MkdirAll would not say which levels are new,
 // which the parent fsyncs need. dirSyncFailed is mkdirAllInRoot's durable,
 // inverted.
-func mkdirAllAbs(dir string, mode os.FileMode, logger *slog.Logger) (dirSyncFailed bool, err error) {
+func mkdirAllAbs(dir string, mode os.FileMode, enforce bool, logger *slog.Logger) (dirSyncFailed bool, err error) {
 	base, rel, err := deepestExistingDir(dir)
 	if err != nil {
 		return false, err
@@ -76,7 +76,7 @@ func mkdirAllAbs(dir string, mode os.FileMode, logger *slog.Logger) (dirSyncFail
 		return false, err
 	}
 	defer root.Close()
-	durable, err := mkdirAllInRoot(root, rel, mode, logger)
+	durable, err := mkdirAllInRoot(root, rel, mode, enforce, logger)
 	return !durable, err
 }
 

@@ -38,7 +38,7 @@ A `maxAge` of zero or less skips the sweep with a `Warn` instead of removing eve
 
 ## Probing a directory
 
-`ProbeWritable(ctx, dir)` proves a directory takes writes by doing what a write does. It creates a temp file, writes and syncs one byte, closes the file and removes it, then reports which stage failed. `dir` may be relative, and `WithMkdirMode` creates it first. Under `WithMode` the probe must also prove an owner-only staging file, as a write would. On Windows either mode option makes the probe return `ErrModeUnsupported` before it creates anything.
+`ProbeWritable(ctx, dir)` proves a directory takes writes by doing what a write does. It creates a temp file, writes and syncs one byte, closes the file and removes it, then reports which stage failed. `dir` may be relative, and `WithMkdirMode` or `WithMkdirAll` creates it first. Under `WithMode` the probe must also prove an owner-only staging file, as a write would. On Windows either mode option makes the probe return `ErrModeUnsupported` before it creates anything.
 
 `ProbeWritableInRoot(ctx, root, name)` runs the same probe through an `*os.Root` you already hold, with `"."` for the root itself. A name that escapes the root is refused.
 

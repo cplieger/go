@@ -2,7 +2,7 @@
 
 This page explains how filesafe sets file and directory modes, and how `EnsurePrivateDir` sets up a directory only one user may enter, for a developer writing credentials, configuration or backups.
 
-None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A write without them creates the file with the directory's inherited ACL.
+None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll` creates missing parent directories the same way.
 
 ## Ordinary and enforced modes
 
@@ -10,7 +10,7 @@ Pass `WithMode` for any file whose readers must be restricted, such as credentia
 
 Omit `WithMode` for a file in a shared tree whose permissions an operator manages through the umask or inherited ACLs, such as a media library. Such a file is created like `os.Create`, at 0666 through the umask, and is never chmod'ed, so the tree's own policy applies. Replacing an existing file without `WithMode` gives the new file those creation defaults, not the old file's mode.
 
-`WithMkdirMode(mode)` creates missing parent directories and proves `mode` on each one it creates. A directory that already exists is never chmod'ed.
+`WithMkdirMode(mode)` creates missing parent directories and proves `mode` on each one it creates. A directory that already exists is never chmod'ed. `WithMkdirAll()` creates them as `os.MkdirAll` does, at 0777 through the umask, and proves nothing, for a tree whose permissions the umask or inherited ACLs manage.
 
 ## A mode argument is a request
 

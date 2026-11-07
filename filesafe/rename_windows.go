@@ -197,3 +197,9 @@ func refuseReadOnlyTarget(name string, mode fs.FileMode) error {
 	}
 	return nil
 }
+
+// syncCreatedDirParent is a no-op on Windows, which has no directory sync:
+// FlushFileBuffers refuses the read-only handle Go opens on a directory. The
+// commit's flush of the published file stands for it on NTFS, and the volume
+// check reports any other filesystem's write not durable.
+func syncCreatedDirParent(*os.Root, string) error { return nil }

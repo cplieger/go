@@ -108,8 +108,8 @@ func (r ProbeResult) Writable() bool {
 // (create a TempName file, write and flush a byte, close, unlink) and reports
 // the first failed stage in the ProbeResult; a non-nil error means the probe
 // could not start (empty dir, done ctx, a refused mode option). dir may be
-// relative; a missing dir fails at ProbeStageCreate unless WithMkdirMode
-// creates it. WithMode makes it prove an owner-only staging file; on Windows
+// relative; a missing dir fails at ProbeStageCreate unless WithMkdirMode or
+// WithMkdirAll creates it. WithMode makes it prove an owner-only staging file; on Windows
 // either mode option returns ErrModeUnsupported. ctx is checked once, a
 // started probe always cleans up, and CleanupStaleTemps reclaims a leftover.
 func ProbeWritable(ctx context.Context, dir string, opts ...Option) (ProbeResult, error) {
@@ -124,8 +124,8 @@ func ProbeWritable(ctx context.Context, dir string, opts ...Option) (ProbeResult
 		return ProbeResult{}, fmt.Errorf("filesafe: %w", ctxErr)
 	}
 	clean := filepath.Clean(dir)
-	if c.mkdirMode != 0 {
-		if mkErr := os.MkdirAll(clean, c.mkdirMode); mkErr != nil {
+	if mode, _, create := c.parentDirs(); create {
+		if mkErr := os.MkdirAll(clean, mode); mkErr != nil {
 			return ProbeResult{Dir: clean, Stage: ProbeStageMkdir, Err: mkErr}, nil
 		}
 	}
@@ -171,8 +171,8 @@ func ProbeWritableInRoot(ctx context.Context, root *os.Root, name string, opts .
 // failure never leaks a file the directory would happily remove. Only the
 // first failure is reported; a secondary teardown failure goes to Debug.
 func probeInRoot(root *os.Root, dir string, c *cfg) ProbeResult {
-	if c.mkdirMode != 0 {
-		if mkErr := root.MkdirAll(dir, c.mkdirMode); mkErr != nil {
+	if mode, _, create := c.parentDirs(); create {
+		if mkErr := root.MkdirAll(dir, mode); mkErr != nil {
 			return ProbeResult{Dir: filepath.Join(root.Name(), dir), Stage: ProbeStageMkdir, Err: mkErr}
 		}
 	}

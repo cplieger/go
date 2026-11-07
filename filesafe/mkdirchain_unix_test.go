@@ -228,7 +228,7 @@ func TestMkdirAllInRoot_NonDirectoryInChain(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("i am a file"), 0o600); err != nil {
 		t.Fatalf("WriteFile() = %v", err)
 	}
-	durable, err := mkdirAllInRoot(root, filepath.Join("a", "b"), 0o755, slog.Default())
+	durable, err := mkdirAllInRoot(root, filepath.Join("a", "b"), 0o755, true, slog.Default())
 	if err == nil {
 		t.Fatal("mkdirAllInRoot(file in the chain) = nil, want an error")
 	}
@@ -251,7 +251,7 @@ func TestMkdirAllInRoot_RefusesAnEscapingSymlinkInTheChain(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "a")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if _, err := mkdirAllInRoot(root, filepath.Join("a", "b"), 0o755, slog.Default()); err == nil {
+	if _, err := mkdirAllInRoot(root, filepath.Join("a", "b"), 0o755, true, slog.Default()); err == nil {
 		t.Fatal("mkdirAllInRoot(through an escaping symlink) = nil, want a refusal")
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "b")); statErr == nil {

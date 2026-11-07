@@ -45,7 +45,7 @@ On Windows `Durable` is true only on a local NTFS volume, when both the temp syn
 
 A caller that needs strict durability treats `Durable == false` as a failure to act on, by retrying or alerting. A caller that only needs atomicity can ignore it. A non-nil error always means the data did not reach its final path.
 
-`WithMkdirMode` is covered by the same guarantee. Each directory the write creates has its own parent synced as it is made. A directory entry that was never synced into its parent can vanish in a crash and take the whole subtree with it, including a file that was itself synced and renamed. A write that creates three directory levels therefore syncs four directories, and `Result.Durable` is false if any of those syncs failed.
+`WithMkdirMode` and `WithMkdirAll` are covered by the same guarantee. Each directory the write creates has its own parent synced as it is made, except on Windows, which has no directory sync: there the write's flush of the published file stands for it on NTFS, and `Result.Durable` is false on the volumes listed below. A directory entry that was never synced into its parent can vanish in a crash and take the whole subtree with it, including a file that was itself synced and renamed. A write that creates three directory levels therefore syncs four directories, and `Result.Durable` is false if any of those syncs failed.
 
 ## Concurrent writers
 
