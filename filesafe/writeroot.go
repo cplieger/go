@@ -170,15 +170,7 @@ func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode, enforce bo
 			return true, nil
 		}
 		if enfErr := enforceDirMode(root, prefix, mode); enfErr != nil {
-			// A refused level would pass the next write as pre-existing, so
-			// it goes while it is still a directory; removing a directory
-			// fails on one a racing writer already filled.
-			if fi, lErr := root.Lstat(prefix); lErr == nil && fi.IsDir() {
-				if rmErr := root.Remove(prefix); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-					enfErr = errors.Join(enfErr, rmErr)
-				}
-			}
-			return false, enfErr
+			return false, removeRefusedLevel(root, prefix, enfErr)
 		}
 		return true, nil
 	case errors.Is(mkErr, fs.ErrExist):
@@ -193,6 +185,21 @@ func mkdirLevelInRoot(root *os.Root, prefix string, mode os.FileMode, enforce bo
 	default:
 		return false, mkErr
 	}
+}
+
+// removeRefusedLevel removes the level this call just created and whose mode
+// was refused, which would otherwise pass the next write as pre-existing. It
+// goes only while it is still a directory, and removing a directory fails
+// on one a racing writer already filled; that failure joins refused.
+func removeRefusedLevel(root *os.Root, prefix string, refused error) error {
+	fi, err := root.Lstat(prefix)
+	if err != nil || !fi.IsDir() {
+		return refused
+	}
+	if rmErr := root.Remove(prefix); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		return errors.Join(refused, rmErr)
+	}
+	return refused
 }
 
 // enforceDirMode opens a directory this process just created inside root
