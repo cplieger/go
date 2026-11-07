@@ -83,7 +83,7 @@ func SwapDefault(tb testing.TB, l *slog.Logger) {
 }
 
 // Enabled reports true for every level so nothing is filtered before capture.
-func (rec *Recorder) Enabled(context.Context, slog.Level) bool { return true }
+func (*Recorder) Enabled(context.Context, slog.Level) bool { return true }
 
 // Handle records r as a stdlib handler would emit it: attribute values are
 // resolved and degenerate attrs are dropped or inlined per the slog.Handler
@@ -144,7 +144,7 @@ type derived struct {
 }
 
 // Enabled reports true for every level so nothing is filtered before capture.
-func (d *derived) Enabled(context.Context, slog.Level) bool { return true }
+func (*derived) Enabled(context.Context, slog.Level) bool { return true }
 
 // Handle materializes the derivation prefix into the record — inherited
 // attributes at their nesting depth, later attributes and the record's own

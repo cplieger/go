@@ -25,7 +25,7 @@ func TestSubmit_FinalEventOverRealSocket(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sock, _ := startTestServer(t, func(j *Job[testPayload]) {
+			sock := startTestServer(t, func(j *Job[testPayload]) {
 				j.Start()
 				j.Finish(tt.out)
 			})
@@ -109,7 +109,7 @@ func TestAwaitDone_StreamHandling(t *testing.T) {
 // outcome's annotations: an OK result can carry a reason (an app-defined
 // skip tolerance) and the duration lands in milliseconds.
 func TestSubmit_ReasonAndDurationReachTheClient(t *testing.T) {
-	sock, _ := startTestServer(t, func(j *Job[testPayload]) {
+	sock := startTestServer(t, func(j *Job[testPayload]) {
 		j.Start()
 		j.Finish(Outcome{OK: true, Reason: "skipped: lock held by another container", Duration: 1500 * time.Millisecond})
 	})
@@ -136,7 +136,7 @@ func TestSubmit_CancellationAbortsTheWait(t *testing.T) {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	sock, _ := startTestServer(t, func(j *Job[testPayload]) {
+	sock := startTestServer(t, func(j *Job[testPayload]) {
 		j.Start()
 		close(started)
 		<-release // never finish the job; the client must give up on its own
@@ -172,7 +172,7 @@ func TestSubmit_CancelledDialReportsTheCancellation(t *testing.T) {
 	// Not parallel: Listen swaps the process-wide umask, so this test's own
 	// socket directory must not be created while a sibling holds that window.
 	// See TestSubmit_CancelledSendReportsTheCancellation for the measurement.
-	sock, _ := startTestServer(t, runOK)
+	sock := startTestServer(t, runOK)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 

@@ -270,7 +270,7 @@ type writerToCancelReader struct {
 	chunks int
 }
 
-func (w *writerToCancelReader) Read([]byte) (int, error) { return 0, io.EOF }
+func (*writerToCancelReader) Read([]byte) (int, error) { return 0, io.EOF }
 
 func (w *writerToCancelReader) WriteTo(dst io.Writer) (int64, error) {
 	var total int64

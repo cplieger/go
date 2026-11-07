@@ -137,7 +137,7 @@ func (e *NotRegularError) Error() string {
 	return fmt.Sprintf("%s: %s (type %s)", ErrNotRegular.Error(), e.Name, e.Mode.Type())
 }
 
-func (e *NotRegularError) Unwrap() error { return ErrNotRegular }
+func (*NotRegularError) Unwrap() error { return ErrNotRegular }
 
 // notRegular is the one producer, so the three refusal sites cannot drift in
 // what they report.
