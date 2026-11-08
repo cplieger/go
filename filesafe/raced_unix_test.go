@@ -5,10 +5,12 @@ package filesafe
 import (
 	"errors"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // withPinOpenHook installs fn between a component's Lstat and its open for
@@ -98,6 +100,7 @@ func TestRacedOpen_Classification(t *testing.T) {
 		"ENOENT, name still there": {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENOENT}, true},
 		"os.Root not a directory":  {&fs.PathError{Op: "open", Path: "f", Err: errors.New("not a directory")}, true},
 		"closed root":              {&fs.PathError{Op: "openat", Path: "f", Err: os.ErrClosed}, false},
+		"ENXIO, regular file seen": {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENXIO}, true},
 		"unchanged EMFILE":         {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EMFILE}, false},
 		"unchanged io error":       {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EIO}, false},
 	} {
@@ -241,9 +244,20 @@ func TestOpenRegularInRootNoFollow_SwappedNameIsErrRaced(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"a socket": func(t *testing.T, dir string) {
+			mustRename(t, filepath.Join(dir, "f"), filepath.Join(dir, "f.old"))
+			listenUnixForTest(t, filepath.Join(dir, "f"))
+		},
+		"a symlink to a socket": func(t *testing.T, dir string) {
+			listenUnixForTest(t, filepath.Join(dir, "s"))
+			mustRename(t, filepath.Join(dir, "f"), filepath.Join(dir, "f.old"))
+			if err := os.Symlink("s", filepath.Join(dir, "f")); err != nil {
+				t.Fatal(err)
+			}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			root, dir := openTestRoot(t)
+			root, dir := shortTestRoot(t)
 			if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -258,6 +272,103 @@ func TestOpenRegularInRootNoFollow_SwappedNameIsErrRaced(t *testing.T) {
 			}
 			if !errors.Is(err, ErrRaced) {
 				t.Errorf("OpenRegularInRootNoFollow after the swap = %v, want ErrRaced", err)
+			}
+		})
+	}
+}
+
+// shortTestRoot is openTestRoot in a short directory, so a socket path inside
+// it stays under the 108-byte limit.
+func shortTestRoot(t *testing.T) (*os.Root, string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "fs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	return root, dir
+}
+
+// listenUnixForTest binds a Unix socket at path for the test's lifetime.
+func listenUnixForTest(t *testing.T, path string) {
+	t.Helper()
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+}
+
+// TestOpenParentInRoot_FIFOSwappedForAComponentIsRefused pins that a FIFO
+// swapped in for a directory component between its Lstat and its open is
+// refused at once (ErrRaced) instead of blocking the open on a FIFO with no
+// writer.
+func TestOpenParentInRoot_FIFOSwappedForAComponentIsRefused(t *testing.T) {
+	root, dir := openTestRoot(t)
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withPinOpenHook(t, func(component string) {
+		if component != "d" {
+			return
+		}
+		mustRename(t, filepath.Join(dir, "d"), filepath.Join(dir, "d.old"))
+		if err := MkfifoForTest(filepath.Join(dir, "d")); err != nil {
+			t.Skipf("mkfifo unsupported: %v", err)
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		parent, _, err := OpenParentInRoot(root, "d/x")
+		if err == nil {
+			_ = parent.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRaced) {
+			t.Errorf("OpenParentInRoot after a FIFO swap = %v, want ErrRaced", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("OpenParentInRoot blocked on a FIFO swapped in for a directory")
+	}
+}
+
+// TestDirectoryEntryPoints_RefuseAFIFOWithoutBlocking pins that a FIFO where a
+// directory belongs is refused at once by the ambient entry points that open
+// a directory by path.
+func TestDirectoryEntryPoints_RefuseAFIFOWithoutBlocking(t *testing.T) {
+	t.Parallel()
+	fifo := filepath.Join(t.TempDir(), "pipe")
+	if err := MkfifoForTest(fifo); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+	for name, call := range map[string]func() error{
+		"WriteFile": func() error {
+			_, err := WriteFile(t.Context(), filepath.Join(fifo, "f.txt"), []byte("x"))
+			return err
+		},
+		"ProbeWritable":     func() error { _, err := ProbeWritable(t.Context(), fifo); return err },
+		"CleanupStaleTemps": func() error { _, err := CleanupStaleTemps(t.Context(), fifo, time.Hour); return err },
+		"CleanupStaleTemps, deep": func() error {
+			_, err := CleanupStaleTemps(t.Context(), fifo, time.Hour, WithRecursive(true))
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			done := make(chan error, 1)
+			go func() { done <- call() }()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s blocked on a FIFO where a directory belongs", name)
 			}
 		})
 	}

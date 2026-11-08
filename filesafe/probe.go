@@ -142,7 +142,7 @@ func ProbeWritable(ctx context.Context, dir string, opts ...WriteOption) (ProbeR
 			return ProbeResult{Dir: clean, Phase: ProbePhaseMkdir, Err: mkErr}, nil
 		}
 	}
-	root, err := os.OpenRoot(clean)
+	root, err := os.OpenRoot(dirOpenName(clean))
 	if err != nil {
 		return ProbeResult{Dir: clean, Phase: ProbePhaseCreate, Err: err}, nil
 	}

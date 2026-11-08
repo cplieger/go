@@ -96,18 +96,21 @@ var pinOpenHook func(name string)
 // racedOpen classifies an open of name that failed after an Lstat of it
 // returned before. ENOTDIR and ELOOP can only mean the name changed, since
 // the Lstat saw neither a non-directory where a directory is opened nor a
-// symlink, and so can an error os.Root makes itself ("not a directory",
-// "path escapes from parent"), which means the resolution met something the
-// Lstat did not see; a closed or invalid root is the caller's misuse. Any
-// other failure is a race when name, looked up again, is present but is not
-// the object the Lstat saw, or is present after an open that found nothing.
-// Those are ErrRaced, the refusal a retry can cure; a name that is gone
-// stays fs.ErrNotExist and every other failure is returned as it is.
+// symlink; so can ENXIO when the Lstat saw a directory or a regular file,
+// because open(2) answers ENXIO only for a socket or a device with no
+// driver. An error os.Root makes itself ("not a directory", "path escapes
+// from parent") means the resolution met something the Lstat did not see;
+// a closed root is the caller's misuse. Any other failure is a race when
+// name, looked up again, is present but is not the file the Lstat saw, or is
+// present after an open that found nothing. Those are ErrRaced, the refusal
+// a retry can cure; a name that is gone stays fs.ErrNotExist and every other
+// failure is returned as it is.
 func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
 	var errno syscall.Errno
 	isErrno := errors.As(err, &errno)
-	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP) ||
-		!isErrno && !errors.Is(err, os.ErrClosed) && !errors.Is(err, os.ErrInvalid)
+	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP ||
+		errno == syscall.ENXIO && (before.IsDir() || before.Mode().IsRegular())) ||
+		!isErrno && !errors.Is(err, os.ErrClosed)
 	if !changed {
 		now, lErr := root.Lstat(name)
 		switch {
@@ -116,7 +119,7 @@ func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error 
 		case errors.Is(err, fs.ErrNotExist):
 			changed = true // present before and after, absent at the open
 		default:
-			changed = now.Mode().Type() != before.Mode().Type() || !os.SameFile(before, now)
+			changed = !os.SameFile(before, now)
 		}
 	}
 	if changed {
@@ -171,7 +174,7 @@ func pinChildInRoot(parent *os.Root, name string) (*os.Root, error) {
 	if pinOpenHook != nil {
 		pinOpenHook(name)
 	}
-	next, err := parent.OpenRoot(name)
+	next, err := parent.OpenRoot(dirOpenName(name))
 	if err != nil {
 		return nil, fmt.Errorf("filesafe: open path component %q: %w", name, racedOpen(parent, name, fi, err))
 	}

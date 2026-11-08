@@ -157,7 +157,7 @@ func CleanupStaleTemps(ctx context.Context, dir string, maxAge time.Duration, op
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return SweepResult{}, fmt.Errorf("filesafe: %w", ctxErr)
 	}
-	d, rdErr := os.Open(dir)
+	d, rdErr := os.Open(dirOpenName(dir))
 	if rdErr != nil {
 		if errors.Is(rdErr, fs.ErrNotExist) {
 			return SweepResult{}, nil
@@ -220,12 +220,21 @@ func (s *ambientSweep) reapDir(d *os.File, dir string) error {
 // that needs the removals confined against a co-mounting writer wants
 // CleanupStaleTempsInRoot instead.
 func (s *ambientSweep) reapTree(dir string) error {
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+	// Walked through an os.Root with WalkDirInRoot, not filepath.WalkDir: its
+	// directory opens are O_DIRECTORY and non-blocking, so a FIFO swapped in
+	// for a subdirectory mid-walk is refused rather than waited on.
+	root, err := os.OpenRoot(dirOpenName(dir))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return WalkDirInRoot(s.ctx, root, func(rel string, d fs.DirEntry, walkErr error) error {
 		if ctxErr := s.ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		path := filepath.Join(dir, filepath.FromSlash(rel))
 		if walkErr != nil {
-			if path == dir {
+			if rel == "." {
 				return walkErr
 			}
 			s.logger.Debug("filesafe.CleanupStaleTemps: skipping unreadable path", "path", path, "error", walkErr)

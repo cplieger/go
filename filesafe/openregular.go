@@ -115,6 +115,9 @@ func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInf
 	if before.Mode()&os.ModeSymlink != 0 {
 		return nil, nil, fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
 	}
+	if !before.Mode().IsRegular() {
+		return nil, nil, notRegular(clean, before.Mode())
+	}
 
 	if pinOpenHook != nil {
 		pinOpenHook(clean)
@@ -123,9 +126,6 @@ func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInf
 	// between the Lstat and here is a rejection rather than a hang.
 	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		if errors.Is(err, syscall.ENXIO) {
-			return nil, nil, socketRefusal(err, clean, func() (os.FileInfo, error) { return root.Lstat(clean) })
-		}
 		return nil, nil, racedOpen(root, clean, before, err)
 	}
 	fi, err := f.Stat()
@@ -133,16 +133,11 @@ func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInf
 		_ = f.Close()
 		return nil, nil, err
 	}
-	// Identity BEFORE kind: a name swapped for a directory is more honestly
-	// reported as a race than as "not a regular file", because the caller's
-	// question was about the object it checked.
+	// The Lstat proved a regular file, so the same inode is one; any other
+	// object at the name now is a swap.
 	if !os.SameFile(before, fi) {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("%w: %s", ErrRaced, clean)
-	}
-	if !fi.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, nil, notRegular(clean, fi.Mode())
 	}
 	return f, fi, nil
 }
