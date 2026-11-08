@@ -8,15 +8,26 @@ import (
 
 const redactedMark = "[redacted]"
 
+// Marker is the truncation marker RedactSingleLineCapped appends to a cut
+// result, written as given and never sanitized: the caller's own program
+// text, never untrusted input or a secret.
+type Marker string
+
 // RedactSingleLineCapped sanitizes s like SanitizeSingleLine, writing
 // "[redacted]" in place of every rune that an occurrence of a non-empty secret
 // touches, in s or in its sanitized form, one mark per run of such runes; then
-// caps like SanitizeSingleLineCapped, dropping a trailing proper prefix of a
-// secret after a cut. No occurrence in s or its sanitized form survives, though
-// a mark and its neighbours can spell a secret that shares text with
-// "[redacted]". Pass s whole: a secret your own truncation split survives as
-// its prefix whenever s then fits n.
-func RedactSingleLineCapped(s string, n int, marker string, secrets ...string) (text string, cut bool) {
+// caps the result as SanitizeSingleLineCapped does, marker inside n, after
+// reading all of s, and drops a trailing proper prefix of a secret after a
+// cut. No occurrence in s or its sanitized form survives, though a mark and
+// its neighbours can spell a secret that shares text with "[redacted]". Pass
+// s whole: a secret your own truncation split survives as its prefix whenever
+// s then fits n.
+//
+// marker is a Marker, not a string, because it sits beside the secrets: a
+// call that put a secret in the marker's place, or left the marker out, would
+// otherwise compile and append the secret itself on a cut. An untyped
+// constant such as "..." converts on its own.
+func RedactSingleLineCapped(s string, n int, marker Marker, secrets ...string) (text string, cut bool) {
 	needles := make([]string, 0, len(secrets))
 	for _, secret := range secrets {
 		if secret != "" {
@@ -30,7 +41,7 @@ func RedactSingleLineCapped(s string, n int, marker string, secrets ...string) (
 	if t == "" || len(t) <= n {
 		return t, false
 	}
-	head, mark := markedCut(t, n, marker)
+	head, mark := markedCut(t, n, string(marker))
 	return trimSecretPrefix(head, needles) + mark, true
 }
 

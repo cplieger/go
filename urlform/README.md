@@ -12,7 +12,7 @@ urlform is built for Go programs that show untrusted URLs to people as links, or
 
 - `Classify` puts every string in exactly one of seven classes and never returns an error.
 - It reports the host a browser opens for `https:/host/x`, `/\host/x` and the Go string `"https://anime\tbytes.tv"`.
-- `HostMatchesDomain` refuses `evilnyaa.si` and `nyaa.si.evil.example` for the domain `nyaa.si`, and `IsASCIIHost` refuses a lookalike host.
+- `Domain.Matches` refuses `evilnyaa.si` and `nyaa.si.evil.example` for the domain `nyaa.si`, and `IsASCIIHost` refuses a lookalike host.
 - `RawQueryNames` finds `apikey` in `apikey=SECRET;foo=x`, a pair `url.ParseQuery` drops.
 - It never accepts or refuses a URL. Your code sets the policy.
 - 29 test cases pin the browser readings, 17 of them from the browsers' shared [web-platform-tests](https://github.com/web-platform-tests/wpt).
@@ -61,7 +61,7 @@ if f.Host == "" || !urlform.IsASCIIHost(f.Host) {
 	return nil, false
 }
 for domain, tracker := range knownDomains {
-	if urlform.HostMatchesDomain(f.Host, domain) {
+	if urlform.Domain(domain).Matches(f.Host) {
 		return tracker, true
 	}
 }
@@ -93,8 +93,8 @@ if p := f.NormalizedPath(); p == "" || !strings.HasPrefix(p, "/beat/") {
 
 - `Classify` returns a `Form`, which holds the `Class` and the facts a browser sees: `Trimmed`, `Host`, `Scheme`, `Port`, `HasBackslash`, `HasTabOrNewline`, `HasUserInfo` and `HostUnrecoverable`.
 - `Class` is one of `ClassEmpty`, `ClassMalformed`, `ClassAbsolute`, `ClassHiddenHost`, `ClassProtocolRelative`, `ClassSchemelessHost` and `ClassRelative`.
-- `(*Form).NormalizedPath` returns the path a browser resolves, with dot segments removed.
-- `IsASCIIHost`, `FoldHostASCII` and `HostMatchesDomain` check host evidence. `EqualASCIIFold` compares ASCII tokens that are not hosts, such as a query parameter name.
+- `Form.NormalizedPath` returns the path a browser resolves, with dot segments removed.
+- `IsASCIIHost`, `FoldHostASCII` and `Domain` with its `Matches` method check host evidence. `EqualASCIIFold` compares ASCII tokens that are not hosts, such as a query parameter name.
 - `RawQueryNames` and `RawQueryPairs` walk a raw query without the parsed map.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/urlform).

@@ -13,7 +13,7 @@ textsafe is built for Go code that logs or re-emits text it did not write, such 
 - It replaces C0 and C1 controls, DEL, the 12 bidi controls, and U+2028 and U+2029 with a space.
 - `encoding/json` and slog's `JSONHandler` write C1 and bidi controls unescaped, so JSON alone does not stop a terminal escape or a [Trojan Source](https://trojansource.codes) reordering.
 - `Sanitize` keeps CR and LF for JSON, and `SanitizeSingleLine` replaces them for a one-line sink.
-- Caps cut on a rune boundary, and the budgeted forms bound the sanitizer's work too.
+- Caps cut on a rune boundary, and `SanitizeCapped`, `SanitizeSingleLineCapped` and `Budget` bound the sanitizer's work too.
 - An `Untrusted` value emits its sanitized form whenever slog, an encoder or a `fmt` verb writes it, as a field, a slice element or a map key. The exceptions are `%#v`, which prints an ASCII-escaped constructor call, and `%T`, `%p` and a `%w` on a non-error, which `fmt` prints without calling its methods. It stores no raw unsafe rune for such a reflection-based printer to find.
 - `Sanitize`, `SanitizeSingleLine` and `Untrusted` in slog and in `fmt`'s `%v` and `%s` do not allocate for clean text.
 
@@ -59,14 +59,14 @@ if ep.Title.Raw() == stored.Title { /* matching stays raw */ }
 
 Tag text that does not come from a decoder with `textsafe.NewUntrusted(s)`. If your program saves a struct and reads it back, store `Raw` in a plain `string` field, because `json.Marshal` writes a tagged field in its sanitized form.
 
-The package has 15 runnable examples on pkg.go.dev, and `go test` keeps them true. [Bounding sanitized text](docs/capping.md) covers hard size limits and bounding the sanitizer's work.
+The package has 14 runnable examples on pkg.go.dev, and `go test` keeps them true. [Bounding sanitized text](docs/capping.md) covers hard size limits and bounding the sanitizer's work.
 
 ## API
 
 - `Sanitize` and `SanitizeSingleLine` sanitize a whole string, keeping or replacing CR and LF.
-- `SanitizeSingleLineBounded`, `SanitizeCapped` and `SanitizeSingleLineCapped` sanitize the whole value first and then cut it to the cap. `SanitizeCapped` and `SanitizeSingleLineCapped` also return whether they cut, and the marker you pass counts toward the cap.
-- `SanitizeBudgeted` and `SanitizeSingleLineBudgeted` cut the raw value to the cap before sanitizing, so a huge value costs no more work than a short one. A `Budget`, created with `NewBudget` or `NewSingleLineBudget`, does the same for several values that share one cap.
-- `RedactSingleLineCapped` removes known secrets from the text and from its sanitized form for a single line, then caps like `SanitizeSingleLineCapped`.
+- `SanitizeSingleLineBounded` sanitizes the whole value and then cuts it to the cap, marking a cut with `...` outside it.
+- `SanitizeCapped` and `SanitizeSingleLineCapped` cut the raw value to the cap before sanitizing, so a huge value costs no more work than a short one. They return whether they cut, and the marker you pass counts toward the cap. A `Budget`, created with `NewBudget` or `NewSingleLineBudget`, does the same for several values that share one cap.
+- `RedactSingleLineCapped` removes known secrets from the text and from its sanitized form for a single line, then cuts the result to the cap with the marker inside it. It reads the whole value, so it does not bound the work.
 - `CapBytes` keeps the head and `CapBytesTail` keeps the tail, both cut on a rune boundary.
 - `IsUnsafeMultiLine`, `IsUnsafeSingleLine`, `IsUnsafeNonASCII` and `IsBidiControl` classify one rune, for a policy of your own.
 - `Untrusted`, created with `NewUntrusted` or by decoding, has `Raw` and `SingleLine`, plus the `LogValue`, `String`, `Format`, `MarshalText` and `UnmarshalText` methods that slog, `fmt` and encoders call.

@@ -60,8 +60,8 @@ func checkSentinel(t *testing.T, s string, n int, marker, sentinel string, secre
 // result.
 func checkRedact(t *testing.T, s string, n int, marker string, secrets []string) (head, full string) {
 	t.Helper()
-	out, cut := textsafe.RedactSingleLineCapped(s, n, marker, secrets...)
-	full, fullCut := textsafe.RedactSingleLineCapped(s, math.MaxInt, marker, secrets...)
+	out, cut := textsafe.RedactSingleLineCapped(s, n, textsafe.Marker(marker), secrets...)
+	full, fullCut := textsafe.RedactSingleLineCapped(s, math.MaxInt, textsafe.Marker(marker), secrets...)
 	if fullCut {
 		t.Fatalf("uncapped call reported a cut for %q", s)
 	}

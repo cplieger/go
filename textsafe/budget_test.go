@@ -8,13 +8,13 @@ import (
 	"github.com/cplieger/go/textsafe"
 )
 
-// composedBudgeted is the local composition textsafe directs a work-bounding
+// composedCapFirst is the local composition textsafe directs a work-bounding
 // caller to hand-roll out of the exported primitives — cap the RAW bytes on a
 // rune boundary, sanitize the chunk, re-cap the growth sanitizing can cause,
 // then charge the marker inside the cap — kept as the independent oracle for
 // the packaged form. Written against the public API only, so it pins the
 // primitive against the composition rather than against its own internals.
-func composedBudgeted(s string, n int, marker string, sanitize func(string) string) (string, bool) {
+func composedCapFirst(s string, n int, marker string, sanitize func(string) string) (string, bool) {
 	clean, cut := "", s != ""
 	if n > 0 {
 		chunk := textsafe.CapBytes(s, n)
@@ -34,16 +34,17 @@ func composedBudgeted(s string, n int, marker string, sanitize func(string) stri
 	}
 }
 
-// TestSanitizeBudgetedPair covers the one-value pre-cap form on both CR/LF
+// TestSanitizeCappedCapFirst covers the one-value cap-first form on both CR/LF
 // policies at once (the two share every axis but that policy): the marker is
 // charged against the cap so the total never exceeds max(n, 0) exactly as the
 // Capped pair promises, a value that fits comes back untouched with cut false,
 // a cap too small for the marker drops the marker rather than emitting a
 // fragment, an empty marker caps silently, sanitization growth is re-capped,
 // every truncation lands on a rune boundary, and the raw pre-cap shows up as
-// the one documented divergence from the Capped pair (an oversized value that
-// SHRINKS when sanitized is cut and marked here).
-func TestSanitizeBudgetedPair(t *testing.T) {
+// the two documented divergences from sanitizing first (an oversized value
+// holding multi-byte unsafe runes can keep fewer bytes and is cut and marked
+// even when it SHRINKS to fit, and an invalid-UTF-8 value can keep fewer).
+func TestSanitizeCappedCapFirst(t *testing.T) {
 	tests := []struct {
 		name       string
 		in         string
@@ -73,12 +74,18 @@ func TestSanitizeBudgetedPair(t *testing.T) {
 		{"two-byte rune backoff below marker width", "aé", 2, "...", "a", "a", true},
 		{"four-byte rune backoff with one-byte marker", "a\U0001f600b", 5, "*", "a*", "a*", true},
 		{"sanitizer growth is re-capped", "\xff\xff\xff", 8, "...", "\ufffd...", "\ufffd...", true},
-		// The pre-cap's one observable divergence from SanitizeCapped: five
-		// three-byte bidi overrides are 15 raw bytes but collapse to five
-		// single-byte spaces, so the Capped pair returns the whole sanitized
-		// form unmarked while this order cuts the raw input at the budget
-		// first and marks what it dropped.
+		// The cap-first result for a value that shrinks: five three-byte
+		// bidi overrides are 15 raw bytes but collapse to five single-byte
+		// spaces. Capping the raw input at 10 bytes first drops two
+		// overrides and marks the cut, where sanitizing first would return
+		// five spaces and cut false.
 		{"oversized value that shrinks is cut and marked", "\u202e\u202e\u202e\u202e\u202e", 10, "...", "   ...", "   ...", true},
+		// The other divergence: the raw cut at 2 bytes backs off over the two
+		// stray continuation bytes to byte 0, so nothing of the value is kept
+		// and the result is the marker alone, shorter than the cap. Sanitizing
+		// first would turn them into U+FFFD and keep the leading "0" before
+		// the marker.
+		{"invalid UTF-8 raw cut backs off over stray bytes", "0\xa4\xa4", 2, "*", "*", "*", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,8 +95,8 @@ func TestSanitizeBudgetedPair(t *testing.T) {
 				sanitize func(string) string
 				want     string
 			}{
-				{"SanitizeBudgeted", textsafe.SanitizeBudgeted, textsafe.Sanitize, tc.wantKeep},
-				{"SanitizeSingleLineBudgeted", textsafe.SanitizeSingleLineBudgeted, textsafe.SanitizeSingleLine, tc.wantStrict},
+				{"SanitizeCapped", textsafe.SanitizeCapped, textsafe.Sanitize, tc.wantKeep},
+				{"SanitizeSingleLineCapped", textsafe.SanitizeSingleLineCapped, textsafe.SanitizeSingleLine, tc.wantStrict},
 			} {
 				got, cut := p.fn(tc.in, tc.n, tc.marker)
 				if got != p.want || cut != tc.wantCut {
@@ -103,7 +110,7 @@ func TestSanitizeBudgetedPair(t *testing.T) {
 				if !utf8.ValidString(got) {
 					t.Errorf("%s(%q, %d, %q) = %q, not valid UTF-8", p.name, tc.in, tc.n, tc.marker, got)
 				}
-				wantText, wantCut := composedBudgeted(tc.in, tc.n, tc.marker, p.sanitize)
+				wantText, wantCut := composedCapFirst(tc.in, tc.n, tc.marker, p.sanitize)
 				if got != wantText || cut != wantCut {
 					t.Errorf("%s(%q, %d, %q) = (%q, %v), hand-composed form is (%q, %v)",
 						p.name, tc.in, tc.n, tc.marker, got, cut, wantText, wantCut)
@@ -113,42 +120,41 @@ func TestSanitizeBudgetedPair(t *testing.T) {
 	}
 }
 
-// TestSanitizeBudgetedBoundsSanitizerWork pins the reason the primitive
-// exists: the budget bounds the sanitizer's WORK, not just its output. The
-// input is 3 MiB of three-byte bidi overrides behind one plain letter, so
-// sanitizing ALL of it would collapse to a megabyte of spaces and fill the
-// 8-byte budget with five of them — which is exactly what SanitizeCapped
-// returns. The pre-cap form can only ever have looked at the first 8 bytes,
-// and its result says so: two spaces. The assertion is on the CAP's effect,
-// not on how long the call took, so it holds on any machine.
-func TestSanitizeBudgetedBoundsSanitizerWork(t *testing.T) {
+// TestSanitizeCappedBoundsSanitizerWork pins why the pair caps first: the
+// cap bounds the sanitizer's WORK, not just its output. The input is 3 MiB of
+// three-byte bidi overrides behind one plain letter, so sanitizing ALL of it
+// would collapse to a megabyte of spaces and fill the 8-byte budget with five
+// of them, which is what the sanitize-first form returns. The pair can only
+// ever have looked at the first 8 bytes, and its result says so: two spaces.
+// The assertion is on the cap's effect, not on how long the call took, so it
+// holds on any machine.
+func TestSanitizeCappedBoundsSanitizerWork(t *testing.T) {
 	huge := "A" + strings.Repeat("\u202e", 1<<20)
 
 	for _, p := range []struct {
-		name      string
-		budgeted  func(string, int, string) (string, bool)
-		capped    func(string, int, string) (string, bool)
-		wantWhole string
+		name     string
+		capped   func(string, int, string) (string, bool)
+		sanitize func(string) string
 	}{
-		{"Sanitize policy", textsafe.SanitizeBudgeted, textsafe.SanitizeCapped, "A    ..."},
-		{"SingleLine policy", textsafe.SanitizeSingleLineBudgeted, textsafe.SanitizeSingleLineCapped, "A    ..."},
+		{"Sanitize policy", textsafe.SanitizeCapped, textsafe.Sanitize},
+		{"SingleLine policy", textsafe.SanitizeSingleLineCapped, textsafe.SanitizeSingleLine},
 	} {
 		t.Run(p.name, func(t *testing.T) {
 			// "A" plus the two overrides that fit whole below byte 8.
 			const wantPrecapped = "A  ..."
 
-			got, cut := p.budgeted(huge, 8, "...")
+			got, cut := p.capped(huge, 8, "...")
 			if got != wantPrecapped || !cut {
-				t.Errorf("budgeted(3 MiB of overrides, 8, %q) = (%q, %v), want (%q, true)",
+				t.Errorf("capped(3 MiB of overrides, 8, %q) = (%q, %v), want (%q, true)",
 					"...", got, cut, wantPrecapped)
 			}
-			whole, _ := p.capped(huge, 8, "...")
-			if whole != p.wantWhole {
-				t.Fatalf("capped(3 MiB of overrides, 8, %q) = %q, want %q; the oracle for this test moved",
-					"...", whole, p.wantWhole)
+			whole, _ := legacyCapped(huge, 8, "...", p.sanitize)
+			if whole != "A    ..." {
+				t.Fatalf("sanitize-first(3 MiB of overrides, 8, %q) = %q, want %q; the oracle for this test moved",
+					"...", whole, "A    ...")
 			}
 			if got == whole {
-				t.Errorf("budgeted and capped agree on %q, so the raw pre-cap did not happen", got)
+				t.Errorf("cap-first and sanitize-first agree on %q, so the raw pre-cap did not happen", got)
 			}
 		})
 	}
@@ -318,16 +324,16 @@ func TestBudgetMatchesCappedForHonestValues(t *testing.T) {
 	for _, in := range inputs {
 		for _, marker := range markers {
 			for _, n := range caps {
-				gotKeep, gotKeepCut := textsafe.SanitizeBudgeted(in, n, marker)
-				wantKeep, wantKeepCut := textsafe.SanitizeCapped(in, n, marker)
+				gotKeep, gotKeepCut := textsafe.SanitizeCapped(in, n, marker)
+				wantKeep, wantKeepCut := legacyCapped(in, n, marker, textsafe.Sanitize)
 				if gotKeep != wantKeep || gotKeepCut != wantKeepCut {
-					t.Errorf("SanitizeBudgeted(%q, %d, %q) = (%q, %v), SanitizeCapped says (%q, %v)",
+					t.Errorf("SanitizeCapped(%q, %d, %q) = (%q, %v), sanitizing first says (%q, %v)",
 						in, n, marker, gotKeep, gotKeepCut, wantKeep, wantKeepCut)
 				}
-				gotStrict, gotStrictCut := textsafe.SanitizeSingleLineBudgeted(in, n, marker)
-				wantStrict, wantStrictCut := textsafe.SanitizeSingleLineCapped(in, n, marker)
+				gotStrict, gotStrictCut := textsafe.SanitizeSingleLineCapped(in, n, marker)
+				wantStrict, wantStrictCut := legacyCapped(in, n, marker, textsafe.SanitizeSingleLine)
 				if gotStrict != wantStrict || gotStrictCut != wantStrictCut {
-					t.Errorf("SanitizeSingleLineBudgeted(%q, %d, %q) = (%q, %v), SanitizeSingleLineCapped says (%q, %v)",
+					t.Errorf("SanitizeSingleLineCapped(%q, %d, %q) = (%q, %v), sanitizing first says (%q, %v)",
 						in, n, marker, gotStrict, gotStrictCut, wantStrict, wantStrictCut)
 				}
 			}

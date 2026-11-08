@@ -64,7 +64,7 @@ const (
 	benchDomain = "nyaa.si"
 	// benchHostSuffixNearMiss ENDS with benchDomain without being under it,
 	// which is the reading a plain strings.HasSuffix test wrongly accepts and
-	// the case HostMatchesDomain exists to refuse.
+	// the case Domain.Matches exists to refuse.
 	benchHostSuffixNearMiss = "evilnyaa.si"
 	// benchToken and benchTokenMixed are an ASCII protocol token as a gate
 	// holds it and as an untrusted URL spells it - EqualASCIIFold's subject,
@@ -368,7 +368,7 @@ func TestRawQueryDecodeCostIsBoundedPerDecodedField(t *testing.T) {
 // strings.Split, or a []byte conversion goes red here rather than adding
 // invisible garbage to every request.
 //
-// HostMatchesDomain used to carry a caveat here, and the caveat is why the
+// Domain.Matches used to carry a caveat here, and the caveat is why the
 // function changed. It tested the subdomain suffix with CutSuffix(host,
 // "."+domain), and the Go runtime keeps such a concatenation on the stack only
 // while the result fits 32 bytes; above that it escaped to the heap and the
@@ -430,7 +430,7 @@ func TestHostPredicatesAreAllocationFree(t *testing.T) {
 		}
 	})
 
-	t.Run("HostMatchesDomain", func(t *testing.T) {
+	t.Run("Domain.Matches", func(t *testing.T) {
 		cases := []struct {
 			name         string
 			host, domain string
@@ -447,15 +447,15 @@ func TestHostPredicatesAreAllocationFree(t *testing.T) {
 			{"non_ascii_subdomain_label", "\u00e9.nyaa.si", benchDomain, true},
 		}
 		for _, tc := range cases {
-			if got := HostMatchesDomain(tc.host, tc.domain); got != tc.want {
-				t.Errorf("HostMatchesDomain(%q, %q) = %v, want %v",
+			if got := Domain(tc.domain).Matches(tc.host); got != tc.want {
+				t.Errorf("Domain(%q).Matches(%q) = %v, want %v",
 					tc.host, tc.domain, got, tc.want)
 				continue
 			}
 			if got := testing.AllocsPerRun(100, func() {
-				_ = HostMatchesDomain(tc.host, tc.domain)
+				_ = Domain(tc.domain).Matches(tc.host)
 			}); got != 0 {
-				t.Errorf("HostMatchesDomain(%q, %q) allocated %v times per run, want 0: "+
+				t.Errorf("Domain(%q).Matches(%q) allocated %v times per run, want 0: "+
 					"the matcher compares the strings it is given and must not build a "+
 					"folded or split copy of either", tc.host, tc.domain, got)
 			}
@@ -467,19 +467,19 @@ func TestHostPredicatesAreAllocationFree(t *testing.T) {
 	// at the rest, so a table of realistic short domains would go on passing
 	// while every real caller paid. 4096 is far past any registrable name and is
 	// here to make the answer unambiguous rather than borderline.
-	t.Run("HostMatchesDomain_at_every_domain_length", func(t *testing.T) {
+	t.Run("Domain.Matches_at_every_domain_length", func(t *testing.T) {
 		for _, n := range []int{8, 24, 31, 32, 33, 64, 256, 4096} {
 			domain := strings.Repeat("a", n-3) + ".si"
 			host := "sub." + domain
-			if !HostMatchesDomain(host, domain) {
-				t.Errorf("HostMatchesDomain(host, %d-byte domain) = false, want true: "+
+			if !Domain(domain).Matches(host) {
+				t.Errorf("Domain(%d-byte domain).Matches(host) = false, want true: "+
 					"the fixture must match or the allocation reading below is vacuous", n)
 				continue
 			}
 			if got := testing.AllocsPerRun(100, func() {
-				_ = HostMatchesDomain(host, domain)
+				_ = Domain(domain).Matches(host)
 			}); got != 0 {
-				t.Errorf("HostMatchesDomain(host, %d-byte domain) allocated %v times per "+
+				t.Errorf("Domain(%d-byte domain).Matches(host) allocated %v times per "+
 					"run, want 0 at every length: a suffix test that concatenates is free "+
 					"below 32 bytes and costs one allocation above it, so a regression here "+
 					"is invisible to a short fixture and paid by every real caller", n, got)
@@ -848,7 +848,7 @@ func BenchmarkEqualASCIIFold(b *testing.B) {
 	}
 }
 
-// BenchmarkHostMatchesDomain charts the matcher a consumer reaches after the
+// BenchmarkDomainMatches charts the matcher a consumer reaches after the
 // IsASCIIHost gate. All three cases are per-request costs on a link publisher's
 // hot path, and each exercises a different exit:
 //
@@ -858,7 +858,7 @@ func BenchmarkEqualASCIIFold(b *testing.B) {
 //     domain without being under it. It must stay cheap, because a hostile feed
 //     is exactly what produces a stream of them, and it must stay FALSE - which
 //     is why the case asserts the answer rather than only timing it.
-func BenchmarkHostMatchesDomain(b *testing.B) {
+func BenchmarkDomainMatches(b *testing.B) {
 	cases := []struct {
 		name         string
 		host, domain string
@@ -870,15 +870,15 @@ func BenchmarkHostMatchesDomain(b *testing.B) {
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
-			if got := HostMatchesDomain(tc.host, tc.domain); got != tc.want {
-				b.Fatalf("HostMatchesDomain(%q, %q) = %v, want %v: the fixture no longer "+
+			if got := Domain(tc.domain).Matches(tc.host); got != tc.want {
+				b.Fatalf("Domain(%q).Matches(%q) = %v, want %v: the fixture no longer "+
 					"exercises the case this series is named for",
 					tc.host, tc.domain, got, tc.want)
 			}
 			b.ReportAllocs()
 			var hits int
 			for b.Loop() {
-				if HostMatchesDomain(tc.host, tc.domain) {
+				if Domain(tc.domain).Matches(tc.host) {
 					hits++
 				}
 			}

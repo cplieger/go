@@ -68,7 +68,7 @@ func TestRedactSingleLineCapped(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, cut := textsafe.RedactSingleLineCapped(tt.in, tt.n, tt.marker, tt.secrets...)
+			got, cut := textsafe.RedactSingleLineCapped(tt.in, tt.n, textsafe.Marker(tt.marker), tt.secrets...)
 			if got != tt.want || cut != tt.wantCut {
 				t.Errorf("RedactSingleLineCapped(%q, %d, %q, %q) = (%q, %v), want (%q, %v)",
 					tt.in, tt.n, tt.marker, tt.secrets, got, cut, tt.want, tt.wantCut)

@@ -8,23 +8,24 @@ import "strings"
 // bounds the sanitizer's WORK and not merely its output, and the marker is
 // charged inside the budget exactly as SanitizeCapped charges it.
 //
-// It is a SEPARATE primitive from the Capped pair rather than an option on it,
-// because SanitizeCapped sanitizes all of s by construction — its cap must
-// survive sanitization growth — and no marker placement changes that. A caller
-// whose value is NOT known to be small needs the opposite order, and a caller
-// assembling SEVERAL values under one shared bound needs a running remainder and
-// a latched fact that a single-call function cannot express. What the two share —
-// the rune-boundary cut, the marker charged inside the cap, the cut FACT returned
-// rather than inferred from the marker — is identical on purpose, so a call site
-// can move between them without re-reading either contract.
+// It is a type of its own rather than an option on the Capped pair because a
+// caller assembling SEVERAL values under one shared bound needs a running
+// remainder and one latched truncation fact across the writes, which a
+// single-value function cannot express. The Capped pair is its one-write form:
+// the cap-first order, the rune-boundary cut, the marker charged inside the
+// cap and the cut FACT returned rather than inferred from the marker are the
+// same, so a call site can move between them without re-reading either
+// contract.
 //
 // The order is the whole point of the type. A multi-megabyte upstream value
 // walked by strings.Map in a memory-limited process is a work-amplification
 // denial of service (CWE-400) whatever the output bound is, so a caller reading
 // an upstream field whose size it does not control caps first. For a value that
-// carries no unsafe rune and is valid UTF-8 the two orders are byte-identical,
-// so adopting this one changes nothing an honest value emits; the two diverge
-// for exactly one input class, described on SanitizeBudgeted.
+// carries no unsafe rune and is valid UTF-8, capping first is byte-identical to
+// sanitizing first, so this order changes nothing an honest value emits. The
+// two orders differ for a value over the cap that holds multi-byte unsafe
+// runes and for invalid UTF-8, both described on SanitizeCapped; cut is honest
+// either way.
 //
 // A Budget is a running remainder over values that ACCUMULATE. A caller
 // bounding several separate output fields by re-measuring an envelope after
@@ -159,47 +160,4 @@ func markedCut(text string, n int, marker string) (head, mark string) {
 		return CapBytes(text, n), ""
 	}
 	return CapBytes(text, n-len(marker)), marker
-}
-
-// SanitizeBudgeted is the one-value form of NewBudget: a Budget of n bytes, one
-// Write of s, and its Result. It is SanitizeCapped with the cap moved AHEAD of
-// the sanitizer — s is capped on a rune boundary at n bytes first, the chunk is
-// sanitized under the multi-line policy, sanitization growth is re-capped,
-// and the caller's marker is charged inside n — so the budget bounds the WORK
-// done on s rather than only the size of what comes back. Reach for it when s
-// comes from an upstream whose size the caller does not control (a response
-// field, an error message interpolating one, a file name), where walking all of
-// it is itself the exposure; reach for SanitizeCapped when s is already known
-// to be small and only its output needs bounding.
-//
-// The two orders agree on every valid-UTF-8 value that carries no unsafe rune,
-// byte for byte, cut for cut, so a call site can move to this one without
-// changing what an honest value emits. They diverge for exactly one input
-// class: a value whose RAW form exceeds n but whose SANITIZED form would have
-// fitted, which needs enough multi-byte unsafe runes to collapse it under the
-// cap (each becomes a single-byte space) — the hostile shape the work bound
-// exists for. This function cuts and marks such a value where SanitizeCapped
-// returns it whole and unmarked, and the mark is honest either way: bytes
-// really were dropped, before sanitizing.
-//
-// SanitizeSingleLineBudgeted is the strict twin. Neither serves a caller
-// aggregating SEVERAL values under one shared budget — that is Budget itself,
-// which is what keeps ONE truncation fact across the writes instead of one per
-// value.
-func SanitizeBudgeted(s string, n int, marker string) (text string, cut bool) {
-	b := NewBudget(n, marker)
-	b.Write(s)
-	return b.Result()
-}
-
-// SanitizeSingleLineBudgeted is SanitizeBudgeted under the strict
-// single-line policy: CR and LF become spaces along with every other unsafe
-// rune, for a single-line sink where a raw newline forges a record boundary.
-// The pre-cap, re-cap, marker and cut contract are identical; see
-// SanitizeBudgeted for the full contract and for the one input class on which
-// the pre-cap order diverges from SanitizeSingleLineCapped's.
-func SanitizeSingleLineBudgeted(s string, n int, marker string) (text string, cut bool) {
-	b := NewSingleLineBudget(n, marker)
-	b.Write(s)
-	return b.Result()
 }

@@ -65,8 +65,10 @@ const (
 // consumer branches on the same facts while keeping its own fail direction
 // as policy: a publisher drops what it cannot vouch for (publish-or-drop),
 // while an evidence gate hides what it cannot classify
-// (extract-evidence-or-hide). Fields are ordered for govet fieldalignment.
+// (extract-evidence-or-hide).
 type Form struct {
+	// Fields are ordered for govet fieldalignment.
+
 	// path is the raw (dot-segments intact) path of the reading whose facts
 	// this Form reports: the canonicalized parse's for a form net/url reads
 	// hierarchically, and the AUTHORITY REPARSE's wherever that reparse is
@@ -88,8 +90,8 @@ type Form struct {
 	// extractable: the parsed hostname of an absolute or protocol-relative
 	// form, or the authority reparse of a schemeless-host or recoverable
 	// hidden-host form. Empty when the string carries none (or the form
-	// hides it; see Class). The fold is ASCII-only by design (see
-	// asciiLower): a full-Unicode fold would launder homograph bytes
+	// hides it; see Class). The fold is ASCII-only by design (the
+	// FoldHostASCII rule): a full-Unicode fold would launder homograph bytes
 	// (U+0130 -> 'i', U+212A -> 'k') into ASCII, so non-ASCII host evidence
 	// survives here unfolded for a consumer's fail-closed ASCII-only host
 	// gates.
@@ -250,7 +252,7 @@ func (f *Form) recoverHiddenAuthority(canonical string) {
 // authority-only form reads "/". It is empty when there is no
 // browser-resolvable path: ClassEmpty, ClassMalformed, HostUnrecoverable, an
 // opaque path, a host-less ClassProtocolRelative form or a query-only reference.
-func (f *Form) NormalizedPath() string {
+func (f Form) NormalizedPath() string { //nolint:gocritic // hugeParam: a value receiver lets Classify(raw).NormalizedPath() compile; the copy is 96 bytes
 	if f.Class == ClassProtocolRelative && f.Host == "" {
 		return ""
 	}
@@ -363,7 +365,7 @@ func canonicalizeSlashes(s string) string {
 // A-Z map to lowercase, every other byte - including every byte of a
 // multi-byte or invalid UTF-8 sequence - is returned unchanged. It is the
 // single home of the rule, read by the string fold (asciiLower, and through it
-// Form.Host, FoldHostASCII, HostMatchesDomain and the special-scheme test in
+// Form.Host, FoldHostASCII, Domain.Matches and the special-scheme test in
 // canonicalizeSlashes) and by the equality comparison (EqualASCIIFold), so no
 // two of those spellings can disagree about what folding ASCII means.
 //
@@ -415,7 +417,7 @@ func asciiLower(s string) string {
 
 // FoldHostASCII lowercases only the ASCII letters A-Z of host, leaving every
 // other byte untouched. It is the exported form of the fold Form.Host already
-// applies and HostMatchesDomain already compares with, for consumers holding
+// applies and Domain.Matches already compares with, for consumers holding
 // host evidence from somewhere else - a configured domain, a request header, a
 // host parsed by net/url directly - that must be compared against those facts
 // under the same rule.
@@ -490,8 +492,14 @@ func IsASCIIHost(host string) bool {
 	return true
 }
 
-// HostMatchesDomain reports whether host equals domain or is a real
-// dot-delimited subdomain of it. It is the matcher IsASCIIHost's documented
+// Domain is a known ASCII domain that host evidence is matched against. It is
+// a type of its own so the call site names which value is the domain: a
+// conversion such as Domain(cfg.Domain).Matches(host) reads as the role it
+// plays, where two bare strings in a row did not.
+type Domain string
+
+// Matches reports whether host equals d or is a real dot-delimited subdomain
+// of it. It is the matcher IsASCIIHost's documented
 // scenario leads to: a consumer that has gated untrusted host evidence on
 // IsASCIIHost then has to compare it against a known ASCII domain, and plain
 // suffix matching is wrong in three ways this closes.
@@ -531,7 +539,8 @@ func IsASCIIHost(host string) bool {
 // match "nyaa.si") before calling. Doing it here would mean applying
 // Unicode-aware trimming to a string whose non-ASCII bytes are exactly what
 // the caller's gate exists to see.
-func HostMatchesDomain(host, domain string) bool {
+func (d Domain) Matches(host string) bool {
+	domain := string(d)
 	if host == "" || domain == "" {
 		return false
 	}

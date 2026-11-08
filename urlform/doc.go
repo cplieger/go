@@ -19,7 +19,7 @@
 // path a browser resolves, with dot segments removed. The classification
 // carries no judgment, so each consumer applies its own fail direction.
 //
-// [FoldHostASCII], [EqualASCIIFold], [IsASCIIHost] and [HostMatchesDomain] share
+// [FoldHostASCII], [EqualASCIIFold], [IsASCIIHost] and [Domain.Matches] share
 // one ASCII-only folding rule, because a full Unicode fold would turn
 // homograph bytes such as U+0130 or U+212A into ASCII. [RawQueryNames] and
 // [RawQueryPairs] read query parameters from the raw bytes, split on both '&'

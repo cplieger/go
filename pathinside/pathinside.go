@@ -47,10 +47,9 @@ type Root string
 // byte-exact: filepath.Rel compares path components case-INSENSITIVELY on
 // Windows and byte-exactly on Unix and Plan 9, so Root("/srv/Data").Contains(
 // "/srv/data/x") is false on Linux and true on Windows. This package neither
-// adds that folding nor removes it. The folding only ever grows containment
-// MORE permissive on Windows, never less — Go 1.27's Unicode 17 tables fold
-// U+FB05/U+FB06 and the Greek U+0390/U+1FD3, U+03B0/U+1FE3, which Go 1.26 held
-// distinct, so Windows containment loosened by exactly those names. The
+// adds that folding nor removes it. A newer Go's fold table can only make
+// containment MORE permissive on Windows, never less (docs/contract.md lists
+// the pairs a recent release added). The
 // hygiene predicates ([RelEscapes], [HasDotDot], [IsCanonical]) are immune:
 // they compare against the literal "..", which has no case-fold partners.
 //
