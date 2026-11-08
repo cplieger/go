@@ -1,4 +1,4 @@
-// Command ssetest serves an ssetest.Fixture for the TypeScript integration
+// Command ssetest serves an internal fixture.Fixture for the TypeScript integration
 // suites. It binds -addr (default 127.0.0.1:0), prints "LISTEN <url>" on
 // stdout once bound, and serves until SIGINT or SIGTERM.
 package main
@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/cplieger/go/httpserver"
-	"github.com/cplieger/go/sse"
-	"github.com/cplieger/go/sse/ssetest"
+	"github.com/cplieger/go/sse/v2"
+	"github.com/cplieger/go/sse/v2/internal/fixture"
 )
 
 const shutdownGrace = 5 * time.Second
@@ -40,12 +40,16 @@ func run() error {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	fixture := ssetest.NewFixture(sse.WithLogger(logger))
-	srv := httpserver.New(fixture.Handler())
+	fx := fixture.NewFixture(sse.WithLogger(logger))
+	srv := httpserver.New(fx.Handler())
 
 	fmt.Fprintf(os.Stdout, "LISTEN http://%s\n", ln.Addr())
-	return httpserver.Run(ctx, srv, ln, nil,
+	return httpserver.Run(ctx, srv, ln,
 		httpserver.WithShutdownGrace(shutdownGrace),
-		httpserver.WithPreDrain(func(ctx context.Context) { _ = fixture.Shutdown(ctx) }),
+		httpserver.WithPreDrain(func(ctx context.Context) {
+			if err := fx.Shutdown(ctx); err != nil {
+				logger.Warn("ssetest: fixture shutdown did not finish", "error", err)
+			}
+		}),
 	)
 }

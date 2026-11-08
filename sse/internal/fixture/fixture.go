@@ -1,4 +1,7 @@
-package ssetest
+// Package fixture is the controllable SSE server the TypeScript integration
+// suites drive through the ssetest/cmd binary. It is internal: its /control
+// routes are a test-harness protocol, not part of the module's API.
+package fixture
 
 import (
 	"context"
@@ -11,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/httpserver"
-	"github.com/cplieger/go/sse"
+	"github.com/cplieger/go/sse/v2"
 )
 
 const (
@@ -90,8 +93,8 @@ func NewFixture(opts ...sse.Option) *Fixture {
 	return f
 }
 
-// Hub returns the current hub; /control/restart replaces it.
-func (f *Fixture) Hub() *sse.Hub {
+// currentHub returns the current hub; /control/restart replaces it.
+func (f *Fixture) currentHub() *sse.Hub {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.hub
@@ -99,7 +102,7 @@ func (f *Fixture) Hub() *sse.Hub {
 
 // Shutdown shuts the current hub down, ending every stream with sse:reset.
 func (f *Fixture) Shutdown(ctx context.Context) error {
-	return f.Hub().Shutdown(ctx)
+	return f.currentHub().Shutdown(ctx)
 }
 
 // Handler mounts the fixture's routes on a fresh ServeMux.
@@ -183,7 +186,7 @@ func (f *Fixture) handleEvents(w http.ResponseWriter, r *http.Request) {
 	delay := f.delayHello
 	f.mu.Unlock()
 
-	opts := []sse.ServeOption{sse.OnConnect(func(sw *sse.Writer, _ sse.Hello) error { return f.connectHook(sw) })}
+	opts := []sse.ServeOption{sse.WithOnConnect(func(sw *sse.Writer, _ sse.Hello) error { return f.connectHook(sw) })}
 	if tag := r.Header.Get("SSE-Client"); tag != "" {
 		opts = append(opts, sse.WithClientTag(tag))
 	}
@@ -277,7 +280,11 @@ func (f *Fixture) handleDigest(w http.ResponseWriter, r *http.Request) {
 	hub, delay := f.hub, f.delayDigest
 	f.mu.Unlock()
 	time.Sleep(delay)
-	hub.DigestHandler(f.resolve).ServeHTTP(w, r)
+	handler, err := hub.DigestHandler(f.resolve)
+	if err != nil {
+		panic(err) // f.resolve is never nil and no option is passed: a harness bug
+	}
+	handler.ServeHTTP(w, r)
 }
 
 func (f *Fixture) resolve(_ context.Context, held []sse.Held) ([]sse.State, error) {
@@ -392,7 +399,7 @@ func (f *Fixture) handlePublish(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", "publish count or size over the fixture's bound")
 		return
 	}
-	hub := f.Hub()
+	hub := f.currentHub()
 	count := max(req.Count, 1)
 	offsets := make([]string, 0, count)
 	for range count {
@@ -623,7 +630,7 @@ func (f *Fixture) handleState(w http.ResponseWriter, _ *http.Request) {
 		ev := &f.events[i]
 		resp.Events = append(resp.Events, presenceEvent{
 			At: ev.At, Kind: ev.Kind, Topic: ev.Topic, Verdict: ev.Verdict, Cause: ev.Cause,
-			Write: ev.Write, Epoch: ev.Epoch, Tag: ev.Tag, ClientID: ev.ClientID,
+			Write: string(ev.Write), Epoch: ev.Epoch, Tag: ev.Tag, ClientID: ev.ClientID,
 		})
 	}
 	f.mu.Unlock()

@@ -67,7 +67,7 @@ func runRace(t testing.TB, publishBefore bool, framesAhead int) digestOutcome {
 		}
 		frame = stampedFrame{version: "42", offset: off}
 	}
-	handler := h.DigestHandler(func(_ context.Context, held []Held) ([]State, error) {
+	handler := mustDigestHandler(t, h, func(_ context.Context, held []Held) ([]State, error) {
 		states := []State{{Subject: subject, Version: "41"}}
 		if publishBefore {
 			publish42()

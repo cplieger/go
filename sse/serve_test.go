@@ -168,7 +168,7 @@ func TestServe_retryThenHelloThenReplayInOneFlush(t *testing.T) {
 		counter := &flushCounter{}
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			counter.ResponseWriter = w
-			h.Serve(counter, r, OnConnect(func(*Writer, Hello) error {
+			h.Serve(counter, r, WithOnConnect(func(*Writer, Hello) error {
 				flushesAtHook.Store(counter.flushes.Load())
 				return nil
 			}))
@@ -190,7 +190,7 @@ func TestServe_retryThenHelloThenReplayInOneFlush(t *testing.T) {
 		}
 		requireClients(t, h, 1)
 		if got := flushesAtHook.Load(); got != 1 {
-			t.Errorf("flushes before OnConnect ran = %d, want 1 (retry, hello and replay leave together)", got)
+			t.Errorf("flushes before the connect hook ran = %d, want 1 (retry, hello and replay leave together)", got)
 		}
 	})
 }
@@ -442,7 +442,7 @@ func TestServe_onConnectWritesIdlessFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := mustNew(t, withEpoch(testEpoch))
 		var hookHello Hello
-		srv := startServer(t, h, OnConnect(func(w *Writer, hello Hello) error {
+		srv := startServer(t, h, WithOnConnect(func(w *Writer, hello Hello) error {
 			hookHello = hello
 			if err := w.Event("", []byte("unnamed")); err != nil {
 				return err
@@ -471,7 +471,7 @@ func TestServe_hookErrorEndsAfterHello(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		logger, logged := captureLog()
 		h := mustNew(t, WithLogger(logger))
-		srv := startServer(t, h, OnConnect(func(*Writer, Hello) error { return errors.New("boom") }))
+		srv := startServer(t, h, WithOnConnect(func(*Writer, Hello) error { return errors.New("boom") }))
 		resp, sc := openStream(t, srv, srv.URL, nil)
 		defer resp.Body.Close()
 		readHello(t, sc)
@@ -486,8 +486,8 @@ func TestServe_hookErrorEndsAfterHello(t *testing.T) {
 		if got := h.ClientCount(); got != 0 {
 			t.Errorf("ClientCount() after the hook failed = %d, want 0", got)
 		}
-		if !strings.Contains(logged.String(), "sse: OnConnect failed") || !strings.Contains(logged.String(), "error=boom") {
-			t.Errorf("log = %q, want the OnConnect failure with error=boom", logged)
+		if !strings.Contains(logged.String(), "sse: connect hook failed") || !strings.Contains(logged.String(), "error=boom") {
+			t.Errorf("log = %q, want the connect hook failure with error=boom", logged)
 		}
 	})
 }

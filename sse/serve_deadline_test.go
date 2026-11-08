@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -79,6 +80,10 @@ func waitForWedge(t *testing.T, h *Hub, queued int) {
 	})
 }
 
+// drainFrame is the drain method's frame in a goroutine dump, by the package's
+// full import path, which carries the module's major-version suffix.
+var drainFrame = reflect.TypeFor[Hub]().PkgPath() + ".(*Hub).drain("
+
 // drainParkedInWrite reports whether a stream's drain goroutine is parked in
 // the network poller waiting for its socket to take a write. No test in this
 // package runs in parallel, so the only stream is the calling test's.
@@ -95,7 +100,7 @@ func drainParkedInWrite() bool {
 	for g := range bytes.SplitSeq(buf, []byte("\n\n")) {
 		if bytes.Contains(g, []byte("[IO wait")) &&
 			bytes.Contains(g, []byte("internal/poll.(*pollDesc).waitWrite")) &&
-			bytes.Contains(g, []byte("sse.(*Hub).drain(")) {
+			bytes.Contains(g, []byte(drainFrame)) {
 			return true
 		}
 	}
@@ -127,7 +132,7 @@ func TestServe_slowClientReceivesReset(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		logger, logged := captureLog()
 		h := mustNew(t, WithLogger(logger), WithClientBuffer(4))
-		srv := startServer(t, h, OnConnect(func(*Writer, Hello) error {
+		srv := startServer(t, h, WithOnConnect(func(*Writer, Hello) error {
 			for i := range 5 {
 				if _, err := h.Publish(Event{Data: []byte("burst")}); err != nil {
 					t.Errorf("Publish #%d in the hook: %v", i+1, err)
@@ -200,7 +205,7 @@ func TestServe_h2IdleGapDoesNotExpireDeadline(t *testing.T) {
 	// place a stream can idle for 2 × writeTimeout with no write is inside the
 	// hook; a deadline left armed by the handshake flush fires there.
 	unstarted := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.Serve(w, r, OnConnect(func(sw *Writer, _ Hello) error {
+		h.Serve(w, r, WithOnConnect(func(sw *Writer, _ Hello) error {
 			time.Sleep(2 * realWriteTimeout)
 			err := sw.Event("after-gap", []byte("ok"))
 			hookErr <- err
@@ -346,7 +351,7 @@ func TestServe_hookWriteTimeoutEndsConnection(t *testing.T) {
 	h := mustNew(t, WithLogger(logger), WithKeepalive(realKeepalive), WithWriteTimeout(realWriteTimeout))
 	hookErr := make(chan error, 1)
 	payload := dataOfFrameSize(MaxFrameBytes, 2)
-	srv := newRealServer(t, h, OnConnect(func(sw *Writer, _ Hello) error {
+	srv := newRealServer(t, h, WithOnConnect(func(sw *Writer, _ Hello) error {
 		for range wedgeFrames {
 			if err := sw.Event("", payload); err != nil {
 				hookErr <- err

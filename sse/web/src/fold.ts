@@ -7,7 +7,7 @@ import type { VisibilityEvent, VisibilityInput, VisibilitySource } from "./visib
  * it leaves; the profile's network reading is not recomputed on a departure and keeps the last value
  * reported, by whichever tab.
  */
-export interface TabState {
+interface TabState {
   readonly visible: boolean;
   readonly online: boolean;
   /** A freshly attached tab may earn one pageshow; cleared by its first. */

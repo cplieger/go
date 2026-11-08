@@ -136,7 +136,7 @@ func TestPresence_deadNamesTheFailingWrite(t *testing.T) {
 		name      string
 		provoke   func(t *testing.T, h *Hub)
 		wantCause PresenceCause
-		wantWrite string
+		wantWrite PresenceWrite
 	}{
 		{
 			name: "keepalive",
@@ -198,7 +198,7 @@ func TestPresence_evictedAndShutdownCauses(t *testing.T) {
 		logger, _ := captureLog()
 		var p presenceLog
 		h := mustNew(t, WithLogger(logger), WithPresence(p.record), WithClientBuffer(2))
-		srv := startServer(t, h, OnConnect(func(*Writer, Hello) error {
+		srv := startServer(t, h, WithOnConnect(func(*Writer, Hello) error {
 			for range 3 {
 				if _, err := h.Publish(Event{Data: []byte("burst")}); err != nil {
 					return err

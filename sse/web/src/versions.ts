@@ -40,8 +40,8 @@ export interface VersionMapOptions {
   readonly onStale?: (subject: Subject, epoch: string) => void;
 }
 
-type BindListener = (epoch: string, dropped: number) => void;
-type StaleListener = (subject: Subject, epoch: string) => void;
+export type BindListener = (epoch: string, dropped: number) => void;
+export type StaleListener = (subject: Subject, epoch: string) => void;
 
 interface Listeners {
   readonly bound: Set<BindListener>;

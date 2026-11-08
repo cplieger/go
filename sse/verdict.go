@@ -18,8 +18,9 @@ const (
 )
 
 // Hello is the handshake frame's payload, written once per connection right
-// after the retry: field and handed to the OnConnect hook unchanged. Floor and
-// Head are decimal strings on the wire because the peer is a JavaScript client.
+// after the retry: field and handed to the WithOnConnect hook unchanged.
+// Floor and Head are decimal strings on the wire because the peer is a
+// JavaScript client.
 type Hello struct {
 	Epoch          string  `json:"epoch"`
 	Verdict        Verdict `json:"verdict"`

@@ -62,30 +62,39 @@ describe("compareOffset", () => {
 describe("validateHello", () => {
   it("validateHello refuses absent or non-integer wire", () => {
     const { wire: _omitted, ...withoutWire } = hello();
-    expect(validateHello(withoutWire, 1, 1)).toEqual({ ok: false, reason: { kind: "bad_hello" } });
-    expect(validateHello(hello({ wire: 1.5 }), 1, 1)).toEqual({
+    expect(validateHello(withoutWire, { minWire: 1, maxWire: 1 })).toEqual({
       ok: false,
       reason: { kind: "bad_hello" },
     });
-    expect(validateHello(hello({ wire: "1" }), 1, 1)).toEqual({
+    expect(validateHello(hello({ wire: 1.5 }), { minWire: 1, maxWire: 1 })).toEqual({
       ok: false,
       reason: { kind: "bad_hello" },
     });
-    expect(validateHello(null, 1, 1)).toEqual({ ok: false, reason: { kind: "bad_hello" } });
-    expect(validateHello("hello", 1, 1)).toEqual({ ok: false, reason: { kind: "bad_hello" } });
+    expect(validateHello(hello({ wire: "1" }), { minWire: 1, maxWire: 1 })).toEqual({
+      ok: false,
+      reason: { kind: "bad_hello" },
+    });
+    expect(validateHello(null, { minWire: 1, maxWire: 1 })).toEqual({
+      ok: false,
+      reason: { kind: "bad_hello" },
+    });
+    expect(validateHello("hello", { minWire: 1, maxWire: 1 })).toEqual({
+      ok: false,
+      reason: { kind: "bad_hello" },
+    });
   });
 
   it("validateHello refuses wire below minWire and above maxWire with the offending value", () => {
-    expect(validateHello(hello({ wire: 0 }), 1, 1)).toEqual({
+    expect(validateHello(hello({ wire: 0 }), { minWire: 1, maxWire: 1 })).toEqual({
       ok: false,
       reason: { kind: "wire_unsupported", wire: 0 },
     });
-    expect(validateHello(hello({ wire: 2 }), 1, 1)).toEqual({
+    expect(validateHello(hello({ wire: 2 }), { minWire: 1, maxWire: 1 })).toEqual({
       ok: false,
       reason: { kind: "wire_unsupported", wire: 2 },
     });
-    expect(validateHello(hello({ wire: 2 }), 1, 2).ok).toBe(true);
-    expect(validateHello(hello({ wire: 1 }), 1, 1).ok).toBe(true);
+    expect(validateHello(hello({ wire: 2 }), { minWire: 1, maxWire: 2 }).ok).toBe(true);
+    expect(validateHello(hello({ wire: 1 }), { minWire: 1, maxWire: 1 }).ok).toBe(true);
   });
 
   it("validateHello refuses epoch, floor, head, keepalive_ms, keepalive_event, resumed shape violations one at a time", () => {
@@ -109,12 +118,15 @@ describe("validateHello", () => {
       { resumed: undefined },
     ];
     for (const violation of violations) {
-      expect(validateHello(hello(violation), 1, 1), JSON.stringify(violation)).toEqual({
+      expect(
+        validateHello(hello(violation), { minWire: 1, maxWire: 1 }),
+        JSON.stringify(violation),
+      ).toEqual({
         ok: false,
         reason: { kind: "bad_hello" },
       });
     }
-    const ok = validateHello(hello(), 1, 1);
+    const ok = validateHello(hello(), { minWire: 1, maxWire: 1 });
     expect(ok).toEqual({
       ok: true,
       hello: {
@@ -128,17 +140,22 @@ describe("validateHello", () => {
         keepalive_event: "sse:keepalive",
       },
     });
-    expect(validateHello(hello({ keepalive_event: "" }), 1, 1).ok).toBe(true);
-    expect(validateHello(hello({ floor: "0", head: "0" }), 1, 1).ok).toBe(true);
+    expect(validateHello(hello({ keepalive_event: "" }), { minWire: 1, maxWire: 1 }).ok).toBe(true);
+    expect(validateHello(hello({ floor: "0", head: "0" }), { minWire: 1, maxWire: 1 }).ok).toBe(
+      true,
+    );
   });
 
   it("validateHello reads resumed strictly as true", () => {
-    const resumed = validateHello(hello({ resumed: true }), 1, 1);
-    const fresh = validateHello(hello({ resumed: false, verdict: "fresh" }), 1, 1);
+    const resumed = validateHello(hello({ resumed: true }), { minWire: 1, maxWire: 1 });
+    const fresh = validateHello(hello({ resumed: false, verdict: "fresh" }), {
+      minWire: 1,
+      maxWire: 1,
+    });
     expect(resumed.ok && resumed.hello.resumed).toBe(true);
     expect(fresh.ok && fresh.hello.resumed).toBe(false);
     expect(fresh.ok && fresh.hello.verdict).toBe("fresh");
-    expect(validateHello(hello({ resumed: "true" }), 1, 1).ok).toBe(false);
+    expect(validateHello(hello({ resumed: "true" }), { minWire: 1, maxWire: 1 }).ok).toBe(false);
   });
 });
 

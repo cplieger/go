@@ -30,19 +30,27 @@ var (
 	// ErrInvalidUTF8 is returned by Publish and Writer.Event when Data is not
 	// valid UTF-8; it is wrapped with the byte offset of the first invalid byte.
 	ErrInvalidUTF8 = errors.New("sse: data is not valid UTF-8")
+	// ErrEventName is returned by Publish and Writer.Event for a name the
+	// encoder or the client would misread: one with the reserved "sse:"
+	// prefix, a CR or LF, or the hub's configured keepalive name.
+	ErrEventName = errors.New("sse: event name not allowed")
 )
 
-// checkEventName panics on a name the encoder or the client would misread: the
+// checkEventName refuses a name the encoder or the client would misread: the
 // reserved "sse:" prefix, a CR or LF, or the hub's configured keepalive name.
-// All three are fixed properties of the call site, so they are panics rather
-// than returned errors.
-func checkEventName(name, keepalive string) {
-	if strings.HasPrefix(name, reservedPrefix) || strings.ContainsAny(name, "\r\n") {
-		panic("sse: event name reserved")
+// It is an error, not a panic, because a name can come from configuration.
+// The error never quotes the name, which may carry the CR or LF it refuses.
+func checkEventName(name, keepalive string) error {
+	if strings.HasPrefix(name, reservedPrefix) {
+		return fmt.Errorf("%w: the %q prefix is reserved", ErrEventName, reservedPrefix)
+	}
+	if strings.ContainsAny(name, "\r\n") {
+		return fmt.Errorf("%w: a name cannot hold CR or LF", ErrEventName)
 	}
 	if name != "" && name == keepalive {
-		panic("sse: event name " + name + " collides with the configured keepalive event")
+		return fmt.Errorf("%w: it is the configured keepalive event", ErrEventName)
 	}
+	return nil
 }
 
 func checkData(data []byte) error {

@@ -140,7 +140,7 @@ export function connect(opts: ConnectOptions): Connection {
             fail({ kind: "bad_hello" });
             return;
           }
-          const result = validateHello(data, opts.minWire, opts.maxWire);
+          const result = validateHello(data, opts);
           if (!result.ok) {
             fail(result.reason);
             return;

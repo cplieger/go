@@ -1,6 +1,6 @@
-import type { Removed, State } from "./digest.js";
+import type { Changed, Removed } from "./digest.js";
 import type { LifecycleEvent, RevalidateCause } from "./lifecycle.js";
-import type { ClientState } from "./reducer.js";
+import type { StreamState } from "./state.js";
 import type { Frame } from "./stream.js";
 import type { Subject } from "./versions.js";
 import type { VisibilityInput } from "./visibility.js";
@@ -21,7 +21,7 @@ export interface PortRevalidateContext {
   readonly generation: number;
   readonly full: boolean;
   /** The host's digest verdict for this run, when its `revalidate` body performed one. */
-  readonly changed?: readonly State[];
+  readonly changed?: readonly Changed[];
   readonly removed?: readonly Removed[];
 }
 
@@ -80,7 +80,7 @@ export type WorkerToTab =
   | { readonly type: "pong"; readonly seq: number }
   | { readonly type: "revalidate_run"; readonly runId: number; readonly ctx: PortRevalidateContext }
   | { readonly type: "stale" }
-  | { readonly type: "state"; readonly state: ClientState };
+  | { readonly type: "state"; readonly state: StreamState };
 
 const TAB_TYPES: ReadonlySet<string> = new Set<TabToWorker["type"]>([
   "attach",

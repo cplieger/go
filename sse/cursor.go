@@ -59,6 +59,8 @@ func ParseCursor(s string) (Cursor, error) {
 }
 
 // String renders the cursor as "<epoch>:<offset>", the id: field's value.
+// The zero Cursor renders ":0", which ParseCursor rejects: it is no position,
+// and its encoding is the empty string, which a caller writes itself.
 func (c Cursor) String() string {
 	return c.Epoch + ":" + strconv.FormatUint(c.Offset, 10)
 }
@@ -94,6 +96,6 @@ func isOffset(s string) bool {
 
 func newEpoch() string {
 	var b [epochLen / 2]byte
-	_, _ = rand.Read(b[:]) // never fails; crashes irrecoverably on entropy failure
+	_, _ = rand.Read(b[:]) // never returns an error; a failed read crashes the program
 	return hex.EncodeToString(b[:])
 }

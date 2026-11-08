@@ -108,7 +108,7 @@ func TestShutdown_blocksUntilGoroutinesExit(t *testing.T) {
 		logger, _ := captureLog()
 		h := mustNew(t, WithLogger(logger))
 		release := make(chan struct{})
-		srv := startServer(t, h, OnConnect(func(*Writer, Hello) error {
+		srv := startServer(t, h, WithOnConnect(func(*Writer, Hello) error {
 			<-release
 			return nil
 		}))
@@ -166,7 +166,7 @@ func TestShutdown_ctxExpiryReturnsErr(t *testing.T) {
 		logger, logged := captureLog()
 		h := mustNew(t, WithLogger(logger))
 		release := make(chan struct{})
-		srv := startServer(t, h, OnConnect(func(*Writer, Hello) error {
+		srv := startServer(t, h, WithOnConnect(func(*Writer, Hello) error {
 			<-release
 			return nil
 		}))
@@ -200,7 +200,7 @@ func TestShutdown_evictedClientNotCountedWhileDraining(t *testing.T) {
 		logger, _ := captureLog()
 		h := mustNew(t, WithLogger(logger), WithClientBuffer(2))
 		var countInsideHook atomic.Int32
-		srv := startServer(t, h, OnConnect(func(*Writer, Hello) error {
+		srv := startServer(t, h, WithOnConnect(func(*Writer, Hello) error {
 			for range 3 {
 				if _, err := h.Publish(Event{Data: []byte("x")}); err != nil {
 					return err

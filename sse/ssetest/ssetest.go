@@ -1,8 +1,8 @@
 // Package ssetest is the test seam between the sse hub and its clients: an
-// httptest server for a hub, a frame reader for the wire, a recorder that
-// answers http.ErrNotSupported to the deadline setters, and Fixture, the
-// controllable server the TypeScript integration suites drive through the
-// ssetest/cmd binary.
+// httptest server for a hub, a frame reader for the wire, and a recorder that
+// answers http.ErrNotSupported to the deadline setters. The controllable
+// server the TypeScript integration suites drive is the ssetest/cmd binary,
+// built on an internal fixture.
 package ssetest
 
 import (
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/sse"
+	"github.com/cplieger/go/sse/v2"
 )
 
 // Serve starts an httptest server whose every request is h.Serve with opts and
@@ -34,9 +34,14 @@ func Serve(t testing.TB, h *sse.Hub, opts ...sse.ServeOption) string {
 	return srv.URL
 }
 
+// RetryEvent is the Event of the Frame that reports a retry: field, with the
+// milliseconds in Data. It carries the reserved "sse:" prefix, which Publish
+// refuses, so it cannot be mistaken for an event a hub published.
+const RetryEvent = "sse:retry"
+
 // Frame is one dispatched event: the id: field, the event: name and the data:
-// lines joined by LF. A retry: field is reported as a Frame with Event "retry"
-// and the milliseconds in Data.
+// lines joined by LF. A retry: field is reported as a Frame with Event
+// RetryEvent and the milliseconds in Data.
 type Frame struct {
 	ID    string
 	Event string
@@ -132,7 +137,7 @@ func (b *frameBuilder) field(line string) {
 func (b *frameBuilder) dispatch() (fr Frame, ok bool) {
 	switch {
 	case b.haveRetry:
-		fr, ok = Frame{Event: "retry", Data: b.cur.Data}, true
+		fr, ok = Frame{Event: RetryEvent, Data: b.cur.Data}, true
 	case b.haveData:
 		b.cur.Data = strings.Join(b.data, "\n")
 		fr, ok = b.cur, true

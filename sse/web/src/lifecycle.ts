@@ -1,4 +1,5 @@
-import type { ClientState, ConnectFailure } from "./reducer.js";
+import type { ConnectFailure } from "./reducer.js";
+import type { StreamStateKind } from "./state.js";
 import type { Subject } from "./versions.js";
 import type { ResetReason } from "./wire.js";
 
@@ -22,7 +23,7 @@ export type HeldDiscardCause =
 
 /** Every record the observability feed (`onLifecycle`) can carry. Nothing branches on one. */
 export type LifecycleEvent =
-  | { kind: "state"; from: ClientState["kind"]; to: ClientState["kind"]; generation: number }
+  | { kind: "state"; from: StreamStateKind; to: StreamStateKind; generation: number }
   | {
       kind: "hello";
       verdict: string;
@@ -55,7 +56,7 @@ export type LifecycleEvent =
   | { kind: "worker_unavailable"; cause: "silent" | "error" }
   | { kind: "worker_recovered" }
   | { kind: "auth_lost"; route: "stream" | "alive" | "digest"; status: 401 }
-  | { kind: "tab_attached"; replaced: boolean; state: ClientState["kind"] }
+  | { kind: "tab_attached"; replaced: boolean; state: StreamStateKind }
   | { kind: "tab_detached"; cause: string }
   | { kind: "port_expired"; sinceLastAckMs: number }
   | { kind: "port_repaired" };

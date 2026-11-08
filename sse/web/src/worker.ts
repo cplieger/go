@@ -1,4 +1,4 @@
-import type { Removed, State } from "./digest.js";
+import type { Changed, Removed } from "./digest.js";
 import { createProfileOnlineSource, createProfileVisibilitySource } from "./fold.js";
 import type { LifecycleEvent } from "./lifecycle.js";
 import { createOnlineManager } from "./online.js";
@@ -20,7 +20,7 @@ import { createVisibilityManager } from "./visibility.js";
 
 /** The changed and removed sets of one host-side digest, fanned to the tabs with the run. */
 export interface DigestVerdict {
-  readonly changed: readonly State[];
+  readonly changed: readonly Changed[];
   readonly removed: readonly Removed[];
 }
 

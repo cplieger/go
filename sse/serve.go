@@ -28,13 +28,13 @@ func WithTopic(topic string) ServeOption {
 	return func(c *serveConfig) { c.topic = topic }
 }
 
-// OnConnect installs a hook that runs after the retry: field, the hello and
+// WithOnConnect installs a hook that runs after the retry: field, the hello and
 // the replay have been flushed, before live delivery. It receives the Hello
 // the client received and writes initial-state frames through the Writer; an
 // error ends the connection. The hook runs on the stream goroutine, holds no
 // hub lock, and may call Publish and Position. Keep it short: a hook that
 // runs past the client's hello timeout loses the tab to a reconnect.
-func OnConnect(fn func(w *Writer, h Hello) error) ServeOption {
+func WithOnConnect(fn func(w *Writer, h Hello) error) ServeOption {
 	return func(c *serveConfig) { c.onConnect = fn }
 }
 
@@ -47,7 +47,7 @@ func WithClientTag(tag string) ServeOption {
 	return func(c *serveConfig) { c.tag = tag }
 }
 
-// Writer is handed to OnConnect only; frames it writes carry no id. Serve
+// Writer is handed to the WithOnConnect hook only; frames it writes carry no id. Serve
 // always supplies it, so there is no constructor and no useful zero value.
 type Writer struct {
 	w         http.ResponseWriter
@@ -59,12 +59,13 @@ type Writer struct {
 }
 
 // Event writes one frame as its own bounded write and flush; name may be
-// empty. It returns ErrFrameTooLarge or ErrInvalidUTF8 exactly as Publish
-// does (the size check has no id line here), panics on the same names, and
-// returns the deadline error when the peer stopped reading, which the hook
-// propagates.
+// empty. It returns ErrEventName, ErrFrameTooLarge or ErrInvalidUTF8 exactly
+// as Publish does (the size check has no id line here), and returns the
+// deadline error when the peer stopped reading, which the hook propagates.
 func (sw *Writer) Event(name string, data []byte) error {
-	checkEventName(name, sw.keepalive)
+	if err := checkEventName(name, sw.keepalive); err != nil {
+		return err
+	}
 	if err := checkData(data); err != nil {
 		return err
 	}
@@ -170,7 +171,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 	connected := h.presenceEvent(c, PresenceConnected)
 	connected.Verdict = sub.hello.Verdict
 	h.presence(&connected)
-	// Deferred so a panicking OnConnect still unregisters the client and still
+	// Deferred so a panicking connect hook still unregisters the client and still
 	// pairs its connected event with one disconnected; the hook is then the
 	// cause by default.
 	dep := departure{cause: PresenceHookFailed}
@@ -193,9 +194,9 @@ func (h *Hub) serveConnected(ctx context.Context, sw *Writer, sub *subscription,
 	if sc.onConnect != nil {
 		if err := sc.onConnect(sw, sub.hello); err != nil {
 			if sw.failed {
-				return h.endOnWriteError(sw, c, "hook", err)
+				return h.endOnWriteError(sw, c, PresenceWriteHook, err)
 			}
-			h.logger.Warn("sse: OnConnect failed", "error", err, "epoch", h.epoch, "verdict", sub.hello.Verdict, "topic", c.topic)
+			h.logger.Warn("sse: connect hook failed", "error", err, "epoch", h.epoch, "verdict", sub.hello.Verdict, "topic", c.topic)
 			if isClosed(c.reset) {
 				return resetDeparture(c, nil)
 			}
@@ -255,14 +256,14 @@ func (h *Hub) stream(ctx context.Context, sw *Writer, c *client) departure {
 			return h.writeReset(sw, c)
 		case e := <-c.ch:
 			if err := h.drain(sw, c, &e); err != nil {
-				return h.endOnWriteError(sw, c, "frame", err)
+				return h.endOnWriteError(sw, c, PresenceWriteFrame, err)
 			}
 		case <-ticker.C:
 			err := sw.writeAndFlush(sw.timeout, func(w io.Writer) error {
 				return writeKeepalive(w, h.cfg.keepaliveEvent)
 			})
 			if err != nil {
-				return h.endOnWriteError(sw, c, "keepalive", err)
+				return h.endOnWriteError(sw, c, PresenceWriteKeepalive, err)
 			}
 		case <-ctx.Done():
 			h.logger.Debug("sse: peer disconnected", "topic", c.topic)
@@ -341,7 +342,7 @@ func writeResetFrame(sw *Writer, c *client) error {
 // endOnWriteError logs a failed write, then attempts the reset write if the
 // client was already signalled; on a timed-out socket that attempt fails at
 // once and is counted reset_unwritten.
-func (h *Hub) endOnWriteError(sw *Writer, c *client, write string, err error) departure {
+func (h *Hub) endOnWriteError(sw *Writer, c *client, write PresenceWrite, err error) departure {
 	attrs := []any{"write", write, "write_timeout", errors.Is(err, os.ErrDeadlineExceeded), "error", err, "topic", c.topic}
 	dep := departure{cause: PresenceDead, write: write}
 	if isClosed(c.reset) {

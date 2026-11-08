@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/sse"
+	"github.com/cplieger/go/sse/v2"
 )
 
 // testClient has no timeout because it reads streams; every request carries
@@ -97,7 +97,7 @@ func TestReadFrames_parsesEncoderOutput(t *testing.T) {
 		t.Fatalf("ReadFrames = %v, want nil; frames so far %+v", err, frames)
 	}
 	want := []Frame{
-		{Event: "retry", Data: "1500"},
+		{Event: RetryEvent, Data: "1500"},
 		{Event: "sse:hello"},
 		{ID: epoch + ":1", Data: "line one\nline two\nline three"},
 		{ID: epoch + ":2", Event: "named", Data: `{"n":2}`},
@@ -152,7 +152,7 @@ func (c *chunkReader) Read(p []byte) (int, error) {
 func TestFrameReader_readsAreIndependentOfChunking(t *testing.T) {
 	const stream = "retry: 1500\n\nevent: sse:hello\ndata: {\"epoch\":\"a\"}\n\ndata: {\"type\":\"connected\"}\n\nid: a:1\nevent: notify\ndata: third\n\n"
 	want := []Frame{
-		{Event: "retry", Data: "1500"},
+		{Event: RetryEvent, Data: "1500"},
 		{Event: "sse:hello", Data: `{"epoch":"a"}`},
 		{Data: `{"type":"connected"}`},
 		{ID: "a:1", Event: "notify", Data: "third"},
@@ -201,7 +201,7 @@ func TestRecorder_hidesDeadlineSetters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Frames = %v, want nil", err)
 	}
-	if len(frames) != 2 || frames[0].Event != "retry" || frames[1].Event != "sse:hello" {
+	if len(frames) != 2 || frames[0].Event != RetryEvent || frames[1].Event != "sse:hello" {
 		t.Errorf("Frames = %+v, want the retry field then the hello", frames)
 	}
 	if err := http.NewResponseController(rec).SetWriteDeadline(time.Now()); err == nil {

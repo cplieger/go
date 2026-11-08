@@ -2,7 +2,7 @@ package sse
 
 import (
 	"errors"
-	"strings"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -147,15 +147,28 @@ func TestNew_derivedDefaults(t *testing.T) {
 	}
 }
 
-func TestMustNew_panicsWithConfigMessage(t *testing.T) {
+// TestMustNew_panicsWithTheConfigError pins that the panic value is the error
+// itself, so a recover can match ErrConfig with errors.Is.
+func TestMustNew_panicsWithTheConfigError(t *testing.T) {
 	defer func() {
 		r := recover()
 		if r == nil {
 			t.Fatal("MustNew(WithReplay(-1)) did not panic")
 		}
-		if s, ok := r.(string); !ok || !strings.Contains(s, ErrConfig.Error()) {
-			t.Errorf("MustNew panic = %v, want the ErrConfig message", r)
+		if err, ok := r.(error); !ok || !errors.Is(err, ErrConfig) {
+			t.Errorf("MustNew panic = %v (%T), want an error wrapping ErrConfig", r, r)
 		}
 	}()
 	MustNew(WithReplay(-1))
+}
+
+// TestWithLogger_nilRestoresTheDefault pins last-one-wins for the logger: a
+// later WithLogger(nil) puts slog.Default back rather than keeping the earlier
+// logger.
+func TestWithLogger_nilRestoresTheDefault(t *testing.T) {
+	logger, _ := captureLog()
+	h := mustNew(t, WithLogger(logger), WithLogger(nil))
+	if h.logger != slog.Default() {
+		t.Errorf("logger after WithLogger(l), WithLogger(nil) = %p, want slog.Default() %p", h.logger, slog.Default())
+	}
 }

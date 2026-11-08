@@ -9,6 +9,7 @@ import {
   initialState,
   reduce,
 } from "./reducer.js";
+import { type StreamState, toStreamState } from "./state.js";
 import { DEFAULT_RETRY_MS, type TimingConfig, WIRE, resolveTiming } from "./timing.js";
 import { type Connection, type TransportFrame, connect } from "./transport.js";
 import { type VersionMap, bindListener, staleListener } from "./versions.js";
@@ -93,7 +94,8 @@ export interface Stream {
   stop(): void;
   /** Aborts the attempt and connects again in place; ignored in hidden_closed, offline and stopped. */
   reconnect(): void;
-  state(): ClientState;
+  /** The connection state, without the timers the stream keeps for itself. */
+  state(): StreamState;
   cursor(): Cursor | null;
   /** Drops the cursor; the next connect presents none and earns a fresh hello. */
   resetCursor(): void;
@@ -769,7 +771,7 @@ export function createStream(opts: StreamOptions): Stream {
     reconnect() {
       dispatch({ type: "reconnect", now: now() });
     },
-    state: () => state,
+    state: () => toStreamState(state),
     cursor: () => cursor,
     resetCursor() {
       cursor = null;

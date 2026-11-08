@@ -66,7 +66,7 @@ func digestBody(t *testing.T, epoch string, subjects ...Held) string {
 
 func TestDigest_methodNotAllowed(t *testing.T) {
 	h := mustNew(t)
-	handler := h.DigestHandler(staticResolver(nil))
+	handler := mustDigestHandler(t, h, staticResolver(nil))
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(method, "/digest", http.NoBody))
@@ -84,7 +84,7 @@ func TestDigest_methodNotAllowed(t *testing.T) {
 
 func TestDigest_contentType(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(nil))
+	handler := mustDigestHandler(t, h, staticResolver(nil))
 	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "application/json-patch+json"} {
 		req := httptest.NewRequest(http.MethodPost, "/digest", strings.NewReader(`{"subjects":[]}`))
 		req.Header.Set("Content-Type", ct)
@@ -105,7 +105,7 @@ func TestDigest_contentType(t *testing.T) {
 
 func TestDigest_bodyOverCap413(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(nil), WithDigestMaxBody(64))
+	handler := mustDigestHandler(t, h, staticResolver(nil), WithDigestMaxBody(64))
 	rec, got := postDigest(t, handler, `{"subjects":[],"padding":"`+strings.Repeat("x", 100)+`"}`)
 	if rec.Code != http.StatusRequestEntityTooLarge || got["code"] != "digest_too_large" {
 		t.Errorf("status %d body %v, want 413 digest_too_large", rec.Code, got)
@@ -114,7 +114,7 @@ func TestDigest_bodyOverCap413(t *testing.T) {
 
 func TestDigest_validationTable(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(nil))
+	handler := mustDigestHandler(t, h, staticResolver(nil))
 	sub := func(kind, ref, version string) string {
 		b, _ := json.Marshal(digestSubject{Kind: kind, Ref: ref, Version: version})
 		return string(b)
@@ -168,7 +168,7 @@ func TestDigest_validationTable(t *testing.T) {
 
 func TestDigest_unknownFieldsIgnored(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(map[Subject]State{{Kind: "chat", Ref: "c1"}: current("chat", "c1", "1")}))
+	handler := mustDigestHandler(t, h, staticResolver(map[Subject]State{{Kind: "chat", Ref: "c1"}: current("chat", "c1", "1")}))
 	rec, got := postDigest(t, handler, `{"epoch":"`+testEpoch+`","future":true,"subjects":[{"kind":"chat","ref":"c1","version":"1","extra":1}]}`)
 	if rec.Code != http.StatusOK || got["must_refetch"] != false || got["checked"] != float64(1) {
 		t.Errorf("status %d response %v, want 200 checked 1 with unknown fields ignored", rec.Code, got)
@@ -183,7 +183,7 @@ func TestDigest_emptySubjectsAnswersPosition(t *testing.T) {
 		}
 	}
 	called := false
-	handler := h.DigestHandler(func(context.Context, []Held) ([]State, error) {
+	handler := mustDigestHandler(t, h, func(context.Context, []Held) ([]State, error) {
 		called = true
 		return nil, nil
 	})
@@ -209,7 +209,7 @@ func TestDigest_epochMismatchMustRefetch(t *testing.T) {
 	logger, logged := captureLog()
 	h := mustNew(t, WithLogger(logger), withEpoch(testEpoch))
 	called := false
-	handler := h.DigestHandler(func(context.Context, []Held) ([]State, error) {
+	handler := mustDigestHandler(t, h, func(context.Context, []Held) ([]State, error) {
 		called = true
 		return nil, nil
 	})
@@ -234,7 +234,7 @@ func TestDigest_epochMismatchMustRefetch(t *testing.T) {
 func TestDigest_resolverErrorMustRefetch(t *testing.T) {
 	logger, logged := captureLog()
 	h := mustNew(t, WithLogger(logger), withEpoch(testEpoch))
-	handler := h.DigestHandler(func(context.Context, []Held) ([]State, error) {
+	handler := mustDigestHandler(t, h, func(context.Context, []Held) ([]State, error) {
 		return nil, errors.New("store locked")
 	})
 	rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, "1"}, Held{Subject{"chat", "c2"}, "1"}))
@@ -259,17 +259,23 @@ func TestDigest_keyMismatchClasses(t *testing.T) {
 		{"missing", []State{current("chat", "c1", "1")}, "missing", "c2", 1},
 		{"duplicate", []State{current("chat", "c1", "1"), current("chat", "c1", "1"), current("chat", "c2", "1")}, "duplicate", "c1", 3},
 		{"unrequested", []State{current("chat", "c1", "1"), current("chat", "c2", "1"), current("chat", "c9", "1")}, "unrequested", "c9", 3},
+		// A Status outside the three has no removal reason on the wire, so
+		// it is a key mismatch and its value is never echoed.
+		{"status", []State{current("chat", "c1", "1"), {Subject: Subject{"chat", "c2"}, Status: "archived"}}, "status", "c2", 2},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			logger, logged := captureLog()
 			h := mustNew(t, WithLogger(logger), withEpoch(testEpoch))
-			handler := h.DigestHandler(func(context.Context, []Held) ([]State, error) { return tc.states, nil })
+			handler := mustDigestHandler(t, h, func(context.Context, []Held) ([]State, error) { return tc.states, nil })
 			rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{c1, "1"}, Held{c2, "1"}))
 			if rec.Code != http.StatusOK || got["must_refetch"] != true {
 				t.Errorf("status %d response %v, want 200 must_refetch", rec.Code, got)
 			}
 			log := logged.String()
+			if tc.name == "status" && (strings.Contains(log, "archived") || strings.Contains(rec.Body.String(), "archived")) {
+				t.Errorf("the out-of-set status was echoed: log %q, body %q", log, rec.Body.String())
+			}
 			for _, want := range []string{"level=ERROR", "class=" + tc.wantClass, "request_subjects=2", fmt.Sprintf("resolver_states=%d", tc.wantCount), "kind=chat", "ref=" + tc.wantRef} {
 				if !strings.Contains(log, want) {
 					t.Errorf("log = %q, want %q", log, want)
@@ -283,7 +289,7 @@ func TestDigest_unrequestedKeyIsSanitisedInLog(t *testing.T) {
 	logger, logged := captureLog()
 	h := mustNew(t, WithLogger(logger), withEpoch(testEpoch))
 	hostile := "evil\r\n\u202e" + strings.Repeat("A", 200)
-	handler := h.DigestHandler(func(context.Context, []Held) ([]State, error) {
+	handler := mustDigestHandler(t, h, func(context.Context, []Held) ([]State, error) {
 		return []State{current("chat", "c1", "1"), current("chat", hostile, "1")}, nil
 	})
 	rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, "1"}))
@@ -301,7 +307,7 @@ func TestDigest_unrequestedKeyIsSanitisedInLog(t *testing.T) {
 
 func TestDigest_forbiddenAndGonePassThrough(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(map[Subject]State{
+	handler := mustDigestHandler(t, h, staticResolver(map[Subject]State{
 		{Kind: "chat", Ref: "c1"}:      current("chat", "c1", "44"),
 		{Kind: "chat", Ref: "c2"}:      current("chat", "c2", "7"),
 		{Kind: "live_turn", Ref: "c1"}: {Subject: Subject{Kind: "live_turn", Ref: "c1"}, Status: StatusGone},
@@ -326,7 +332,7 @@ func TestDigest_forbiddenAndGonePassThrough(t *testing.T) {
 func TestDigest_headReadAfterResolver(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch), WithReplay(8), WithReplayTTL(replayTTL))
 	var published uint64
-	handler := h.DigestHandler(func(_ context.Context, held []Held) ([]State, error) {
+	handler := mustDigestHandler(t, h, func(_ context.Context, held []Held) ([]State, error) {
 		off, err := h.Publish(Event{Data: []byte("during-resolve")})
 		if err != nil {
 			return nil, err
@@ -350,7 +356,7 @@ func TestDigest_stringOffsets(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	handler := h.DigestHandler(staticResolver(nil))
+	handler := mustDigestHandler(t, h, staticResolver(nil))
 	req := httptest.NewRequest(http.MethodPost, "/digest", strings.NewReader(`{"subjects":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -374,7 +380,7 @@ func TestDigest_worstCaseBatchFitsDefaultCap(t *testing.T) {
 	if len(body) >= defaultDigestMaxBody {
 		t.Fatalf("worst-case body is %d bytes, want under the %d-byte default cap", len(body), defaultDigestMaxBody)
 	}
-	rec, got := postDigest(t, h.DigestHandler(staticResolver(states)), body)
+	rec, got := postDigest(t, mustDigestHandler(t, h, staticResolver(states)), body)
 	if rec.Code != http.StatusOK || got["must_refetch"] != false || got["checked"] != float64(defaultDigestMaxSubjects) {
 		t.Errorf("status %d response %v, want 200 checked %d for a %d-byte body", rec.Code, got, defaultDigestMaxSubjects, len(body))
 	}
@@ -409,21 +415,39 @@ func TestSanitizeLogValue_behavior(t *testing.T) {
 	}
 }
 
+// TestDigestHandler_refusesBadConfiguration pins that a nil resolver and every
+// non-positive cap are ErrConfig at construction, with no handler.
+func TestDigestHandler_refusesBadConfiguration(t *testing.T) {
+	h := mustNew(t, withEpoch(testEpoch))
+	for name, build := range map[string]func() (http.Handler, error){
+		"nil resolver":      func() (http.Handler, error) { return h.DigestHandler(nil) },
+		"zero max subjects": func() (http.Handler, error) { return h.DigestHandler(staticResolver(nil), WithDigestMaxSubjects(0)) },
+		"negative max subjects": func() (http.Handler, error) {
+			return h.DigestHandler(staticResolver(nil), WithDigestMaxSubjects(-1))
+		},
+		"zero max body":     func() (http.Handler, error) { return h.DigestHandler(staticResolver(nil), WithDigestMaxBody(0)) },
+		"negative max body": func() (http.Handler, error) { return h.DigestHandler(staticResolver(nil), WithDigestMaxBody(-1)) },
+	} {
+		if handler, err := build(); !errors.Is(err, ErrConfig) || handler != nil {
+			t.Errorf("%s: DigestHandler = (%v, %v), want (nil, ErrConfig)", name, handler, err)
+		}
+	}
+}
+
 func TestDigest_nilOptionAndDefaults(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(map[Subject]State{{Kind: "chat", Ref: "c1"}: current("chat", "c1", "1")}), nil,
-		WithDigestMaxSubjects(0), WithDigestMaxSubjects(-1), WithDigestMaxBody(0), WithDigestMaxBody(-1))
+	handler := mustDigestHandler(t, h, staticResolver(map[Subject]State{{Kind: "chat", Ref: "c1"}: current("chat", "c1", "1")}), nil)
 	body := bytes.Repeat([]byte(" "), 4096)
 	body = append(body, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, "1"})...)
 	rec, got := postDigest(t, handler, string(body))
 	if rec.Code != http.StatusOK || got["checked"] != float64(1) {
-		t.Errorf("status %d response %v, want 200 checked 1 (non-positive caps keep the defaults, a nil option is skipped)", rec.Code, got)
+		t.Errorf("status %d response %v, want 200 checked 1 (the default caps apply and a nil option is skipped)", rec.Code, got)
 	}
 }
 
 func TestDigest_maxSubjectsOptionCaps(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
-	handler := h.DigestHandler(staticResolver(nil), WithDigestMaxSubjects(1))
+	handler := mustDigestHandler(t, h, staticResolver(nil), WithDigestMaxSubjects(1))
 	rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, "1"}, Held{Subject{"chat", "c2"}, "1"}))
 	if msg, _ := got["error"].(string); rec.Code != http.StatusBadRequest || msg != "subjects holds 2 entries, max 1" {
 		t.Errorf("two subjects under WithDigestMaxSubjects(1): status %d response %v, want 400 naming the cap of 1", rec.Code, got)
@@ -437,7 +461,7 @@ func TestDigest_maxSubjectsOptionCaps(t *testing.T) {
 func TestDigest_kindAcceptsEveryAllowedClass(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
 	for _, kind := range []string{"z", "a0", "a9", "a_", "az09_"} {
-		handler := h.DigestHandler(staticResolver(map[Subject]State{{Kind: kind, Ref: "r"}: current(kind, "r", "1")}))
+		handler := mustDigestHandler(t, h, staticResolver(map[Subject]State{{Kind: kind, Ref: "r"}: current(kind, "r", "1")}))
 		rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{kind, "r"}, "1"}))
 		if rec.Code != http.StatusOK || got["checked"] != float64(1) {
 			t.Errorf("kind %q: status %d response %v, want 200 checked 1", kind, rec.Code, got)
@@ -448,7 +472,7 @@ func TestDigest_kindAcceptsEveryAllowedClass(t *testing.T) {
 func TestDigest_versionAcceptsPrintableASCIIEdges(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
 	const edges = " v~"
-	handler := h.DigestHandler(staticResolver(map[Subject]State{{Kind: "chat", Ref: "c1"}: current("chat", "c1", edges)}))
+	handler := mustDigestHandler(t, h, staticResolver(map[Subject]State{{Kind: "chat", Ref: "c1"}: current("chat", "c1", edges)}))
 	rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, edges}))
 	if rec.Code != http.StatusOK || got["checked"] != float64(1) || got["must_refetch"] != false {
 		t.Errorf("version %q (space and tilde, the printable ASCII edges): status %d response %v, want 200 checked 1", edges, rec.Code, got)
