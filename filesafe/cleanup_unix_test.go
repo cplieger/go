@@ -251,3 +251,31 @@ func TestNewPendingFile_NameIsClean(t *testing.T) {
 		t.Errorf("PendingFile.Name() = %q, want %q", p.Name(), want)
 	}
 }
+
+// A PendingFile staged through the root OpenParentInRoot returns reports a
+// clean temp path, though that root's own Name keeps the "/." its open added.
+func TestNewPendingFileInRoot_NameIsCleanThroughAPinnedParent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	parent, base, err := OpenParentInRoot(root, "d/out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	p, err := NewPendingFileInRoot(t.Context(), parent, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Cleanup() })
+	if want := filepath.Join(dir, "d", filepath.Base(p.Name())); p.Name() != want {
+		t.Errorf("PendingFile.Name() = %q, want %q", p.Name(), want)
+	}
+}

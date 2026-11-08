@@ -437,6 +437,11 @@ func (p *PendingFile) Truncate(size int64) error {
 // Commit, which verifies the staged file's actual size.
 func (p *PendingFile) BytesWritten() int64 { return p.written }
 
+// Name reports the temp file's path, cleaned, so a root opened through
+// OpenParentInRoot, whose own Name keeps a "/." the open added, does not
+// carry it into the temp's path.
+func (p *PendingFile) Name() string { return filepath.Clean(p.File.Name()) }
+
 // closeOwnedRoot closes the parent-directory root when this PendingFile
 // opened it (NewPendingFile). Idempotent. A caller-provided root
 // (NewPendingFileInRoot) is never closed.

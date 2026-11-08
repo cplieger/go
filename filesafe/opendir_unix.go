@@ -40,6 +40,9 @@ func dirOpenName(name string) string {
 // os.Root opens every component but the last with O_DIRECTORY, so name is
 // opened as a directory and "." inside it: a FIFO swapped in for name answers
 // ENOTDIR instead of blocking. The child root keeps the "/." in its Name()
-// ("<root>/d/."); every path this package reports goes through filepath.Join
-// or filepath.Clean, or is rewritten by dirOpenErr.
+// ("<root>/d/.", or "<root>/./d/." after pinDirInRoot opens "."), and so does
+// the Name of a plain *os.File opened through it. The package's own reports
+// clean it: Result.Path and ProbeResult.Dir use filepath.Join, PendingFile.Name
+// and the root log attributes filepath.Clean, and a pin error is rewritten by
+// dirOpenErr.
 func childDirOpenName(name string) string { return name + string(filepath.Separator) + "." }
