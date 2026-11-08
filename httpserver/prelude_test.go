@@ -268,32 +268,6 @@ func TestDecodeBody_tooLarge(t *testing.T) {
 	}
 }
 
-func TestDecodeBodyOptional_valid(t *testing.T) {
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"trinity"}`))
-	var p payload
-	httpserver.DecodeBodyOptional(rr, req, &p)
-	if p.Name != "trinity" {
-		t.Errorf("Name = %q, want trinity", p.Name)
-	}
-	if rr.Body.Len() != 0 {
-		t.Errorf("optional decode wrote a response: %s", rr.Body.String())
-	}
-}
-
-func TestDecodeBodyOptional_invalidIgnored(t *testing.T) {
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`garbage`))
-	var p payload
-	httpserver.DecodeBodyOptional(rr, req, &p) // must not panic or write
-	if p.Name != "" {
-		t.Errorf("Name = %q, want zero value", p.Name)
-	}
-	if rr.Body.Len() != 0 {
-		t.Errorf("optional decode wrote a response: %s", rr.Body.String())
-	}
-}
-
 func TestLimitBody_readPastLimitErrors(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("0123456789"))

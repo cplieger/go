@@ -92,13 +92,13 @@ func serve(h http.Handler, method, target string, header http.Header) *httptest.
 	return rr
 }
 
-func TestRequestLogger_mintsIDWhenAbsent(t *testing.T) {
+func TestLogging_mintsIDWhenAbsent(t *testing.T) {
 	var seen string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = httpserver.RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-	h := httpserver.RequestLogger(next, httpserver.WithLogger(discardLogger()))
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()))(next)
 
 	rr := serve(h, http.MethodGet, "/x", nil)
 
@@ -111,12 +111,12 @@ func TestRequestLogger_mintsIDWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_reusesValidInboundID(t *testing.T) {
+func TestLogging_reusesValidInboundID(t *testing.T) {
 	var seen string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = httpserver.RequestIDFromContext(r.Context())
 	})
-	h := httpserver.RequestLogger(next, httpserver.WithLogger(discardLogger()))
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()))(next)
 
 	hdr := http.Header{}
 	hdr.Set(httpserver.HeaderRequestID, "inbound-123")
@@ -130,12 +130,12 @@ func TestRequestLogger_reusesValidInboundID(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_replacesInvalidInboundID(t *testing.T) {
+func TestLogging_replacesInvalidInboundID(t *testing.T) {
 	var seen string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = httpserver.RequestIDFromContext(r.Context())
 	})
-	h := httpserver.RequestLogger(next, httpserver.WithLogger(discardLogger()))
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()))(next)
 
 	hdr := http.Header{}
 	hdr.Set(httpserver.HeaderRequestID, "bad id!!")
@@ -153,9 +153,9 @@ func TestRequestLogger_replacesInvalidInboundID(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_emitsOneInfoLine(t *testing.T) {
+func TestLogging_emitsOneInfoLine(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(statusHandler(http.StatusCreated), httpserver.WithLogger(slog.New(logCap)))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(statusHandler(http.StatusCreated))
 
 	serve(h, http.MethodPost, "/api/thing", nil)
 
@@ -188,11 +188,9 @@ func TestRequestLogger_emitsOneInfoLine(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_skipPathOmitsLogLineButEchoesID(t *testing.T) {
+func TestLogging_skipPathOmitsLogLineButEchoesID(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithSkipPaths("/stream"))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithSkipPaths("/stream"))(okHandler())
 
 	rr := serve(h, http.MethodGet, "/stream", nil)
 
@@ -204,11 +202,9 @@ func TestRequestLogger_skipPathOmitsLogLineButEchoesID(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_nonSkipPathStillLogs(t *testing.T) {
+func TestLogging_nonSkipPathStillLogs(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithSkipPaths("/stream"))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithSkipPaths("/stream"))(okHandler())
 
 	serve(h, http.MethodGet, "/other", nil)
 
@@ -217,60 +213,12 @@ func TestRequestLogger_nonSkipPathStillLogs(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_metricHookOnLoggedPath(t *testing.T) {
-	var (
-		calls              int
-		gotMethod, gotPath string
-		gotStatus          int
-		gotDuration        time.Duration
-	)
-	hook := func(m httpserver.RequestMetric) {
-		calls++
-		gotMethod, gotPath, gotStatus, gotDuration = m.Method, m.Path, m.Status, m.Latency
-	}
-	h := httpserver.RequestLogger(statusHandler(http.StatusAccepted),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetric(hook))
-
-	serve(h, http.MethodPut, "/metric", nil)
-
-	if calls != 1 {
-		t.Fatalf("hook called %d times, want 1", calls)
-	}
-	if gotMethod != http.MethodPut || gotPath != "/metric" {
-		t.Errorf("hook got (%q, %q), want (PUT, /metric)", gotMethod, gotPath)
-	}
-	if gotStatus != http.StatusAccepted {
-		t.Errorf("hook status = %d, want %d", gotStatus, http.StatusAccepted)
-	}
-	if gotDuration < 0 {
-		t.Errorf("hook duration = %v, want non-negative", gotDuration)
-	}
-}
-
-func TestRequestLogger_skipPathExcludedFromMetricHook(t *testing.T) {
-	var calls int
-	hook := func(httpserver.RequestMetric) { calls++ }
-	// A skip path is excluded from BOTH the access log and the metric hook: a
-	// stream's open-to-close duration plus a synthetic status is misleading.
-	h := httpserver.RequestLogger(statusHandler(http.StatusTeapot),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithSkipPaths("/stream"),
-		httpserver.WithRecordMetric(hook))
-
-	serve(h, http.MethodGet, "/stream", nil)
-
-	if calls != 0 {
-		t.Errorf("metric hook called %d times for a skip path, want 0", calls)
-	}
-}
-
-func TestRequestLogger_recorderCapturesHandlerStatus(t *testing.T) {
+func TestLogging_recorderCapturesHandlerStatus(t *testing.T) {
 	logCap := &captureHandler{}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusForbidden)
 	})
-	h := httpserver.RequestLogger(next, httpserver.WithLogger(slog.New(logCap)))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(next)
 
 	rr := serve(h, http.MethodGet, "/x", nil)
 
@@ -286,39 +234,39 @@ func TestRequestLogger_recorderCapturesHandlerStatus(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_defaultLoggerWhenUnset(t *testing.T) {
+func TestLogging_defaultLoggerWhenUnset(t *testing.T) {
 	swapDefaultLogger(t, discardLogger())
 
 	// No WithLogger option: exercises the slog.Default() fallback.
-	h := httpserver.RequestLogger(okHandler())
+	h := httpserver.Logging()(okHandler())
 	rr := serve(h, http.MethodGet, "/x", nil)
 	if !httpserver.ValidRequestID(rr.Header().Get(httpserver.HeaderRequestID)) {
 		t.Error("default-logger path did not echo a valid request id")
 	}
 }
 
-func TestRequestLogger_nilOptionIgnored(t *testing.T) {
+func TestLogging_nilOptionIgnored(t *testing.T) {
 	// A nil LogOption must be skipped rather than panic.
-	h := httpserver.RequestLogger(okHandler(), nil, httpserver.WithLogger(discardLogger()))
+	h := httpserver.Logging(nil, httpserver.WithLogger(discardLogger()))(okHandler())
 	rr := serve(h, http.MethodGet, "/x", nil)
 	if !httpserver.ValidRequestID(rr.Header().Get(httpserver.HeaderRequestID)) {
 		t.Error("did not echo a valid request id")
 	}
 }
 
-func TestRequestLogger_panicStillEmitsAccessLine(t *testing.T) {
+func TestLogging_panicStillEmitsAccessLine(t *testing.T) {
 	logCap := &captureHandler{}
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})
-	h := httpserver.RequestLogger(next, httpserver.WithLogger(slog.New(logCap)))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(next)
 
-	// RequestLogger does not recover; the panic propagates out of ServeHTTP.
+	// Logging does not recover; the panic propagates out of ServeHTTP.
 	// Recover it here so the test can assert the deferred access line still ran.
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
-				t.Error("handler panic did not propagate through RequestLogger")
+				t.Error("handler panic did not propagate through Logging")
 			}
 		}()
 		serve(h, http.MethodGet, "/boom", nil)
@@ -336,16 +284,13 @@ func TestRequestLogger_panicStillEmitsAccessLine(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_skipFuncSuppressesLogAndMetricButEchoesID(t *testing.T) {
+func TestLogging_skipFuncSuppressesLogAndMetricButEchoesID(t *testing.T) {
 	logCap := &captureHandler{}
 	var metricCalls int
 	// A path parameter (/ws/{id}) that an exact WithSkipPaths match cannot cover.
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithSkipFunc(func(r *http.Request) bool {
-			return strings.HasPrefix(r.URL.Path, "/ws/")
-		}),
-		httpserver.WithRecordMetric(func(httpserver.RequestMetric) { metricCalls++ }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithSkipFunc(func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/ws/")
+	}), httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { metricCalls++ }))(okHandler())
 
 	rr := serve(h, http.MethodGet, "/ws/room-42", nil)
 
@@ -360,11 +305,9 @@ func TestRequestLogger_skipFuncSuppressesLogAndMetricButEchoesID(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_skipFuncFalseStillLogs(t *testing.T) {
+func TestLogging_skipFuncFalseStillLogs(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithSkipFunc(func(*http.Request) bool { return false }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithSkipFunc(func(*http.Request) bool { return false }))(okHandler())
 
 	serve(h, http.MethodGet, "/normal", nil)
 
@@ -540,9 +483,9 @@ func TestWithSkipUpgrades(t *testing.T) {
 				httpserver.WithLogger(slog.New(logCap)),
 				httpserver.WithSkipUpgrades(true),
 				httpserver.WithClientIP(),
-				httpserver.WithRecordMetric(func(httpserver.RequestMetric) { metricCalls++ }),
+				httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { metricCalls++ }),
 			}
-			h := httpserver.RequestLogger(tc.handler(t), append(opts, tc.extraOpts...)...)
+			h := httpserver.Logging(append(opts, tc.extraOpts...)...)(tc.handler(t))
 
 			w := &hijackableRecorder{ResponseRecorder: httptest.NewRecorder()}
 			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.target, nil))
@@ -618,10 +561,7 @@ func TestWithSkipUpgrades_recordsTheRefusalAPredicateSuppresses(t *testing.T) {
 	refused := statusHandler(http.StatusBadRequest) // what Accept answers for that key
 
 	predicting := &captureHandler{}
-	httpserver.RequestLogger(refused,
-		httpserver.WithLogger(slog.New(predicting)),
-		httpserver.WithSkipFunc(looksLikeUpgrade),
-	).ServeHTTP(httptest.NewRecorder(), upgradeRequest())
+	httpserver.Logging(httpserver.WithLogger(slog.New(predicting)), httpserver.WithSkipFunc(looksLikeUpgrade))(refused).ServeHTTP(httptest.NewRecorder(), upgradeRequest())
 
 	if n := len(predicting.snapshot()); n != 0 {
 		t.Fatalf("the predicting wiring emitted %d lines for the refused handshake, want 0; "+
@@ -629,10 +569,7 @@ func TestWithSkipUpgrades_recordsTheRefusalAPredicateSuppresses(t *testing.T) {
 	}
 
 	observing := &captureHandler{}
-	httpserver.RequestLogger(refused,
-		httpserver.WithLogger(slog.New(observing)),
-		httpserver.WithSkipUpgrades(true),
-	).ServeHTTP(httptest.NewRecorder(), upgradeRequest())
+	httpserver.Logging(httpserver.WithLogger(slog.New(observing)), httpserver.WithSkipUpgrades(true))(refused).ServeHTTP(httptest.NewRecorder(), upgradeRequest())
 
 	recs := observing.snapshot()
 	if len(recs) != 1 {
@@ -647,7 +584,7 @@ func TestWithSkipUpgrades_recordsTheRefusalAPredicateSuppresses(t *testing.T) {
 // additive: without it, a 101 keeps the line every existing consumer gets today.
 func TestWithSkipUpgrades_absentLeavesUpgradesLogged(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(wsUpgradeHandler(t), httpserver.WithLogger(slog.New(logCap)))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(wsUpgradeHandler(t))
 
 	w := &hijackableRecorder{ResponseRecorder: httptest.NewRecorder()}
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ws", nil))
@@ -688,7 +625,7 @@ func TestWithSkipUpgrades_falseMatchesAbsentAndLastWins(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			logCap := &captureHandler{}
 			opts := append([]httpserver.LogOption{httpserver.WithLogger(slog.New(logCap))}, tc.opts...)
-			h := httpserver.RequestLogger(wsUpgradeHandler(t), opts...)
+			h := httpserver.Logging(opts...)(wsUpgradeHandler(t))
 
 			w := &hijackableRecorder{ResponseRecorder: httptest.NewRecorder()}
 			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ws", nil))
@@ -732,12 +669,12 @@ func TestWithSkipUpgrades_panicAfterTheSwitchIsStillLogged(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_rejectsCRLFInjectionInboundID(t *testing.T) {
+func TestLogging_rejectsCRLFInjectionInboundID(t *testing.T) {
 	var seen string
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = httpserver.RequestIDFromContext(r.Context())
 	})
-	h := httpserver.RequestLogger(next, httpserver.WithLogger(discardLogger()))
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()))(next)
 
 	hdr := http.Header{}
 	// A header-splitting / log-forging inbound id must be rejected, not echoed.
@@ -769,9 +706,9 @@ func serveWithPeer(h http.Handler, remoteAddr, xff string) {
 
 // Without WithClientIP the access line carries no client_ip attribute (the
 // default output is unchanged).
-func TestRequestLogger_noClientIPAttrByDefault(t *testing.T) {
+func TestLogging_noClientIPAttrByDefault(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(), httpserver.WithLogger(slog.New(logCap)))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(okHandler())
 
 	serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
 
@@ -786,11 +723,9 @@ func TestRequestLogger_noClientIPAttrByDefault(t *testing.T) {
 
 // With WithClientIP and no trusted ranges, the socket peer host is logged and
 // an X-Forwarded-For is IGNORED (the spoof-proof default).
-func TestRequestLogger_withClientIPLogsPeerByDefault(t *testing.T) {
+func TestLogging_withClientIPLogsPeerByDefault(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithClientIP())
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithClientIP())(okHandler())
 
 	// A spoofed XFF must not be honored when no proxy range is trusted.
 	serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
@@ -803,11 +738,9 @@ func TestRequestLogger_withClientIPLogsPeerByDefault(t *testing.T) {
 
 // With WithClientIP and the peer inside a trusted proxy range, the real client
 // is resolved from X-Forwarded-For (right-to-left, skipping trusted hops).
-func TestRequestLogger_withClientIPResolvesTrustedXFF(t *testing.T) {
+func TestLogging_withClientIPResolvesTrustedXFF(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")))(okHandler())
 
 	// Peer 192.0.2.1 is a trusted proxy; it appended the client it saw.
 	serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
@@ -820,11 +753,9 @@ func TestRequestLogger_withClientIPResolvesTrustedXFF(t *testing.T) {
 
 // WithClientIPFunc logs the result of the caller-supplied resolver verbatim
 // (for a dynamic/hot-reloaded trusted set), instead of the fixed-set ClientIP.
-func TestRequestLogger_withClientIPFunc(t *testing.T) {
+func TestLogging_withClientIPFunc(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithClientIPFunc(func(*http.Request) string { return "resolved-by-func" }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithClientIPFunc(func(*http.Request) string { return "resolved-by-func" }))(okHandler())
 
 	serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
 
@@ -835,13 +766,10 @@ func TestRequestLogger_withClientIPFunc(t *testing.T) {
 
 // WithClientIP and WithClientIPFunc are mutually exclusive; the last one applied
 // wins (the earlier one's state is cleared).
-func TestRequestLogger_clientIPOptionsMutuallyExclusive(t *testing.T) {
+func TestLogging_clientIPOptionsMutuallyExclusive(t *testing.T) {
 	// Func applied last → func wins.
 	cap1 := &captureHandler{}
-	h1 := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(cap1)),
-		httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")),
-		httpserver.WithClientIPFunc(func(*http.Request) string { return "func-wins" }))
+	h1 := httpserver.Logging(httpserver.WithLogger(slog.New(cap1)), httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")), httpserver.WithClientIPFunc(func(*http.Request) string { return "func-wins" }))(okHandler())
 	serveWithPeer(h1, "192.0.2.1:1234", "203.0.113.5")
 	if got := attrsOf(cap1.snapshot()[0])["client_ip"]; got != "func-wins" {
 		t.Errorf("client_ip = %v, want func-wins", got)
@@ -849,10 +777,7 @@ func TestRequestLogger_clientIPOptionsMutuallyExclusive(t *testing.T) {
 
 	// WithClientIP applied last → trusted-set path wins (func cleared).
 	cap2 := &captureHandler{}
-	h2 := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(cap2)),
-		httpserver.WithClientIPFunc(func(*http.Request) string { return "func-loses" }),
-		httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")))
+	h2 := httpserver.Logging(httpserver.WithLogger(slog.New(cap2)), httpserver.WithClientIPFunc(func(*http.Request) string { return "func-loses" }), httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")))(okHandler())
 	serveWithPeer(h2, "192.0.2.1:1234", "203.0.113.5")
 	if got := attrsOf(cap2.snapshot()[0])["client_ip"]; got != "203.0.113.5" {
 		t.Errorf("client_ip = %v, want the trusted-XFF client 203.0.113.5", got)
@@ -861,11 +786,9 @@ func TestRequestLogger_clientIPOptionsMutuallyExclusive(t *testing.T) {
 
 // WithClientIPFunc(nil) is a no-op (matching the package's nil-option
 // convention), so no client_ip attribute is emitted.
-func TestRequestLogger_withClientIPFuncNilIsNoOp(t *testing.T) {
+func TestLogging_withClientIPFuncNilIsNoOp(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithClientIPFunc(nil))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithClientIPFunc(nil))(okHandler())
 
 	serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
 
@@ -880,12 +803,9 @@ func TestRequestLogger_withClientIPFuncNilIsNoOp(t *testing.T) {
 
 // A nil WithClientIPFunc applied after WithClientIP does not clear the prior
 // trusted-set resolver: the nil callback is ignored, not last-wins.
-func TestRequestLogger_withClientIPFuncNilKeepsPriorTrustedSet(t *testing.T) {
+func TestLogging_withClientIPFuncNilKeepsPriorTrustedSet(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")),
-		httpserver.WithClientIPFunc(nil))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithClientIP(netip.MustParsePrefix("192.0.2.0/24")), httpserver.WithClientIPFunc(nil))(okHandler())
 
 	serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
 
@@ -897,17 +817,15 @@ func TestRequestLogger_withClientIPFuncNilKeepsPriorTrustedSet(t *testing.T) {
 // A panicking WithClientIPFunc resolver must not escape the outer Logging defer
 // (which sits outside Recoverer): the request still completes, the access line
 // is still emitted, and only the client_ip attribute is omitted.
-func TestRequestLogger_panickingClientIPResolverStillEmitsAccessLine(t *testing.T) {
+func TestLogging_panickingClientIPResolverStillEmitsAccessLine(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithClientIPFunc(func(*http.Request) string { panic("resolver boom") }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithClientIPFunc(func(*http.Request) string { panic("resolver boom") }))(okHandler())
 
 	// A panic in the resolver must be contained, not propagated out of ServeHTTP.
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("client-IP resolver panic escaped RequestLogger: %v", r)
+				t.Errorf("client-IP resolver panic escaped Logging: %v", r)
 			}
 		}()
 		serveWithPeer(h, "192.0.2.1:1234", "203.0.113.5")
@@ -939,240 +857,7 @@ func TestRequestLogger_panickingClientIPResolverStillEmitsAccessLine(t *testing.
 	}
 }
 
-// A panicking WithRecordMetric hook must not escape the outer Logging defer: the
-// request still completes and the access line is still emitted (the metric for
-// this request is simply skipped).
-func TestRequestLogger_panickingMetricHookStillEmitsAccessLine(t *testing.T) {
-	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(statusHandler(http.StatusAccepted),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithRecordMetric(func(httpserver.RequestMetric) { panic("metric boom") }))
-
-	// A panic in the metric hook must be contained, not propagated out of ServeHTTP.
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("metric hook panic escaped RequestLogger: %v", r)
-			}
-		}()
-		serve(h, http.MethodPut, "/metric", nil)
-	}()
-
-	recs := logCap.snapshot()
-	var access *slog.Record
-	var sawFailure bool
-	for i := range recs {
-		switch recs[i].Message {
-		case "http":
-			access = &recs[i]
-		case "httpserver: metric hook failed":
-			sawFailure = true
-		}
-	}
-	if !sawFailure {
-		t.Error("expected a 'metric hook failed' log record, got none")
-	}
-	if access == nil {
-		t.Fatal("access line was not emitted after metric hook panic")
-	}
-	if m := attrsOf(*access); m["status"] != int64(http.StatusAccepted) {
-		t.Errorf("access line status = %v, want %d", m["status"], http.StatusAccepted)
-	}
-}
-
-func TestRequestLogger_requestAwareMetricHookSeesPattern(t *testing.T) {
-	var (
-		calls       int
-		gotPattern  string
-		gotStatus   int
-		gotDuration time.Duration
-	)
-	mux := http.NewServeMux()
-	mux.Handle("GET /things/{id}", statusHandler(http.StatusAccepted))
-	h := httpserver.RequestLogger(mux,
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetricRequest(func(r *http.Request, status int, d time.Duration) {
-			calls++
-			gotPattern, gotStatus, gotDuration = r.Pattern, status, d
-		}))
-
-	serve(h, http.MethodGet, "/things/42", nil)
-
-	if calls != 1 {
-		t.Fatalf("hook called %d times, want 1", calls)
-	}
-	if gotPattern != "GET /things/{id}" {
-		t.Errorf("hook r.Pattern = %q, want %q", gotPattern, "GET /things/{id}")
-	}
-	if gotStatus != http.StatusAccepted {
-		t.Errorf("hook status = %d, want %d", gotStatus, http.StatusAccepted)
-	}
-	if gotDuration < 0 {
-		t.Errorf("hook duration = %v, want non-negative", gotDuration)
-	}
-}
-
-func TestRequestLogger_requestAwareMetricHookEmptyPatternOnUnmatched(t *testing.T) {
-	// No route matches, so the mux never assigns r.Pattern and answers 404. The
-	// hook must observe the empty pattern (the consumer's "collapse to
-	// unmatched" cardinality guard) with the real 404 status.
-	var (
-		calls      int
-		gotPattern string
-		gotStatus  int
-	)
-	mux := http.NewServeMux()
-	mux.Handle("GET /known", okHandler())
-	h := httpserver.RequestLogger(mux,
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetricRequest(func(r *http.Request, status int, _ time.Duration) {
-			calls++
-			gotPattern, gotStatus = r.Pattern, status
-		}))
-
-	serve(h, http.MethodGet, "/unknown", nil)
-
-	if calls != 1 {
-		t.Fatalf("hook called %d times, want 1", calls)
-	}
-	if gotPattern != "" {
-		t.Errorf("hook r.Pattern = %q for an unmatched route, want empty", gotPattern)
-	}
-	if gotStatus != http.StatusNotFound {
-		t.Errorf("hook status = %d, want %d", gotStatus, http.StatusNotFound)
-	}
-}
-
-func TestRequestLogger_requestAwareMetricHookFiresOnPanic(t *testing.T) {
-	var (
-		calls     int
-		gotStatus int
-	)
-	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("boom")
-	})
-	h := httpserver.RequestLogger(next,
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetricRequest(func(_ *http.Request, status int, _ time.Duration) {
-			calls++
-			gotStatus = status
-		}))
-
-	// RequestLogger does not recover; the panic propagates out of ServeHTTP.
-	// Recover it here so the test can assert the deferred hook still fired.
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("handler panic did not propagate through RequestLogger")
-			}
-		}()
-		serve(h, http.MethodGet, "/boom", nil)
-	}()
-
-	if calls != 1 {
-		t.Fatalf("hook called %d times after panic, want 1 (deferred emission)", calls)
-	}
-	if gotStatus != http.StatusOK {
-		t.Errorf("hook status = %d, want 200 (recorded default)", gotStatus)
-	}
-}
-
-func TestRequestLogger_requestAwareMetricHookSkippedOnSkipPath(t *testing.T) {
-	var calls int
-	h := httpserver.RequestLogger(statusHandler(http.StatusTeapot),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithSkipPaths("/stream"),
-		httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { calls++ }))
-
-	serve(h, http.MethodGet, "/stream", nil)
-
-	if calls != 0 {
-		t.Errorf("request-aware hook called %d times for a skip path, want 0", calls)
-	}
-}
-
-func TestRequestLogger_metricHookVariantsMutuallyExclusive(t *testing.T) {
-	// WithRecordMetric and WithRecordMetricRequest set the same hook slot; the
-	// last one applied wins, in either order.
-	var classic, reqAware int
-	last := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetric(func(httpserver.RequestMetric) { classic++ }),
-		httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { reqAware++ }))
-	serve(last, http.MethodGet, "/x", nil)
-	if classic != 0 || reqAware != 1 {
-		t.Errorf("request-aware applied last: classic=%d reqAware=%d, want 0 and 1", classic, reqAware)
-	}
-
-	classic, reqAware = 0, 0
-	first := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { reqAware++ }),
-		httpserver.WithRecordMetric(func(httpserver.RequestMetric) { classic++ }))
-	serve(first, http.MethodGet, "/x", nil)
-	if classic != 1 || reqAware != 0 {
-		t.Errorf("classic applied last: classic=%d reqAware=%d, want 1 and 0", classic, reqAware)
-	}
-}
-
-func TestRequestLogger_requestAwareMetricHookNilIsNoOp(t *testing.T) {
-	// A nil fn is ignored per the package's skip-nil option convention: it
-	// neither enables the request-aware hook nor clears a prior WithRecordMetric.
-	var classic int
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetric(func(httpserver.RequestMetric) { classic++ }),
-		httpserver.WithRecordMetricRequest(nil))
-
-	serve(h, http.MethodGet, "/x", nil)
-
-	if classic != 1 {
-		t.Errorf("classic hook called %d times after trailing WithRecordMetricRequest(nil), want 1", classic)
-	}
-}
-
-// A panicking WithRecordMetricRequest hook must not escape the outer Logging
-// defer: the request still completes and the access line is still emitted (the
-// metric for this request is simply skipped), mirroring the WithRecordMetric
-// containment contract.
-func TestRequestLogger_panickingRequestAwareMetricHookStillEmitsAccessLine(t *testing.T) {
-	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(statusHandler(http.StatusAccepted),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { panic("metric boom") }))
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("request-aware metric hook panic escaped RequestLogger: %v", r)
-			}
-		}()
-		serve(h, http.MethodPut, "/metric", nil)
-	}()
-
-	recs := logCap.snapshot()
-	var access *slog.Record
-	var sawFailure bool
-	for i := range recs {
-		switch recs[i].Message {
-		case "http":
-			access = &recs[i]
-		case "httpserver: metric hook failed":
-			sawFailure = true
-		}
-	}
-	if !sawFailure {
-		t.Error("expected a 'metric hook failed' log record, got none")
-	}
-	if access == nil {
-		t.Fatal("access line was not emitted after request-aware metric hook panic")
-	}
-	if m := attrsOf(*access); m["status"] != int64(http.StatusAccepted) {
-		t.Errorf("access line status = %v, want %d", m["status"], http.StatusAccepted)
-	}
-}
-
-func TestRequestLogger_withLogLevelMapsStatus(t *testing.T) {
+func TestLogging_withLogLevelMapsStatus(t *testing.T) {
 	// The canonical scrape-quiet policy: 2xx/3xx at Debug, 4xx Warn, 5xx Error.
 	policy := func(_ *http.Request, status int) slog.Level {
 		switch {
@@ -1193,9 +878,7 @@ func TestRequestLogger_withLogLevelMapsStatus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		logCap := &captureHandler{}
-		h := httpserver.RequestLogger(statusHandler(tc.status),
-			httpserver.WithLogger(slog.New(logCap)),
-			httpserver.WithLogLevel(policy))
+		h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithLogLevel(policy))(statusHandler(tc.status))
 
 		serve(h, http.MethodGet, "/x", nil)
 
@@ -1209,9 +892,9 @@ func TestRequestLogger_withLogLevelMapsStatus(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_defaultLineLevelIsInfo(t *testing.T) {
+func TestLogging_defaultLineLevelIsInfo(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(), httpserver.WithLogger(slog.New(logCap)))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(okHandler())
 
 	serve(h, http.MethodGet, "/x", nil)
 
@@ -1224,11 +907,9 @@ func TestRequestLogger_defaultLineLevelIsInfo(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withLogLevelNilIsNoOp(t *testing.T) {
+func TestLogging_withLogLevelNilIsNoOp(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithLogLevel(nil))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithLogLevel(nil))(okHandler())
 
 	serve(h, http.MethodGet, "/x", nil)
 
@@ -1243,16 +924,14 @@ func TestRequestLogger_withLogLevelNilIsNoOp(t *testing.T) {
 
 // A panicking WithLogLevel policy must not lose the access line or escape the
 // outer Logging defer: the line falls back to Info and the failure is logged.
-func TestRequestLogger_panickingLogLevelHookStillEmitsAccessLine(t *testing.T) {
+func TestLogging_panickingLogLevelHookStillEmitsAccessLine(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(statusHandler(http.StatusAccepted),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithLogLevel(func(*http.Request, int) slog.Level { panic("level boom") }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithLogLevel(func(*http.Request, int) slog.Level { panic("level boom") }))(statusHandler(http.StatusAccepted))
 
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("log level hook panic escaped RequestLogger: %v", r)
+				t.Errorf("log level hook panic escaped Logging: %v", r)
 			}
 		}()
 		serve(h, http.MethodPut, "/x", nil)
@@ -1280,20 +959,17 @@ func TestRequestLogger_panickingLogLevelHookStillEmitsAccessLine(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withLogLevelComposesWithRequestMetricHook(t *testing.T) {
+func TestLogging_withLogLevelComposesWithRequestMetricHook(t *testing.T) {
 	// The level policy and the request-aware metric hook ride the same
 	// deferred emission: both must fire for one request.
 	var metricCalls int
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(statusHandler(http.StatusNotFound),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithLogLevel(func(_ *http.Request, status int) slog.Level {
-			if status >= 400 {
-				return slog.LevelWarn
-			}
-			return slog.LevelDebug
-		}),
-		httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { metricCalls++ }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithLogLevel(func(_ *http.Request, status int) slog.Level {
+		if status >= 400 {
+			return slog.LevelWarn
+		}
+		return slog.LevelDebug
+	}), httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { metricCalls++ }))(statusHandler(http.StatusNotFound))
 
 	serve(h, http.MethodGet, "/missing", nil)
 
@@ -1309,16 +985,14 @@ func TestRequestLogger_withLogLevelComposesWithRequestMetricHook(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withPathFuncRewritesLoggedPath(t *testing.T) {
+func TestLogging_withPathFuncRewritesLoggedPath(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithPathFunc(func(r *http.Request) string {
-			if strings.HasPrefix(r.URL.Path, "/api/sessions/") {
-				return "/api/sessions/{id}"
-			}
-			return r.URL.Path
-		}))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithPathFunc(func(r *http.Request) string {
+		if strings.HasPrefix(r.URL.Path, "/api/sessions/") {
+			return "/api/sessions/{id}"
+		}
+		return r.URL.Path
+	}))(okHandler())
 
 	serve(h, http.MethodDelete, "/api/sessions/tok-secret-123", nil)
 
@@ -1340,43 +1014,9 @@ func TestRequestLogger_withPathFuncRewritesLoggedPath(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withPathFuncFeedsLegacyMetricHook(t *testing.T) {
-	var gotPath string
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithPathFunc(func(*http.Request) string { return "/tmpl/{id}" }),
-		httpserver.WithRecordMetric(func(m httpserver.RequestMetric) {
-			gotPath = m.Path
-		}))
-
-	serve(h, http.MethodGet, "/tmpl/abc123", nil)
-
-	if gotPath != "/tmpl/{id}" {
-		t.Errorf("legacy metric hook path = %q, want the transformed template", gotPath)
-	}
-}
-
-func TestRequestLogger_withPathFuncDoesNotAffectRequestMetricHook(t *testing.T) {
-	var gotPath string
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithPathFunc(func(*http.Request) string { return "/tmpl/{id}" }),
-		httpserver.WithRecordMetricRequest(func(r *http.Request, _ int, _ time.Duration) {
-			gotPath = r.URL.Path
-		}))
-
-	serve(h, http.MethodGet, "/tmpl/abc123", nil)
-
-	if gotPath != "/tmpl/abc123" {
-		t.Errorf("request-aware metric hook saw %q, want the raw request path", gotPath)
-	}
-}
-
-func TestRequestLogger_withPathFuncPanicFallsBackToPlaceholder(t *testing.T) {
+func TestLogging_withPathFuncPanicFallsBackToPlaceholder(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithPathFunc(func(*http.Request) string { panic("boom") }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithPathFunc(func(*http.Request) string { panic("boom") }))(okHandler())
 
 	rr := serve(h, http.MethodGet, "/api/sessions/tok-secret-456", nil)
 
@@ -1404,11 +1044,9 @@ func TestRequestLogger_withPathFuncPanicFallsBackToPlaceholder(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withPathFuncEmptyReturnFallsBackToPlaceholder(t *testing.T) {
+func TestLogging_withPathFuncEmptyReturnFallsBackToPlaceholder(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithPathFunc(func(*http.Request) string { return "" }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithPathFunc(func(*http.Request) string { return "" }))(okHandler())
 
 	serve(h, http.MethodGet, "/api/sessions/tok-secret-789", nil)
 
@@ -1421,14 +1059,11 @@ func TestRequestLogger_withPathFuncEmptyReturnFallsBackToPlaceholder(t *testing.
 	}
 }
 
-func TestRequestLogger_withPathFuncNotCalledOnSkippedPath(t *testing.T) {
+func TestLogging_withPathFuncNotCalledOnSkippedPath(t *testing.T) {
 	var calls int
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithSkipFunc(func(r *http.Request) bool {
-			return strings.HasPrefix(r.URL.Path, "/api/sessions/")
-		}),
-		httpserver.WithPathFunc(func(*http.Request) string { calls++; return "/x" }))
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()), httpserver.WithSkipFunc(func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/api/sessions/")
+	}), httpserver.WithPathFunc(func(*http.Request) string { calls++; return "/x" }))(okHandler())
 
 	serve(h, http.MethodGet, "/api/sessions/tok", nil)
 
@@ -1437,11 +1072,9 @@ func TestRequestLogger_withPathFuncNotCalledOnSkippedPath(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withPathFuncNilIgnored(t *testing.T) {
+func TestLogging_withPathFuncNilIgnored(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithPathFunc(nil))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithPathFunc(nil))(okHandler())
 
 	serve(h, http.MethodGet, "/plain", nil)
 
@@ -1454,18 +1087,16 @@ func TestRequestLogger_withPathFuncNilIgnored(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_withPathFuncSeesPopulatedPattern(t *testing.T) {
+func TestLogging_withPathFuncSeesPopulatedPattern(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/sessions/{id}", okHandler())
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(mux,
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithPathFunc(func(r *http.Request) string {
-			if r.Pattern != "" {
-				return r.Pattern
-			}
-			return "(unmatched)"
-		}))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithPathFunc(func(r *http.Request) string {
+		if r.Pattern != "" {
+			return r.Pattern
+		}
+		return "(unmatched)"
+	}))(mux)
 
 	serve(h, http.MethodGet, "/api/sessions/tok-abc", nil)
 
@@ -1478,12 +1109,9 @@ func TestRequestLogger_withPathFuncSeesPopulatedPattern(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_levelHookPanicDiagnosticCarriesTransformedPath(t *testing.T) {
+func TestLogging_levelHookPanicDiagnosticCarriesTransformedPath(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithPathFunc(func(*http.Request) string { return "/tmpl/{id}" }),
-		httpserver.WithLogLevel(func(*http.Request, int) slog.Level { panic("level boom") }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithPathFunc(func(*http.Request) string { return "/tmpl/{id}" }), httpserver.WithLogLevel(func(*http.Request, int) slog.Level { panic("level boom") }))(okHandler())
 
 	serve(h, http.MethodGet, "/tmpl/tok-secret-lvl", nil)
 
@@ -1511,9 +1139,7 @@ func TestRequestLogger_levelHookPanicDiagnosticCarriesTransformedPath(t *testing
 func probeLevelOf(t *testing.T, target string, status int, probePaths ...string) slog.Level {
 	t.Helper()
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(statusHandler(status),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.ProbeLogLevel(probePaths...))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithProbeLogLevel(probePaths...))(statusHandler(status))
 	serve(h, http.MethodGet, target, nil)
 	recs := logCap.snapshot()
 	if len(recs) != 1 {
@@ -1558,10 +1184,7 @@ func TestProbeLogLevel_emptySetLogsEverythingAtInfo(t *testing.T) {
 
 func TestProbeLogLevel_skippedPathStillEmitsNothing(t *testing.T) {
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithSkipPaths("/ws"),
-		httpserver.ProbeLogLevel("/ws"))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithSkipPaths("/ws"), httpserver.WithProbeLogLevel("/ws"))(okHandler())
 	serve(h, http.MethodGet, "/ws", nil)
 	if n := len(logCap.snapshot()); n != 0 {
 		t.Errorf("skipped path emitted %d lines, want 0 (skip wins over the probe policy)", n)
@@ -1606,7 +1229,7 @@ func loggedPathFor(t *testing.T, method, target string, opts ...httpserver.LogOp
 	t.Helper()
 	logCap := &captureHandler{}
 	opts = append([]httpserver.LogOption{httpserver.WithLogger(slog.New(logCap))}, opts...)
-	h := httpserver.RequestLogger(nestedSessionMux(), opts...)
+	h := httpserver.Logging(opts...)(nestedSessionMux())
 	serve(h, method, target, nil)
 	recs := logCap.snapshot()
 	if len(recs) != 1 {
@@ -1803,13 +1426,13 @@ func requestWithPath(method, path string) *http.Request {
 	return req
 }
 
-// loggedAttrs serves req through RequestLogger wrapped around next and returns
+// loggedAttrs serves req through Logging wrapped around next and returns
 // the attributes of the single access line it emitted.
 func loggedAttrs(t *testing.T, next http.Handler, req *http.Request, opts ...httpserver.LogOption) map[string]any {
 	t.Helper()
 	logCap := &captureHandler{}
 	opts = append([]httpserver.LogOption{httpserver.WithLogger(slog.New(logCap))}, opts...)
-	httpserver.RequestLogger(next, opts...).ServeHTTP(httptest.NewRecorder(), req)
+	httpserver.Logging(opts...)(next).ServeHTTP(httptest.NewRecorder(), req)
 	recs := logCap.snapshot()
 	if len(recs) != 1 {
 		t.Fatalf("got %d log records, want exactly 1", len(recs))
@@ -1830,7 +1453,7 @@ func asciiPath(n int) string {
 	return "/" + strings.Repeat("a", n-1)
 }
 
-func TestRequestLogger_boundsTheLoggedPathByDefault(t *testing.T) {
+func TestLogging_boundsTheLoggedPathByDefault(t *testing.T) {
 	// The cap is a floor, not an opt-in: no option is passed here, which is the
 	// whole point — the eight consumers that never bounded their path get it on a
 	// version bump without touching their code.
@@ -1862,7 +1485,7 @@ func TestRequestLogger_boundsTheLoggedPathByDefault(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_cutLoggedPathCarriesTheMarker(t *testing.T) {
+func TestLogging_cutLoggedPathCarriesTheMarker(t *testing.T) {
 	// A silently shortened path reads as a real request for a route that does not
 	// exist, which sends an operator hunting for a missing handler instead of a
 	// client sending a megabyte URL. The marker is the difference.
@@ -1875,7 +1498,7 @@ func TestRequestLogger_cutLoggedPathCarriesTheMarker(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_cutsTheLoggedPathOnARuneBoundary(t *testing.T) {
+func TestLogging_cutsTheLoggedPathOnARuneBoundary(t *testing.T) {
 	// Each case places a multi-byte rune so the cap falls INSIDE it. The whole
 	// rune must go: half a rune is rewritten as U+FFFD by every encoder between
 	// here and the log store, so the tail of the value is corrupt for the reader
@@ -1953,7 +1576,7 @@ func TestWithMaxLoggedPath_nonPositiveKeepsTheDefault(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_cutsALoggedPathWithNoRuneStartToKeep(t *testing.T) {
+func TestLogging_cutsALoggedPathWithNoRuneStartToKeep(t *testing.T) {
 	// The value the cap receives is not always a well-formed path: a redaction
 	// transform that byte-slices one hands back the TAIL of a rune, and %-escapes
 	// decode to the same shape. When every byte before the cut is a continuation
@@ -2008,7 +1631,7 @@ func TestWithMaxLoggedPath_boundsTheTemplatePolicyOutput(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_boundsTheLoggedMethod(t *testing.T) {
+func TestLogging_boundsTheLoggedMethod(t *testing.T) {
 	// net/http validates the method's CHARSET before a handler runs, so LENGTH is
 	// the axis left open — and it is bounded only by the request line, a megabyte
 	// at this package's own MaxHeaderBytes default.
@@ -2039,7 +1662,7 @@ func TestRequestLogger_boundsTheLoggedMethod(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_overlongMethodDoesNotAlterRouting(t *testing.T) {
+func TestLogging_overlongMethodDoesNotAlterRouting(t *testing.T) {
 	// Only the LOGGED value changes. The mux still refuses the method the client
 	// actually sent, with the status and the Allow header it would have produced
 	// without this package in the chain.
@@ -2048,7 +1671,7 @@ func TestRequestLogger_overlongMethodDoesNotAlterRouting(t *testing.T) {
 
 	logCap := &captureHandler{}
 	rr := httptest.NewRecorder()
-	httpserver.RequestLogger(mux, httpserver.WithLogger(slog.New(logCap))).
+	httpserver.Logging(httpserver.WithLogger(slog.New(logCap)))(mux).
 		ServeHTTP(rr, requestWithPath(strings.Repeat("M", 100), "/x"))
 
 	if rr.Code != http.StatusMethodNotAllowed {
@@ -2072,15 +1695,12 @@ func TestRequestLogger_overlongMethodDoesNotAlterRouting(t *testing.T) {
 	}
 }
 
-func TestRequestLogger_boundsTheMethodInAHookFailureDiagnostic(t *testing.T) {
+func TestLogging_boundsTheMethodInAHookFailureDiagnostic(t *testing.T) {
 	// The hook-failure diagnostics log a method too, and they land in the same
 	// stream as the access line. A bound that covered only the access line would
 	// leave a panicking hook as the way to get an unbounded method into the log.
 	logCap := &captureHandler{}
-	httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithLogLevel(func(*http.Request, int) slog.Level { panic("level boom") }),
-	).ServeHTTP(httptest.NewRecorder(), requestWithPath(strings.Repeat("M", 300), "/x"))
+	httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithLogLevel(func(*http.Request, int) slog.Level { panic("level boom") }))(okHandler()).ServeHTTP(httptest.NewRecorder(), requestWithPath(strings.Repeat("M", 300), "/x"))
 
 	recs := logCap.snapshot()
 	if len(recs) != 2 {
@@ -2090,25 +1710,6 @@ func TestRequestLogger_boundsTheMethodInAHookFailureDiagnostic(t *testing.T) {
 		if got := attrsOf(rec)["method"]; got != overlongMethod {
 			t.Errorf("%q record logged method %v, want the placeholder", rec.Message, got)
 		}
-	}
-}
-
-func TestRequestLogger_legacyMetricHookGetsTheBoundedValues(t *testing.T) {
-	// The legacy hook's two text arguments ARE the recorded values, so an
-	// over-long token cannot reach a metric label either.
-	var gotMethod, gotPath string
-	httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordMetric(func(m httpserver.RequestMetric) {
-			gotMethod, gotPath = m.Method, m.Path
-		}),
-	).ServeHTTP(httptest.NewRecorder(), requestWithPath(strings.Repeat("M", 100), asciiPath(1000)))
-
-	if gotMethod != overlongMethod {
-		t.Errorf("hook method = %.40q, want the placeholder", gotMethod)
-	}
-	if want := asciiPath(defaultLoggedPathCap) + truncatedMarker; gotPath != want {
-		t.Errorf("hook path is %d bytes, want the cut value (%d bytes)", len(gotPath), len(want))
 	}
 }
 
@@ -2202,7 +1803,7 @@ func TestRouteMetricLabels_labelPairs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			method, path := httpserver.RouteMetricLabels(routeLabelRequest(tc.method, tc.pattern))
+			method, path := httpserver.RouteMetricLabelsForTest(routeLabelRequest(tc.method, tc.pattern))
 			if method != tc.wantMethod || path != tc.wantPath {
 				t.Errorf("RouteMetricLabels(method %.40q, pattern %q) = (%.40q, %q), want (%q, %q)",
 					tc.method, tc.pattern, method, path, tc.wantMethod, tc.wantPath)
@@ -2229,7 +1830,7 @@ func TestRouteMetricLabels_methodLabelIsBoundedByConstruction(t *testing.T) {
 	}
 	for _, pattern := range []string{"", "/", "/api/sessions/", "GET /beat/{id}"} {
 		for _, m := range hostile {
-			method, _ := httpserver.RouteMetricLabels(routeLabelRequest(m, pattern))
+			method, _ := httpserver.RouteMetricLabelsForTest(routeLabelRequest(m, pattern))
 			if !permitted[method] {
 				t.Errorf("pattern %q, method %.40q: label %.40q is outside the ten permitted values",
 					pattern, m, method)
@@ -2270,12 +1871,9 @@ func TestRouteMetricLabels_againstARealMux(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotMethod, gotPath string
-			httpserver.RequestLogger(routeMetricMux(),
-				httpserver.WithLogger(discardLogger()),
-				httpserver.WithRecordMetricRequest(func(r *http.Request, _ int, _ time.Duration) {
-					gotMethod, gotPath = httpserver.RouteMetricLabels(r)
-				}),
-			).ServeHTTP(httptest.NewRecorder(), requestWithPath(tc.method, tc.path))
+			httpserver.Logging(httpserver.WithLogger(discardLogger()), httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) {
+				gotMethod, gotPath = m.Method, m.Path
+			}))(routeMetricMux()).ServeHTTP(httptest.NewRecorder(), requestWithPath(tc.method, tc.path))
 
 			if gotMethod != tc.wantMethod || gotPath != tc.wantPath {
 				t.Errorf("%.40q %s: labels = (%.40q, %q), want (%q, %q)",
@@ -2305,12 +1903,9 @@ func TestRouteMetricLabels_unmatchedCollapsesThePathLabel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var gotMethod, gotPath string
-		httpserver.RequestLogger(mux,
-			httpserver.WithLogger(discardLogger()),
-			httpserver.WithRecordMetricRequest(func(r *http.Request, _ int, _ time.Duration) {
-				gotMethod, gotPath = httpserver.RouteMetricLabels(r)
-			}),
-		).ServeHTTP(httptest.NewRecorder(), requestWithPath(tc.method, tc.target))
+		httpserver.Logging(httpserver.WithLogger(discardLogger()), httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) {
+			gotMethod, gotPath = m.Method, m.Path
+		}))(mux).ServeHTTP(httptest.NewRecorder(), requestWithPath(tc.method, tc.target))
 
 		if gotMethod != tc.wantMethod || gotPath != metricUnmatched {
 			t.Errorf("%.40q %s: labels = (%.40q, %q), want (%q, %q)",
@@ -2392,11 +1987,7 @@ func TestWithRecordRouteMetric_pathLabelIgnoresTheLogPathPolicy(t *testing.T) {
 	// redact a credential out of the LOG) neither feeds nor weakens it. The two
 	// are complementary: one bounds a log line, the other bounds a label domain.
 	var gotPath string
-	h := httpserver.RequestLogger(routeMetricMux(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithPathFunc(func(*http.Request) string { return "/redacted" }),
-		httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) { gotPath = m.Path }),
-	)
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()), httpserver.WithPathFunc(func(*http.Request) string { return "/redacted" }), httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) { gotPath = m.Path }))(routeMetricMux())
 	h.ServeHTTP(httptest.NewRecorder(), requestWithPath(http.MethodGet, "/beat/abc123"))
 
 	if gotPath != "/beat/{id}" {
@@ -2447,14 +2038,12 @@ func TestWithRecordRouteMetric_panickingHookStillEmitsAccessLine(t *testing.T) {
 	// unisolated panic here would escape to net/http and close the connection on
 	// an otherwise completed request.
 	logCap := &captureHandler{}
-	h := httpserver.RequestLogger(okHandler(),
-		httpserver.WithLogger(slog.New(logCap)),
-		httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { panic("metric boom") }))
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { panic("metric boom") }))(okHandler())
 
 	func() {
 		defer func() {
 			if v := recover(); v != nil {
-				t.Errorf("route metric hook panic escaped RequestLogger: %v", v)
+				t.Errorf("route metric hook panic escaped Logging: %v", v)
 			}
 		}()
 		h.ServeHTTP(httptest.NewRecorder(), requestWithPath(http.MethodGet, "/x"))
@@ -2478,65 +2067,11 @@ func TestWithRecordRouteMetric_panickingHookStillEmitsAccessLine(t *testing.T) {
 	}
 }
 
-func TestWithRecordRouteMetric_mutuallyExclusiveWithTheOtherHooks(t *testing.T) {
-	// Three hooks, one metric per request: whichever option is applied last
-	// wins, and the earlier one must be CLEARED rather than left firing too.
-	// Each case records which hook ran, so a double-fire fails as loudly as a
-	// wrong winner.
-	cases := []struct {
-		name string
-		opts func(fire func(string)) []httpserver.LogOption
-		want string
-	}{
-		{"route after legacy", func(fire func(string)) []httpserver.LogOption {
-			return []httpserver.LogOption{
-				httpserver.WithRecordMetric(func(httpserver.RequestMetric) { fire("legacy") }),
-				httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { fire("route") }),
-			}
-		}, "route"},
-		{"route after request-aware", func(fire func(string)) []httpserver.LogOption {
-			return []httpserver.LogOption{
-				httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { fire("request") }),
-				httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { fire("route") }),
-			}
-		}, "route"},
-		{"legacy after route", func(fire func(string)) []httpserver.LogOption {
-			return []httpserver.LogOption{
-				httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { fire("route") }),
-				httpserver.WithRecordMetric(func(httpserver.RequestMetric) { fire("legacy") }),
-			}
-		}, "legacy"},
-		{"request-aware after route", func(fire func(string)) []httpserver.LogOption {
-			return []httpserver.LogOption{
-				httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { fire("route") }),
-				httpserver.WithRecordMetricRequest(func(*http.Request, int, time.Duration) { fire("request") }),
-			}
-		}, "request"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var fired []string
-			opts := append([]httpserver.LogOption{httpserver.WithLogger(discardLogger())},
-				tc.opts(func(which string) { fired = append(fired, which) })...)
-			httpserver.RequestLogger(okHandler(), opts...).
-				ServeHTTP(httptest.NewRecorder(), requestWithPath(http.MethodGet, "/x"))
-
-			if len(fired) != 1 || fired[0] != tc.want {
-				t.Errorf("hooks fired = %v, want exactly [%s]", fired, tc.want)
-			}
-		})
-	}
-}
-
 func TestWithRecordRouteMetric_nilIsNoOp(t *testing.T) {
 	// The package's skip-nil convention: a trailing nil neither enables the hook
 	// nor clears the one already applied.
 	var got string
-	httpserver.RequestLogger(routeMetricMux(),
-		httpserver.WithLogger(discardLogger()),
-		httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) { got = m.Method }),
-		httpserver.WithRecordRouteMetric(nil),
-	).ServeHTTP(httptest.NewRecorder(), requestWithPath(http.MethodDelete, "/api/sessions/x"))
+	httpserver.Logging(httpserver.WithLogger(discardLogger()), httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) { got = m.Method }), httpserver.WithRecordRouteMetric(nil))(routeMetricMux()).ServeHTTP(httptest.NewRecorder(), requestWithPath(http.MethodDelete, "/api/sessions/x"))
 
 	if got != http.MethodDelete {
 		t.Errorf("hook method = %q, want the prior hook still installed and firing", got)

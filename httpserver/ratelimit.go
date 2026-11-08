@@ -241,7 +241,11 @@ const (
 // when limits every request, for a caller that filters failed attempts first.
 // when runs on every request, and the access-line flood is bounded only with
 // the limiter outside Logging. Use RateLimiter directly for other numbers.
-func FailedAuthRateLimit(when func(*http.Request) bool, msg string) Middleware {
+//
+// opts apply after the preset's own, so WithRateLimitResponder renders the
+// 429 on another content type; a WithRateLimitWhen or WithRateLimitError in
+// opts replaces the preset's predicate or envelope.
+func FailedAuthRateLimit(when func(*http.Request) bool, msg string, opts ...RateLimitOption) Middleware {
 	if msg == "" {
 		msg = failedAuthDefaultMsg
 	}
@@ -249,8 +253,7 @@ func FailedAuthRateLimit(when func(*http.Request) bool, msg string) Middleware {
 	// nil here leaves RateLimiter's default (draw a token from every request)
 	// in place, which is exactly the documented meaning. Re-checking it would
 	// be a second reading of the same rule, free to disagree with the first.
-	return RateLimiter(failedAuthBurst, failedAuthInterval,
-		WithRateLimitWhen(when),
-		WithRateLimitError(failedAuthCode, msg),
-	)
+	all := make([]RateLimitOption, 0, 2+len(opts))
+	all = append(all, WithRateLimitWhen(when), WithRateLimitError(failedAuthCode, msg))
+	return RateLimiter(failedAuthBurst, failedAuthInterval, append(all, opts...)...)
 }

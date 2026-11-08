@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -45,39 +44,6 @@ func TestNew_defaults(t *testing.T) {
 	}
 }
 
-func TestNew_optionsOverride(t *testing.T) {
-	srv := httpserver.New(nil,
-		httpserver.WithReadTimeout(1*time.Second),
-		httpserver.WithWriteTimeout(2*time.Second),
-		httpserver.WithIdleTimeout(3*time.Second),
-		httpserver.WithReadHeaderTimeout(4*time.Second),
-		httpserver.WithMaxHeaderBytes(512),
-	)
-	if srv.ReadTimeout != 1*time.Second {
-		t.Errorf("ReadTimeout = %v, want 1s", srv.ReadTimeout)
-	}
-	if srv.WriteTimeout != 2*time.Second {
-		t.Errorf("WriteTimeout = %v, want 2s", srv.WriteTimeout)
-	}
-	if srv.IdleTimeout != 3*time.Second {
-		t.Errorf("IdleTimeout = %v, want 3s", srv.IdleTimeout)
-	}
-	if srv.ReadHeaderTimeout != 4*time.Second {
-		t.Errorf("ReadHeaderTimeout = %v, want 4s", srv.ReadHeaderTimeout)
-	}
-	if srv.MaxHeaderBytes != 512 {
-		t.Errorf("MaxHeaderBytes = %d, want 512", srv.MaxHeaderBytes)
-	}
-}
-
-func TestWithErrorLog_setsServerErrorLog(t *testing.T) {
-	logger := log.New(io.Discard, "", 0)
-	srv := httpserver.New(nil, httpserver.WithErrorLog(logger))
-	if srv.ErrorLog != logger {
-		t.Error("WithErrorLog did not set http.Server.ErrorLog")
-	}
-}
-
 func TestNew_nilOptionIgnored(t *testing.T) {
 	srv := httpserver.New(nil, nil) // must not panic
 	if srv == nil {
@@ -90,7 +56,7 @@ func TestNew_nilOptionIgnored(t *testing.T) {
 
 // runAndShutdown starts Run on a fresh loopback listener, confirms it serves a
 // request, cancels the context, and returns Run's result. It fails the test if
-// onShutdown was not called.
+// the WithTeardown hook was not called.
 func runAndShutdown(t *testing.T, opts ...httpserver.RunOption) error {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -104,7 +70,8 @@ func runAndShutdown(t *testing.T, opts ...httpserver.RunOption) error {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, func(context.Context) { shutdownCalled.Store(true) }, opts...)
+		all := append([]httpserver.RunOption{httpserver.WithTeardown(func(context.Context) { shutdownCalled.Store(true) })}, opts...)
+		done <- httpserver.Run(ctx, srv, ln, all...)
 	}()
 
 	addr := ln.Addr().String()
@@ -128,7 +95,7 @@ func runAndShutdown(t *testing.T, opts ...httpserver.RunOption) error {
 		t.Fatal("Run did not return after context cancellation")
 	}
 	if !shutdownCalled.Load() {
-		t.Error("onShutdown was not called during graceful shutdown")
+		t.Error("the WithTeardown hook was not called during graceful shutdown")
 	}
 	return runErr
 }
@@ -164,7 +131,7 @@ func TestRun_serveErrorReturned(t *testing.T) {
 	}
 	srv := httpserver.New(nil)
 
-	runErr := httpserver.Run(context.Background(), srv, ln, nil)
+	runErr := httpserver.Run(context.Background(), srv, ln)
 	if runErr == nil {
 		t.Error("Run = nil, want a serve error from the closed listener")
 	}
@@ -189,9 +156,7 @@ func closedListener(t *testing.T) net.Listener {
 // against, so it is pinned rather than assumed.
 func TestRun_fatalServeErrorSkipsGracefulHooksByDefault(t *testing.T) {
 	var preDrainCalled, teardownCalled atomic.Bool
-	runErr := httpserver.Run(t.Context(), httpserver.New(nil), closedListener(t),
-		func(context.Context) { teardownCalled.Store(true) },
-		httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }))
+	runErr := httpserver.Run(t.Context(), httpserver.New(nil), closedListener(t), httpserver.WithTeardown(func(context.Context) { teardownCalled.Store(true) }), httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }))
 
 	if runErr == nil {
 		t.Fatal("Run = nil, want a serve error from the closed listener")
@@ -200,7 +165,7 @@ func TestRun_fatalServeErrorSkipsGracefulHooksByDefault(t *testing.T) {
 		t.Error("pre-drain hook ran on a fatal serve error; it is documented for the graceful path only")
 	}
 	if teardownCalled.Load() {
-		t.Error("onShutdown ran on a fatal serve error; it is documented for the graceful path only")
+		t.Error("the WithTeardown hook ran on a fatal serve error; it is documented for the graceful path only")
 	}
 }
 
@@ -226,11 +191,7 @@ func TestRun_serveExitRunsOnFatalServeError(t *testing.T) {
 		ctxLiveInsideHook = appCtx.Err() == nil
 	}
 
-	runErr := httpserver.Run(appCtx, httpserver.New(nil), closedListener(t),
-		func(context.Context) { teardownCalled.Store(true) },
-		httpserver.WithShutdownGrace(grace),
-		httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }),
-		httpserver.WithServeExit(serveExit))
+	runErr := httpserver.Run(appCtx, httpserver.New(nil), closedListener(t), httpserver.WithTeardown(func(context.Context) { teardownCalled.Store(true) }), httpserver.WithShutdownGrace(grace), httpserver.WithPreDrain(func(context.Context) { preDrainCalled.Store(true) }), httpserver.WithServeExit(serveExit))
 
 	if runErr == nil {
 		t.Fatal("Run = nil, want the serve error; the hook must not swallow it")
@@ -244,7 +205,7 @@ func TestRun_serveExitRunsOnFatalServeError(t *testing.T) {
 	if span := deadline.Sub(start); span <= 0 || span > grace+250*time.Millisecond {
 		t.Errorf("serve-exit deadline is %v out, want ~%v (the configured grace)", span, grace)
 	}
-	// The hook, not the graceful sequence: pre-drain and onShutdown stay
+	// The hook, not the graceful sequence: pre-drain and the teardown stay
 	// unrun, and the caller's own context is still live (nothing cancelled it),
 	// which is why a teardown that waits on it must cancel it itself.
 	if preDrainCalled.Load() || teardownCalled.Load() {
@@ -270,9 +231,7 @@ func TestRun_serveExitRunsWhenCallerClosesServer(t *testing.T) {
 	go func() {
 		// context.Background(): nothing ever cancels the run, so only the
 		// caller's own Shutdown can end it.
-		done <- httpserver.Run(context.Background(), srv, ln,
-			func(context.Context) { teardownCalled.Store(true) },
-			httpserver.WithServeExit(func(context.Context) { called.Store(true) }))
+		done <- httpserver.Run(context.Background(), srv, ln, httpserver.WithTeardown(func(context.Context) { teardownCalled.Store(true) }), httpserver.WithServeExit(func(context.Context) { called.Store(true) }))
 	}()
 
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -298,7 +257,7 @@ func TestRun_serveExitRunsWhenCallerClosesServer(t *testing.T) {
 		t.Error("serve-exit hook did not run when Serve returned on its own")
 	}
 	if teardownCalled.Load() {
-		t.Error("onShutdown ran without a graceful stop; only the serve-exit hook covers this path")
+		t.Error("the WithTeardown hook ran without a graceful stop; only the serve-exit hook covers this path")
 	}
 }
 
@@ -324,8 +283,7 @@ func TestRun_serveExitNotRunOnGracefulPath(t *testing.T) {
 func TestRun_nilServeExitIgnored(t *testing.T) {
 	// The fatal path with WithServeExit(nil): the nil hook is skipped, not
 	// called, and the serve error still comes back.
-	runErr := httpserver.Run(t.Context(), httpserver.New(nil), closedListener(t), nil,
-		httpserver.WithServeExit(nil))
+	runErr := httpserver.Run(t.Context(), httpserver.New(nil), closedListener(t), httpserver.WithServeExit(nil))
 	if runErr == nil {
 		t.Error("Run = nil, want the serve error")
 	}
@@ -337,7 +295,7 @@ func TestRun_onShutdownNilIsSafe(t *testing.T) {
 		srv := httpserver.New(okHandler())
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- httpserver.Run(ctx, srv, ln, nil) }() // nil onShutdown
+		go func() { done <- httpserver.Run(ctx, srv, ln) }() // no teardown
 
 		// synctest.Wait replaces a 50ms "give Serve a moment" sleep: it returns
 		// once Run's Serve goroutine is durably blocked in Accept, so the server
@@ -373,7 +331,7 @@ func TestRun_slowOnShutdownStillRunsWithinGrace(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			done <- httpserver.Run(ctx, srv, ln, onShutdown, httpserver.WithShutdownGrace(2*time.Second))
+			done <- httpserver.Run(ctx, srv, ln, httpserver.WithTeardown(onShutdown), httpserver.WithShutdownGrace(2*time.Second))
 		}()
 
 		synctest.Wait()
@@ -432,7 +390,7 @@ func TestRun_holdsRequestOpenAcrossShutdown(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			done <- httpserver.Run(ctx, srv, ln, onShutdown, httpserver.WithShutdownGrace(grace))
+			done <- httpserver.Run(ctx, srv, ln, httpserver.WithTeardown(onShutdown), httpserver.WithShutdownGrace(grace))
 		}()
 
 		statusCh := make(chan int, 1)
@@ -499,7 +457,7 @@ func TestRun_returnsShutdownDeadlineExceeded(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(25*time.Millisecond))
+		done <- httpserver.Run(ctx, srv, ln, httpserver.WithShutdownGrace(25*time.Millisecond))
 	}()
 
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -587,8 +545,7 @@ func TestRun_preDrainRunsBeforeShutdownDrain(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, onShutdown,
-			httpserver.WithPreDrain(preDrain), httpserver.WithShutdownGrace(2*time.Second))
+		done <- httpserver.Run(ctx, srv, ln, httpserver.WithTeardown(onShutdown), httpserver.WithPreDrain(preDrain), httpserver.WithShutdownGrace(2*time.Second))
 	}()
 
 	statusCh := make(chan int, 1)
@@ -638,6 +595,14 @@ func TestRun_preDrainRunsBeforeShutdownDrain(t *testing.T) {
 	}
 }
 
+// A trailing WithTeardown(nil) is skipped, so the teardown runAndShutdown
+// registers first still runs: a nil hook never clears an earlier one.
+func TestRun_nilTeardownKeepsAnEarlierOne(t *testing.T) {
+	if err := runAndShutdown(t, httpserver.WithTeardown(nil)); err != nil {
+		t.Errorf("Run with WithTeardown(nil) = %v, want nil", err)
+	}
+}
+
 func TestRun_nilPreDrainIgnored(t *testing.T) {
 	if err := runAndShutdown(t, httpserver.WithPreDrain(nil)); err != nil {
 		t.Errorf("Run with WithPreDrain(nil) = %v, want nil", err)
@@ -679,7 +644,7 @@ func TestRun_closesSilentConnectionAtShutdown(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(10*time.Second))
+		done <- httpserver.Run(ctx, srv, ln, httpserver.WithShutdownGrace(10*time.Second))
 	}()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -766,7 +731,7 @@ func TestRun_closesConnectionAcceptedDuringShutdown(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(10*time.Second))
+		done <- httpserver.Run(ctx, srv, ln, httpserver.WithShutdownGrace(10*time.Second))
 	}()
 
 	silent, err := net.Dial("tcp", inner.Addr().String())
@@ -826,7 +791,7 @@ func TestRun_chainsCallerConnState(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, nil, httpserver.WithShutdownGrace(2*time.Second))
+		done <- httpserver.Run(ctx, srv, ln, httpserver.WithShutdownGrace(2*time.Second))
 	}()
 
 	transport := &http.Transport{}
@@ -896,17 +861,6 @@ func TestWithSlogErrorLog_bridgesNetHTTPLinesIntoSlog(t *testing.T) {
 	}
 	if !strings.Contains(records[0].Message, "Accept error") {
 		t.Errorf("message = %q, want it to carry net/http's line", records[0].Message)
-	}
-}
-
-func TestWithSlogErrorLog_lastAppliedWins(t *testing.T) {
-	swapDefaultLogger(t, slog.New(&captureHandler{}))
-
-	// WithErrorLog remains the override for a custom logger.
-	custom := log.New(io.Discard, "", 0)
-	srv := httpserver.New(nil, httpserver.WithSlogErrorLog(slog.LevelError), httpserver.WithErrorLog(custom))
-	if srv.ErrorLog != custom {
-		t.Error("WithErrorLog did not override an earlier WithSlogErrorLog")
 	}
 }
 
@@ -1098,8 +1052,7 @@ func TestRun_serveErrorTakesPrecedenceOverGraceExpiry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- httpserver.Run(ctx, srv, ln, nil,
-			httpserver.WithShutdownGrace(100*time.Millisecond), httpserver.WithPreDrain(preDrain))
+		done <- httpserver.Run(ctx, srv, ln, httpserver.WithShutdownGrace(100*time.Millisecond), httpserver.WithPreDrain(preDrain))
 	}()
 
 	client := &http.Client{Timeout: 5 * time.Second}

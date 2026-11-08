@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ import (
 )
 
 // decodeSeeds is the shared adversarial corpus for the two prelude fuzz
-// targets: the untrusted-body shapes that DecodeBody / DecodeBodyOptional
+// targets: the untrusted-body shapes that DecodeBody
 // receive off the network. It covers empty, whitespace-only, valid
 // scalar/object/array values, a value with accepted trailing whitespace,
 // truncated JSON, two back-to-back values, trailing junk, deep nesting,
@@ -43,7 +42,7 @@ var decodeSeeds = [][]byte{
 }
 
 // countingBody is an io.ReadCloser wrapper that records how many bytes were
-// actually pulled from the underlying reader. DecodeBody/DecodeBodyOptional
+// actually pulled from the underlying reader. DecodeBody
 // wrap the request body in an http.MaxBytesReader (via LimitBody), which caps
 // underlying reads at MaxJSONBody (+1 to detect overflow); counting the pulled
 // bytes proves the cap bounds reads for ANY input rather than only checking the
@@ -261,57 +260,6 @@ func allTokensOrEmpty(entries []string) bool {
 		}
 	}
 	return true
-}
-
-// FuzzDecodeBodyOptional drives the REAL DecodeBodyOptional over arbitrary
-// request-body bytes and asserts, for every input:
-//
-//  1. It never panics.
-//  2. It NEVER writes a response and never sets a non-200 status, regardless of
-//     how malformed the body is: an empty body, invalid JSON, trailing junk, or
-//     two values are all swallowed silently (the optional-error-swallow
-//     contract, and specifically the empty-body-swallow that DecodeBody instead
-//     rejects with a 400).
-//  3. Reads stay bounded by the MaxJSONBody cap (same MaxBytesReader guard as
-//     DecodeBody), so an optional decode cannot cause an unbounded read either.
-//  4. Cross-consistency with strict DecodeBody: whenever DecodeBody accepts the
-//     same bytes as exactly one value, DecodeBodyOptional must have decoded that
-//     identical value. (When DecodeBody rejects, Optional may still have decoded
-//     a leading value and MUST NOT have written anything -- covered by 2.)
-func FuzzDecodeBodyOptional(f *testing.F) {
-	for _, s := range decodeSeeds {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, body []byte) {
-		cbOpt := &countingBody{r: bytes.NewReader(body)}
-		reqOpt := httptest.NewRequest(http.MethodPost, "/", cbOpt)
-		rrOpt := httptest.NewRecorder()
-
-		var optInto any
-		httpserver.DecodeBodyOptional(rrOpt, reqOpt, &optInto)
-
-		if rrOpt.Body.Len() != 0 {
-			t.Fatalf("DecodeBodyOptional wrote a response body: %q (body=%q)", rrOpt.Body.String(), body)
-		}
-		if rrOpt.Code != http.StatusOK { // recorder default; a WriteError would move it to 400
-			t.Fatalf("DecodeBodyOptional set status %d, must not write a response (body=%q)", rrOpt.Code, body)
-		}
-		if cbOpt.n > httpserver.MaxJSONBody+1 {
-			t.Fatalf("DecodeBodyOptional read %d bytes, exceeds MaxJSONBody+1 (%d)", cbOpt.n, httpserver.MaxJSONBody+1)
-		}
-
-		// When strict DecodeBody accepts these exact bytes, Optional (which
-		// decodes the same leading value) must have produced the same value.
-		cbDec := &countingBody{r: bytes.NewReader(body)}
-		reqDec := httptest.NewRequest(http.MethodPost, "/", cbDec)
-		rrDec := httptest.NewRecorder()
-		var decInto any
-		if httpserver.DecodeBody(rrDec, reqDec, &decInto, "x") {
-			if !reflect.DeepEqual(optInto, decInto) {
-				t.Fatalf("DecodeBody accepted but Optional decoded a different value: opt=%#v dec=%#v (body=%q)", optInto, decInto, body)
-			}
-		}
-	})
 }
 
 // FuzzLimitBodyWriterChain fuzzes the ResponseWriter chain LimitBody must walk

@@ -78,7 +78,7 @@ A rebinding attack cannot reach it, because the attack's `Host` is not loopback.
 
 ## Loopback-only endpoints
 
-`LoopbackOnly(refuse)` admits a request only when `LoopbackRequest` passes and `ProxiedRequest` finds no forwarding header. Every other request goes to `refuse`. A nil `refuse` answers 403 with the standard error envelope and the code `loopback_only`. Pass your own handler to keep an envelope your clients already depend on.
+`LoopbackOnly(opts...)` admits a request only when `LoopbackRequest` passes and `ProxiedRequest` finds no forwarding header. Every other request is answered 403 with the standard error envelope and the code `loopback_only`. `WithLoopbackError(code, msg)` sets your own code and message, and `WithLoopbackResponder(fn)` renders the refusal yourself, for an envelope your clients already depend on or a refusal you want to log, as the matching options do for `RateLimiter`.
 
 `LoopbackRequest(r)` reports whether a request is local. The socket peer must be loopback and the `Host` must name the local host, and either check failing refuses. It reads `r.RemoteAddr` and `r.Host` and nothing else, so forwarded headers never admit or refuse a request. The `Host` check accepts every spelling `CanonicalHost` collapses: `localhost` in any case, `127.0.0.0/8` and `::1`, with an optional port or trailing dot.
 

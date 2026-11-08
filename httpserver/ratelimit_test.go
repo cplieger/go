@@ -638,3 +638,29 @@ func TestFailedAuthRateLimitMessage(t *testing.T) {
 		})
 	}
 }
+
+// TestFailedAuthRateLimitTakesAResponder pins that the preset's options reach
+// RateLimiter after its own, so a non-JSON service renders the 429 itself
+// while the preset's code and message still arrive.
+func TestFailedAuthRateLimitTakesAResponder(t *testing.T) {
+	var gotCode ErrorCode
+	var gotMsg string
+	responder := func(w http.ResponseWriter, _ *http.Request, status int, code ErrorCode, msg string) {
+		gotCode, gotMsg = code, msg
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte("<error/>"))
+	}
+	hits := 0
+	h := FailedAuthRateLimit(nil, "too many failed apikey attempts", WithRateLimitResponder(responder))(okHandler(&hits))
+	for range failedAuthBurst {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/x", nil))
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", nil))
+	if rec.Code != http.StatusTooManyRequests || rec.Body.String() != "<error/>" {
+		t.Fatalf("refusal = %d %q, want the responder's 429", rec.Code, rec.Body.String())
+	}
+	if gotCode != failedAuthCode || gotMsg != "too many failed apikey attempts" {
+		t.Errorf("responder got (%q, %q), want the preset's code and the caller's message", gotCode, gotMsg)
+	}
+}

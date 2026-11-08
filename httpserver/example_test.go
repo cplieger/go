@@ -2,6 +2,7 @@ package httpserver_test
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,9 +18,9 @@ func ExampleValidRequestID() {
 	// false
 }
 
-func ExampleOk() {
+func ExampleOK() {
 	rr := httptest.NewRecorder()
-	httpserver.Ok(rr)
+	httpserver.OK(rr)
 	fmt.Print(rr.Body.String())
 	// Output:
 	// {"ok":true}
@@ -48,25 +49,28 @@ func ExampleMethodNotAllowed() {
 	// {"error":"method not allowed","code":"method_not_allowed"}
 }
 
-func ExampleRouteMetricLabels() {
-	// The labels for a request that matched "GET /beat/{id}". A HEAD probe
-	// records HEAD, not the pattern's GET, so the metric and the access line
-	// agree on the method.
-	head := &http.Request{Method: http.MethodHead, Pattern: "GET /beat/{id}"}
-	fmt.Println(httpserver.RouteMetricLabels(head))
+func ExampleWithRecordRouteMetric() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /beat/{id}", func(http.ResponseWriter, *http.Request) {})
+	h := httpserver.Logging(
+		httpserver.WithLogger(slog.New(slog.DiscardHandler)),
+		httpserver.WithRecordRouteMetric(func(m httpserver.RequestMetric) {
+			fmt.Println(m.Method, m.Path, m.Status)
+		}),
+	)(mux)
 
-	// A non-standard method collapses onto one bucket, so a caller cannot mint a
-	// series per invented token. The access line still records the token itself.
-	probe := &http.Request{Method: "PROPFIND", Pattern: "/"}
-	fmt.Println(httpserver.RouteMetricLabels(probe))
-
+	// A HEAD probe records HEAD, not the pattern's GET, so the metric and the
+	// access line agree on the method; every id records as one series.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/beat/7", nil))
+	// A non-standard method collapses onto one bucket, so a caller cannot mint
+	// a series per invented token. The access line still records the token.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("PROPFIND", "/beat/7", nil))
 	// Nothing matched: every unrouted request shares one path label.
-	missed := &http.Request{Method: http.MethodGet}
-	fmt.Println(httpserver.RouteMetricLabels(missed))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/nope", nil))
 	// Output:
-	// HEAD /beat/{id}
-	// other /
-	// GET unmatched
+	// HEAD /beat/{id} 200
+	// other unmatched 405
+	// GET unmatched 404
 }
 
 func ExampleNewStaticTokenVerifier() {

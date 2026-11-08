@@ -222,7 +222,7 @@ func TestRecoverer_insideLoggingLogsStatus500(t *testing.T) {
 	panicky := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })
 
 	// Logging outermost, Recoverer inside (the documented arrangement): the
-	// recovered 500 is recorded before RequestLogger's deferred access line runs,
+	// recovered 500 is recorded before Logging's deferred access line runs,
 	// so the request logs as 500 rather than a misleading 200. The recoverer uses
 	// a discard logger, so logCap captures only the access line.
 	h := httpserver.Chain(panicky,
@@ -246,7 +246,7 @@ func TestRecoverer_insideLoggingLogsStatus500(t *testing.T) {
 		t.Errorf("access line status = %v, want 500 (Recoverer inside Logging)", m["status"])
 	}
 
-	// The error body carries the request id threaded by RequestLogger.
+	// The error body carries the request id threaded by Logging.
 	echoed := rr.Header().Get(httpserver.HeaderRequestID)
 	var body httpserver.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
@@ -1199,7 +1199,7 @@ func TestRouteTimeout_envelopeCarriesContextRequestID(t *testing.T) {
 }
 
 func TestRouteTimeout_envelopeOmitsRequestIDWithoutContext(t *testing.T) {
-	// Without an id in the request context (no RequestLogger upstream) the
+	// Without an id in the request context (no Logging upstream) the
 	// envelope omits the field entirely (omitempty wire shape), matching
 	// WriteError's behavior for an id-less request.
 	slow := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -1217,17 +1217,14 @@ func TestRouteTimeout_envelopeOmitsRequestIDWithoutContext(t *testing.T) {
 	}
 }
 
-func TestRouteTimeout_underRequestLoggerCorrelatesHeaderAndBody(t *testing.T) {
-	// The universal-correlation proof: composed under RequestLogger, the minted
+func TestRouteTimeout_underLoggingCorrelatesHeaderAndBody(t *testing.T) {
+	// The universal-correlation proof: composed under Logging, the minted
 	// id on the X-Request-ID response header and the request_id in the timeout
 	// envelope are the same id.
 	slow := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
-	h := httpserver.RequestLogger(
-		httpserver.RouteTimeout(slow, 20*time.Millisecond, "server too slow"),
-		httpserver.WithLogger(discardLogger()),
-	)
+	h := httpserver.Logging(httpserver.WithLogger(discardLogger()))(httpserver.RouteTimeout(slow, 20*time.Millisecond, "server too slow"))
 
 	rr := serve(h, http.MethodGet, "/", nil)
 

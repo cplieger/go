@@ -29,7 +29,7 @@ func loopbackOnlyProbe(t *testing.T, mw Middleware, remote, host string, headers
 
 func TestLoopbackOnlyAdmitsAnInContainerCaller(t *testing.T) {
 	t.Parallel()
-	admitted, rec := loopbackOnlyProbe(t, LoopbackOnly(nil), "127.0.0.1:54321", "localhost:9848", nil)
+	admitted, rec := loopbackOnlyProbe(t, LoopbackOnly(), "127.0.0.1:54321", "localhost:9848", nil)
 	if !admitted {
 		t.Fatalf("a loopback peer with a loopback Host and no provenance headers was refused (%d): that is the only caller this gate exists to admit", rec.Code)
 	}
@@ -44,7 +44,7 @@ func TestLoopbackOnlyRefusesEachProvenanceHeader(t *testing.T) {
 	for _, name := range proxyProvenanceHeaders {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			admitted, rec := loopbackOnlyProbe(t, LoopbackOnly(nil),
+			admitted, rec := loopbackOnlyProbe(t, LoopbackOnly(),
 				"127.0.0.1:54321", "localhost:9848", map[string]string{name: "x"})
 			if admitted {
 				t.Errorf("%s did not refuse: a same-loopback proxy passes both loopback legs, so the header set is the only thing left distinguishing it", name)
@@ -61,7 +61,7 @@ func TestLoopbackOnlyRefusesEachProvenanceHeader(t *testing.T) {
 // in-container caller whose HTTP library sends `Origin:` blank.
 func TestLoopbackOnlyIgnoresAnEmptyProvenanceHeader(t *testing.T) {
 	t.Parallel()
-	admitted, _ := loopbackOnlyProbe(t, LoopbackOnly(nil),
+	admitted, _ := loopbackOnlyProbe(t, LoopbackOnly(),
 		"127.0.0.1:54321", "localhost:9848", map[string]string{"Origin": ""})
 	if !admitted {
 		t.Error("an empty Origin refused the request; only a header with a VALUE is evidence of provenance")
@@ -82,7 +82,7 @@ func TestLoopbackOnlyStillRequiresBothLoopbackLegs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if admitted, _ := loopbackOnlyProbe(t, LoopbackOnly(nil), tc.remote, tc.host, nil); admitted {
+			if admitted, _ := loopbackOnlyProbe(t, LoopbackOnly(), tc.remote, tc.host, nil); admitted {
 				t.Error("admitted a request the two-legged predicate refuses")
 			}
 		})
@@ -91,19 +91,41 @@ func TestLoopbackOnlyStillRequiresBothLoopbackLegs(t *testing.T) {
 
 // The refusal belongs to the app: a consumer with its own error envelope must be
 // able to keep it, or adopting the middleware silently changes what its callers
-// receive.
-func TestLoopbackOnlyUsesTheCallerSuppliedRefusal(t *testing.T) {
+// receive. The responder receives the status, code and message.
+func TestLoopbackOnlyUsesTheCallerSuppliedResponder(t *testing.T) {
 	t.Parallel()
-	custom := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var got struct {
+		status int
+		code   ErrorCode
+		msg    string
+	}
+	custom := func(w http.ResponseWriter, _ *http.Request, status int, code ErrorCode, msg string) {
+		got.status, got.code, got.msg = status, code, msg
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("my own envelope"))
-	})
-	admitted, rec := loopbackOnlyProbe(t, LoopbackOnly(custom), "203.0.113.9:1", "evil.example", nil)
+	}
+	admitted, rec := loopbackOnlyProbe(t, LoopbackOnly(WithLoopbackResponder(custom), WithLoopbackError("svc_local", "call it locally")),
+		"203.0.113.9:1", "evil.example", nil)
 	if admitted {
 		t.Fatal("the request was admitted")
 	}
 	if rec.Code != http.StatusTeapot || !strings.Contains(rec.Body.String(), "my own envelope") {
-		t.Errorf("refusal = %d %q, want the caller's handler to have written it", rec.Code, rec.Body.String())
+		t.Errorf("refusal = %d %q, want the caller's responder to have written it", rec.Code, rec.Body.String())
+	}
+	if got.status != http.StatusForbidden || got.code != "svc_local" || got.msg != "call it locally" {
+		t.Errorf("responder got (%d, %q, %q), want (403, svc_local, call it locally)", got.status, got.code, got.msg)
+	}
+}
+
+// WithLoopbackError replaces the code and message the default envelope carries.
+func TestLoopbackOnlyErrorOptionSetsTheEnvelope(t *testing.T) {
+	t.Parallel()
+	_, rec := loopbackOnlyProbe(t, LoopbackOnly(WithLoopbackError("svc_local", "call it locally")), "203.0.113.9:1", "evil.example", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "svc_local") || !strings.Contains(body, "call it locally") {
+		t.Errorf("refusal body %q, want the caller's code and message", body)
 	}
 }
 
@@ -111,12 +133,12 @@ func TestLoopbackOnlyUsesTheCallerSuppliedRefusal(t *testing.T) {
 // what a log query or alert rule keys on across services.
 func TestLoopbackOnlyDefaultRefusalCarriesTheStandardEnvelope(t *testing.T) {
 	t.Parallel()
-	_, rec := loopbackOnlyProbe(t, LoopbackOnly(nil), "203.0.113.9:1", "evil.example", nil)
+	_, rec := loopbackOnlyProbe(t, LoopbackOnly(), "203.0.113.9:1", "evil.example", nil)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, loopbackRefusalCode) {
+	if !strings.Contains(body, string(loopbackRefusalCode)) {
 		t.Errorf("default refusal body %q does not carry the %q code", body, loopbackRefusalCode)
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {

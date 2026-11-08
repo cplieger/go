@@ -6,8 +6,8 @@ This page is for a developer writing handlers on httpserver. It covers the JSON 
 
 - `JSONHeaders(w)` sets `Content-Type: application/json` and `X-Content-Type-Options: nosniff`.
 - `WriteJSON(w, v)` writes `v` with status 200.
-- `WriteJSONStatus(w, code, v)` sets the headers, writes the status and encodes `v`. An encode failure is logged at `Warn` and not returned.
-- `Ok(w)` writes 200 with `{"ok":true}`.
+- `WriteJSONStatus(w, status, v)` sets the headers, writes the status and encodes `v`. An encode failure is logged at `Warn` and not returned.
+- `OK(w)` writes 200 with `{"ok":true}`.
 
 ## Errors
 
@@ -36,12 +36,9 @@ A code that breaks that grammar is neither sent nor repaired, and it never panic
 | Function | Cap | On failure |
 | --- | --- | --- |
 | `DecodeBody(w, r, v, errMsg)` | `MaxJSONBody` | writes 400 with `errMsg` and returns false |
-| `DecodeBodyOptional(w, r, v)` | `MaxJSONBody` | ignores the error |
 | `DecodeJSONInto(w, r, v, maxBytes)` | `maxBytes` | writes nothing and returns the error |
 
-Each decodes a single JSON value, and `DecodeBody` and `DecodeJSONInto` reject trailing data. Unknown fields are accepted.
-
-`DecodeBodyOptional` ignores two errors a caller often wants. A body holding a value plus trailing data leaves the first value in `v`, where `DecodeBody` would reject it. An oversized body's `*http.MaxBytesError` is ignored too, so it looks the same as an absent body. To tell those apart, use `DecodeJSONInto` and check `errors.Is(err, io.EOF)` for the absent case.
+Each decodes a single JSON value and rejects trailing data. Unknown fields are accepted. For a body that may be absent, use `DecodeJSONInto` and treat `errors.Is(err, io.EOF)` as the absent case.
 
 `DecodeJSONInto` is the mechanism behind `DecodeBody`, for an app with its own error envelope or a cap per endpoint. It returns a `*http.MaxBytesError` for an oversized body, `ErrTrailingData` for a second JSON value, and another error for a malformed body. Map the result to your own status and envelope, for example 413 for the size error.
 

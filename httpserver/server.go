@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,48 +40,15 @@ const (
 	// 431 the handler never sees, which is both surprising and hard to trace back
 	// to a library default. This library's consumers are heterogeneous — some are
 	// browser-facing with cookies and large auth headers, some are machine-only
-	// APIs — so the right ceiling is per app. WithMaxHeaderBytes is the knob.
+	// APIs — so the right ceiling is per app: assign srv.MaxHeaderBytes.
 	defaultMaxHeaderBytes = 1 << 20
 	defaultShutdownGrace  = 5 * time.Second
 )
 
-// ServerOption configures the *http.Server built by New.
+// ServerOption configures the *http.Server built by New. Only options that
+// add a capability exist; every other field is a plain assignment on the
+// returned server (see New).
 type ServerOption func(*http.Server)
-
-// WithReadTimeout sets http.Server.ReadTimeout, the deadline for reading the
-// entire request. Leave it unset for streaming request bodies.
-func WithReadTimeout(d time.Duration) ServerOption {
-	return func(s *http.Server) { s.ReadTimeout = d }
-}
-
-// WithWriteTimeout sets http.Server.WriteTimeout, the deadline for writing the
-// entire response. It is unset by default: streaming apps (SSE, WebSocket, long
-// responses) MUST omit it, because it would cut off an in-progress stream.
-func WithWriteTimeout(d time.Duration) ServerOption {
-	return func(s *http.Server) { s.WriteTimeout = d }
-}
-
-// WithIdleTimeout sets http.Server.IdleTimeout, the keep-alive idle deadline.
-func WithIdleTimeout(d time.Duration) ServerOption {
-	return func(s *http.Server) { s.IdleTimeout = d }
-}
-
-// WithReadHeaderTimeout sets http.Server.ReadHeaderTimeout, the slowloris guard
-// bounding how long a client may take to send request headers.
-func WithReadHeaderTimeout(d time.Duration) ServerOption {
-	return func(s *http.Server) { s.ReadHeaderTimeout = d }
-}
-
-// WithMaxHeaderBytes sets http.Server.MaxHeaderBytes.
-func WithMaxHeaderBytes(n int) ServerOption {
-	return func(s *http.Server) { s.MaxHeaderBytes = n }
-}
-
-// WithErrorLog sets http.Server.ErrorLog so connection-level errors go to the
-// caller's logger instead of the standard logger. It is the override for a
-// custom *log.Logger; for the ordinary case of routing those lines into slog
-// at a chosen level, use WithSlogErrorLog.
-func WithErrorLog(l *log.Logger) ServerOption { return func(s *http.Server) { s.ErrorLog = l } }
 
 // WithSlogErrorLog sets http.Server.ErrorLog to a bridge that forwards
 // net/http's own connection-level lines into slog at level, so they arrive as
@@ -101,25 +67,26 @@ func WithErrorLog(l *log.Logger) ServerOption { return func(s *http.Server) { s.
 // It resolves slog.Default() when the option is APPLIED (inside New), so
 // install the process logger before building the server; a later
 // slog.SetDefault does not retroactively re-target an already-built
-// http.Server. WithErrorLog remains the escape hatch for any other
-// *log.Logger, and the default (net/http's standard logger) is unchanged when
-// neither option is passed.
+// http.Server. Any other *log.Logger is a plain assignment to srv.ErrorLog,
+// and the default (net/http's standard logger) is unchanged when neither is
+// set.
 func WithSlogErrorLog(level slog.Level) ServerOption {
 	return func(s *http.Server) {
-		WithErrorLog(slog.NewLogLogger(slog.Default().Handler(), level))(s)
+		s.ErrorLog = slog.NewLogLogger(slog.Default().Handler(), level)
 	}
 }
 
 // New builds an *http.Server for handler with streaming-safe defaults:
 // ReadHeaderTimeout 10s (a slowloris guard), IdleTimeout 120s, MaxHeaderBytes
 // 1 MiB, and ReadTimeout/WriteTimeout left unset (0) so SSE, WebSocket, and
-// other long-lived responses work out of the box. Options override the
-// defaults.
+// other long-lived responses work out of the box. Assign a field of the
+// returned server to change a default.
 //
 // Because ReadTimeout and WriteTimeout are unset by default, only header
 // reading is time-bounded (by ReadHeaderTimeout); a slow request BODY is not.
-// A non-streaming handler should add WithReadTimeout to bound slowloris-style
-// slow bodies. A streaming handler, which cannot use a whole-request timeout,
+// A non-streaming handler should set srv.ReadTimeout to bound slowloris-style
+// slow bodies; WriteTimeout must stay unset for a streaming one, because it
+// would cut off an in-progress stream. A streaming handler, which cannot use a whole-request timeout,
 // should instead apply per-request deadlines via
 // http.ResponseController.SetReadDeadline/SetWriteDeadline. Note that
 // MaxBytesReader (see LimitBody) bounds body SIZE, not the time taken to send
@@ -127,10 +94,11 @@ func WithSlogErrorLog(level slog.Level) ServerOption {
 //
 // # Fields left to the caller, and one that logs nothing
 //
-// New returns the *http.Server, so any field it does not set is reachable
-// with a plain assignment and gets no option here — an option that only assigns
-// a field of the value the constructor hands back adds surface and no
-// capability. Three worth knowing about on Go 1.27:
+// New returns the *http.Server, so every field is reachable with a plain
+// assignment and gets no option here — an option that only assigns a field of
+// the value the constructor hands back adds surface and no capability, which
+// is why WithSlogErrorLog, which builds a bridge, is the one ServerOption.
+// Three fields worth knowing about on Go 1.27:
 //
 //   - Server.MaxHeaderValueCount caps how many header VALUES a request may
 //     carry, defaulting to http.DefaultMaxHeaderValueCount (500). Set it
@@ -169,6 +137,7 @@ func New(handler http.Handler, opts ...ServerOption) *http.Server {
 // runConfig holds resolved Run configuration.
 type runConfig struct {
 	preDrain      func(ctx context.Context)
+	teardown      func(ctx context.Context)
 	serveExit     func(ctx context.Context)
 	shutdownGrace time.Duration
 }
@@ -178,7 +147,7 @@ type RunOption func(*runConfig)
 
 // WithShutdownGrace sets how long Run allows for graceful shutdown: the window
 // for the pre-drain hook to run, for in-flight requests to finish, and for the
-// onShutdown teardown to run. Defaults to 5s.
+// WithTeardown hook to run. Defaults to 5s.
 func WithShutdownGrace(d time.Duration) RunOption {
 	return func(c *runConfig) { c.shutdownGrace = d }
 }
@@ -190,10 +159,27 @@ func WithShutdownGrace(d time.Duration) RunOption {
 // the server's BaseContext or shut down an SSE hub so long-lived connections
 // end (otherwise Shutdown waits its full grace period for them). fn receives
 // a context bounded by the SAME shutdown deadline that Shutdown and
-// onShutdown share; whatever budget it spends is no longer available to
+// WithTeardown share; whatever budget it spends is no longer available to
 // them. A nil fn is ignored.
 func WithPreDrain(fn func(ctx context.Context)) RunOption {
-	return func(c *runConfig) { c.preDrain = fn }
+	return func(c *runConfig) {
+		if fn != nil {
+			c.preDrain = fn
+		}
+	}
+}
+
+// WithTeardown registers the hook Run invokes after srv.Shutdown has drained
+// in-flight requests, on the graceful path only: the place to close what the
+// handlers used (a store, a hub, a background loop). fn receives a context
+// bounded by the same shutdown deadline as WithPreDrain and Shutdown. A nil fn
+// is ignored.
+func WithTeardown(fn func(ctx context.Context)) RunOption {
+	return func(c *runConfig) {
+		if fn != nil {
+			c.teardown = fn
+		}
+	}
 }
 
 // WithServeExit registers an opt-in teardown hook Run invokes when srv.Serve
@@ -201,7 +187,7 @@ func WithPreDrain(fn func(ctx context.Context)) RunOption {
 // sequence. That covers a fatal serve error (the listener or the accept loop is
 // gone) and a Shutdown or Close the caller drove itself outside Run. Exactly
 // one of the two paths runs per Run call: with the hook registered, either
-// pre-drain -> Shutdown -> onShutdown ran, or fn did. Without it, Run keeps
+// pre-drain -> Shutdown -> teardown ran, or fn did. Without it, Run keeps
 // today's behavior of returning the serve error with NEITHER hook invoked, so
 // an existing caller sees no change. A nil fn is ignored.
 //
@@ -211,28 +197,33 @@ func WithPreDrain(fn func(ctx context.Context)) RunOption {
 // listener, so a drain would only spend fn's budget waiting on connections
 // whose accept loop is already dead.
 //
-// WithPreDrain and onShutdown are NOT reused here, because both are documented
+// WithPreDrain and WithTeardown are NOT reused here, because both are documented
 // against a graceful stop that this path is not: ctx is still LIVE (nothing
 // cancelled it), and there is no drain for a pre-drain phase to precede. That
 // matters for what fn must do — a teardown that waits on a goroutine keyed to
 // ctx (a background loop stopped by the same signal context) has to cancel it
 // inside fn, by calling the signal context's stop function, or it waits out the
 // whole grace for a goroutine nothing has asked to stop. A caller whose
-// teardown is cancellation-independent can pass the same function to both
-// slots: Run(ctx, srv, ln, teardown, WithServeExit(teardown)).
+// teardown is cancellation-independent can pass the same function to both:
+// Run(ctx, srv, ln, WithTeardown(teardown), WithServeExit(teardown)).
 func WithServeExit(fn func(ctx context.Context)) RunOption {
-	return func(c *runConfig) { c.serveExit = fn }
+	return func(c *runConfig) {
+		if fn != nil {
+			c.serveExit = fn
+		}
+	}
 }
 
 // Run serves srv on ln until ctx is cancelled, then shuts down within one
 // grace period (WithShutdownGrace): the WithPreDrain hook, srv.Shutdown, then
-// onShutdown if non-nil, all bounded by the same deadline. When Serve returns
+// the WithTeardown hook, all bounded by the same deadline. When Serve returns
 // before ctx is cancelled, only the WithServeExit hook runs. Run returns a
 // serve error first, else the shutdown error (see ErrShutdownGraceExpired), and
 // treats http.ErrServerClosed as a clean stop. It sets srv.ConnState, calling
 // any hook already set first, and closes connections that have sent no request
 // once srv.Shutdown starts. Bind ln first so a port-in-use error precedes Run.
-func Run(ctx context.Context, srv *http.Server, ln net.Listener, onShutdown func(ctx context.Context), opts ...RunOption) error {
+// srv and ln must be non-nil; Run panics on either before serving.
+func Run(ctx context.Context, srv *http.Server, ln net.Listener, opts ...RunOption) error {
 	c := &runConfig{shutdownGrace: defaultShutdownGrace}
 	for _, o := range opts {
 		if o != nil {
@@ -286,10 +277,10 @@ func Run(ctx context.Context, srv *http.Server, ln net.Listener, onShutdown func
 	defer cancel()
 	shutdownErr := srv.Shutdown(shutdownCtx)
 
-	if onShutdown != nil {
+	if c.teardown != nil {
 		teardownCtx, teardownCancel := context.WithDeadline(context.Background(), deadline)
 		defer teardownCancel()
-		onShutdown(teardownCtx)
+		c.teardown(teardownCtx)
 	}
 
 	// Serve returns ErrServerClosed (normalized to nil) once Shutdown runs. A
