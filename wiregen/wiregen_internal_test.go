@@ -63,7 +63,7 @@ func TestPathName_snakeCase(t *testing.T) {
 		{"fooBar", "foo_bar"},         // plain camelCase boundary
 	}
 	for _, c := range cases {
-		if got := r.pathName(c.in); got != c.want {
+		if got := r.pathName(c.in, c.in); got != c.want {
 			t.Errorf("pathName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
@@ -181,11 +181,11 @@ func TestIsIdentReferenced(t *testing.T) {
 	}
 }
 
-// TestTypeOf_nil pins that TypeOf answers a nil type with the zero WireType,
+// TestTypeOf_nil pins that TypeOf answers a nil type with the zero Type,
 // which Generate refuses as an error, rather than panicking.
 func TestTypeOf_nil(t *testing.T) {
-	if got := TypeOf(nil); got != (WireType{}) {
-		t.Errorf("TypeOf(nil) = %+v, want the zero WireType", got)
+	if got := TypeOf(nil); got != (Type{}) {
+		t.Errorf("TypeOf(nil) = %+v, want the zero Type", got)
 	}
 }
 
@@ -194,7 +194,7 @@ func TestTypeOf_nil(t *testing.T) {
 // and the code must fall back to reflect.TypeFor[T]() to resolve the name.
 func TestTypeRef_interfaceFallback(t *testing.T) {
 	// error is a builtin interface: PkgPath "" and Name "error".
-	if got := TypeRef[error](); got != (WireType{PkgPath: "", Name: "error"}) {
+	if got := TypeRef[error](); got != (Type{PkgPath: "", Name: "error"}) {
 		t.Errorf("TypeRef[error]() = %+v, want {PkgPath:\"\" Name:\"error\"}", got)
 	}
 	// A named interface in this package resolves its name via the fallback.

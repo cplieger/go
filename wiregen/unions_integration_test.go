@@ -62,3 +62,21 @@ try {
 		t.Errorf("node output %q, want %q", out, want)
 	}
 }
+
+// TestUnion_PathOverrideWithTemplateSyntaxStaysData pins that a backtick or
+// "${" in a PathNameOverride reaches the union decoder's unknown-tag error as
+// text: the file still type-checks and the message carries the characters.
+func TestUnion_PathOverrideWithTemplateSyntaxStaysData(t *testing.T) {
+	r := unionReg()
+	r.PathNameOverride = map[string]string{"Shape": "sh`ape${1}"}
+	out := runTS(t, r, map[string]string{"main.ts": `import { decodeShape } from "./decoders.gen.js";
+try {
+  decodeShape(JSON.parse('{"type":"hexagon"}'));
+} catch (e) {
+  console.log((e as Error).message);
+}
+`})
+	if !strings.Contains(out, "$.sh`ape${1}") {
+		t.Errorf("decoder message = %q, want the override's characters verbatim", out)
+	}
+}

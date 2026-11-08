@@ -10,7 +10,7 @@ import (
 
 func presenceReg() *testRegistry {
 	r := newTestRegistry()
-	r.Types = []wiregen.WireType{
+	r.Types = []wiregen.Type{
 		wiregen.TypeRef[presence.Wire](), wiregen.TypeRef[presence.Inner](),
 		wiregen.TypeRef[presence.Inherited](), wiregen.TypeRef[presence.ProtoReq](),
 	}

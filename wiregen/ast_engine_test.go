@@ -19,7 +19,7 @@ import (
 // registered with no type loads its own package and discovers its members.
 func TestNewASTEngine_discoversEnumsWithoutRegisteredTypes(t *testing.T) {
 	r := &Registry{}
-	r.Enums = []EnumRef{{Type: WireType{PkgPath: crossrefPkg, Name: "Color"}}}
+	r.Enums = []EnumRef{{Type: Type{PkgPath: crossrefPkg, Name: "Color"}}}
 
 	out := mustGen(t, r.typesFile)
 	checkContains(t, "enum-discovery", out, `export type Color = "red" | "green" | "blue";`)
@@ -32,7 +32,7 @@ func TestNewASTEngine_discoversEnumsWithoutRegisteredTypes(t *testing.T) {
 // invalid TypeScript.
 func TestResolveStructFields_dashCommaFieldEmitted(t *testing.T) {
 	r := &Registry{}
-	r.Types = []WireType{{PkgPath: edgesPkg, Name: "DashComma"}}
+	r.Types = []Type{{PkgPath: edgesPkg, Name: "DashComma"}}
 	out := mustGen(t, r.typesFile)
 
 	checkContains(t, "dash-comma", out, "export interface DashComma {")
@@ -46,7 +46,7 @@ func TestResolveStructFields_dashCommaFieldEmitted(t *testing.T) {
 // the package: Alpha.path and Beta.path must carry their own docs.
 func TestFieldDoc_scopedToDeclaringField(t *testing.T) {
 	r := &Registry{}
-	r.Types = []WireType{
+	r.Types = []Type{
 		{PkgPath: crossrefPkg, Name: "Alpha"},
 		{PkgPath: crossrefPkg, Name: "Beta"},
 	}
@@ -63,7 +63,7 @@ func TestFieldDoc_scopedToDeclaringField(t *testing.T) {
 // SHORT name must therefore NOT match, so the field is refused as unmapped.
 func TestTypeKey_fullyQualifiesNamedType(t *testing.T) {
 	r := &Registry{}
-	r.Types = []WireType{{PkgPath: basicPkg, Name: "HasCustomMapped"}}
+	r.Types = []Type{{PkgPath: basicPkg, Name: "HasCustomMapped"}}
 	r.Mappings = map[string]Mapping{"CustomID": {TS: "ShortMapped"}}
 	_, err := r.typesFile(t.Context())
 	if err == nil || !strings.Contains(err.Error(), basicPkg+".HasCustomMapped.ID: struct "+basicPkg+".CustomID is neither registered nor mapped") {

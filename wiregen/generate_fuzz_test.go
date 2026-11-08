@@ -22,10 +22,10 @@ func FuzzGenerate(f *testing.F) {
 	f.Fuzz(func(t *testing.T, validatorsImport, typesImport, eventType, typeName string) {
 		r := newTestRegistry(
 			wiregen.WithValidatorsImport(validatorsImport),
-			wiregen.WithTypesImportPath(typesImport),
+			wiregen.WithTypesImport(typesImport),
 		)
 		address := wiregen.TypeRef[basic.Address]()
-		r.Types = []wiregen.WireType{
+		r.Types = []wiregen.Type{
 			address,
 			wiregen.TypeRef[basic.User](),
 			wiregen.TypeRef[basic.Notification](),
@@ -33,8 +33,8 @@ func FuzzGenerate(f *testing.F) {
 		r.Enums = []wiregen.EnumRef{wiregen.StringEnum[basic.Status]()}
 		// typeName is any string, resolved in basic's package: a listed or
 		// unlisted struct, an enum, a non-struct or nothing.
-		r.Events = []wiregen.Event{{Name: eventType, Data: wiregen.WireType{PkgPath: address.PkgPath, Name: typeName}}}
-		r.Constants = []wiregen.WireConst{{TSName: "X", Value: 42}}
+		r.Events = []wiregen.Event{{Name: eventType, Data: wiregen.Type{PkgPath: address.PkgPath, Name: typeName}}}
+		r.Constants = []wiregen.Const{{TSName: "X", Value: 42}}
 
 		// Generate must either refuse the registry, as every getter then does,
 		// or write each file byte-identically to its getter.

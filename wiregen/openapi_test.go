@@ -24,7 +24,7 @@ const docURL = "file:///openapi.json"
 // enums, bounds and a mapping.
 func fullReg() *testRegistry {
 	r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
-	r.Types = []wiregen.WireType{
+	r.Types = []wiregen.Type{
 		wiregen.TypeRef[openapi.Item](), wiregen.TypeRef[openapi.Shared](),
 		wiregen.TypeRef[openapi.Detail](), wiregen.TypeRef[openapi.Create](),
 	}
@@ -379,11 +379,11 @@ func TestEndpointStatus(t *testing.T) {
 		want string
 	}{
 		{"204 with a body", func(e *wiregen.Endpoint) { e.Status = 204 }, "204 is exactly the status of a JSON endpoint with no Response"},
-		{"200 without a body", func(e *wiregen.Endpoint) { e.Response = wiregen.WireType{}; e.Status = 200 }, "204 is exactly"},
+		{"200 without a body", func(e *wiregen.Endpoint) { e.Response = wiregen.Type{}; e.Status = 200 }, "204 is exactly"},
 		{"3xx on JSON", func(e *wiregen.Endpoint) { e.Status = 302 }, "success status 302, outside 2xx"},
 		{"205", func(e *wiregen.Endpoint) { e.Status = 205 }, "success status 205"},
 		{"2xx on a redirect", func(e *wiregen.Endpoint) {
-			e.Kind, e.Response, e.Status = wiregen.KindRedirect, wiregen.WireType{}, 200
+			e.Kind, e.Response, e.Status = wiregen.KindRedirect, wiregen.Type{}, 200
 		}, "is kind redirect and has status 200"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

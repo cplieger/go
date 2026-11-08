@@ -13,7 +13,7 @@ import (
 
 const enumsPkg = "github.com/cplieger/go/wiregen/testdata/enums"
 
-func enumsReg(refs []wiregen.EnumRef, types ...wiregen.WireType) *testRegistry {
+func enumsReg(refs []wiregen.EnumRef, types ...wiregen.Type) *testRegistry {
 	r := newTestRegistry()
 	r.Types = types
 	r.Enums = refs
@@ -88,7 +88,7 @@ func TestEnumsByType(t *testing.T) {
 		}
 	})
 	t.Run("an enum and a type sharing a name are refused", func(t *testing.T) {
-		r := enumsReg([]wiregen.EnumRef{wiregen.StringEnum[enums.Empty]()}, wiregen.WireType{PkgPath: enumsPkg + "/a", Name: "Empty"})
+		r := enumsReg([]wiregen.EnumRef{wiregen.StringEnum[enums.Empty]()}, wiregen.Type{PkgPath: enumsPkg + "/a", Name: "Empty"})
 		if err := generateErr(t, r); err == nil || !strings.Contains(err.Error(), `"Empty" is registered from two packages`) {
 			t.Errorf("err = %v, want the shared name refused", err)
 		}

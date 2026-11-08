@@ -26,7 +26,7 @@ func validatorsRegistry() *testRegistry {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./test-validators.js"),
 	)
-	r.Types = []wiregen.WireType{
+	r.Types = []wiregen.Type{
 		wiregen.TypeRef[basic.Address](),
 		wiregen.TypeRef[basic.User](),
 		wiregen.TypeRef[basic.Notification](),
@@ -95,8 +95,8 @@ func TestGenerate_ValidatorsFile(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	r2 := newTestRegistry(wiregen.WithFilenames(wiregen.Filenames{Types: "wire/types.gen.ts", Decoders: "wire/decoders.gen.ts"}))
-	r2.Types = []wiregen.WireType{wiregen.TypeRef[basic.Address]()}
+	r2 := newTestRegistry(wiregen.WithTypesFile("wire/types.gen.ts"), wiregen.WithDecodersFile("wire/decoders.gen.ts"))
+	r2.Types = []wiregen.Type{wiregen.TypeRef[basic.Address]()}
 	if err := r2.generate(t.Context(), root); err != nil {
 		t.Fatalf("Generate with modules in a subdirectory: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestGenerate_TSOutputsStayInTSDir(t *testing.T) {
 		opt  wiregen.Option
 	}{
 		{"parent", wiregen.WithValidatorsFile("../validators.gen.ts")},
-		{"parent after a child", wiregen.WithFilenames(wiregen.Filenames{Types: "a/../../types.gen.ts"})},
+		{"parent after a child", wiregen.WithTypesFile("a/../../types.gen.ts")},
 		{"absolute", wiregen.WithArbitrariesFile(outside)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -151,7 +151,7 @@ func TestGenerate_SymlinkCannotEscapeTSDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := validatorsRegistry()
-	r.opts = append(r.opts, wiregen.WithFilenames(wiregen.Filenames{Types: "wire/types.gen.ts"}))
+	r.opts = append(r.opts, wiregen.WithTypesFile("wire/types.gen.ts"))
 	if err := r.generate(t.Context(), dir); err == nil {
 		t.Error("Generate wrote through a symlink leaving the TS directory")
 	}

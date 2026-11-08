@@ -25,7 +25,7 @@ func TestGenerate_DeterministicAcrossRuns(t *testing.T) {
 		r := newTestRegistry(
 			wiregen.WithValidatorsImport("./v.js"),
 		)
-		r.Types = []wiregen.WireType{
+		r.Types = []wiregen.Type{
 			wiregen.TypeRef[basic.User](),
 			wiregen.TypeRef[basic.Address](),
 			wiregen.TypeRef[basic.Notification](),
@@ -56,7 +56,7 @@ func TestGenerate_DeterministicAcrossRuns(t *testing.T) {
 			r.event("user:updated", "User"),
 			r.event("holder", "Holder"),
 		}
-		r.Constants = []wiregen.WireConst{
+		r.Constants = []wiregen.Const{
 			{TSName: "MSG_A", Value: 1},
 			{TSName: "MSG_B", Value: 2},
 			{TSName: "MSG_C", Value: 3},
@@ -86,7 +86,7 @@ func TestGenerate_DeterministicAcrossRuns(t *testing.T) {
 // TestGenerateTypes_TypeOrderIndependent: the types output does not depend on
 // the order types are registered in.
 func TestGenerateTypes_TypeOrderIndependent(t *testing.T) {
-	makeReg := func(types []wiregen.WireType) *testRegistry {
+	makeReg := func(types []wiregen.Type) *testRegistry {
 		r := newTestRegistry(
 			wiregen.WithValidatorsImport("./v.js"),
 		)
@@ -94,12 +94,12 @@ func TestGenerateTypes_TypeOrderIndependent(t *testing.T) {
 		r.Enums = []wiregen.EnumRef{wiregen.StringEnum[basic.Status]()}
 		return r
 	}
-	order1 := []wiregen.WireType{
+	order1 := []wiregen.Type{
 		wiregen.TypeRef[basic.User](),
 		wiregen.TypeRef[basic.Address](),
 		wiregen.TypeRef[basic.Notification](),
 	}
-	order2 := []wiregen.WireType{
+	order2 := []wiregen.Type{
 		wiregen.TypeRef[basic.Notification](),
 		wiregen.TypeRef[basic.User](),
 		wiregen.TypeRef[basic.Address](),
@@ -115,7 +115,7 @@ func TestGenerateDecoders_TypeOrderIndependent(t *testing.T) {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./v.js"),
 	)
-	r.Types = []wiregen.WireType{
+	r.Types = []wiregen.Type{
 		wiregen.TypeRef[basic.User](),
 		wiregen.TypeRef[basic.Address](),
 		wiregen.TypeRef[basic.HasBytes](),
@@ -128,7 +128,7 @@ func TestGenerateDecoders_TypeOrderIndependent(t *testing.T) {
 		r2 := newTestRegistry(
 			wiregen.WithValidatorsImport("./v.js"),
 		)
-		r2.Types = []wiregen.WireType{
+		r2.Types = []wiregen.Type{
 			wiregen.TypeRef[basic.HasMap](),
 			wiregen.TypeRef[basic.HasBytes](),
 			wiregen.TypeRef[basic.Address](),

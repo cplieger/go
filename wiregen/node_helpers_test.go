@@ -37,7 +37,7 @@ func nodeModules(tb testing.TB, ctx context.Context, r *testRegistry, files map[
 	opts := append(append([]wiregen.Option{}, r.opts...),
 		wiregen.WithTSDir(dir),
 		wiregen.WithValidatorsImport("./validators.gen.ts"),
-		wiregen.WithTypesImportPath("./types.gen.ts"))
+		wiregen.WithTypesImport("./types.gen.ts"))
 	if err := r.Generate(ctx, opts...); err != nil {
 		tb.Fatalf("generate: %v", err)
 	}

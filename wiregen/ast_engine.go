@@ -90,15 +90,16 @@ func (fi *fieldInfo) refuse(reason string) {
 
 // astEngine loads Go packages and resolves type information from source.
 type astEngine struct {
-	byName   map[string]*typeInfo
-	pkgs     map[string]*packages.Package
-	gen      *generator
-	types    []*typeInfo
-	refusals []string
+	byName       map[string]*typeInfo
+	pkgs         map[string]*packages.Package
+	usedMappings map[string]bool // the Mappings keys a resolved field reached
+	gen          *generator
+	types        []*typeInfo
+	refusals     []string
 }
 
 func newASTEngine(ctx context.Context, g *generator) (*astEngine, error) {
-	e := &astEngine{gen: g, byName: make(map[string]*typeInfo)}
+	e := &astEngine{gen: g, byName: make(map[string]*typeInfo), usedMappings: make(map[string]bool)}
 
 	pkgPaths := g.rootPackages()
 	if len(pkgPaths) == 0 {
@@ -160,7 +161,7 @@ func (e *astEngine) refuseUndecodable() {
 	used := map[string]map[direction]bool{}
 	for i := range e.gen.Endpoints {
 		ep := &e.gen.Endpoints[i]
-		for _, wt := range []WireType{ep.Request, ep.Params, ep.Query} {
+		for _, wt := range []Type{ep.Request, ep.Params, ep.Query} {
 			e.reach(used, wt, dirRequest)
 		}
 	}
@@ -179,8 +180,8 @@ func (e *astEngine) refuseUndecodable() {
 
 // reach records in used that wt, and every registered type its fields reach,
 // crosses in direction d.
-func (e *astEngine) reach(used map[string]map[direction]bool, wt WireType, d direction) {
-	if wt == (WireType{}) || used[wt.Name][d] {
+func (e *astEngine) reach(used map[string]map[direction]bool, wt Type, d direction) {
+	if wt == (Type{}) || used[wt.Name][d] {
 		return
 	}
 	if used[wt.Name] == nil {
@@ -191,7 +192,7 @@ func (e *astEngine) reach(used map[string]map[direction]bool, wt WireType, d dir
 	for i := range ti.Fields {
 		for f := &ti.Fields[i]; f != nil; f = f.Elem {
 			if f.Kind == kindStruct {
-				e.reach(used, WireType{PkgPath: e.gen.typeNames[f.GoTypeName], Name: f.GoTypeName}, d)
+				e.reach(used, Type{PkgPath: e.gen.typeNames[f.GoTypeName], Name: f.GoTypeName}, d)
 			}
 		}
 	}
@@ -394,7 +395,7 @@ func wireName(ref EnumRef, c *types.Const) (name string, member bool, err error)
 	return name, werr == nil, nil
 }
 
-func (e *astEngine) resolveType(wt WireType, allPkgs map[string]*packages.Package) (*typeInfo, error) {
+func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (*typeInfo, error) {
 	pkg, ok := allPkgs[wt.PkgPath]
 	if !ok {
 		return nil, fmt.Errorf("wiregen: package %q not loaded, and type %s needs it", wt.PkgPath, wt.Name)
@@ -685,6 +686,7 @@ func (e *astEngine) resolveInto(t types.Type, fi *fieldInfo) {
 	}
 	key := e.gen.mappingKey(t)
 	if m, ok := e.gen.Mappings[key]; ok {
+		e.usedMappings[key] = true
 		fi.Kind, fi.TSType, fi.Mapping, fi.GoTypeName = kindMapped, m.TS, &m, key
 		fi.needDecoder(t)
 		return

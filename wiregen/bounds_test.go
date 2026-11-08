@@ -14,7 +14,7 @@ const openapiPkg = "github.com/cplieger/go/wiregen/testdata/openapi"
 // boundsReg registers Create, whose fields carry every bound method.
 func boundsReg() *testRegistry {
 	r := newTestRegistry()
-	r.Types = []wiregen.WireType{wiregen.TypeRef[openapi.Create](), wiregen.TypeRef[openapi.Item](), wiregen.TypeRef[openapi.Shared]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[openapi.Create](), wiregen.TypeRef[openapi.Item](), wiregen.TypeRef[openapi.Shared]()}
 	r.Enums = []wiregen.EnumRef{wiregen.TextEnum[openapi.Level]()}
 	r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "0"}
 	return r
@@ -114,7 +114,7 @@ func TestBoundsByMethod(t *testing.T) {
 
 func TestBoundRefusals(t *testing.T) {
 	r := newTestRegistry()
-	r.Types = []wiregen.WireType{wiregen.TypeRef[openapi.Misbound]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[openapi.Misbound]()}
 	_, err := r.typesFile(t.Context())
 	if err == nil {
 		t.Fatal("Generate accepted unreadable or misplaced bounds")

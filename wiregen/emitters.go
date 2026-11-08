@@ -247,7 +247,7 @@ func (g *generator) emitEnumConsts(w *strings.Builder, used *usedIdents) {
 
 func (g *generator) emitDecoder(w *strings.Builder, ti *typeInfo, used *usedIdents) {
 	tn := g.tsName(ti.Name)
-	path := "$." + g.pathName(tn)
+	path := "$." + g.pathName(ti.Name, tn)
 	used.helper("asObject")
 	used.typeRef(tn)
 	w.WriteString("export const " + g.decoderName(ti.Name) + ": Decoder<" + tn + "> = (v) => {\n")

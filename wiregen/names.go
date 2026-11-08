@@ -20,7 +20,7 @@ func (g *generator) tsName(goName string) string {
 }
 
 func (g *generator) tsEnumName(goName string) string {
-	if override, ok := g.EnumTSName[goName]; ok {
+	if override, ok := g.EnumTSNameOverride[goName]; ok {
 		if s := sanitizeTypeIdent(override); s != "" {
 			return s
 		}
@@ -29,7 +29,7 @@ func (g *generator) tsEnumName(goName string) string {
 }
 
 // sanitizeTypeIdent sanitizes a consumer-supplied TS type-name override —
-// the ONE sanitizer for both struct (TSNameOverride) and enum (EnumTSName)
+// the ONE sanitizer for both struct (TSNameOverride) and enum (EnumTSNameOverride)
 // overrides, so the same raw override string always yields the same
 // identifier: case-preserving character stripping plus the reserved-word
 // suffix guard.
@@ -48,8 +48,11 @@ func (g *generator) decoderName(typeName string) string {
 	return "decode" + g.tsName(typeName)
 }
 
-func (g *generator) pathName(typeName string) string {
-	if override, ok := g.PathNameOverride[typeName]; ok {
+// pathName returns a decoder's error-path name for the registered Go type
+// goName, whose TS identifier is typeName: PathNameOverride's entry for
+// goName, else typeName in snake_case.
+func (g *generator) pathName(goName, typeName string) string {
+	if override, ok := g.PathNameOverride[goName]; ok {
 		return tsStringLiteral(override)
 	}
 	var b strings.Builder
@@ -313,7 +316,7 @@ func (g *generator) claimIdents() (map[string]string, error) {
 	claim := func(who string, ids ...string) {
 		for _, id := range ids {
 			if prev, dup := taken[id]; dup {
-				errs = append(errs, fmt.Errorf("wiregen: %s and %s both emit the TS identifier %s; rename one through TSNameOverride or EnumTSName", prev, who, id))
+				errs = append(errs, fmt.Errorf("wiregen: %s and %s both emit the TS identifier %s; rename one through TSNameOverride or EnumTSNameOverride", prev, who, id))
 				continue
 			}
 			taken[id] = who
@@ -346,7 +349,7 @@ func (g *generator) claimIdents() (map[string]string, error) {
 }
 
 func (g *generator) typesSpec(from string) string {
-	return tsStringLiteral(cmp.Or(g.o.typesImportPath, moduleSpecifier(from, g.o.typesFilename)))
+	return tsStringLiteral(cmp.Or(g.o.typesImport, moduleSpecifier(from, g.o.typesFilename)))
 }
 
 func (g *generator) validatorsSpec(from string) string {

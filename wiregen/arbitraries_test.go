@@ -22,7 +22,7 @@ func newArbRegistry() *testRegistry {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./test-validators.js"),
 	)
-	r.Types = []wiregen.WireType{
+	r.Types = []wiregen.Type{
 		wiregen.TypeRef[basic.Address](),
 		wiregen.TypeRef[basic.User](),
 		wiregen.TypeRef[basic.HasBytes](),
@@ -241,7 +241,7 @@ func TestGenerateArbitraries_NestedCollections(t *testing.T) {
 		dict = `{ maxKeys: 2, size: "small", depthIdentifier: "wiregen" }`
 	)
 	cases := []struct {
-		typ  wiregen.WireType
+		typ  wiregen.Type
 		name string
 		want string
 	}{

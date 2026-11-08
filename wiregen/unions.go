@@ -16,7 +16,7 @@ import (
 // admit no other property.
 type Union struct {
 	Cases map[string][]string
-	Type  WireType
+	Type  Type
 	Tag   string
 }
 
@@ -212,7 +212,7 @@ func (g *generator) emitUnionType(w *strings.Builder, ti *typeInfo) {
 
 func (g *generator) emitUnionDecoder(w *strings.Builder, ti *typeInfo, used *usedIdents) {
 	tn := g.tsName(ti.Name)
-	path := "$." + g.pathName(tn)
+	path := "$." + g.pathName(ti.Name, tn)
 	used.helper("asObject")
 	used.helper("reqOneOf")
 	used.typeRef(tn)
@@ -246,7 +246,9 @@ func (g *generator) emitUnionDecoder(w *strings.Builder, ti *typeInfo, used *use
 		w.WriteString("    }\n")
 	}
 	w.WriteString("    default:\n")
-	w.WriteString("      throw new globalThis.TypeError(`" + path + ": unknown " + tsStringLiteral(ti.Union.tag) + " ${globalThis.String(tag as unknown)}`);\n")
+	// A double-quoted literal, not a template: path and the tag are escaped
+	// for double quotes only, so a backtick or "${" in an override stays data.
+	w.WriteString("      throw new globalThis.TypeError(\"" + path + ": unknown " + tsStringLiteral(ti.Union.tag) + " \" + globalThis.String(tag as unknown));\n")
 	w.WriteString("  }\n")
 	w.WriteString("};\n\n")
 }
