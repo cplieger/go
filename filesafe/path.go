@@ -49,8 +49,8 @@ func validateAbsClean(path string) (string, error) {
 
 // dirOpenErr names name, not dirOpenName(name), in err when err is the
 // *fs.PathError an open or read of dirOpenName(name) returned, so a failure
-// reads as the caller's own directory rather than as name/. with a trailing
-// dot.
+// reads as the caller's own directory rather than with the separator
+// dirOpenName added.
 func dirOpenErr(err error, name string) error {
 	if pe, ok := errors.AsType[*fs.PathError](err); ok {
 		pe.Path = name

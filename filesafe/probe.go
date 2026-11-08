@@ -148,7 +148,7 @@ func ProbeWritable(ctx context.Context, dir string, opts ...WriteOption) (ProbeR
 	}
 	defer root.Close()
 	res := probeInRoot(root, ".", c)
-	res.Dir = clean // report the caller's own directory, not root.Name()+"/.".
+	res.Dir = clean // report the caller's own directory, not root.Name() with its trailing separator.
 	return res, nil
 }
 

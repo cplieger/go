@@ -5,6 +5,7 @@ package filesafe
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -16,9 +17,16 @@ func openDirInRoot(root *os.Root, dir string) (*os.File, error) {
 	return root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
 }
 
-// dirOpenName is name with "/." appended, so opening it resolves name as an
-// intermediate component, which the kernel requires to be a directory: a
-// FIFO, socket or file there answers ENOTDIR at once instead of an open that
-// waits on a FIFO with no writer. os.OpenRoot and os.Open open their final
-// component with neither O_DIRECTORY nor O_NONBLOCK.
-func dirOpenName(name string) string { return name + string(filepath.Separator) + "." }
+// dirOpenName is name with a trailing separator, which the kernel resolves
+// only to a directory: a FIFO, socket or file there answers ENOTDIR at once
+// instead of an open that waits on a FIFO with no writer. os.OpenRoot and
+// os.Open open their final component with neither O_DIRECTORY nor
+// O_NONBLOCK. A root opened this way names its children cleanly
+// ("dir/" joined with "x" is "dir/x"), so only an open's own error carries
+// the separator, which dirOpenErr takes back out.
+func dirOpenName(name string) string {
+	if strings.HasSuffix(name, string(filepath.Separator)) {
+		return name
+	}
+	return name + string(filepath.Separator)
+}

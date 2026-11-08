@@ -335,6 +335,9 @@ func TestOpenParentInRoot_FIFOSwappedForAComponentIsRefused(t *testing.T) {
 		if !errors.Is(err, ErrRaced) {
 			t.Errorf("OpenParentInRoot after a FIFO swap = %v, want ErrRaced", err)
 		}
+		if pe, ok := errors.AsType[*fs.PathError](err); !ok || pe.Path != "d" {
+			t.Errorf("OpenParentInRoot after a FIFO swap = %v, want a *fs.PathError naming d", err)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("OpenParentInRoot blocked on a FIFO swapped in for a directory")
 	}

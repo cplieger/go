@@ -235,3 +235,19 @@ func TestDirOpenErrors_NameTheCallersPath(t *testing.T) {
 		t.Errorf("ProbeWritable(file).Err = %v, want a *fs.PathError naming %s", res.Err, file)
 	}
 }
+
+// An ambient PendingFile's temp is named as filepath.Join would name it, with
+// nothing the directory open added, so its path matches the InRoot sibling's
+// and any path a caller builds itself.
+func TestNewPendingFile_NameIsClean(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p, err := NewPendingFile(t.Context(), filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Cleanup() })
+	if want := filepath.Join(dir, filepath.Base(p.Name())); p.Name() != want {
+		t.Errorf("PendingFile.Name() = %q, want %q", p.Name(), want)
+	}
+}

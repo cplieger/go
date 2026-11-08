@@ -230,7 +230,7 @@ func (s *ambientSweep) reapDir(d *os.File, dir string) error {
 // that needs the removals confined against a co-mounting writer wants
 // CleanupStaleTempsInRoot instead.
 //
-// The walk is WalkDirInRoot over root, opened by the caller as dir/., the walker
+// The walk is WalkDirInRoot over root, opened by the caller through dirOpenName, the walker
 // CleanupStaleTempsInRoot uses. So a symlink to a directory is swept as the flat
 // sweep sweeps it, where filepath.WalkDir would Lstat it and stop, and a dir that
 // is not a directory is refused with ENOTDIR rather than reaped as its own entry.
@@ -242,7 +242,7 @@ func (s *ambientSweep) reapTree(root *os.Root, dir string) error {
 		path := filepath.Join(dir, filepath.FromSlash(rel))
 		if walkErr != nil {
 			if rel == "." {
-				return walkErr
+				return dirOpenErr(walkErr, dir)
 			}
 			s.logger.Debug("filesafe.CleanupStaleTemps: skipping unreadable path", "path", path, "error", walkErr)
 			s.result.Unreadable++
