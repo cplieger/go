@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -84,7 +85,7 @@ func TestRunLoopDoesNotFireWhenAlreadyCancelled(t *testing.T) {
 
 func TestJitteredDelayNoJitterReturnsInterval(t *testing.T) {
 	t.Parallel()
-	cases := []float64{0, -0.1, -1}
+	cases := []float64{0, -0.1, -1, math.NaN()}
 	for _, fraction := range cases {
 		if got := JitteredDelay(time.Hour, fraction); got != time.Hour {
 			t.Errorf("JitteredDelay(1h, %v) = %s, want 1h", fraction, got)

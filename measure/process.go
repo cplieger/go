@@ -3,7 +3,6 @@ package measure
 import (
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -181,14 +180,6 @@ func processFamilies() []metricFamily {
 		}
 	}
 	return fams
-}
-
-// WriteProcess writes Go runtime and standard process metrics in
-// Prometheus text format. It is a thin shim over the neutral IR
-// (processFamilies) and the Prometheus encoder, preserved as part of the
-// package's exported surface.
-func WriteProcess(b *strings.Builder) {
-	appendPrometheus(b, processFamilies())
 }
 
 // resolvedProcStartTime memoizes the kernel-derived process start time. Because

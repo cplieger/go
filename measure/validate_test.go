@@ -85,7 +85,7 @@ func TestErroredMetric_RecordPathsAreInert(t *testing.T) {
 	g.Set(3)
 	g.Add(1)
 	g.Sub(1)
-	if got := g.Get(); got != 0 {
+	if got := g.Value(); got != 0 {
 		t.Errorf("errored Gauge value = %v, want 0", got)
 	}
 
@@ -275,7 +275,7 @@ func TestNewLabeledCounter_MutatingCallerSliceIsolated(t *testing.T) {
 	lc.Inc("us-east")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, `region="us-east"`) {
 		t.Errorf("expected owned label name region, got: %s", out)
@@ -295,7 +295,7 @@ func TestNewLabeledHistogram_MutationCannotBypassLeGuard(t *testing.T) {
 	lh.Observe(0.5, "/api")
 
 	var b strings.Builder
-	WriteLabeledHistogram(&b, lh)
+	writeLabeledHistogram(&b, lh)
 	out := b.String()
 	if !strings.Contains(out, `path="/api"`) {
 		t.Errorf("expected owned label name path, got: %s", out)
@@ -369,7 +369,7 @@ func TestSanitizeLabelValues_InvalidUTF8NoPanic(t *testing.T) {
 	lc.Inc(bad) // must not panic
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	if out := b.String(); !strings.Contains(out, "\uFFFD") {
 		t.Errorf("exposition missing U+FFFD replacement: %q", out)
 	}
@@ -525,7 +525,7 @@ func TestSanitizeHelp_ExpositionCarriesReplacement(t *testing.T) {
 	c := NewCounter("sanhelp_expo_counter_total", "bad\xff\xfehelp")
 	c.Inc()
 	var cb strings.Builder
-	WriteCounter(&cb, c)
+	writeCounter(&cb, c)
 	if out := cb.String(); !strings.Contains(out, "# HELP sanhelp_expo_counter_total bad\uFFFDhelp") {
 		t.Errorf("counter HELP = %q, want U+FFFD replacement", out)
 	}
@@ -533,7 +533,7 @@ func TestSanitizeHelp_ExpositionCarriesReplacement(t *testing.T) {
 	lh := NewLabeledHistogram("sanhelp_expo_hist_seconds", "bad\xff\xfehelp", []string{"m"})
 	lh.Observe(0.5, "x")
 	var hb strings.Builder
-	WriteLabeledHistogram(&hb, lh)
+	writeLabeledHistogram(&hb, lh)
 	if out := hb.String(); !strings.Contains(out, "# HELP sanhelp_expo_hist_seconds bad\uFFFDhelp") {
 		t.Errorf("labeled histogram HELP = %q, want U+FFFD replacement", out)
 	}
@@ -548,7 +548,7 @@ func TestValidateLabelValues_ValidSucceeds(t *testing.T) {
 	lc.Inc("plain")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, `lang="héllo"`) {
 		t.Errorf("expected multi-byte UTF-8 label value in output, got: %s", out)

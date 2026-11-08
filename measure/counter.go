@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"math"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -46,8 +45,7 @@ type Counter struct {
 // NewCounter creates a named counter. Per Prometheus convention the name
 // should end in `_total` (e.g. "http_requests_total"). An invalid name is
 // captured into the counter rather than panicking: the counter records
-// nothing, WriteCounter emits nothing for it, and the error surfaces at
-// registration.
+// nothing, Handler never emits it, and the error surfaces at registration.
 func NewCounter(name, help string) *Counter {
 	help = sanitizeHelp(name, help)
 	return &Counter{name: name, help: help, err: checkMetricName(name)}
@@ -200,17 +198,6 @@ func (lc *LabeledCounter) Delete(labelVals ...string) {
 	lc.deleteSeries(lc.vals, lc.labels, labelVals)
 }
 
-// WriteCounter writes a counter in Prometheus text format. It is a thin shim
-// over the neutral IR (Counter.family) and the Prometheus encoder, retained as
-// part of the package's exported surface. A counter carrying a construction
-// error writes nothing: an invalid metric must never reach the exposition.
-func WriteCounter(b *strings.Builder, c *Counter) {
-	if c.err != nil {
-		return
-	}
-	appendPrometheus(b, []metricFamily{c.family()})
-}
-
 // loadOrStore returns the entry for key, creating it with makeV under the
 // write lock when absent. loaded reports whether the entry already existed.
 // The hot loaded-path never reads s.name. Label values carrying invalid UTF-8
@@ -341,15 +328,4 @@ func (s *series) sortedLabelKeys[V any](vals map[labelKey]V) []labelKey {
 // buildLabelString builds a sorted, spec-escaped label string from labels and key.
 func buildLabelString(labels []string, key *labelKey) string {
 	return renderLabels(labelsFor(labels, key))
-}
-
-// WriteLabeledCounter writes a labeled counter in Prometheus text format (IR
-// shim). A counter carrying a construction error writes nothing.
-func WriteLabeledCounter(b *strings.Builder, lc *LabeledCounter) {
-	if lc.err != nil {
-		return
-	}
-	if f, ok := lc.family(); ok {
-		appendPrometheus(b, []metricFamily{f})
-	}
 }

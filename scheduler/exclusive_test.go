@@ -65,7 +65,7 @@ func quoteMsg(msg string) string {
 func TestExclusiveRunFree(t *testing.T) {
 	t.Parallel()
 	logger, buf := captureLogger()
-	e := NewExclusive(t.TempDir(), logger)
+	e := NewExclusive(t.TempDir(), WithLogger(logger))
 
 	runs := 0
 	out, err := e.Run(func() error {
@@ -89,7 +89,7 @@ func TestExclusiveRunFree(t *testing.T) {
 func TestExclusiveRunJobErrorPassthrough(t *testing.T) {
 	t.Parallel()
 	jobErr := errors.New("cycle failed")
-	e := NewExclusive(t.TempDir(), silentLogger())
+	e := NewExclusive(t.TempDir(), WithLogger(silentLogger()))
 
 	out, err := e.Run(func() error { return jobErr })
 	if !errors.Is(err, jobErr) {
@@ -104,7 +104,7 @@ func TestExclusiveRunQueuesWhileBusy(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logger, buf := captureLogger()
-	e := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
 
 	holder, ok, err := TryLock(filepath.Join(dir, ExclusiveLockName))
 	if err != nil || !ok {
@@ -157,7 +157,7 @@ func TestExclusiveDiscardAtCapacity(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logger, buf := captureLogger()
-	e := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
 
 	holder, ok, err := TryLock(filepath.Join(dir, ExclusiveLockName))
 	if err != nil || !ok {
@@ -192,8 +192,8 @@ func TestExclusiveConsumeLoop(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logger, buf := captureLogger()
-	e := NewExclusive(dir, logger)
-	requester := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
+	requester := NewExclusive(dir, WithLogger(logger))
 
 	runs := 0
 	out, err := e.Run(func() error {
@@ -227,8 +227,8 @@ func TestExclusiveConsumeLoop(t *testing.T) {
 func TestExclusiveQueueCapacity(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	e := NewExclusive(dir, silentLogger(), WithQueueCapacity(3))
-	requester := NewExclusive(dir, silentLogger(), WithQueueCapacity(3))
+	e := NewExclusive(dir, WithLogger(silentLogger()), WithQueueCapacity(3))
+	requester := NewExclusive(dir, WithLogger(silentLogger()), WithQueueCapacity(3))
 
 	runs := 0
 	out, err := e.Run(func() error {
@@ -259,7 +259,7 @@ func TestExclusiveQueueCapacity(t *testing.T) {
 func TestExclusiveQueueCapacityDiscardBound(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	e := NewExclusive(dir, silentLogger(), WithQueueCapacity(2))
+	e := NewExclusive(dir, WithLogger(silentLogger()), WithQueueCapacity(2))
 
 	holder, ok, err := TryLock(filepath.Join(dir, ExclusiveLockName))
 	if err != nil || !ok {
@@ -282,7 +282,7 @@ func TestExclusiveQueueCapacityDiscardBound(t *testing.T) {
 func TestExclusiveCapacityBelowOneClampsToOne(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	e := NewExclusive(dir, silentLogger(), WithQueueCapacity(0))
+	e := NewExclusive(dir, WithLogger(silentLogger()), WithQueueCapacity(0))
 
 	holder, ok, err := TryLock(filepath.Join(dir, ExclusiveLockName))
 	if err != nil || !ok {
@@ -333,7 +333,7 @@ func TestExclusiveZeroValueQueuesLikeConstructed(t *testing.T) {
 func TestExclusiveQueueCapacityIsLastWins(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	e := NewExclusive(dir, silentLogger(), WithQueueCapacity(3), WithQueueCapacity(1))
+	e := NewExclusive(dir, WithLogger(silentLogger()), WithQueueCapacity(3), WithQueueCapacity(1))
 
 	holder, ok, err := TryLock(filepath.Join(dir, ExclusiveLockName))
 	if err != nil || !ok {
@@ -353,7 +353,7 @@ func TestExclusiveRunOrSkipBusy(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logger, buf := captureLogger()
-	e := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
 
 	holder, ok, err := TryLock(filepath.Join(dir, ExclusiveLockName))
 	if err != nil || !ok {
@@ -378,7 +378,7 @@ func TestExclusiveRunOrSkipBusy(t *testing.T) {
 
 func TestExclusiveRunOrSkipFree(t *testing.T) {
 	t.Parallel()
-	e := NewExclusive(t.TempDir(), silentLogger())
+	e := NewExclusive(t.TempDir(), WithLogger(silentLogger()))
 	runs := 0
 	out, err := e.RunOrSkip(func() error { runs++; return nil })
 	if err != nil || out != OutcomeRan || runs != 1 {
@@ -390,8 +390,8 @@ func TestExclusiveRunOrSkipDrainsQueue(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logger, buf := captureLogger()
-	e := NewExclusive(dir, logger)
-	requester := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
+	requester := NewExclusive(dir, WithLogger(logger))
 
 	runs := 0
 	out, err := e.RunOrSkip(func() error {
@@ -424,7 +424,7 @@ func TestExclusiveGateClosedSkipsRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ExclusiveQueueName), []byte("1\n"), 0o644); err != nil {
 		t.Fatalf("seeding queue counter: %v", err)
 	}
-	e := NewExclusive(dir, logger, WithGate(func() bool { return false }))
+	e := NewExclusive(dir, WithLogger(logger), WithGate(func() bool { return false }))
 
 	out, err := e.Run(failIfRun(t))
 	if err != nil {
@@ -444,7 +444,7 @@ func TestExclusiveGateClosedSkipsRun(t *testing.T) {
 	if out, serr := e.RunOrSkip(failIfRun(t)); serr != nil || out != OutcomeGated {
 		t.Errorf("gated RunOrSkip = (%s, %v), want (gated, nil)", out, serr)
 	}
-	open := NewExclusive(dir, silentLogger())
+	open := NewExclusive(dir, WithLogger(silentLogger()))
 	runs := 0
 	if out, rerr := open.Run(func() error { runs++; return nil }); rerr != nil || out != OutcomeRan || runs != 1 {
 		t.Errorf("ungated Run after gated calls = (%s, %v) with %d runs, want (ran, nil) with 1", out, rerr, runs)
@@ -457,8 +457,8 @@ func TestExclusiveGateClosureDefersQueuedDemand(t *testing.T) {
 	logger, buf := captureLogger()
 	var gateOpen atomic.Bool
 	gateOpen.Store(true)
-	e := NewExclusive(dir, logger, WithGate(gateOpen.Load))
-	requester := NewExclusive(dir, silentLogger())
+	e := NewExclusive(dir, WithLogger(logger), WithGate(gateOpen.Load))
+	requester := NewExclusive(dir, WithLogger(silentLogger()))
 
 	runs := 0
 	out, err := e.Run(func() error {
@@ -488,8 +488,8 @@ func TestExclusiveRerunCapDefersDemand(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logger, buf := captureLogger()
-	e := NewExclusive(dir, logger)
-	requester := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
+	requester := NewExclusive(dir, WithLogger(logger))
 
 	// The job re-queues demand on every run (a relentless trigger source):
 	// without the cap the holder would rerun forever. It must execute the
@@ -544,7 +544,7 @@ func TestExclusiveGarbageCounterParsesAsZero(t *testing.T) {
 		t.Fatalf("seeding garbage counter: %v", err)
 	}
 
-	e := NewExclusive(dir, logger)
+	e := NewExclusive(dir, WithLogger(logger))
 	runs := 0
 	out, err := e.Run(func() error { runs++; return nil })
 	if err != nil || out != OutcomeRan || runs != 1 {
@@ -557,8 +557,8 @@ func TestExclusiveGarbageCounterParsesAsZero(t *testing.T) {
 func TestExclusiveJobErrorsJoinedAcrossReruns(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	e := NewExclusive(dir, silentLogger())
-	requester := NewExclusive(dir, silentLogger())
+	e := NewExclusive(dir, WithLogger(silentLogger()))
+	requester := NewExclusive(dir, WithLogger(silentLogger()))
 
 	firstErr := errors.New("initial cycle failed")
 	rerunErr := errors.New("queued rerun failed")
@@ -584,7 +584,7 @@ func TestExclusiveJobErrorsJoinedAcrossReruns(t *testing.T) {
 func TestExclusiveInfraError(t *testing.T) {
 	t.Parallel()
 	// A directory that does not exist makes the lock file uncreatable.
-	e := NewExclusive(filepath.Join(t.TempDir(), "missing-dir"), silentLogger())
+	e := NewExclusive(filepath.Join(t.TempDir(), "missing-dir"), WithLogger(silentLogger()))
 
 	out, err := e.Run(failIfRun(t))
 	if err == nil {
@@ -620,7 +620,7 @@ func TestExclusiveReportsAcquisitionQueueError(t *testing.T) {
 	if err := os.Mkdir(blocked, 0o750); err != nil {
 		t.Fatalf("blocking the counter path: %v", err)
 	}
-	e := NewExclusive(dir, silentLogger())
+	e := NewExclusive(dir, WithLogger(silentLogger()))
 
 	runs := 0
 	out, err := e.Run(func() error {
@@ -652,7 +652,7 @@ func TestExclusiveReportsPostRunQueueError(t *testing.T) {
 	counter := filepath.Join(dir, ExclusiveQueueName)
 	var gateOpen atomic.Bool
 	gateOpen.Store(true)
-	e := NewExclusive(dir, silentLogger(), WithGate(gateOpen.Load))
+	e := NewExclusive(dir, WithLogger(silentLogger()), WithGate(gateOpen.Load))
 
 	runs := 0
 	out, err := e.Run(func() error {
@@ -700,7 +700,7 @@ func TestExclusiveNilLoggerUsesDefault(t *testing.T) {
 	}
 	defer holder.Unlock()
 
-	e := NewExclusive(dir, nil)
+	e := NewExclusive(dir)
 	if out, serr := e.RunOrSkip(failIfRun(t)); serr != nil || out != OutcomeSkipped {
 		t.Fatalf("RunOrSkip = (%s, %v), want (skipped, nil)", out, serr)
 	}
@@ -725,7 +725,7 @@ func TestExclusiveNoOverlapHammer(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			e := NewExclusive(dir, silentLogger(), WithQueueCapacity(2))
+			e := NewExclusive(dir, WithLogger(silentLogger()), WithQueueCapacity(2))
 			for range 25 {
 				if _, err := e.Run(job); err != nil {
 					t.Errorf("hammer Run err = %v, want nil", err)
@@ -745,7 +745,7 @@ func TestExclusiveNoOverlapHammer(t *testing.T) {
 	// rerun cap; a holder retiring at the cap may defer residue, which the
 	// next acquisition clears (the run that starts then satisfies it). One
 	// final run therefore leaves the counter at zero.
-	e := NewExclusive(dir, silentLogger())
+	e := NewExclusive(dir, WithLogger(silentLogger()))
 	if _, err := e.Run(func() error { return nil }); err != nil {
 		t.Fatalf("final drain Run err = %v, want nil", err)
 	}

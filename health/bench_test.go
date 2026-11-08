@@ -8,38 +8,38 @@ import (
 	"testing"
 )
 
-// BenchmarkProbeCheck_Healthy benchmarks the steady-state hot path when
+// BenchmarkProbe_Healthy benchmarks the steady-state hot path when
 // the marker file exists.
-func BenchmarkProbeCheck_Healthy(b *testing.B) {
+func BenchmarkProbe_Healthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		b.Fatal(err)
 	}
 	b.ResetTimer()
 	for b.Loop() {
-		ProbeCheck(path)
+		probeCode(path)
 	}
 }
 
-// BenchmarkProbeCheck_Unhealthy benchmarks the probe when the marker is
+// BenchmarkProbe_Unhealthy benchmarks the probe when the marker is
 // absent from a writable directory.
-func BenchmarkProbeCheck_Unhealthy(b *testing.B) {
+func BenchmarkProbe_Unhealthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	b.ResetTimer()
 	for b.Loop() {
-		ProbeCheck(path)
+		probeCode(path)
 	}
 }
 
-// BenchmarkMarkerCheckHealthy benchmarks the os.Stat call HTTP handlers
+// BenchmarkMarkerHealthy benchmarks the os.Stat call HTTP handlers
 // invoke on every request (Signal.Healthy delegates to it).
-func BenchmarkMarkerCheckHealthy(b *testing.B) {
+func BenchmarkMarkerHealthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	m := NewMarker(path)
 	m.Set(true)
 	b.ResetTimer()
 	for b.Loop() {
-		m.CheckHealthy()
+		m.Healthy()
 	}
 }
 

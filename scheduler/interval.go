@@ -109,9 +109,13 @@ func WithRedactedValue(redacted bool) IntervalOption {
 }
 
 // WithIntervalLogger routes ParseInterval's warnings to a specific logger
-// instead of slog.Default().
+// instead of slog.Default(). A nil logger is ignored, so the default stays.
 func WithIntervalLogger(l *slog.Logger) IntervalOption {
-	return func(c *intervalConfig) { c.logger = l }
+	return func(c *intervalConfig) {
+		if l != nil {
+			c.logger = l
+		}
+	}
 }
 
 // ParseInterval interprets a raw interval environment value into a Schedule,
@@ -136,7 +140,9 @@ func ParseInterval(raw string, def time.Duration, opts ...IntervalOption) Schedu
 	}
 	c := &intervalConfig{name: "interval", logger: slog.Default()}
 	for _, opt := range opts {
-		opt(c)
+		if opt != nil {
+			opt(c)
+		}
 	}
 
 	trimmed := strings.TrimSpace(raw)

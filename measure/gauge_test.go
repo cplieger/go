@@ -12,23 +12,23 @@ import (
 func TestGaugeFloat64(t *testing.T) {
 	g := NewGauge("test_gauge_f64", "test")
 	g.Set(3.14)
-	if got := g.Get(); math.Abs(got-3.14) > 0.001 {
+	if got := g.Value(); math.Abs(got-3.14) > 0.001 {
 		t.Errorf("Gauge.Set(3.14) = %f", got)
 	}
 	g.Inc()
-	if got := g.Get(); math.Abs(got-4.14) > 0.001 {
+	if got := g.Value(); math.Abs(got-4.14) > 0.001 {
 		t.Errorf("Gauge after Inc = %f", got)
 	}
 	g.Dec()
-	if got := g.Get(); math.Abs(got-3.14) > 0.001 {
+	if got := g.Value(); math.Abs(got-3.14) > 0.001 {
 		t.Errorf("Gauge after Dec = %f", got)
 	}
 	g.Add(1.5)
-	if got := g.Get(); math.Abs(got-4.64) > 0.001 {
+	if got := g.Value(); math.Abs(got-4.64) > 0.001 {
 		t.Errorf("Gauge after Add = %f", got)
 	}
 	g.Sub(0.64)
-	if got := g.Get(); math.Abs(got-4.0) > 0.001 {
+	if got := g.Value(); math.Abs(got-4.0) > 0.001 {
 		t.Errorf("Gauge after Sub = %f", got)
 	}
 }
@@ -38,7 +38,7 @@ func TestGaugeIncDec(t *testing.T) {
 	g.Inc()
 	g.Inc()
 	g.Dec()
-	if got := g.Get(); got != 1 {
+	if got := g.Value(); got != 1 {
 		t.Errorf("Gauge = %f, want 1", got)
 	}
 }
@@ -49,7 +49,7 @@ func TestLabeledGauge(t *testing.T) {
 	lg.Set(10, "server2")
 
 	var b strings.Builder
-	WriteLabeledGauge(&b, lg)
+	writeLabeledGauge(&b, lg)
 	out := b.String()
 
 	if !strings.Contains(out, "# TYPE lg_test gauge") {
@@ -70,7 +70,7 @@ func TestLabeledGauge_Reset(t *testing.T) {
 	lg.Reset()
 
 	var b strings.Builder
-	WriteLabeledGauge(&b, lg)
+	writeLabeledGauge(&b, lg)
 	if b.Len() != 0 {
 		t.Errorf("expected empty output after Reset, got: %s", b.String())
 	}
@@ -83,7 +83,7 @@ func TestLabeledGauge_Delete(t *testing.T) {
 	lg.Delete("a")
 
 	var b strings.Builder
-	WriteLabeledGauge(&b, lg)
+	writeLabeledGauge(&b, lg)
 	out := b.String()
 	if strings.Contains(out, `host="a"`) {
 		t.Errorf("deleted key still present: %s", out)
@@ -127,7 +127,7 @@ func TestNewLabeledGauge_ExactlyMaxLabelsAllowed(t *testing.T) {
 	lg.Set(9, "1", "2", "3", "4", "5", "6", "7", "8") // must not panic with eight labels
 
 	var b strings.Builder
-	WriteLabeledGauge(&b, lg)
+	writeLabeledGauge(&b, lg)
 	if out := b.String(); !strings.Contains(out, `a="1",b="2",c="3",d="4",e="5",f="6",g="7",h="8"`) {
 		t.Errorf("eight-label gauge not exposed correctly:\n%s", out)
 	}
@@ -140,7 +140,7 @@ func TestWriteGaugeFormat(t *testing.T) {
 	g.Dec()
 
 	var b strings.Builder
-	WriteGauge(&b, g)
+	writeGauge(&b, g)
 	out := b.String()
 
 	if !strings.Contains(out, "# HELP active_connections Active connection count") {
@@ -177,7 +177,7 @@ func TestGauge_specialValues(t *testing.T) {
 			g.Set(tt.val)
 
 			var b strings.Builder
-			WriteGauge(&b, g)
+			writeGauge(&b, g)
 			out := b.String()
 			if !strings.Contains(out, "rt6_special_"+tt.name+" "+tt.prom) {
 				t.Errorf("Prometheus: expected %q in:\n%s", tt.prom, out)
@@ -193,7 +193,7 @@ func TestLabeledGauge_specialValues(t *testing.T) {
 	lg.Set(math.Inf(-1), "neginf")
 
 	var b strings.Builder
-	WriteLabeledGauge(&b, lg)
+	writeLabeledGauge(&b, lg)
 	out := b.String()
 	posInf := "+" + "Inf"
 	negInf := "-" + "Inf"
@@ -216,7 +216,7 @@ func TestLabeledGauge_emptyLabelSet(t *testing.T) {
 	lg.Set(42)
 
 	var b strings.Builder
-	WriteLabeledGauge(&b, lg)
+	writeLabeledGauge(&b, lg)
 	out := b.String()
 	if !strings.Contains(out, "rt6_empty_lg") {
 		t.Errorf("empty label gauge missing: %s", out)
@@ -237,7 +237,7 @@ func TestGauge_AddSub_Concurrent(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if v := g.Get(); math.Abs(v) > 1.0 {
+	if v := g.Value(); math.Abs(v) > 1.0 {
 		t.Errorf("gauge drift too large: %f", v)
 	}
 }
@@ -274,7 +274,7 @@ func TestLabeledGauge_DeleteConcurrent(t *testing.T) {
 }
 
 // TestLabeledGauge_SetResetDelete_ConcurrentScrape races Set/Reset/Delete
-// against a concurrent scrape (WriteLabeledGauge) to pin the nil-map-slot skip
+// against a concurrent scrape (writeLabeledGauge) to pin the nil-map-slot skip
 // in the family materialiser: a key nulled mid-scrape must not be dereferenced.
 func TestLabeledGauge_SetResetDelete_ConcurrentScrape(t *testing.T) {
 	lg := NewLabeledGauge("rt6_race_gauge", "race test", []string{"id"})
@@ -327,7 +327,7 @@ func TestLabeledGauge_SetResetDelete_ConcurrentScrape(t *testing.T) {
 					return
 				default:
 					var b strings.Builder
-					WriteLabeledGauge(&b, lg)
+					writeLabeledGauge(&b, lg)
 				}
 			}
 		})
@@ -344,7 +344,7 @@ func TestGauge_reservedSuffixNamesRenderVerbatim(t *testing.T) {
 	gt := NewGauge("weird_total", "a gauge whose name ends in _total")
 	gt.Set(7)
 	var b strings.Builder
-	WriteGauge(&b, gt)
+	writeGauge(&b, gt)
 	if out := b.String(); !strings.Contains(out, "# TYPE weird_total gauge") || !strings.Contains(out, "weird_total 7") {
 		t.Errorf("gauge named _total mangled:\n%s", out)
 	}
@@ -352,7 +352,7 @@ func TestGauge_reservedSuffixNamesRenderVerbatim(t *testing.T) {
 	gb := NewGauge("my_bucket", "a gauge whose name ends in _bucket")
 	gb.Set(3)
 	b.Reset()
-	WriteGauge(&b, gb)
+	writeGauge(&b, gb)
 	if out := b.String(); !strings.Contains(out, "my_bucket 3") {
 		t.Errorf("gauge named _bucket mangled: %s", out)
 	}
@@ -379,7 +379,7 @@ func TestGaugeRecordPathIsAllocationFree(t *testing.T) {
 		{"sub", "Gauge.Sub(1.5)", func() { g.Sub(1.5) }},
 		{"inc", "Gauge.Inc()", func() { g.Inc() }},
 		{"dec", "Gauge.Dec()", func() { g.Dec() }},
-		{"get", "Gauge.Get()", func() { _ = g.Get() }},
+		{"get", "Gauge.Value()", func() { _ = g.Value() }},
 		{"labeled_set", `LabeledGauge.Set(1.5, "scan")`, func() { lg.Set(1.5, "scan") }},
 	}
 	for _, tc := range cases {

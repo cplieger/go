@@ -17,11 +17,11 @@ import (
 func TestSubmit_FinalEventOverRealSocket(t *testing.T) {
 	tests := []struct {
 		name   string
-		out    Outcome
+		out    Result
 		wantOK bool
 	}{
-		{"clean run reports ok", Outcome{OK: true, Duration: time.Millisecond}, true},
-		{"failed run reports not ok", Outcome{OK: false, Reason: "job failed"}, false},
+		{"clean run reports ok", Result{OK: true, Duration: time.Millisecond}, true},
+		{"failed run reports not ok", Result{OK: false, Reason: "job failed"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -29,7 +29,7 @@ func TestSubmit_FinalEventOverRealSocket(t *testing.T) {
 				j.Start()
 				j.Finish(tt.out)
 			})
-			var kinds []string
+			var kinds []EventKind
 			final, err := Submit(t.Context(), sock, testPayload{Repos: []string{"owner/repo"}}, func(ev Event) {
 				kinds = append(kinds, ev.Kind)
 			})
@@ -39,7 +39,7 @@ func TestSubmit_FinalEventOverRealSocket(t *testing.T) {
 			if final.Kind != EventDone || final.OK != tt.wantOK {
 				t.Errorf("final event = %+v, want done ok=%v", final, tt.wantOK)
 			}
-			if want := []string{EventQueued, EventStarted}; len(kinds) != 2 || kinds[0] != want[0] || kinds[1] != want[1] {
+			if want := []EventKind{EventQueued, EventStarted}; len(kinds) != 2 || kinds[0] != want[0] || kinds[1] != want[1] {
 				t.Errorf("onEvent saw %v, want %v", kinds, want)
 			}
 		})
@@ -111,7 +111,7 @@ func TestAwaitDone_StreamHandling(t *testing.T) {
 func TestSubmit_ReasonAndDurationReachTheClient(t *testing.T) {
 	sock := startTestServer(t, func(j *Job[testPayload]) {
 		j.Start()
-		j.Finish(Outcome{OK: true, Reason: "skipped: lock held by another container", Duration: 1500 * time.Millisecond})
+		j.Finish(Result{OK: true, Reason: "skipped: lock held by another container", Duration: 1500 * time.Millisecond})
 	})
 	final, err := Submit(t.Context(), sock, testPayload{}, nil)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestSubmit_CancellationAbortsTheWait(t *testing.T) {
 		j.Start()
 		close(started)
 		<-release // never finish the job; the client must give up on its own
-		j.Finish(Outcome{OK: false, Reason: "abandoned"})
+		j.Finish(Result{OK: false, Reason: "abandoned"})
 	})
 	t.Cleanup(func() { close(release) })
 

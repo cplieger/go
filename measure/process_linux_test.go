@@ -47,13 +47,13 @@ func TestReadKernelStartTime_AgreesWithPackageInitAnchor(t *testing.T) {
 	}
 }
 
-// TestWriteProcess_LinuxFDsEmitted checks end to end that WriteProcess emits
+// TestWriteProcess_LinuxFDsEmitted checks end to end that writeProcess emits
 // process_open_fds and process_max_fds when /proc/self/fd and
 // /proc/self/limits are readable: a non-negative count, and a positive limit
 // (float64(math.MaxUint64) when unlimited).
 func TestWriteProcess_LinuxFDsEmitted(t *testing.T) {
 	var b strings.Builder
-	WriteProcess(&b)
+	writeProcess(&b)
 
 	var openVal, maxVal string
 	var gotOpen, gotMax bool

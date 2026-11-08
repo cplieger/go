@@ -29,7 +29,7 @@ func ExampleExclusive() {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	ex := scheduler.NewExclusive(dir, slog.New(slog.DiscardHandler))
+	ex := scheduler.NewExclusive(dir, scheduler.WithLogger(slog.New(slog.DiscardHandler)))
 	outcome, _ := ex.Run(func() error {
 		fmt.Println("cycle ran")
 		return nil

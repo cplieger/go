@@ -89,7 +89,7 @@ func TestJob_ExactlyOneResultNeverBlocksExecutor(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		j.Finish(Outcome{OK: true, Duration: 42 * time.Millisecond})
+		j.Finish(Result{OK: true, Duration: 42 * time.Millisecond})
 	}()
 	select {
 	case <-finished:

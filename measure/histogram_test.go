@@ -139,7 +139,7 @@ func TestNewHistogram_emptyAndNilBuckets(t *testing.T) {
 		h.Observe(5.0)
 
 		var b strings.Builder
-		WriteHistogram(&b, h)
+		writeHistogram(&b, h)
 		if out := b.String(); !strings.Contains(out, `empty_buckets_bucket{le="+Inf"} 2`) {
 			t.Errorf("empty buckets wrong: %s", out)
 		}
@@ -177,7 +177,7 @@ func TestLabeledHistogram_emptyBuckets(t *testing.T) {
 	}
 
 	var b strings.Builder
-	WriteLabeledHistogram(&b, lh)
+	writeLabeledHistogram(&b, lh)
 	out := b.String()
 	for _, want := range []string{
 		`lhx_empty_buckets_bucket{k="v",le="+Inf"} 2`,
@@ -278,7 +278,7 @@ func TestHistogram_NegativeBuckets(t *testing.T) {
 	h.Observe(5)
 
 	var b strings.Builder
-	WriteHistogram(&b, h)
+	writeHistogram(&b, h)
 	out := b.String()
 
 	if !strings.Contains(out, `neg_buckets_bucket{le="-10"} 0`) {
@@ -322,7 +322,7 @@ func TestHistogram_SingleBucket(t *testing.T) {
 	h.Observe(1.5)
 
 	var b strings.Builder
-	WriteHistogram(&b, h)
+	writeHistogram(&b, h)
 	out := b.String()
 
 	if !strings.Contains(out, `single_bucket_bucket{le="1"} 1`) {
@@ -360,7 +360,7 @@ func TestWriteHistogramFormat(t *testing.T) {
 	h.Observe(0.01)
 
 	var b strings.Builder
-	WriteHistogram(&b, h)
+	writeHistogram(&b, h)
 	out := b.String()
 
 	if !strings.Contains(out, "# HELP fmt_hist test help") {
@@ -385,9 +385,9 @@ func TestWriteHistogram_SumRendering(t *testing.T) {
 		h := NewHistogram("hist_sum_tiny", "test")
 		h.Observe(1e-7) // a fixed-precision %.6f would floor this sum to zero
 		var b strings.Builder
-		WriteHistogram(&b, h)
+		writeHistogram(&b, h)
 		if got := b.String(); !strings.Contains(got, "hist_sum_tiny_sum 1e-07\n") {
-			t.Errorf("WriteHistogram sum = %q, want line %q", got, "hist_sum_tiny_sum 1e-07")
+			t.Errorf("writeHistogram sum = %q, want line %q", got, "hist_sum_tiny_sum 1e-07")
 		}
 	})
 	t.Run("whole sum renders as bare integer", func(t *testing.T) {
@@ -395,9 +395,9 @@ func TestWriteHistogram_SumRendering(t *testing.T) {
 		h.Observe(2)
 		h.Observe(2) // sum = 4
 		var b strings.Builder
-		WriteHistogram(&b, h)
+		writeHistogram(&b, h)
 		if got := b.String(); !strings.Contains(got, "hist_sum_whole_sum 4\n") {
-			t.Errorf("WriteHistogram sum = %q, want line %q", got, "hist_sum_whole_sum 4")
+			t.Errorf("writeHistogram sum = %q, want line %q", got, "hist_sum_whole_sum 4")
 		}
 	})
 }
@@ -421,7 +421,7 @@ func TestLabeledHistogram(t *testing.T) {
 	lh.Observe(2.0, "POST")
 
 	var b strings.Builder
-	WriteLabeledHistogram(&b, lh)
+	writeLabeledHistogram(&b, lh)
 	out := b.String()
 
 	if !strings.Contains(out, "# TYPE lh_test histogram") {
@@ -445,7 +445,7 @@ func TestLabeledHistogram_Reset(t *testing.T) {
 	lh.Reset()
 
 	var b strings.Builder
-	WriteLabeledHistogram(&b, lh)
+	writeLabeledHistogram(&b, lh)
 	if b.Len() != 0 {
 		t.Errorf("expected empty output after Reset, got: %s", b.String())
 	}
@@ -458,7 +458,7 @@ func TestLabeledHistogram_Delete(t *testing.T) {
 	lh.Delete("a")
 
 	var b strings.Builder
-	WriteLabeledHistogram(&b, lh)
+	writeLabeledHistogram(&b, lh)
 	out := b.String()
 	if strings.Contains(out, `host="a"`) {
 		t.Errorf("deleted key still present: %s", out)
@@ -502,7 +502,7 @@ func TestNewLabeledHistogram_ExactlyMaxLabelsAllowed(t *testing.T) {
 	lh.Observe(0.5, "1", "2", "3", "4", "5", "6", "7", "8") // must not panic with eight labels
 
 	var b strings.Builder
-	WriteLabeledHistogram(&b, lh)
+	writeLabeledHistogram(&b, lh)
 	if out := b.String(); !strings.Contains(out, `a="1",b="2",c="3",d="4",e="5",f="6",g="7",h="8"`) {
 		t.Errorf("eight-label histogram not exposed correctly:\n%s", out)
 	}
@@ -665,7 +665,7 @@ func TestHistogram_nameEndingInCount(t *testing.T) {
 	h := NewHistogram("ops_count", "operations", WithBuckets([]float64{1, 5, 10}))
 	h.Observe(3)
 	var b strings.Builder
-	WriteHistogram(&b, h)
+	writeHistogram(&b, h)
 	out := b.String()
 	for _, want := range []string{
 		"# TYPE ops_count histogram",

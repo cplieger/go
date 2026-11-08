@@ -24,9 +24,9 @@ func TestExecute_RunsJobsInOrderWithOwnResults(t *testing.T) {
 	q.Close()
 
 	var seen []string
-	Execute(t.Context(), q, func(_ context.Context, trigger string, p testPayload) Outcome {
+	Execute(t.Context(), q, func(_ context.Context, trigger string, p testPayload) Result {
 		seen = append(seen, trigger)
-		return Outcome{OK: true, Reason: trigger, Duration: time.Duration(len(p.Repos))}
+		return Result{OK: true, Reason: trigger, Duration: time.Duration(len(p.Repos))}
 	})
 
 	if len(seen) != 2 || seen[0] != External || seen[1] != "interval" {
@@ -34,10 +34,10 @@ func TestExecute_RunsJobsInOrderWithOwnResults(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		job  *Job[testPayload]
-		want Outcome
+		want Result
 	}{
-		{a, Outcome{OK: true, Reason: External, Duration: 1}},
-		{b, Outcome{OK: true, Reason: "interval", Duration: 0}},
+		{a, Result{OK: true, Reason: External, Duration: 1}},
+		{b, Result{OK: true, Reason: "interval", Duration: 0}},
 	} {
 		select {
 		case <-tc.job.Started():
@@ -70,9 +70,9 @@ func TestExecute_CancelledContextFinishesWithoutStarting(t *testing.T) {
 	}
 	q.Close()
 
-	Execute(ctx, q, func(context.Context, string, struct{}) Outcome {
+	Execute(ctx, q, func(context.Context, string, struct{}) Result {
 		t.Error("callback ran for a job cancelled before start")
-		return Outcome{}
+		return Result{}
 	})
 
 	select {
@@ -81,7 +81,7 @@ func TestExecute_CancelledContextFinishesWithoutStarting(t *testing.T) {
 	default:
 	}
 	got := <-j.Result()
-	want := Outcome{OK: false, Reason: CancelledReason}
+	want := Result{OK: false, Reason: CancelledReason}
 	if got != want {
 		t.Errorf("Result() = %+v, want %+v", got, want)
 	}
@@ -103,7 +103,7 @@ func TestExecute_PanickingCallbackStillDeliversResult(t *testing.T) {
 	propagated := make(chan any, 1)
 	go func() {
 		defer func() { propagated <- recover() }()
-		Execute(t.Context(), q, func(context.Context, string, struct{}) Outcome {
+		Execute(t.Context(), q, func(context.Context, string, struct{}) Result {
 			panic("boom")
 		})
 	}()

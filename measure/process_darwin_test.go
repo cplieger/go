@@ -53,7 +53,7 @@ func TestSoftLimit_darwin(t *testing.T) {
 // resident memory does not.
 func TestWriteProcess_darwin(t *testing.T) {
 	var b strings.Builder
-	WriteProcess(&b)
+	writeProcess(&b)
 	out := b.String()
 	for _, name := range []string{pmCPUTotal, pmOpenFDs, pmMaxFDs, pmVirtualMaxBytes, pmStartTime} {
 		if !strings.Contains(out, "\n"+name+" ") {

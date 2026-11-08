@@ -4,14 +4,11 @@
 // Construction never panics on an invalid name, label or bucket set: the
 // error is captured into the metric and surfaces at registration, where
 // Register returns it and MustRegister panics. Such a metric records nothing
-// (one warning on the first dropped record) and its Write* function emits
-// nothing. A label-arity mismatch on a record path and a negative Counter.Add
-// panic.
+// (one warning on the first dropped record) and Handler emits nothing for it.
+// A label-arity mismatch on a record path and a negative Counter.Add panic.
 //
-// Finish registration before serving a custom handler built on the Write*
-// functions, which read a metric's name without the registry lock. Registry
-// handlers and record paths are safe concurrently with registration. What is
-// left out by design is listed in the README.
+// Registry handlers and record paths are safe concurrently with
+// registration. What is left out by design is listed in the README.
 package measure
 
 import (
@@ -108,6 +105,7 @@ type Registry struct {
 	// prefix). Every registration reports it, so a registry that cannot
 	// produce a valid metric name refuses rather than emitting one.
 	err               error
+	logger            *slog.Logger
 	prefix            string
 	counters          []*Counter
 	gauges            []*Gauge
@@ -132,10 +130,15 @@ type Registry struct {
 // construction: it keeps this package to ONE error model with no exception,
 // and for a caller registering through MustRegister the failure still lands at
 // init, where a package-level registry is built.
-func NewRegistry(prefix string) *Registry {
+func NewRegistry(prefix string, opts ...RegistryOption) *Registry {
 	r := &Registry{
 		prefix: prefix,
 		names:  make(map[string]string),
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(r)
+		}
 	}
 	if prefix != "" {
 		if err := checkMetricName(prefix); err != nil {
@@ -349,9 +352,30 @@ func (r *Registry) Handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if _, err := io.WriteString(w, encodePrometheus(r.collect(req.Context()))); err != nil {
-			slog.Debug("measure: writing prometheus exposition failed", "error", err)
+			orDefault(r.logger).Debug("measure: writing prometheus exposition failed", "error", err)
 		}
 	}
+}
+
+// RegistryOption configures NewRegistry.
+type RegistryOption func(*Registry)
+
+// WithLogger sets the logger for the lines the registry writes while it
+// serves or gathers: a failed write of the exposition and a registered
+// collector's problems. A nil logger, like none, means slog.Default at the
+// time of each line. Lines a metric writes when it is recorded, and the
+// process-metric lines, which every registry in the process shares, go to
+// slog.Default.
+func WithLogger(l *slog.Logger) RegistryOption {
+	return func(r *Registry) { r.logger = l }
+}
+
+// orDefault is l, or slog.Default at the moment of the call when l is nil.
+func orDefault(l *slog.Logger) *slog.Logger {
+	if l != nil {
+		return l
+	}
+	return slog.Default()
 }
 
 // formatValue renders a float64 metric value in its canonical exposition form.

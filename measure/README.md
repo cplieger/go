@@ -116,7 +116,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a
 
 - Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup.
 - Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
-- Serve `Handler` alone. Its page already includes the Go and process metrics, so adding `WriteProcess` to the same page repeats every one of them.
+- Serve `Handler` alone. Its page already includes the Go and process metrics.
 - Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.
 - Publish build information as a `LabeledGauge` with a `version` label, set to 1.
 
@@ -125,10 +125,9 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a
 - Metrics: `NewCounter`, `NewGauge`, `NewHistogram` and their labeled variants `NewLabeledCounter`, `NewLabeledGauge` and `NewLabeledHistogram`.
 - Buckets: `DefaultBuckets`, `APIBuckets` and the `WithBuckets` option.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.
-- Registry: `NewRegistry`, `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement.
+- Registry: `NewRegistry` with its `WithLogger` option (`RegistryOption`), `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement.
 - Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewCollector` and `(*Emitter).Emit`.
 - Reading: `Gather`, which returns `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`.
-- Custom handlers: `WriteCounter`, `WriteGauge`, `WriteHistogram`, their labeled variants and `WriteProcess`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
 
@@ -165,7 +164,7 @@ measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page giv
 
 ## Documentation
 
-- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather`, label values, HTTP instrumentation, process metrics and the low-level writers.
+- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather`, label values, HTTP instrumentation, process metrics and the output format.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 
 ## Credits

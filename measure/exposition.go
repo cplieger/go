@@ -89,7 +89,7 @@ func (g *Gauge) family() metricFamily {
 		name:    g.name,
 		typ:     typeGauge,
 		help:    g.help,
-		samples: []sample{{value: formatValue(g.Get())}},
+		samples: []sample{{value: formatValue(g.Value())}},
 	}
 }
 

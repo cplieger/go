@@ -56,6 +56,7 @@ type Collector struct {
 	err        error
 	collect    func(ctx context.Context, e *Emitter)
 	active     map[problemKey]bool // problems the last scrape saw; guarded by mu
+	logger     *slog.Logger        // the registry's WithLogger; set once at registration
 	pending    []logEntry          // transitions not logged yet, in order; guarded by mu
 	descs      []*Desc
 	mu         sync.Mutex
@@ -129,6 +130,9 @@ func (c *Collector) registerInto(r *Registry) error {
 	if !c.registered.CompareAndSwap(false, true) {
 		return errors.New("measure: collector already registered")
 	}
+	c.mu.Lock()
+	c.logger = r.logger
+	c.mu.Unlock()
 	names := make([]string, len(c.descs))
 	for i, d := range c.descs {
 		names[i] = r.prefixed(d.name)
@@ -292,12 +296,13 @@ type logEntry struct {
 	cleared bool
 }
 
-func (e logEntry) log() {
+func (e logEntry) log(l *slog.Logger) {
+	l = orDefault(l)
 	if e.cleared {
-		slog.Info("measure: collector problem cleared", "family", e.key.family, "problem", e.key.kind.String())
+		l.Info("measure: collector problem cleared", "family", e.key.family, "problem", e.key.kind.String())
 		return
 	}
-	slog.Warn("measure: collector problem", "family", e.key.family, "problem", e.key.kind.String(), "count", e.count)
+	l.Warn("measure: collector problem", "family", e.key.family, "problem", e.key.kind.String(), "count", e.count)
 }
 
 // logTransitions logs a problem once when a scrape first sees it and once
@@ -324,6 +329,7 @@ func (c *Collector) logTransitions(seen map[problemKey]int) {
 		return
 	}
 	c.logging = true
+	logger := c.logger
 	c.mu.Unlock()
 	drained := false
 	var rest []logEntry
@@ -348,7 +354,7 @@ func (c *Collector) logTransitions(seen map[problemKey]int) {
 		c.mu.Unlock()
 		for i, e := range batch {
 			rest = batch[i+1:]
-			e.log()
+			e.log(logger)
 		}
 		rest = nil
 	}

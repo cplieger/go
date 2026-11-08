@@ -17,7 +17,7 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 
 Every `Set(true)` refreshes the marker's modification time, so the writing side needs no change. Pick a deadline comfortably above one interval plus the longest normal cycle. Three intervals is a reasonable default. A stale marker fails with a stderr line that gives its age and the deadline.
 
-`CheckHealthy`, `Healthy` and `Handler` check existence only, whether or not the probe has a deadline. For an HTTP endpoint that applies the same deadline, pass `m.Within(d)` as its signal with the `d` you give `WithMaxAge`. It is healthy while the marker exists and is no older than `d`, and a non-positive `d` checks existence only, the probe's rule. In degraded mode it is unhealthy, as `Healthy` is.
+`Healthy` and `Handler` check existence only, whether or not the probe has a deadline. For an HTTP endpoint that applies the same deadline, pass `m.Within(d)` as its signal with the `d` you give `WithMaxAge`. It is healthy while the marker exists and is no older than `d`, and a non-positive `d` checks existence only, the probe's rule. In degraded mode it is unhealthy, as `Healthy` is.
 
 ## Building it with `Lease`
 
@@ -40,7 +40,7 @@ Leave it off for a service that a separate process triggers, for example a `dock
 
 ## Reading a marker in-process with `Inspect`
 
-`RunProbe` and `ProbeCheck` answer a healthcheck with 0 or 1. A long-running process that watches its own marker, for example to spot its own stuck loop, needs two things an exit code cannot carry. It needs the marker's age, to report it, and it needs to tell a stale marker from an absent one, because they call for opposite responses. A stale marker means the loop is stuck and a restart may clear it. An absent marker means nothing has written it yet, after a cold start or a wiped volume, and a restart changes nothing.
+`RunProbe` answers a healthcheck with 0 or 1. A long-running process that watches its own marker, for example to spot its own stuck loop, needs two things an exit code cannot carry. It needs the marker's age, to report it, and it needs to tell a stale marker from an absent one, because they call for opposite responses. A stale marker means the loop is stuck and a restart may clear it. An absent marker means nothing has written it yet, after a cold start or a wiped volume, and a restart changes nothing.
 
 ```go
 switch f := health.Inspect(path, health.WithMaxAge(lease)); f.State {
@@ -56,10 +56,11 @@ case health.MarkerAbsent, health.MarkerUnreadable, health.MarkerDirUnavailable:
 
 | State | Meaning |
 | --- | --- |
+| `MarkerUnknown` | The zero value, which no `Inspect` returns. It is not healthy, so a `Freshness` left unfilled cannot read as a fresh marker |
 | `MarkerFresh` | The marker exists and, with a deadline armed, is inside it |
 | `MarkerStale` | The marker is older than the armed deadline, and the app can write it and its folder. Only reachable with `WithMaxAge` |
 | `MarkerAbsent` | No marker in a writable folder |
 | `MarkerUnreadable` | The stat failed for another reason, such as permissions or an I/O error |
 | `MarkerDirUnavailable` | Degraded mode, which the probe treats as healthy. The folder cannot be written, and the marker is absent, unreadable or past a deadline. Or a marker that can be read is not a regular file `Set` can refresh, and it is past a deadline nothing can refresh |
 
-`RunProbe` and `ProbeCheck` are built on `Inspect`, so a process acting on `Inspect` and the container healthcheck reach the same verdict. Without `WithMaxAge`, a present marker is always `MarkerFresh`.
+`RunProbe` is built on `Inspect`, so a process acting on `Inspect` and the container healthcheck reach the same verdict. Without `WithMaxAge`, a present marker is always `MarkerFresh`.

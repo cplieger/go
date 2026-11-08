@@ -17,31 +17,32 @@ func Example() {
 	defer m.Cleanup()
 
 	m.Set(true)
-	fmt.Println("healthy:", m.CheckHealthy())
+	fmt.Println("healthy:", m.Healthy())
 
 	m.Set(false)
-	fmt.Println("healthy:", m.CheckHealthy())
+	fmt.Println("healthy:", m.Healthy())
 	// Output:
 	// healthy: true
 	// healthy: false
 }
 
-// ExampleProbeCheck shows how to use ProbeCheck for a testable probe
-// that does not call os.Exit.
-func ExampleProbeCheck() {
+// ExampleInspect shows the probe decision without os.Exit: Inspect reads the
+// marker and Healthy is the verdict RunProbe turns into its exit code.
+func ExampleInspect() {
 	dir, _ := os.MkdirTemp("", "health-example-*")
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, ".healthy")
 
-	// No marker yet — writable dir means unhealthy.
-	fmt.Println("code:", health.ProbeCheck(path))
+	// No marker yet in a writable dir: unhealthy.
+	f := health.Inspect(path)
+	fmt.Println(f.Healthy(), f.Reason())
 
-	// Create marker — healthy.
+	// Create the marker: healthy.
 	os.WriteFile(path, nil, 0o600)
-	fmt.Println("code:", health.ProbeCheck(path))
+	fmt.Println(health.Inspect(path).Healthy())
 	// Output:
-	// code: 1
-	// code: 0
+	// false unhealthy: marker absent
+	// true
 }
 
 // ExampleLease_Duration builds the argument for WithMaxAge from an app's own

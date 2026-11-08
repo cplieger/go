@@ -137,14 +137,22 @@ type Exclusive struct {
 }
 
 // NewExclusive returns an Exclusive coordinating runs through lock and queue
-// files inside dir (which must exist). A nil log falls back to slog.Default()
-// at call time. Options: WithQueueCapacity, WithGate.
-func NewExclusive(dir string, log *slog.Logger, opts ...ExclusiveOption) *Exclusive {
-	e := &Exclusive{dir: dir, logger: log, capacity: 1}
+// files inside dir (which must exist). Options: WithLogger, WithQueueCapacity,
+// WithGate; a nil option is skipped.
+func NewExclusive(dir string, opts ...ExclusiveOption) *Exclusive {
+	e := &Exclusive{dir: dir, capacity: 1}
 	for _, opt := range opts {
-		opt(e)
+		if opt != nil {
+			opt(e)
+		}
 	}
 	return e
+}
+
+// WithLogger sets the logger an Exclusive reports to. A nil logger, like
+// none, means slog.Default at the time of each line.
+func WithLogger(l *slog.Logger) ExclusiveOption {
+	return func(e *Exclusive) { e.logger = l }
 }
 
 // gateOpen reports whether a run may start; a nil gate is always open.

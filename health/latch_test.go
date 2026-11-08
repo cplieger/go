@@ -71,3 +71,15 @@ func TestLatch_UnhealthyWriteAfterDrainStillLands(t *testing.T) {
 		t.Fatal("Set(false) after BeginDrain must still remove the marker")
 	}
 }
+
+// TestNewLatch_NilMarkerPanicsAtConstruction pins that a nil Marker fails at
+// NewLatch, not later inside Set or BeginDrain.
+func TestNewLatch_NilMarkerPanicsAtConstruction(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewLatch(nil) returned, want a panic at the call site")
+		}
+	}()
+	NewLatch(nil)
+}

@@ -20,8 +20,8 @@ var (
 	ErrFull = errors.New("run queue is full")
 )
 
-// Outcome is a Job's final result.
-type Outcome struct {
+// Result is a Job's final result.
+type Result struct {
 	// Reason explains a not-OK outcome that isn't a plain job failure
 	// (cancelled by shutdown, a failed preflight), or annotates an OK outcome
 	// that carries a caveat.
@@ -38,7 +38,7 @@ type Outcome struct {
 // cancellation.
 type Job[P any] struct {
 	started chan struct{}
-	result  chan Outcome
+	result  chan Result
 	// Payload carries the request's arguments (the app's own type; an
 	// argless daemon uses an empty struct).
 	Payload P
@@ -59,7 +59,7 @@ func NewJob[P any](trigger string, payload P) *Job[P] {
 		Trigger: trigger,
 		started: make(chan struct{}),
 		// Buffered so the executor never blocks on a departed waiter.
-		result: make(chan Outcome, 1),
+		result: make(chan Result, 1),
 	}
 }
 
@@ -78,13 +78,13 @@ func (j *Job[P]) Started() <-chan struct{} {
 // Finish delivers the job's single result. Exactly one Finish per accepted
 // job; the buffered result channel means the caller never blocks on a
 // departed waiter.
-func (j *Job[P]) Finish(out Outcome) {
+func (j *Job[P]) Finish(out Result) {
 	j.result <- out
 }
 
 // Result receives the job's exactly-one outcome — from the run itself, or
 // from shutdown cancellation.
-func (j *Job[P]) Result() <-chan Outcome {
+func (j *Job[P]) Result() <-chan Result {
 	return j.result
 }
 

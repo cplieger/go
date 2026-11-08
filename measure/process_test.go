@@ -585,7 +585,7 @@ func TestProcGCPauseSeconds_ScaledToSeconds(t *testing.T) {
 	runtime.GC() // guarantee PauseTotalNs > 0
 
 	var b strings.Builder
-	WriteProcess(&b)
+	writeProcess(&b)
 
 	var val float64
 	var found bool
@@ -611,7 +611,7 @@ func TestProcGCPauseSeconds_ScaledToSeconds(t *testing.T) {
 
 func TestWriteProcess(t *testing.T) {
 	var b strings.Builder
-	WriteProcess(&b)
+	writeProcess(&b)
 	out := b.String()
 	for _, want := range []string{
 		"go_goroutines",
@@ -621,7 +621,7 @@ func TestWriteProcess(t *testing.T) {
 		"process_start_time_seconds",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("WriteProcess missing %q", want)
+			t.Errorf("writeProcess missing %q", want)
 		}
 	}
 }
@@ -631,7 +631,7 @@ func TestWriteProcess_uptimeAndStartTimeReconcile(t *testing.T) {
 	// start time coming from the kernel on Linux, or the package-init fallback
 	// otherwise), so start + uptime must reconcile with now regardless of source.
 	var b strings.Builder
-	WriteProcess(&b)
+	writeProcess(&b)
 	out := b.String()
 
 	var uptime, start float64

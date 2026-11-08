@@ -17,8 +17,8 @@
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
 //
-// Logging goes through slog.Default(); configure it via slog.SetDefault
-// in main before constructing a Marker.
+// A Marker logs to the logger WithLogger gives NewMarker, or to slog.Default
+// at the time of each line.
 //
 // Thread-safe; Set may be called from any goroutine.
 package health
@@ -52,8 +52,11 @@ const DefaultPath = "/tmp/.healthy"
 // Marker implements the file-based distroless healthcheck pattern.
 // Use NewMarker to construct it; call Set(bool) at lifecycle points;
 // defer Cleanup on shutdown; call RunProbe from main when os.Args[1] is
-// "health".
+// "health". Only the read methods, Healthy and Within, accept a nil
+// *Marker (reporting unhealthy); Set, SetChecked and Cleanup need one from
+// NewMarker.
 type Marker struct {
+	logger         *slog.Logger
 	path           string
 	loggedFailSigs []string
 	mu             sync.Mutex
@@ -66,11 +69,16 @@ type Marker struct {
 // must be a regular file Set can refresh. On failure it logs a single Warn
 // with a fix hint and returns a marker in degraded mode; callers need not
 // branch on the result.
-func NewMarker(path string) *Marker {
+func NewMarker(path string, opts ...MarkerOption) *Marker {
 	m := &Marker{path: path}
+	for _, o := range opts {
+		if o != nil {
+			o(m)
+		}
+	}
 	if err := probeHealthDir(path); err != nil {
 		m.degraded = true
-		slog.Warn("health marker directory not writable, "+
+		m.log().Warn("health marker directory not writable, "+
 			"container will report healthy in degraded mode",
 			"dir", filepath.Dir(path),
 			"error", err,
@@ -78,7 +86,7 @@ func NewMarker(path string) *Marker {
 				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`")
 	} else if err := markerWritable(path); err != nil {
 		m.degraded = true
-		slog.Warn("health marker not writable, "+
+		m.log().Warn("health marker not writable, "+
 			"container will report healthy in degraded mode",
 			"path", path,
 			"error", err,
@@ -86,6 +94,23 @@ func NewMarker(path string) *Marker {
 				"earlier run as another user left, a directory or a FIFO")
 	}
 	return m
+}
+
+// MarkerOption configures NewMarker.
+type MarkerOption func(*Marker)
+
+// WithLogger sets the logger a Marker reports to. A nil logger, like none,
+// means slog.Default at the time of each line.
+func WithLogger(l *slog.Logger) MarkerOption {
+	return func(m *Marker) { m.logger = l }
+}
+
+// log returns the Marker's logger, or slog.Default when none was given.
+func (m *Marker) log() *slog.Logger {
+	if m.logger != nil {
+		return m.logger
+	}
+	return slog.Default()
 }
 
 // markerWritable returns why Set could not refresh the marker at path, or
@@ -155,10 +180,10 @@ func (m *Marker) SetChecked(ok bool) error {
 		return err
 	}
 	if was != ok {
-		logHealthState(ok)
+		m.logHealthState(ok)
 	}
 	if m.recordSuccess() {
-		slog.Info("health marker write recovered", "path", m.path, "healthy", ok)
+		m.log().Info("health marker write recovered", "path", m.path, "healthy", ok)
 	}
 	return nil
 }
@@ -195,12 +220,12 @@ func (m *Marker) applyState(ok bool) (string, error) {
 
 // logHealthState logs a health-state transition at the level matching the
 // new state: Info when healthy, Warn when not.
-func logHealthState(ok bool) {
+func (m *Marker) logHealthState(ok bool) {
 	if ok {
-		slog.Info("health state changed", "healthy", true)
+		m.log().Info("health state changed", "healthy", true)
 		return
 	}
-	slog.Warn("health state changed", "healthy", false)
+	m.log().Warn("health state changed", "healthy", false)
 }
 
 // Cleanup removes the marker. Typically called via defer at shutdown.
@@ -212,17 +237,18 @@ func (m *Marker) Cleanup() {
 		return
 	}
 	if err := os.Remove(m.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		slog.Warn("failed to remove health marker on cleanup",
+		m.log().Warn("failed to remove health marker on cleanup",
 			"path", m.path, "error", err)
 	}
 }
 
-// CheckHealthy reports whether the marker file currently exists via a
-// strict os.Stat, one call per invocation. Unlike RunProbe/ProbeCheck,
-// it reports false in degraded mode whatever file is there, because Set
-// cannot change it: an HTTP consumer via Handler deserves an honest signal
-// rather than the restart-loop avoidance the probe needs.
-func (m *Marker) CheckHealthy() bool {
+// Healthy reports whether the marker file currently exists via a strict
+// os.Stat, one call per invocation, not a field read; it satisfies Signal.
+// Unlike RunProbe, it reports false in degraded mode whatever file is there,
+// because Set cannot change it: an HTTP consumer via Handler deserves an
+// honest signal rather than the restart-loop avoidance the probe needs. A
+// nil *Marker reports false.
+func (m *Marker) Healthy() bool {
 	if m == nil || m.degraded {
 		return false
 	}
@@ -230,18 +256,13 @@ func (m *Marker) CheckHealthy() bool {
 	return err == nil
 }
 
-// Healthy satisfies the Signal interface by delegating to
-// [Marker.CheckHealthy]. It inherits CheckHealthy's cost: one os.Stat
-// per call, not a field read.
-func (m *Marker) Healthy() bool { return m.CheckHealthy() }
-
 // Within returns a Signal for a marker os.Stat can read: healthy when d is
 // non-positive or the marker is no older than d, the comparison [WithMaxAge]
 // gives the probe, so a future modification time is fresh. Any stat error is
 // unhealthy. Pass the same [Lease.Duration] to both, so a marker Set can write
 // gets one verdict from the probe and the handler. In degraded mode (an
 // unwritable directory or marker) it is unhealthy whatever file is there, as
-// CheckHealthy is, while the probe reports healthy. It costs one os.Stat per
+// Healthy is, while the probe reports healthy. It costs one os.Stat per
 // call.
 func (m *Marker) Within(d time.Duration) Signal {
 	if m == nil || m.degraded {
@@ -266,8 +287,8 @@ func (w markerWithin) Healthy() bool {
 // that the marker's age exceeds.
 func stale(age, maxAge time.Duration) bool { return maxAge > 0 && age > maxAge }
 
-// ProbeOption configures the probe-side health decision (RunProbe and
-// ProbeCheck). Without options the probe checks marker existence only.
+// ProbeOption configures the probe-side health decision (Inspect and
+// RunProbe). Without options the probe checks marker existence only.
 type ProbeOption func(*probeConfig)
 
 // probeConfig holds the probe-side knobs collected from ProbeOptions.
@@ -363,8 +384,12 @@ func addSaturating(a, b time.Duration) time.Duration {
 type MarkerState int
 
 const (
+	// MarkerUnknown is the zero value: a Freshness no Inspect filled. It is
+	// not healthy, so a zero Freshness on an error path cannot read as a
+	// fresh marker.
+	MarkerUnknown MarkerState = iota
 	// MarkerFresh is a marker present and, when a deadline is armed, inside it.
-	MarkerFresh MarkerState = iota
+	MarkerFresh
 	// MarkerStale is a marker present but older than the armed deadline, one
 	// the app can write in a directory it can write. Only reachable with
 	// WithMaxAge; without it a present marker is always fresh.
@@ -434,15 +459,18 @@ func (f Freshness) Reason() string {
 	case MarkerAbsent:
 		return "unhealthy: marker absent"
 	case MarkerUnreadable:
+		if f.Err == nil {
+			return "unhealthy: marker stat failed"
+		}
 		return "unhealthy: marker stat failed: " + f.Err.Error()
 	case MarkerFresh, MarkerDirUnavailable:
 		return ""
 	}
-	return ""
+	return "unhealthy: marker state unknown"
 }
 
 // Inspect reads a health marker and reports what it found, without deciding
-// anything or exiting. RunProbe and ProbeCheck are presentations of it, so a
+// anything or exiting. RunProbe is a presentation of it, so a
 // caller acting on Inspect's result and a container healthcheck reading the
 // exit code cannot diverge.
 //
@@ -451,7 +479,9 @@ func (f Freshness) Reason() string {
 func Inspect(path string, opts ...ProbeOption) Freshness {
 	var cfg probeConfig
 	for _, o := range opts {
-		o(&cfg)
+		if o != nil {
+			o(&cfg)
+		}
 	}
 	info, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
 	if statErr == nil {
@@ -494,14 +524,6 @@ func RunProbe(path string, opts ...ProbeOption) {
 	os.Exit(code)
 }
 
-// ProbeCheck implements the health-probe decision without calling
-// os.Exit, so it can be unit-tested. Returns 0 for healthy or
-// degraded, 1 for unhealthy.
-func ProbeCheck(path string, opts ...ProbeOption) int {
-	code, _ := probeCheck(path, opts...)
-	return code
-}
-
 // probeCheck carries the shared probe decision plus the operator-facing
 // diagnostic for the unhealthy exit: "marker absent" for the common
 // ENOENT case, a stale-age line when an armed WithMaxAge deadline is
@@ -510,7 +532,7 @@ func ProbeCheck(path string, opts ...ProbeOption) int {
 //
 // It is a presentation of Inspect, not a second reading: one
 // implementation decides, and the exit code and the structured result
-// are two views of it (pinned by TestInspectAndProbeCheckCannotDisagree).
+// are two views of it.
 func probeCheck(path string, opts ...ProbeOption) (code int, reason string) {
 	f := Inspect(path, opts...)
 	if f.Healthy() {
@@ -530,7 +552,7 @@ func (m *Marker) warnFailure(msg string, err error) {
 	}
 	sig := msg + "\x00" + err.Error()
 	if !slices.Contains(m.loggedFailSigs, sig) {
-		slog.Warn(msg, "path", m.path, "error", err)
+		m.log().Warn(msg, "path", m.path, "error", err)
 		m.loggedFailSigs = append(m.loggedFailSigs, sig)
 	}
 	m.failed = true

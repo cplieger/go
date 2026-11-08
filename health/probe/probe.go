@@ -23,15 +23,21 @@ import (
 // reason instead of a SIGKILL from the runtime.
 const DefaultTimeout = 5 * time.Second
 
-// URL performs a single liveness GET against url and returns nil when
+// client sends every probe GET. It is the package's own, not
+// http.DefaultClient, so no other package can change its timeout, redirect
+// policy or cookie jar; it sends through http.DefaultTransport. Its zero
+// Timeout leaves the deadline to the context.
+var client = &http.Client{}
+
+// get performs a single liveness GET against target and returns nil when
 // the final response (after following redirects) has a 2xx status. Any
 // transport error, context expiry, or non-2xx status is an error.
-func URL(ctx context.Context, url string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+func get(ctx context.Context, target string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err // *url.Error already names the URL and operation
 	}
@@ -60,7 +66,7 @@ func Check(w io.Writer, timeout time.Duration, urls ...string) int {
 
 	code := 0
 	for _, u := range urls {
-		if err := URL(ctx, u); err != nil {
+		if err := get(ctx, u); err != nil {
 			fmt.Fprintf(w, "unhealthy: probe %s: %v\n", u, err)
 			code = 1
 		}

@@ -1,6 +1,7 @@
 package measure
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -732,5 +733,24 @@ func TestNewCollectorClaimsADescOnce(t *testing.T) {
 	wg.Wait()
 	if wins.Load() != 1 {
 		t.Errorf("%d collectors claimed one unowned desc, want exactly 1", wins.Load())
+	}
+}
+
+// TestRegistryWithLogger_routesCollectorProblems pins that a registry's
+// WithLogger receives its collectors' problem lines.
+func TestRegistryWithLogger_routesCollectorProblems(t *testing.T) {
+	var buf bytes.Buffer
+	l := slog.New(slog.NewTextHandler(&buf, nil)).With("reg", "r1")
+	d := NewGaugeDesc("widgets", "Widgets.", []string{"kind"})
+	c := NewCollector(func(_ context.Context, e *Emitter) {
+		e.Emit(d, 1) // wrong arity: one label declared, none given
+	}, d)
+	r := NewRegistry("", WithLogger(l))
+	r.MustRegister(c)
+	if _, err := r.Gather(t.Context()); err == nil {
+		t.Fatal("Gather = nil error, want the dropped sample reported")
+	}
+	if out := buf.String(); !strings.Contains(out, "measure: collector problem") || !strings.Contains(out, "reg=r1") {
+		t.Errorf("registry logger got %q, want the attributed collector problem", out)
 	}
 }

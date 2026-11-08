@@ -121,24 +121,24 @@ func TestHealthMarker_Property(t *testing.T) {
 	})
 }
 
-func TestProbeCheck_healthy(t *testing.T) {
+func TestProbe_healthy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("create marker: %v", err)
 	}
-	if got := ProbeCheck(path); got != 0 {
-		t.Errorf("ProbeCheck(marker present) = %d, want 0", got)
+	if got := probeCode(path); got != 0 {
+		t.Errorf("probeCode(marker present) = %d, want 0", got)
 	}
 }
 
-func TestProbeCheck_unhealthy(t *testing.T) {
+func TestProbe_unhealthy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
-	if got := ProbeCheck(path); got != 1 {
-		t.Errorf("ProbeCheck(marker absent, writable dir) = %d, want 1", got)
+	if got := probeCode(path); got != 1 {
+		t.Errorf("probeCode(marker absent, writable dir) = %d, want 1", got)
 	}
 }
 
-func TestProbeCheck_degraded(t *testing.T) {
+func TestProbe_degraded(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ro")
 	if err := os.Mkdir(dir, 0o500); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -147,16 +147,16 @@ func TestProbeCheck_degraded(t *testing.T) {
 	if err := probeHealthDir(path); err == nil {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
-	if got := ProbeCheck(path); got != 0 {
-		t.Errorf("ProbeCheck(unwritable dir) = %d, want 0 (degraded)", got)
+	if got := probeCode(path); got != 0 {
+		t.Errorf("probeCode(unwritable dir) = %d, want 0 (degraded)", got)
 	}
 }
 
-// TestProbeCheck_maxAge covers the opt-in freshness deadline: fresh
+// TestProbe_maxAge covers the opt-in freshness deadline: fresh
 // markers pass, stale markers fail with a reason naming both ages, a
 // non-positive deadline disables the check, and absence keeps its own
 // diagnostic (the deadline never masks it).
-func TestProbeCheck_maxAge(t *testing.T) {
+func TestProbe_maxAge(t *testing.T) {
 	newMarker := func(t *testing.T, age time.Duration) string {
 		t.Helper()
 		path := filepath.Join(t.TempDir(), ".healthy")
@@ -172,8 +172,8 @@ func TestProbeCheck_maxAge(t *testing.T) {
 
 	t.Run("fresh_passes", func(t *testing.T) {
 		path := newMarker(t, 0)
-		if got := ProbeCheck(path, WithMaxAge(time.Hour)); got != 0 {
-			t.Errorf("ProbeCheck(fresh, 1h deadline) = %d, want 0", got)
+		if got := probeCode(path, WithMaxAge(time.Hour)); got != 0 {
+			t.Errorf("probeCode(fresh, 1h deadline) = %d, want 0", got)
 		}
 	})
 
@@ -191,8 +191,8 @@ func TestProbeCheck_maxAge(t *testing.T) {
 	t.Run("non_positive_disables", func(t *testing.T) {
 		path := newMarker(t, 24*time.Hour)
 		for _, d := range []time.Duration{0, -time.Minute} {
-			if got := ProbeCheck(path, WithMaxAge(d)); got != 0 {
-				t.Errorf("ProbeCheck(old marker, WithMaxAge(%v)) = %d, want 0 (disabled)", d, got)
+			if got := probeCode(path, WithMaxAge(d)); got != 0 {
+				t.Errorf("probeCode(old marker, WithMaxAge(%v)) = %d, want 0 (disabled)", d, got)
 			}
 		}
 	})
@@ -209,12 +209,12 @@ func TestProbeCheck_maxAge(t *testing.T) {
 	})
 }
 
-// TestProbeCheck_maxAge_boundary property-checks the freshness decision
+// TestProbe_maxAge_boundary property-checks the freshness decision
 // around the deadline: strictly younger than max-age passes, strictly
 // older fails. Ages are constructed with at least a second of headroom
 // on the fresh side so the test's own execution time cannot flip the
 // verdict.
-func TestProbeCheck_maxAge_boundary(t *testing.T) {
+func TestProbe_maxAge_boundary(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		maxAgeSec := rapid.IntRange(2, 7200).Draw(rt, "maxAgeSec")
 		deltaSec := rapid.IntRange(1, 3600).Draw(rt, "deltaSec")
@@ -234,13 +234,13 @@ func TestProbeCheck_maxAge_boundary(t *testing.T) {
 			rt.Fatalf("backdate marker: %v", err)
 		}
 
-		got := ProbeCheck(path, WithMaxAge(time.Duration(maxAgeSec)*time.Second))
+		got := probeCode(path, WithMaxAge(time.Duration(maxAgeSec)*time.Second))
 		want := 0
 		if stale {
 			want = 1
 		}
 		if got != want {
-			rt.Fatalf("ProbeCheck(age %ds, max-age %ds) = %d, want %d", ageSec, maxAgeSec, got, want)
+			rt.Fatalf("probeCode(age %ds, max-age %ds) = %d, want %d", ageSec, maxAgeSec, got, want)
 		}
 	})
 }
@@ -270,11 +270,11 @@ func TestHealthMarker_SetTrue_refreshesMtime(t *testing.T) {
 	}
 }
 
-// TestProbeCheck_statFailure_diagnostic pins the unhealthy-reason
+// TestProbe_statFailure_diagnostic pins the unhealthy-reason
 // classification: a stat failure that is not ENOENT (here a symlink
 // loop in a writable dir) must exit 1 with a diagnostic naming the
 // stat error, not the misleading "marker absent".
-func TestProbeCheck_statFailure_diagnostic(t *testing.T) {
+func TestProbe_statFailure_diagnostic(t *testing.T) {
 	loop := filepath.Join(t.TempDir(), ".healthy")
 	if err := os.Symlink(loop, loop); err != nil {
 		t.Skipf("cannot create self-referencing symlink: %v", err)
@@ -360,7 +360,7 @@ func TestHealthMarker_HealthyDegraded(t *testing.T) {
 	if m.Healthy() {
 		t.Error("Healthy() = true in degraded mode, want false (strict os.Stat)")
 	}
-	if m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+	if m.Within(time.Hour).Healthy() || !Inspect(path, WithMaxAge(time.Hour)).Healthy() {
 		t.Error("absent marker in degraded mode: want Within unhealthy and the probe healthy")
 	}
 }
@@ -388,15 +388,15 @@ func TestHealthMarker_DegradedWithALeftoverMarker(t *testing.T) {
 	}
 	inProcessUnhealthy := func(age string) {
 		t.Helper()
-		if m.CheckHealthy() || m.Healthy() || m.Within(time.Hour).Healthy() || m.Within(0).Healthy() {
-			t.Errorf("%s leftover in degraded mode: want CheckHealthy, Healthy and Within unhealthy", age)
+		if m.Healthy() || m.Within(time.Hour).Healthy() || m.Within(0).Healthy() {
+			t.Errorf("%s leftover in degraded mode: want Healthy and Within unhealthy", age)
 		}
 		if rec := serve(t, Handler(m)); rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s leftover in degraded mode: Handler = %d, want 503", age, rec.Code)
 		}
 	}
 	inProcessUnhealthy("fresh")
-	if ProbeCheck(path) != 0 || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+	if !Inspect(path).Healthy() || !Inspect(path, WithMaxAge(time.Hour)).Healthy() {
 		t.Error("fresh leftover in degraded mode: want the probe healthy")
 	}
 	old := time.Now().Add(-2 * time.Hour)
@@ -407,7 +407,7 @@ func TestHealthMarker_DegradedWithALeftoverMarker(t *testing.T) {
 	if got := Inspect(path, WithMaxAge(time.Hour)); got.State != MarkerDirUnavailable || got.Age < time.Hour || got.Err == nil {
 		t.Errorf("stale leftover in degraded mode: Inspect = %+v, want MarkerDirUnavailable with its age and the directory error", got)
 	}
-	if ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+	if !Inspect(path, WithMaxAge(time.Hour)).Healthy() {
 		t.Error("stale leftover in degraded mode: want a healthy probe, not a restart loop")
 	}
 }
@@ -770,8 +770,8 @@ func writeExternalMarker(t *testing.T, path string) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write external marker: %v", err)
 	}
-	if code := ProbeCheck(path); code != 0 {
-		t.Fatalf("ProbeCheck on an external marker = %d, want 0", code)
+	if code := probeCode(path); code != 0 {
+		t.Fatalf("the probe on an external marker = %d, want 0", code)
 	}
 }
 
@@ -785,8 +785,8 @@ func TestHealthMarker_Set_inheritedMarkerFalseWarns(t *testing.T) {
 	if m.degraded {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
-	if !m.CheckHealthy() {
-		t.Fatal("CheckHealthy on an inherited marker = false, want true")
+	if !m.Healthy() {
+		t.Fatal("Healthy on an inherited marker = false, want true")
 	}
 
 	buf := captureLogs(t)
@@ -794,8 +794,8 @@ func TestHealthMarker_Set_inheritedMarkerFalseWarns(t *testing.T) {
 	m.Set(false)
 
 	logged := buf.String()
-	if m.CheckHealthy() {
-		t.Error("CheckHealthy after Set(false) = true, want false")
+	if m.Healthy() {
+		t.Error("Healthy after Set(false) = true, want false")
 	}
 	if got := strings.Count(logged, `level=WARN msg="health state changed" healthy=false`); got != 1 {
 		t.Errorf("WARN healthy=false lines = %d, want 1\nlog:\n%s", got, logged)
@@ -915,8 +915,8 @@ func TestHealthMarker_Set_externallyCreatedMarkerFalseWarns(t *testing.T) {
 	m.Set(false)
 
 	logged := buf.String()
-	if code := ProbeCheck(path); code != 1 {
-		t.Errorf("ProbeCheck after Set(false) = %d, want 1", code)
+	if code := probeCode(path); code != 1 {
+		t.Errorf("the probe after Set(false) = %d, want 1", code)
 	}
 	if got := strings.Count(logged, `level=WARN msg="health state changed" healthy=false`); got != 1 {
 		t.Errorf("WARN healthy=false lines = %d, want 1\nlog:\n%s", got, logged)
@@ -939,8 +939,8 @@ func TestHealthMarker_Set_externallyRemovedMarkerTrueLogsChange(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("remove marker externally: %v", err)
 	}
-	if code := ProbeCheck(path); code != 1 {
-		t.Fatalf("ProbeCheck after external remove = %d, want 1", code)
+	if code := probeCode(path); code != 1 {
+		t.Fatalf("the probe after external remove = %d, want 1", code)
 	}
 
 	buf := captureLogs(t)
@@ -1060,8 +1060,8 @@ func TestNewMarker_degradedOnAnUnwritableMarker(t *testing.T) {
 	if strings.Count(logged, "health marker not writable") != 1 || !strings.Contains(logged, "another user") || !strings.Contains(logged, "permission denied") {
 		t.Errorf("want one WARN naming the leftover marker; log:\n%s", logged)
 	}
-	if m.CheckHealthy() || m.SetChecked(true) != nil {
-		t.Error("an unwritable marker: want CheckHealthy false and SetChecked a nil no-op")
+	if m.Healthy() || m.SetChecked(true) != nil {
+		t.Error("an unwritable marker: want Healthy false and SetChecked a nil no-op")
 	}
 	old := time.Now().Add(-2 * time.Hour)
 	if err := os.Chtimes(path, old, old); err != nil {
@@ -1449,11 +1449,11 @@ func TestInspect_states(t *testing.T) {
 	})
 }
 
-// TestInspectAndProbeCheckCannotDisagree pins that the exit code a container
+// TestInspectAndProbeCannotDisagree pins that the exit code a container
 // healthcheck sees and the structured Freshness a caller acts on are two
 // views of one decision; a divergence would let an app restart itself on a
 // verdict its own healthcheck disagrees with.
-func TestInspectAndProbeCheckCannotDisagree(t *testing.T) {
+func TestInspectAndProbeCannotDisagree(t *testing.T) {
 	loop := filepath.Join(t.TempDir(), "loop")
 	_ = os.Symlink(loop, loop)
 
@@ -1482,8 +1482,8 @@ func TestInspectAndProbeCheckCannotDisagree(t *testing.T) {
 			if reason != f.Reason() {
 				t.Errorf("probeCheck reason = %q, Inspect.Reason() = %q; the two presentations must carry the same text", reason, f.Reason())
 			}
-			if got := ProbeCheck(tc.path, tc.opts...); got != code {
-				t.Errorf("ProbeCheck = %d, probeCheck = %d", got, code)
+			if got := probeCode(tc.path, tc.opts...); got != code {
+				t.Errorf("probeCode = %d, probeCheck = %d", got, code)
 			}
 		})
 	}
@@ -1508,23 +1508,53 @@ func TestMarkerStateString(t *testing.T) {
 	}
 }
 
-// CheckHealthy is the primary spelling of the liveness read and Healthy the
-// Signal adapter over it; the two must never disagree, or a Handler consumer
-// and a direct caller would see different liveness for one marker.
-func TestCheckHealthyAndHealthyCannotDisagree(t *testing.T) {
+// Healthy follows Set on a writable marker, and a nil marker reads unhealthy.
+func TestHealthyFollowsSet(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "marker")
 	m := NewMarker(path)
 	for _, set := range []bool{true, false, true} {
 		m.Set(set)
-		if got, want := m.Healthy(), m.CheckHealthy(); got != want {
-			t.Errorf("after Set(%v) on %s: Healthy() = %v, CheckHealthy() = %v; must agree", set, path, got, want)
-		}
-		if got := m.CheckHealthy(); got != set {
-			t.Errorf("after Set(%v) on %s: CheckHealthy() = %v, want %v", set, path, got, set)
+		if got := m.Healthy(); got != set {
+			t.Errorf("after Set(%v) on %s: Healthy() = %v, want %v", set, path, got, set)
 		}
 	}
 	var nilM *Marker
-	if nilM.CheckHealthy() || nilM.Healthy() {
-		t.Errorf("nil marker: CheckHealthy() = %v, Healthy() = %v, want false, false", nilM.CheckHealthy(), nilM.Healthy())
+	if nilM.Healthy() {
+		t.Error("nil marker: Healthy() = true, want false")
 	}
+}
+
+// The zero Freshness is not a healthy reading, and Reason never panics on a
+// caller-built unreadable state with no error.
+func TestFreshnessZeroValueIsUnknown(t *testing.T) {
+	t.Parallel()
+	var f Freshness
+	if f.Healthy() || f.State != MarkerUnknown || f.State.String() != "unknown" {
+		t.Errorf("zero Freshness = %+v (healthy %v), want MarkerUnknown and unhealthy", f, f.Healthy())
+	}
+	if f.Reason() == "" {
+		t.Error("zero Freshness has an empty Reason, which reads as healthy")
+	}
+	if got := (Freshness{State: MarkerUnreadable}).Reason(); got != "unhealthy: marker stat failed" {
+		t.Errorf("Reason(unreadable, nil Err) = %q", got)
+	}
+}
+
+// WithLogger routes a Marker's lines to the given logger.
+func TestNewMarker_WithLogger(t *testing.T) {
+	var buf bytes.Buffer
+	l := slog.New(slog.NewTextHandler(&buf, nil)).With("svc", "x")
+	path := filepath.Join(t.TempDir(), "marker")
+	m := NewMarker(path, WithLogger(l))
+	m.Set(true)
+	if out := buf.String(); !strings.Contains(out, "health state changed") || !strings.Contains(out, "svc=x") {
+		t.Errorf("logger got %q, want the attributed state change", out)
+	}
+}
+
+// probeCode is the probe's exit code for path, the decision RunProbe exits
+// with, without calling os.Exit.
+func probeCode(path string, opts ...ProbeOption) int {
+	code, _ := probeCheck(path, opts...)
+	return code
 }

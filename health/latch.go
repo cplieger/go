@@ -15,8 +15,13 @@ type Latch struct {
 	draining bool
 }
 
-// NewLatch returns a latch writing through m.
+// NewLatch returns a latch writing through m. It panics on a nil m, here at
+// the caller rather than at the first Set or BeginDrain, since a Latch with
+// no Marker can never write.
 func NewLatch(m *Marker) *Latch {
+	if m == nil {
+		panic("health: NewLatch with a nil Marker")
+	}
 	return &Latch{marker: m}
 }
 

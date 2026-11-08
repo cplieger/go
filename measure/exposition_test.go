@@ -187,55 +187,57 @@ func TestCollect_capacityGauges(t *testing.T) {
 	}
 }
 
-// TestWrite_ErroredMetricWritesNothing pins the v4 invariant on the direct
-// write path: a metric value carrying a construction error emits NOTHING
-// through its low-level Write* function — never a # HELP/# TYPE block for a
-// family that could corrupt the scrape. One case per Write* shim, each with a
-// different captured-error class. Serial: it captures slog.Default (the
-// record calls staging each metric emit the one-time inert-record warning).
-func TestWrite_ErroredMetricWritesNothing(t *testing.T) {
+// TestHandler_ErroredMetricNeverReachesTheOutput pins the v4 invariant at the
+// one exposition path: a metric carrying a construction error is refused by
+// Register and so never appears in Handler's output, not even as a # HELP or
+// # TYPE line that could corrupt the scrape. One case per metric type, each
+// with a different captured-error class. Serial: it captures slog.Default
+// (the record calls staging each metric emit the one-time inert-record
+// warning).
+func TestHandler_ErroredMetricNeverReachesTheOutput(t *testing.T) {
 	_ = captureDebugLogs(t) // absorb the expected one-time inert-record warnings
 	cases := []struct {
-		name  string
-		write func(b *strings.Builder)
+		name   string
+		family string
+		metric func() Metric
 	}{
-		{"counter, invalid name", func(b *strings.Builder) {
-			c := NewCounter("bad-name", "x")
-			c.Inc()
-			WriteCounter(b, c)
-		}},
-		{"gauge, invalid name", func(b *strings.Builder) {
-			g := NewGauge("bad-name", "x")
-			g.Set(4)
-			WriteGauge(b, g)
-		}},
-		{"labeled counter, invalid label name", func(b *strings.Builder) {
+		{"counter, invalid name", "bad-name", func() Metric { c := NewCounter("bad-name", "x"); c.Inc(); return c }},
+		{"gauge, invalid name", "bad-name", func() Metric { g := NewGauge("bad-name", "x"); g.Set(4); return g }},
+		{"labeled counter, invalid label name", "wn_ok_total", func() Metric {
 			lc := NewLabeledCounter("wn_ok_total", "x", []string{"bad-label"})
 			lc.Inc("v")
-			WriteLabeledCounter(b, lc)
+			return lc
 		}},
-		{"labeled gauge, reserved label prefix", func(b *strings.Builder) {
+		{"labeled gauge, reserved label prefix", "wn_ok_gauge", func() Metric {
 			lg := NewLabeledGauge("wn_ok_gauge", "x", []string{"__rsv"})
 			lg.Set(1, "v")
-			WriteLabeledGauge(b, lg)
+			return lg
 		}},
-		{"histogram, unordered buckets", func(b *strings.Builder) {
+		{"histogram, unordered buckets", "wn_ok_hist", func() Metric {
 			h := NewHistogram("wn_ok_hist", "x", WithBuckets([]float64{2, 1}))
 			h.Observe(0.5)
-			WriteHistogram(b, h)
+			return h
 		}},
-		{"labeled histogram, reserved le label", func(b *strings.Builder) {
+		{"labeled histogram, reserved le label", "wn_ok_seconds", func() Metric {
 			lh := NewLabeledHistogram("wn_ok_seconds", "x", []string{"le"})
 			lh.Observe(0.5, "v")
-			WriteLabeledHistogram(b, lh)
+			return lh
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var b strings.Builder
-			tc.write(&b)
-			if b.Len() != 0 {
-				t.Errorf("Write* of a metric carrying a construction error emitted %q, want nothing", b.String())
+			r := NewRegistry("")
+			if err := r.Register(tc.metric()); err == nil {
+				t.Fatal("Register accepted a metric carrying a construction error")
+			}
+			var leaked []string
+			for line := range strings.SplitSeq(body(t, r), "\n") {
+				if strings.Contains(line, tc.family) {
+					leaked = append(leaked, line)
+				}
+			}
+			if len(leaked) > 0 {
+				t.Errorf("Handler emitted %q for a metric carrying a construction error", leaked)
 			}
 		})
 	}
@@ -285,7 +287,7 @@ func TestHelpEscaping_Prometheus(t *testing.T) {
 	c.Inc()
 
 	var b strings.Builder
-	WriteCounter(&b, c)
+	writeCounter(&b, c)
 	if out := b.String(); !strings.Contains(out, `# HELP help_esc line1\\line2\nline3"quoted"`) {
 		t.Errorf("Prometheus HELP escaping wrong:\n%s", out)
 	}

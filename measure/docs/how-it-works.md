@@ -1,6 +1,6 @@
 # How measure works
 
-This page is for a Go developer using measure in a service. It covers each metric type and its methods, the registry, collectors, reading a registry with `Gather`, construction errors, label values, HTTP instrumentation, process metrics, the output format and the low-level writers.
+This page is for a Go developer using measure in a service. It covers each metric type and its methods, the registry, collectors, reading a registry with `Gather`, construction errors, label values, HTTP instrumentation, process metrics and the output format.
 
 ## Metric types
 
@@ -10,7 +10,7 @@ Every constructor takes a metric name and its HELP text. The labeled constructor
 | --- | --- | --- |
 | Counter | `NewCounter(name, help)` | `Inc()`, `Add(n int64)` |
 | Labeled counter | `NewLabeledCounter(name, help, labels)` | `Inc(vals...)`, `Add(n, vals...)`, `Delete(vals...)`, `Reset()` |
-| Gauge | `NewGauge(name, help)` | `Set`, `Add`, `Sub`, `Inc`, `Dec`, `Get`, all on `float64` |
+| Gauge | `NewGauge(name, help)` | `Set`, `Add`, `Sub`, `Inc`, `Dec` and `Value`, all on `float64` |
 | Labeled gauge | `NewLabeledGauge(name, help, labels)` | `Set(v, vals...)`, `Delete(vals...)`, `Reset()` |
 | Histogram | `NewHistogram(name, help, opts...)` | `Observe(seconds)` |
 | Labeled histogram | `NewLabeledHistogram(name, help, labels, opts...)` | `Observe(seconds, vals...)`, `Delete(vals...)`, `Reset()`, `NewTimer(vals...)` |
@@ -74,7 +74,7 @@ A constructor never panics on an invalid metric name, an invalid, reserved or du
 
 A construction error cannot be cleared. Rebuild the metric with a valid name, label set or buckets.
 
-A metric that carries a construction error records nothing. Its `Inc`, `Add`, `Set` and `Observe` calls do nothing, and the first one logs a warning through `log/slog` that names the metric and the error. If you record through an invalid metric before registering it, the first dropped record still leaves a trace in your logs. The metric never reaches the output, and the low-level writers write nothing for it.
+A metric that carries a construction error records nothing. Its `Inc`, `Add`, `Set` and `Observe` calls do nothing, and the first one logs a warning through `log/slog` that names the metric and the error. If you record through an invalid metric before registering it, the first dropped record still leaves a trace in your logs. The metric never reaches the output.
 
 An invalid registry prefix is captured the same way. Every `Register` and `MustRegister` call on that registry reports it, because no metric under that prefix could have a valid name.
 
@@ -129,9 +129,3 @@ No read stops the world: measure never calls `runtime.ReadMemStats`. A `runtime/
 One formatter renders every number. Whole values render as bare integers such as `42`. Other values use the shortest form that reads back to the same `float64`. Non-finite values render as `+Inf`, `-Inf` and `NaN`.
 
 Recording and scraping are safe to run from many goroutines at once, and both are safe while metrics are being registered.
-
-## Low-level writers
-
-`WriteCounter`, `WriteGauge`, `WriteLabeledCounter`, `WriteLabeledGauge`, `WriteHistogram`, `WriteLabeledHistogram` and `WriteProcess` append one metric, or the process metrics, to a `*strings.Builder` in the same format `Handler` serves. Use them to build a custom handler. A metric carrying a construction error writes nothing. A collector has no writer: only `Handler` serves it and `Gather` reads it.
-
-Finish every `Register` and `MustRegister` call before a custom handler built on these writers starts serving. The writers read a metric's name without the registry's lock, and registration sets the prefixed name.

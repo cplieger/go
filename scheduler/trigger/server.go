@@ -134,29 +134,52 @@ type Server[P any] struct {
 	// ErrFull or ErrClosed (the app's rejection warning). Undecodable
 	// requests never reach it; the library logs those without the payload.
 	OnRejected func(payload P, err error)
+	// Logger receives the server's own lines (accept failures, undecodable
+	// requests, and the queue lines when OnAccepted or OnRejected is nil).
+	// Nil means slog.Default at the time of each line.
+	Logger *slog.Logger
 
-	// handlers tracks the accept loop plus per-connection goroutines so
-	// shutdown can wait for every accepted request to receive its final
-	// event before the daemon exits. The accept loop registers itself here
-	// too, keeping the counter non-zero until Accept has failed with
-	// net.ErrClosed — so no handler Add can race Wait at zero. Bounded:
-	// every submitted job is guaranteed a result, and a not-yet-submitted
-	// connection is bounded by requestReadTimeout.
+	// handlers tracks the per-connection goroutines so Serve can wait for
+	// every accepted request to receive its final event. Bounded once the
+	// executor finishes every submitted job, and a not-yet-submitted
+	// connection by requestReadTimeout.
 	handlers sync.WaitGroup
 }
 
-// Serve starts the accept loop and returns immediately. Connections are
-// served until the listener is closed (daemon shutdown); Wait blocks until
-// the loop and every in-flight handler have finished.
-func (s *Server[P]) Serve(ln net.Listener) {
-	s.handlers.Go(func() { s.serve(ln) })
+// Serve accepts run requests on ln until ctx is done, then closes ln and
+// waits for every connection it accepted. It blocks, so start it in its own
+// goroutine and receive its result at shutdown.
+//
+// A connection ends once its job is finished and the final event written, or,
+// for a request not yet submitted, at the request read timeout. The final
+// event is best-effort: a write that fails or passes the event write timeout
+// is logged and the connection closed. Closing the queue finishes no job.
+// The executor does: Execute finishes every job it drains, as cancelled once
+// its context is done, so close the queue and let Execute return before
+// waiting on Serve. A run already in flight holds Serve until it returns.
+//
+// Serve returns nil when ctx ended, and an error matching net.ErrClosed when
+// ln was closed before ctx ended. Call Serve once per Server.
+func (s *Server[P]) Serve(ctx context.Context, ln net.Listener) error {
+	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
+	defer stop()
+	s.serve(ln)
+	// Read before the drain, so a ctx that ends while handlers finish does
+	// not turn a listener closed first into a clean return.
+	ctxEnded := ctx.Err() != nil
+	s.handlers.Wait()
+	if ctxEnded {
+		return nil
+	}
+	return fmt.Errorf("trigger: listener closed before the context ended: %w", net.ErrClosed)
 }
 
-// Wait blocks until the accept loop has exited and every accepted request
-// has its final event on the wire. Call after closing the listener and the
-// queue.
-func (s *Server[P]) Wait() {
-	s.handlers.Wait()
+// log returns the server's logger, or slog.Default when none was set.
+func (s *Server[P]) log() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.Default()
 }
 
 // serve accepts connections until the listener is closed.
@@ -167,7 +190,7 @@ func (s *Server[P]) serve(ln net.Listener) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			slog.Warn("trigger socket accept failed", "error", err)
+			s.log().Warn("trigger socket accept failed", "error", err)
 			// A persistent accept error (e.g. fd exhaustion) must not
 			// hot-spin: pace retries so the log gets one warn per second, not
 			// a flood. Shutdown still exits promptly: ln.Close() makes the
@@ -193,11 +216,11 @@ func (s *Server[P]) handle(conn net.Conn) {
 		// is not a rejection. A request whose bytes arrived and were cut short
 		// reports io.ErrUnexpectedEOF, so it keeps the warning and the answer.
 		if errors.Is(err, io.EOF) {
-			slog.Debug("trigger connection closed without sending a request")
+			s.log().Debug("trigger connection closed without sending a request")
 			return
 		}
-		slog.Warn("trigger request rejected: undecodable", "error", err)
-		writeEvent(conn, Event{Kind: EventDone, OK: false, Reason: "undecodable request"})
+		s.log().Warn("trigger request rejected: undecodable", "error", err)
+		writeEvent(s.log(), conn, Event{Kind: EventDone, OK: false, Reason: "undecodable request"})
 		return
 	}
 	j := NewJob(External, payload)
@@ -205,30 +228,30 @@ func (s *Server[P]) handle(conn net.Conn) {
 		if s.OnRejected != nil {
 			s.OnRejected(payload, err)
 		} else {
-			slog.Warn("trigger request rejected", "reason", err)
+			s.log().Warn("trigger request rejected", "reason", err)
 		}
-		writeEvent(conn, Event{Kind: EventDone, OK: false, Reason: err.Error()})
+		writeEvent(s.log(), conn, Event{Kind: EventDone, OK: false, Reason: err.Error()})
 		return
 	}
 	if s.OnAccepted != nil {
 		s.OnAccepted(payload)
 	} else {
-		slog.Info("triggered run queued")
+		s.log().Info("triggered run queued")
 	}
-	writeEvent(conn, Event{Kind: EventQueued})
+	writeEvent(s.log(), conn, Event{Kind: EventQueued})
 
-	relayEvents(conn, j)
+	relayEvents(s.log(), conn, j)
 }
 
 // relayEvents streams the job's lifecycle to the client: a started event if
 // the run begins (a job cancelled before starting delivers its result without
 // ever starting, so it waits on both), then exactly one final done event.
-func relayEvents[P any](conn net.Conn, j *Job[P]) {
+func relayEvents[P any](l *slog.Logger, conn net.Conn, j *Job[P]) {
 	started := j.Started()
 	for {
 		select {
 		case <-started:
-			writeEvent(conn, Event{Kind: EventStarted})
+			writeEvent(l, conn, Event{Kind: EventStarted})
 			started = nil // block this case from now on; wait for the result
 		case out := <-j.Result():
 			if started != nil {
@@ -238,11 +261,11 @@ func relayEvents[P any](conn net.Conn, j *Job[P]) {
 				// for a run that actually started.
 				select {
 				case <-started:
-					writeEvent(conn, Event{Kind: EventStarted})
+					writeEvent(l, conn, Event{Kind: EventStarted})
 				default:
 				}
 			}
-			writeEvent(conn, Event{
+			writeEvent(l, conn, Event{
 				Kind:       EventDone,
 				OK:         out.OK,
 				DurationMs: out.Duration.Milliseconds(),
@@ -256,9 +279,9 @@ func relayEvents[P any](conn net.Conn, j *Job[P]) {
 // writeEvent sends one status line, best-effort: a departed client only
 // forfeits its own visibility (the run itself is daemon-owned and its result
 // delivery never blocks on the connection).
-func writeEvent(conn net.Conn, ev Event) {
+func writeEvent(l *slog.Logger, conn net.Conn, ev Event) {
 	_ = conn.SetWriteDeadline(time.Now().Add(eventWriteTimeout))
 	if err := json.NewEncoder(conn).Encode(ev); err != nil {
-		slog.Debug("trigger event write failed (client gone?)", "event", ev.Kind, "error", err)
+		l.Debug("trigger event write failed (client gone?)", "event", ev.Kind, "error", err)
 	}
 }
