@@ -8,4 +8,4 @@ A new `Limits` or `BudgetLimits` field takes its default at zero, so `resolve` o
 
 ## Releases
 
-A caller's `Limits` literal leaves a new bound at zero, so the bound is not a breaking change only when its zero value rejects no document that some existing `Limits` value accepts, including one that raised other bounds. In practice its zero value either resolves from the existing field it overlaps (a per-tag namespace bound whose zero means the caller's `MaxTagAttrs`) or sits above anything the existing fields can admit. Any other default is a breaking change and takes `feat!:`.
+A caller's `Limits` or `BudgetLimits` literal leaves a new bound at zero, so the bound is not a breaking change only when its zero value rejects no document that some existing value of that type accepts, including one that raised other bounds. In practice its zero value either resolves from the existing field it overlaps (a per-tag namespace bound whose zero means the caller's `MaxTagAttrs`) or sits above anything the existing fields can admit. Any other default is a breaking change and takes `feat!:`.
