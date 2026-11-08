@@ -439,7 +439,9 @@ func (p *PendingFile) BytesWritten() int64 { return p.written }
 
 // Name reports the temp file's path, cleaned, so a root opened through
 // OpenParentInRoot, whose own Name keeps a "/." the open added, does not
-// carry it into the temp's path.
+// carry it into the temp's path. The path is cleaned lexically
+// (filepath.Clean), as Result.Path is joined, so a root opened through a
+// symlink followed by ".." is named as written, not as resolved.
 func (p *PendingFile) Name() string { return filepath.Clean(p.File.Name()) }
 
 // closeOwnedRoot closes the parent-directory root when this PendingFile

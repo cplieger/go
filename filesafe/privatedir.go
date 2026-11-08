@@ -3,6 +3,7 @@ package filesafe
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // PrivateDirResult reports the outcome of one EnsurePrivateDir call.
@@ -56,7 +57,7 @@ func EnforceMode(f *os.File, want os.FileMode) (os.FileMode, error) {
 	stored, asked := chmodBits(fi.Mode()), chmodBits(want)
 	if stored != asked {
 		return stored, fmt.Errorf("%w: %s: asked for %#o, filesystem stored %#o",
-			ErrModeNotStored, f.Name(), asked, stored)
+			ErrModeNotStored, filepath.Clean(f.Name()), asked, stored)
 	}
 	return stored, nil
 }
