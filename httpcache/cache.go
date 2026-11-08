@@ -1,4 +1,4 @@
-package httpclient
+package httpcache
 
 import (
 	"container/list"
@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	// defaultCacheBytes is the bound a zero CacheConfig.MaxBytes takes.
+	// defaultCacheBytes is the bound a zero Config.MaxBytes takes.
 	defaultCacheBytes = 32 << 20
 
 	// entryOverhead is the fixed cost charged to every entry beside its bytes:
@@ -35,9 +35,9 @@ const (
 	maxNotModifiedBytes = 8 << 20
 )
 
-// CacheConfig configures a [Cache] or a [CacheRoundTripper]. The zero value is
+// Config configures a [Cache] or a [RoundTripper]. The zero value is
 // ready to use: 32 MiB, no held fields, and Saved counts nothing.
-type CacheConfig struct {
+type Config struct {
 	// Held are the response header fields the owner reads from a served answer.
 	// A name is matched canonically; a name given twice is held once, required
 	// if either entry is.
@@ -48,7 +48,7 @@ type CacheConfig struct {
 	MaxBytes int64
 	// FreeNotModified says the server bills nothing for a 304 answering a
 	// conditional request that carries an Authorization header, as GitHub's REST
-	// API does. It decides only what CacheState.Saved counts.
+	// API does. It decides only what State.Saved counts.
 	FreeNotModified bool
 }
 
@@ -62,8 +62,8 @@ type HeldField struct {
 	Required bool
 }
 
-// CacheState is what a cache has done since it was built, and what it holds now.
-type CacheState struct {
+// State is what a cache has done since it was built, and what it holds now.
+type State struct {
 	Hits   int   // reads a held answer served after a 304
 	Misses int   // every other stored read the server answered in full
 	Saved  int   // served 304s on a server that bills none (FreeNotModified)
@@ -74,6 +74,8 @@ type CacheState struct {
 // reads and decodes its own answers through [Cache.Begin]. It is safe for
 // concurrent use. A held answer is served only where the server answers its
 // validator with 304 Not Modified in the same exchange; nothing is served on age.
+// The zero Cache holds nothing and every read passes through it; build one with
+// New to hold answers.
 type Cache struct {
 	index      map[string]*list.Element
 	order      *list.List
@@ -88,8 +90,8 @@ type Cache struct {
 	freeNotMod bool
 }
 
-// NewCache builds a [Cache] from cfg.
-func NewCache(cfg CacheConfig) *Cache {
+// New builds a [Cache] from cfg.
+func New(cfg Config) *Cache {
 	maxBytes := cfg.MaxBytes
 	if maxBytes == 0 {
 		maxBytes = defaultCacheBytes
@@ -104,11 +106,11 @@ func NewCache(cfg CacheConfig) *Cache {
 func (c *Cache) on() bool { return c.max > 0 }
 
 // State is what the cache has done since it was built, and what it holds now.
-func (c *Cache) State() CacheState {
+func (c *Cache) State() State {
 	c.mu.Lock()
 	held := c.bytes
 	c.mu.Unlock()
-	return CacheState{
+	return State{
 		Hits:   int(c.hits.Load()),
 		Misses: int(c.misses.Load()),
 		Saved:  int(c.saved.Load()),
@@ -123,7 +125,9 @@ func (c *Cache) Clear() {
 	defer c.mu.Unlock()
 	c.gen++
 	c.index = map[string]*list.Element{}
-	c.order.Init()
+	if c.order != nil { // the zero Cache has no list and holds nothing
+		c.order.Init()
+	}
 	c.bytes = 0
 }
 
@@ -261,7 +265,7 @@ func credential(r *http.Request) string {
 // key is one GET's key: the credential folded as its digest, never as itself, the
 // variant, and everything of r that reaches the wire but the validators and the
 // credential's own lines: its effective host, its URL and each header line under
-// the name it is sent by. [CacheGuard] holds the request that reaches the wire to
+// the name it is sent by. [Guard] holds the request that reaches the wire to
 // the one keyed here.
 func (*Cache) key(cred, variant string, r *http.Request) string {
 	fields := make([]string, 0, 5+2*len(r.Header))

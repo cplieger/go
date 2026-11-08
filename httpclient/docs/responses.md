@@ -1,6 +1,6 @@
 # Status codes, errors and bodies
 
-This page is for a developer handling what comes back from a call. It covers how httpclient turns a status into an error, which error types to match, how to name a failure below HTTP, and how bodies are capped and drained. [Revalidation cache](caching.md) covers conditional requests.
+This page is for a developer handling what comes back from a call. It covers how httpclient turns a status into an error, which error types to match, how to name a failure below HTTP, and how bodies are capped and drained. The [httpcache](https://github.com/cplieger/go/tree/main/httpcache) module covers conditional requests.
 
 ## Status checking
 

@@ -1,4 +1,4 @@
-package httpclient
+package httpcache
 
 import (
 	"bytes"
@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 )
 
-// wireCheckKey carries a stored read's [wireCheck] to [CacheGuard].
+// wireCheckKey carries a stored read's [wireCheck] to [Guard].
 type wireCheckKey struct{}
 
-// wireCheck is the request a stored read keyed, as [CacheGuard] compares every
+// wireCheck is the request a stored read keyed, as [Guard] compares every
 // attempt and redirect hop against it, and the last answer the wire gave it.
 type wireCheck struct {
 	header   http.Header
@@ -61,7 +61,7 @@ func (w *wireCheck) record(resp *http.Response) {
 
 // vouches reports whether every request of the read reached the wire as keyed and
 // resp is the wire's last answer, its status and headers, as it gave it. Only
-// [CacheGuard] records an answer, so a read that reached no guard, an observer
+// [Guard] records an answer, so a read that reached no guard, an observer
 // that changed a request or those, and a redirect hop are not vouched for;
 // [wireCheck.carried] vouches for the body.
 func (w *wireCheck) vouches(resp *http.Response) bool {
@@ -102,14 +102,14 @@ func (b *wireBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// CacheGuard is the round tripper a [Cache.Begin] read is sent through, beneath
+// Guard is the round tripper a [Cache.Begin] read is sent through, beneath
 // every round tripper that may change a request or an answer. A request that
 // differs from the one prepare keyed leaves without validators, and an answer it
 // did not get from next as next gave it, or that reports another request, is
 // neither served nor kept. A read that reaches no guard is never served or kept.
-// A [CacheRoundTripper] guards its own next; do not put another guard inside it.
+// A [RoundTripper] guards its own next; do not put another guard inside it.
 // Nil next means [http.DefaultTransport].
-func CacheGuard(next http.RoundTripper) http.RoundTripper {
+func Guard(next http.RoundTripper) http.RoundTripper {
 	if next == nil {
 		next = http.DefaultTransport
 	}

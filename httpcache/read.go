@@ -1,4 +1,4 @@
-package httpclient
+package httpcache
 
 import (
 	"bytes"
@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/cplieger/go/httpclient"
 )
 
-// CacheReadConfig is what one read begins with.
-type CacheReadConfig struct {
+// ReadConfig is what one read begins with.
+type ReadConfig struct {
 	// Discarded takes the header of an answer the read drops: a resent 304's,
 	// and a 304 that fails the read. Nil ignores them.
 	Discarded func(http.Header)
@@ -26,16 +28,16 @@ type CacheReadConfig struct {
 	Resend bool
 }
 
-// errSentTwice is what a second [CacheRead.Send] fails with.
-var errSentTwice = errors.New("httpclient: a CacheRead is sent once")
+// errSentTwice is what a second [Read.Send] fails with.
+var errSentTwice = errors.New("httpcache: a Read is sent once")
 
-// CacheRead is one read through a [Cache], begun by [Cache.Begin]. It is not
+// Read is one read through a [Cache], begun by [Cache.Begin]. It is not
 // safe for concurrent use.
-type CacheRead struct {
+type Read struct {
 	err   error
 	cache *Cache
 	kept  *pageEntry
-	cfg   CacheReadConfig
+	cfg   ReadConfig
 	rv    revalidation
 	sent  bool
 	done  bool
@@ -43,20 +45,20 @@ type CacheRead struct {
 }
 
 // Begin starts one read.
-func (c *Cache) Begin(cfg CacheReadConfig) *CacheRead {
+func (c *Cache) Begin(cfg ReadConfig) *Read {
 	cfg.Store = cfg.Store && c.on()
-	return &CacheRead{cache: c, cfg: cfg}
+	return &Read{cache: c, cfg: cfg}
 }
 
 // Send runs the read's attempts through send: the first, and with Resend the one
 // a 304 nothing held may serve forces. send builds the request, calls prepare on
 // it after every other header is set, and sends what prepare returns, beneath a
-// [CacheGuard]. prepare keys the request and, on the first attempt, sets the held
+// [Guard]. prepare keys the request and, on the first attempt, sets the held
 // entry's validator. Send answers the last attempt's response and error as send
 // returned them, a refused redirect's response beside its error included; a 304
 // whose body fails to read, with Resend unset or on the resend, fails with that
 // read's error. A read is sent once; a second Send sends nothing and fails.
-func (r *CacheRead) Send(send func(prepare func(*http.Request) *http.Request) (*http.Response, error)) (*http.Response, error) {
+func (r *Read) Send(send func(prepare func(*http.Request) *http.Request) (*http.Response, error)) (*http.Response, error) {
 	if r.sent {
 		return nil, errSentTwice
 	}
@@ -68,7 +70,7 @@ func (r *CacheRead) Send(send func(prepare func(*http.Request) *http.Request) (*
 
 // Answered records that the owner read the answer Send returned in full, and
 // reports whether State counts this read, as a hit or a miss.
-func (r *CacheRead) Answered() bool {
+func (r *Read) Answered() bool {
 	r.rv.answered = r.rv.cacheable
 	return r.rv.answered
 }
@@ -77,7 +79,7 @@ func (r *CacheRead) Answered() bool {
 // field it omits, a copy of the held body, and ok. ok is false for any other
 // answer, a 304 the cache refused included, which the owner treats as the 304 it
 // is. A served 304 carrying no-store forgets the entry once the read finishes.
-func (r *CacheRead) Serve(live http.Header) (header http.Header, body []byte, ok bool) {
+func (r *Read) Serve(live http.Header) (header http.Header, body []byte, ok bool) {
 	if r.rv.verdict != verdictServe || r.done {
 		return nil, nil, false
 	}
@@ -90,7 +92,7 @@ func (r *CacheRead) Serve(live http.Header) (header http.Header, body []byte, ok
 // answer carries a well-formed validator and no no-store, and kept succeeds. It
 // keeps nothing otherwise, so nothing is kept from a body a round tripper above
 // the guard replaced.
-func (r *CacheRead) Keep(resp *http.Response, body []byte, kept func() ([]byte, error)) {
+func (r *Read) Keep(resp *http.Response, body []byte, kept func() ([]byte, error)) {
 	if r.done || resp == nil || resp.StatusCode != http.StatusOK || !r.rv.vouched(resp, body) {
 		return
 	}
@@ -101,7 +103,7 @@ func (r *CacheRead) Keep(resp *http.Response, body []byte, kept func() ([]byte, 
 // ended by then fails the read, which keeps nothing, and its error is returned.
 // hit reports whether the held answer served the read. A second call changes
 // nothing and returns the first's result.
-func (r *CacheRead) Finish(ctx context.Context, ok bool) (hit bool, err error) {
+func (r *Read) Finish(ctx context.Context, ok bool) (hit bool, err error) {
 	if r.done {
 		return r.hit, r.err
 	}
@@ -164,13 +166,13 @@ func (rv *revalidation) vouched(resp *http.Response, body []byte) bool {
 	return rv.cacheable && rv.check.vouches(resp) && rv.check.carried(body)
 }
 
-// exchange is one read through the cache, the sequence [CacheRead] and
-// [CacheRoundTripper] share: the first attempt in the mode the read takes, in the
+// exchange is one read through the cache, the sequence [Read] and
+// [RoundTripper] share: the first attempt in the mode the read takes, in the
 // generation current as it begins, each answer judged by [judge], and a 304
 // nothing held may serve sent once more without a validator, whether or not the
 // read is stored. The resend belongs to the first attempt's read, whose key and
 // generation the owner settles once ([Cache.settle]).
-func (c *Cache) exchange(cfg CacheReadConfig, send func(func(*http.Request) *http.Request) (*http.Response, error)) (*http.Response, revalidation, error) {
+func (c *Cache) exchange(cfg ReadConfig, send func(func(*http.Request) *http.Request) (*http.Response, error)) (*http.Response, revalidation, error) {
 	if cfg.Discarded == nil {
 		cfg.Discarded = func(http.Header) {}
 	}
@@ -194,7 +196,7 @@ func (c *Cache) exchange(cfg CacheReadConfig, send func(func(*http.Request) *htt
 // attempt is one send of the read and the verdict [judge] gives its answer. first
 // is the attempt a resend replaces, nil on the first one, which alone may be
 // resent.
-func (c *Cache) attempt(cfg CacheReadConfig, send func(func(*http.Request) *http.Request) (*http.Response, error), mode cacheMode, gen uint64, first *revalidation) (*http.Response, revalidation, error) {
+func (c *Cache) attempt(cfg ReadConfig, send func(func(*http.Request) *http.Request) (*http.Response, error), mode cacheMode, gen uint64, first *revalidation) (*http.Response, revalidation, error) {
 	rv := revalidation{gen: gen}
 	prepare := func(r *http.Request) *http.Request {
 		if mode == cacheOff {
@@ -219,7 +221,7 @@ func (c *Cache) attempt(cfg CacheReadConfig, send func(func(*http.Request) *http
 
 // revalidate keys a stored request by its credential and variant, and in the
 // conditional mode sets the held entry's validator on it. It answers the request
-// to send, carrying the [wireCheck] [CacheGuard] holds every attempt and hop to.
+// to send, carrying the [wireCheck] [Guard] holds every attempt and hop to.
 // A request other than a GET, which [Cache.key] does not separate by method, and
 // one carrying no-store (RFC 9111 section 5.2.1.5) are left unkeyed.
 func (c *Cache) revalidate(r *http.Request, variant string, mode cacheMode, rv *revalidation) *http.Request {
@@ -261,7 +263,7 @@ func (c *Cache) judge(rv *revalidation, resp *http.Response, resend bool) (verdi
 	if resp.StatusCode != http.StatusNotModified {
 		return verdictNone, nil
 	}
-	body, err := ReadLimitedBody(resp.Body, maxNotModifiedBytes)
+	body, err := httpclient.ReadLimitedBody(resp.Body, maxNotModifiedBytes)
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	switch {
 	case err == nil && rv.held != nil && rv.vouched(resp, body) && rv.held.answers(c.held, resp.Header) && c.current(rv.gen):
