@@ -506,7 +506,7 @@ func TestResponseTooLargeError_Error_message(t *testing.T) {
 	}
 }
 
-func TestPermanentError(t *testing.T) {
+func TestPermanent(t *testing.T) {
 	t.Parallel()
 
 	t.Run("wraps and unwraps", func(t *testing.T) {
@@ -547,15 +547,15 @@ func TestPermanentError(t *testing.T) {
 		}
 	})
 
-	t.Run("IsTransient returns false for PermanentError", func(t *testing.T) {
+	t.Run("IsTransient returns false for a Permanent mark", func(t *testing.T) {
 		t.Parallel()
 		pe := Permanent(&StatusError{Code: 503})
 		if IsTransient(pe) {
-			t.Error("PermanentError wrapping transient should not be transient")
+			t.Error("a Permanent mark over a transient error is not transient")
 		}
 	})
 
-	t.Run("Do does not retry PermanentError", func(t *testing.T) {
+	t.Run("Do does not retry a Permanent mark", func(t *testing.T) {
 		t.Parallel()
 		calls := 0
 		_, err := Do(t.Context(), func(_ context.Context) (string, error) {
@@ -566,7 +566,7 @@ func TestPermanentError(t *testing.T) {
 			t.Fatal("expected error")
 		}
 		if calls != 1 {
-			t.Errorf("calls = %d, want 1 (PermanentError not retried)", calls)
+			t.Errorf("calls = %d, want 1 (a Permanent mark is not retried)", calls)
 		}
 	})
 }

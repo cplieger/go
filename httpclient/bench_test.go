@@ -158,7 +158,7 @@ func BenchmarkIsTransient_Nil(b *testing.B) {
 	}
 }
 
-func BenchmarkIsTransient_PermanentError(b *testing.B) {
+func BenchmarkIsTransient_Permanent(b *testing.B) {
 	err := Permanent(errors.New("bad request"))
 	for b.Loop() {
 		_ = IsTransient(err)
@@ -170,7 +170,7 @@ func BenchmarkIsTransient_PermanentError(b *testing.B) {
 // The benchmarks above already report allocations per operation, and seven of
 // them report exactly zero: JitteredBackoff, SafeDouble, ParseRetryAfter's
 // seconds and empty cases, and IsTransient on an unexpected EOF, a nil error
-// and a PermanentError. Each of those zeros is a contract nobody had written
+// and a Permanent mark. Each of those zeros is a contract nobody had written
 // down, and nothing in this repo asserted one until this section landed.
 //
 // The contracts below exist because a chart cannot hold a contract. httpclient is

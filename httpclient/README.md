@@ -76,7 +76,7 @@ client := &http.Client{Transport: httpclient.NewCacheRoundTripper(nil, httpclien
 ## API
 
 - Retry: `Do[T]`, `GetBytes`, `NewRetryRoundTripper` (the `RetryRoundTripper`), `NewRetry` and `New`, with their options (`Option`, `DoOption`, `GetOption`), `TransportConfig` with its `CheckRetry`, `OnRetry` and `PrepareRetry` hooks, `ErrMaxElapsed` and `ContextWithDefaultTimeout`.
-- Backoff and Retry-After: `JitteredBackoff`, `SafeDouble`, `SleepCtx`, `ParseRetryAfter`, `ParseRetryAfterResponse`, and `RetryAfterCap`, the 60-second cap they share.
+- Backoff and Retry-After: `JitteredBackoff`, `SafeDouble`, `SleepCtx`, `ParseRetryAfter` with its 60-second `RetryAfterCap`, and `ParseRetryAfterResponse`, which keeps the raw value.
 - Classification: `IsTransient`, `Permanent` and `IsPermanent`, `MarkTransient`, `AttemptTimeout` and `IsAttemptTimeout`, `IsRetryableStatus`, `CauseOf` with its `Cause` names, the `Transient` and `RetryAfterHint` interfaces.
 - Status and errors: `CheckStatus`, the `StatusError` type with its `ErrUnauthorized`, `ErrForbidden`, `ErrRateLimited` and `ErrServerError` sentinels, and the `ResponseTooLargeError` type.
 - Redirects: `DefaultRedirectPolicy`, `RefuseAllRedirects` and `RedirectPolicy` with its `RedirectOption` options, the `CheckRedirect` shape they share, and the `RedirectRefusedError` every hard refusal returns, whose `RedirectReason` names the rule.
