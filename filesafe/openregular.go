@@ -103,7 +103,7 @@ func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInf
 	// between the Lstat and here is a rejection rather than a hang.
 	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, racedOpen(root, clean, before, err)
 	}
 	fi, err := f.Stat()
 	if err != nil {

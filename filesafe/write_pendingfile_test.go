@@ -585,3 +585,20 @@ func TestPendingFile_Close_IsCleanup(t *testing.T) {
 		assertContent(t, path, "data")
 	})
 }
+
+// TestPendingFile_Close_ClosesTheOwnedRoot pins that Close, like Cleanup,
+// closes the parent root NewPendingFile opened, so a deferred Close leaks no
+// directory descriptor.
+func TestPendingFile_Close_ClosesTheOwnedRoot(t *testing.T) {
+	t.Parallel()
+	pf, err := NewPendingFile(t.Context(), filepath.Join(t.TempDir(), "f.txt"))
+	if err != nil {
+		t.Fatalf("NewPendingFile: %v", err)
+	}
+	if err := pf.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+	if _, err := pf.root.Stat("."); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("owned root after Close: Stat = %v, want os.ErrClosed", err)
+	}
+}

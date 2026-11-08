@@ -144,6 +144,40 @@ func TestOptions_ZeroModesRefused(t *testing.T) {
 			if _, err := ProbeWritable(t.Context(), dir, opts...); !errors.Is(err, ErrInvalidArgument) {
 				t.Errorf("ProbeWritable = %v, want ErrInvalidArgument", err)
 			}
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			inRoot := map[string]func() error{
+				"WriteFileInRoot": func() error {
+					_, err := WriteFileInRoot(t.Context(), root, "sub/f.txt", []byte("x"), opts...)
+					return err
+				},
+				"WriteReaderInRoot": func() error {
+					_, err := WriteReaderInRoot(t.Context(), root, "sub/f.txt", strings.NewReader("x"), opts...)
+					return err
+				},
+				"NewPendingFileInRoot": func() error {
+					p, err := NewPendingFileInRoot(t.Context(), root, "sub/f.txt", opts...)
+					if err == nil {
+						_ = p.Cleanup()
+					}
+					return err
+				},
+				"ProbeWritableInRoot": func() error {
+					_, err := ProbeWritableInRoot(t.Context(), root, "sub", opts...)
+					return err
+				},
+			}
+			for call, run := range inRoot {
+				if err := run(); !errors.Is(err, ErrInvalidArgument) {
+					t.Errorf("%s = %v, want ErrInvalidArgument", call, err)
+				}
+			}
+			if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+				t.Errorf("the refused calls left %d entries in the directory (err %v)", len(entries), err)
+			}
 		})
 	}
 	if c := buildWriteCfg([]WriteOption{WithMkdirMode(0), WithMkdirAll(true)}); c.writeOptionsErr() != nil {

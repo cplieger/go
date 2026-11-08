@@ -25,20 +25,22 @@ var (
 	ErrFileTooLarge = errors.New("filesafe: file too large")
 	// ErrSymlinkTarget is returned when the target path is a symlink, which
 	// every write entry point, OpenRegularNoFollow, OpenRegularInRootNoFollow
-	// and EnsurePrivateDir refuse, and by OpenParentInRoot (so RemoveFileInRoot
-	// and CleanupStaleTempsInRoot) for a symlinked ancestor of the name.
+	// and EnsurePrivateDir refuse, and by OpenParentInRoot (so
+	// RemoveFileInRoot) for a symlinked ancestor of the name.
 	ErrSymlinkTarget = errors.New("filesafe: target is a symlink")
-	// ErrRaced is returned by OpenRegularInRootNoFollow when the name changed
-	// identity between the check that refused a symlink and the open that
-	// followed it, so the refusal could not be shown to cover the descriptor
-	// handed back, and by OpenParentInRoot when an ancestor directory did. A retry is the sane response, unlike ErrSymlinkTarget, which
+	// ErrRaced is returned when a name changed between a check and the open
+	// that followed it, so the check could not be shown to cover what was
+	// opened: by OpenRegularInRootNoFollow for the name it refused a symlink
+	// at, and by OpenParentInRoot (so RemoveFileInRoot) for an ancestor
+	// directory. A retry is the sane response, unlike ErrSymlinkTarget, which
 	// is a permanent verdict about what is at the name. Match with errors.Is.
 	ErrRaced = errors.New("filesafe: path changed between the check and the open")
 	// ErrNotRegular is returned when a name resolves to something other than a
-	// regular file. ReadBounded, ReadBoundedInRoot, OpenRegularNoFollow, OpenRegularInRoot and OpenRegularInRootNoFollow
-	// refuse to read it, RemoveFileInRoot refuses to unlink it, and every write
-	// entry point refuses to publish over it. Match with errors.Is; for the mode itself, errors.As a
-	// *NotRegularError rather than parsing the message.
+	// regular file. ReadBounded, ReadBoundedInRoot, OpenRegularNoFollow,
+	// OpenRegularInRoot and OpenRegularInRootNoFollow refuse to read it,
+	// RemoveFileInRoot refuses to unlink it, and every write entry point
+	// refuses to publish over it. Match with errors.Is; for the mode itself,
+	// errors.As a *NotRegularError rather than parsing the message.
 	ErrNotRegular = errors.New("filesafe: not a regular file")
 	// ErrNotDirectory is returned by EnsurePrivateDir when the name is occupied
 	// by something other than a directory, and by OpenParentInRoot for an
@@ -59,7 +61,7 @@ var (
 	// WithMkdirMode, and by EnsurePrivateDir. Match with errors.Is.
 	ErrModeNotStored = errors.New("filesafe: filesystem did not store the requested mode")
 	// ErrAborted is returned by PendingFile.Commit when the pending file was
-	// already aborted by a prior Cleanup.
+	// already aborted by a prior Cleanup or Close.
 	ErrAborted = errors.New("filesafe: pending file aborted")
 	// ErrFileBusy is returned on Windows when the replace was refused through
 	// every retry, or the context ended while waiting to retry. It arrives
@@ -70,9 +72,10 @@ var (
 	// Windows reports the same way. Match with errors.Is.
 	ErrFileBusy = errors.New("filesafe: target in use or access denied")
 	// ErrModeUnsupported is returned on Windows by EnforceMode,
-	// EnsurePrivateDir and any write or probe given WithMode or WithMkdirMode,
-	// before anything is created: Go's chmod there only sets the read-only
-	// attribute. Match with errors.Is.
+	// EnsurePrivateDir and any write or probe given a nonzero WithMode or
+	// WithMkdirMode, before anything is created: Go's chmod there only sets the
+	// read-only attribute. A zero mode is ErrInvalidArgument on every platform.
+	// Match with errors.Is.
 	ErrModeUnsupported = errors.New("filesafe: file modes are not supported on this platform")
 )
 
@@ -170,7 +173,7 @@ func (e *NotRegularError) Error() string {
 // Unwrap returns ErrNotRegular, so errors.Is matches the verdict.
 func (*NotRegularError) Unwrap() error { return ErrNotRegular }
 
-// notRegular is the one producer, so the three refusal sites cannot drift in
+// notRegular is the one producer, so the refusal sites cannot drift in
 // what they report.
 func notRegular(name string, mode os.FileMode) error {
 	return &NotRegularError{Name: name, Mode: mode}

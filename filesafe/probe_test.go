@@ -50,10 +50,10 @@ func TestProbeWritable(t *testing.T) {
 
 		res, err := ProbeWritable(t.Context(), dir)
 		if err != nil {
-			t.Fatalf("ProbeWritable(%q) = err %v, want nil (a stage failure is never an error)", dir, err)
+			t.Fatalf("ProbeWritable(%q) = err %v, want nil (a phase failure is never an error)", dir, err)
 		}
 		if !res.OK() || !res.Writable() {
-			t.Errorf("OK()=%v Writable()=%v, want true true (stage %v, err %v)",
+			t.Errorf("OK()=%v Writable()=%v, want true true (phase %v, err %v)",
 				res.OK(), res.Writable(), res.Phase, res.Err)
 		}
 		if res.Phase != ProbePhaseNone || res.Err != nil {
@@ -121,7 +121,7 @@ func TestProbeWritable(t *testing.T) {
 		t.Parallel()
 		skipModeOptions(t)
 		// A regular file in the parent chain makes MkdirAll fail without
-		// permission trickery, so the stage is reachable as root too.
+		// permission trickery, so the phase is reachable as root too.
 		blocker := filepath.Join(t.TempDir(), "file")
 		if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 			t.Fatalf("seed blocker: %v", err)
@@ -295,10 +295,10 @@ func TestProbeWritableInRoot(t *testing.T) {
 
 		cases := map[string]struct {
 			opts      []WriteOption
-			wantStage ProbePhase
+			wantPhase ProbePhase
 		}{
-			"create_stage_without_mkdir": {wantStage: ProbePhaseCreate},
-			"mkdir_stage_with_mkdir":     {opts: []WriteOption{WithMkdirMode(0o755)}, wantStage: ProbePhaseMkdir},
+			"create_stage_without_mkdir": {wantPhase: ProbePhaseCreate},
+			"mkdir_stage_with_mkdir":     {opts: []WriteOption{WithMkdirMode(0o755)}, wantPhase: ProbePhaseMkdir},
 		}
 		for name, tc := range cases {
 			t.Run(name, func(t *testing.T) {
@@ -307,10 +307,10 @@ func TestProbeWritableInRoot(t *testing.T) {
 				}
 				res, probeErr := ProbeWritableInRoot(t.Context(), root, "../escaped", tc.opts...)
 				if probeErr != nil {
-					t.Fatalf("ProbeWritableInRoot(escaping) = err %v, want nil (the root refuses it as a stage failure)", probeErr)
+					t.Fatalf("ProbeWritableInRoot(escaping) = err %v, want nil (the root refuses it as a phase failure)", probeErr)
 				}
-				if res.Phase != tc.wantStage || res.Err == nil {
-					t.Errorf("Phase=%v Err=%v, want %v and a non-nil error", res.Phase, res.Err, tc.wantStage)
+				if res.Phase != tc.wantPhase || res.Err == nil {
+					t.Errorf("Phase=%v Err=%v, want %v and a non-nil error", res.Phase, res.Err, tc.wantPhase)
 				}
 				if res.Writable() || res.Name != "" {
 					t.Errorf("Writable()=%v Name=%q, want false and \"\"", res.Writable(), res.Name)
@@ -350,7 +350,7 @@ func TestProbeWritableInRoot(t *testing.T) {
 	})
 }
 
-// TestProbeData covers the stages that run while the probe file is open, at
+// TestProbeData covers the phases that run while the probe file is open, at
 // probeData rather than ProbeWritable: a failure is not constructible on a
 // healthy directory the test owns. The sync failure is in probe_unix_test.go.
 func TestProbeData(t *testing.T) {
@@ -358,11 +358,11 @@ func TestProbeData(t *testing.T) {
 
 	cases := map[string]struct {
 		open      func(t *testing.T) *os.File
-		wantStage ProbePhase
+		wantPhase ProbePhase
 	}{
 		"regular_file_passes": {
 			open:      func(t *testing.T) *os.File { return openProbeTemp(t) },
-			wantStage: ProbePhaseNone,
+			wantPhase: ProbePhaseNone,
 		},
 		"closed_handle_fails_at_write": {
 			open: func(t *testing.T) *os.File {
@@ -372,18 +372,18 @@ func TestProbeData(t *testing.T) {
 				}
 				return f
 			},
-			wantStage: ProbePhaseWrite,
+			wantPhase: ProbePhaseWrite,
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			stage, err := probeData(tc.open(t))
-			if stage != tc.wantStage {
-				t.Errorf("stage = %v, want %v (err %v)", stage, tc.wantStage, err)
+			phase, err := probeData(tc.open(t))
+			if phase != tc.wantPhase {
+				t.Errorf("phase = %v, want %v (err %v)", phase, tc.wantPhase, err)
 			}
-			if (err != nil) != (tc.wantStage != ProbePhaseNone) {
-				t.Errorf("err = %v, want non-nil only for a failing stage", err)
+			if (err != nil) != (tc.wantPhase != ProbePhaseNone) {
+				t.Errorf("err = %v, want non-nil only for a failing phase", err)
 			}
 		})
 	}
@@ -401,7 +401,7 @@ func openProbeTemp(t *testing.T) *os.File {
 	return f
 }
 
-// TestProbeTearDown covers the two teardown stages and the leak
+// TestProbeTearDown covers the two teardown phases and the leak
 // accounting. A same-owner test cannot make a real directory accept a
 // create and refuse the unlink, so the refusal is constructed instead: a
 // NON-EMPTY directory swapped in makes Remove fail with ENOTEMPTY, and an
@@ -413,14 +413,14 @@ func TestProbeTearDown(t *testing.T) {
 		// prepare mutates the created probe file (and may pre-close the
 		// handle) to force a teardown failure.
 		prepare    func(t *testing.T, path string, f *os.File)
-		firstStage ProbePhase
-		wantStage  ProbePhase
+		firstPhase ProbePhase
+		wantPhase  ProbePhase
 		wantLeaked bool
 		wantDebug  int
 	}{
 		"clean_teardown": {
 			prepare:   func(*testing.T, string, *os.File) {},
-			wantStage: ProbePhaseNone,
+			wantPhase: ProbePhaseNone,
 		},
 		"already_gone_is_success": {
 			prepare: func(t *testing.T, path string, _ *os.File) {
@@ -428,7 +428,7 @@ func TestProbeTearDown(t *testing.T) {
 					t.Fatalf("pre-remove: %v", err)
 				}
 			},
-			wantStage: ProbePhaseNone,
+			wantPhase: ProbePhaseNone,
 		},
 		"close_failure_is_reported": {
 			prepare: func(t *testing.T, _ string, f *os.File) {
@@ -436,13 +436,13 @@ func TestProbeTearDown(t *testing.T) {
 					t.Fatalf("pre-close: %v", err)
 				}
 			},
-			wantStage: ProbePhaseClose,
+			wantPhase: ProbePhaseClose,
 		},
 		"remove_failure_is_reported_and_leaks": {
 			prepare: func(t *testing.T, path string, _ *os.File) {
 				replaceWithNonEmptyDir(t, path)
 			},
-			wantStage:  ProbePhaseRemove,
+			wantPhase:  ProbePhaseRemove,
 			wantLeaked: true,
 		},
 		"first_failure_wins_and_the_second_is_logged": {
@@ -452,7 +452,7 @@ func TestProbeTearDown(t *testing.T) {
 				}
 				replaceWithNonEmptyDir(t, path)
 			},
-			wantStage:  ProbePhaseClose,
+			wantPhase:  ProbePhaseClose,
 			wantLeaked: true,
 			wantDebug:  1,
 		},
@@ -460,8 +460,8 @@ func TestProbeTearDown(t *testing.T) {
 			prepare: func(t *testing.T, path string, _ *os.File) {
 				replaceWithNonEmptyDir(t, path)
 			},
-			firstStage: ProbePhaseWrite,
-			wantStage:  ProbePhaseWrite,
+			firstPhase: ProbePhaseWrite,
+			wantPhase:  ProbePhaseWrite,
 			wantLeaked: true,
 			wantDebug:  1,
 		},
@@ -479,17 +479,17 @@ func TestProbeTearDown(t *testing.T) {
 			tc.prepare(t, filepath.Join(dir, tmpName), f)
 
 			h := &captureHandler{}
-			res := ProbeResult{Dir: dir, Name: tmpName, Leaked: true, Phase: tc.firstStage}
-			if tc.firstStage != ProbePhaseNone {
-				res.Err = errors.New("earlier stage")
+			res := ProbeResult{Dir: dir, Name: tmpName, Leaked: true, Phase: tc.firstPhase}
+			if tc.firstPhase != ProbePhaseNone {
+				res.Err = errors.New("earlier phase")
 			}
 			res.tearDown(root, f, tmpName, buildWriteCfg([]WriteOption{WithLogger(slog.New(h))}))
 
-			if res.Phase != tc.wantStage {
-				t.Errorf("Phase = %v, want %v (err %v)", res.Phase, tc.wantStage, res.Err)
+			if res.Phase != tc.wantPhase {
+				t.Errorf("Phase = %v, want %v (err %v)", res.Phase, tc.wantPhase, res.Err)
 			}
-			if (res.Err != nil) != (tc.wantStage != ProbePhaseNone) {
-				t.Errorf("Err = %v, want non-nil only for a failing stage", res.Err)
+			if (res.Err != nil) != (tc.wantPhase != ProbePhaseNone) {
+				t.Errorf("Err = %v, want non-nil only for a failing phase", res.Err)
 			}
 			if res.Leaked != tc.wantLeaked {
 				t.Errorf("Leaked = %v, want %v", res.Leaked, tc.wantLeaked)
@@ -513,9 +513,9 @@ func TestProbePhaseString(t *testing.T) {
 		ProbePhaseRemove: "remove probe file",
 		ProbePhase(99):   "unknown phase",
 	}
-	for stage, want := range cases {
-		if got := stage.String(); got != want {
-			t.Errorf("ProbePhase(%d).String() = %q, want %q", int(stage), got, want)
+	for phase, want := range cases {
+		if got := phase.String(); got != want {
+			t.Errorf("ProbePhase(%d).String() = %q, want %q", int(phase), got, want)
 		}
 	}
 }
@@ -533,13 +533,13 @@ func TestProbeResultWritable(t *testing.T) {
 		ProbePhaseClose:  true,
 		ProbePhaseRemove: true,
 	}
-	for stage, want := range cases {
-		res := ProbeResult{Phase: stage}
+	for phase, want := range cases {
+		res := ProbeResult{Phase: phase}
 		if got := res.Writable(); got != want {
-			t.Errorf("ProbeResult{Phase: %v}.Writable() = %v, want %v", stage, got, want)
+			t.Errorf("ProbeResult{Phase: %v}.Writable() = %v, want %v", phase, got, want)
 		}
-		if got := res.OK(); got != (stage == ProbePhaseNone) {
-			t.Errorf("ProbeResult{Phase: %v}.OK() = %v, want %v", stage, got, stage == ProbePhaseNone)
+		if got := res.OK(); got != (phase == ProbePhaseNone) {
+			t.Errorf("ProbeResult{Phase: %v}.OK() = %v, want %v", phase, got, phase == ProbePhaseNone)
 		}
 	}
 }

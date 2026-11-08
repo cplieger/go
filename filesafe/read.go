@@ -66,11 +66,11 @@ func checkReadCap(maxBytes int64) error {
 // stat and before the read. The caller owns f; ReadBoundedFile does not close
 // it. A nil f returns ErrUnsafePath, and maxBytes follows ReadBounded's rule.
 func ReadBoundedFile(ctx context.Context, f *os.File, maxBytes int64) ([]byte, error) {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, fmt.Errorf("filesafe: %w", ctxErr)
-	}
 	if f == nil {
 		return nil, fmt.Errorf("%w: nil file", ErrUnsafePath)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("filesafe: %w", ctxErr)
 	}
 	if capErr := checkReadCap(maxBytes); capErr != nil {
 		return nil, capErr

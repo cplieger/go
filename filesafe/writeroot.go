@@ -323,6 +323,9 @@ func writeAtomicInRoot(ctx context.Context, root *os.Root, name string, c *cfg, 
 // crash durability. Result.Path is root's directory joined with the cleaned
 // relative name. A nil root returns ErrUnsafePath.
 func WriteFileInRoot(ctx context.Context, root *os.Root, name string, data []byte, opts ...WriteOption) (Result, error) {
+	if root == nil {
+		return Result{}, fmt.Errorf("%w: nil root", ErrUnsafePath)
+	}
 	c := buildWriteCfg(opts)
 	if err := checkWriteCap(int64(len(data)), c.maxBytes); err != nil {
 		return Result{}, err

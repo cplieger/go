@@ -92,8 +92,9 @@ func WithRecursive(recursive bool) SweepOption {
 // umask and inherited ACLs) and never chmod'ed or checked. Pass it for any
 // file whose readers must be restricted. A zero mode would publish a file
 // nobody but root can read, so a write or probe given WithMode(0) returns
-// ErrInvalidArgument before creating anything. On Windows a write or probe
-// given it returns ErrModeUnsupported before creating anything.
+// ErrInvalidArgument before creating anything, on every platform. On Windows
+// a write or probe given a nonzero mode returns ErrModeUnsupported before
+// creating anything.
 func WithMode(mode os.FileMode) WriteOption {
 	return writeOption(func(c *cfg) {
 		c.mode = mode
@@ -107,9 +108,9 @@ func WithMode(mode os.FileMode) WriteOption {
 // fails with ErrModeNotStored. It governs directories only; the file's mode
 // is WithMode's. Result.Durable is false if a created directory's parent
 // fsync failed. A zero mode returns ErrInvalidArgument before creating
-// anything; WithMkdirAll(false) is the way to create no directories. On
-// Windows a write or probe given it returns ErrModeUnsupported before
-// creating anything; use WithMkdirAll there. It and WithMkdirAll replace
+// anything, on every platform; WithMkdirAll(false) is the way to create no
+// directories. On Windows a write or probe given a nonzero mode returns
+// ErrModeUnsupported before creating anything; use WithMkdirAll there. It and WithMkdirAll replace
 // each other; the last call wins.
 func WithMkdirMode(mode os.FileMode) WriteOption {
 	return writeOption(func(c *cfg) { c.mkdirMode, c.mkdirModeSet, c.mkdirAll = mode, true, false })

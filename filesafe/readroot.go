@@ -22,6 +22,9 @@ import (
 // The caller owns root; ReadBoundedInRoot does not close it. A nil root
 // returns ErrUnsafePath, and maxBytes follows ReadBounded's rule.
 func ReadBoundedInRoot(ctx context.Context, root *os.Root, name string, maxBytes int64) ([]byte, error) {
+	if root == nil {
+		return nil, fmt.Errorf("%w: nil root", ErrUnsafePath)
+	}
 	if capErr := checkReadCap(maxBytes); capErr != nil {
 		return nil, capErr
 	}

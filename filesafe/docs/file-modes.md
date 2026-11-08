@@ -2,7 +2,7 @@
 
 This page explains how filesafe sets file and directory modes, and how `EnsurePrivateDir` sets up a directory only one user may enter, for a developer writing credentials, configuration or backups.
 
-None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll(true)` creates missing parent directories the same way.
+None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given a nonzero `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A zero mode is `ErrInvalidArgument` on every platform. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll(true)` creates missing parent directories the same way.
 
 ## Ordinary and enforced modes
 

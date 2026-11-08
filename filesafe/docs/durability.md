@@ -68,9 +68,9 @@ Every error matches with `errors.Is` or `errors.As`.
 | `ErrNotOwned` | `EnsurePrivateDir` found a directory not owned by the effective user, or could not tell |
 | `ErrModeTooOpen` | `EnsurePrivateDir` found a pre-existing directory with group or other access, and no repair was asked for |
 | `ErrModeNotStored` | `EnforceMode`, or a write or probe under `WithMode` or `WithMkdirMode`, found the filesystem stored a different mode than asked. A directory level refused this way is removed again while it is still an empty directory, so a retry fails the same way; one another writer has already filled stays, and the error also carries the removal failure |
-| `ErrAborted` | `PendingFile.Commit` was called after `Cleanup` aborted the write |
+| `ErrAborted` | `PendingFile.Commit` was called after `Cleanup` or `Close` aborted the write |
 | `ErrFileBusy` | Windows only. Another handle refused the replace on every retry, or the context ended while waiting to retry. It arrives inside a `*WriteError` with `PhaseRename`, wrapping the last `syscall.Errno`: a sharing or lock violation means a handle held the file, and access denied is either such a handle or an ACL refusal |
-| `ErrModeUnsupported` | Windows only. `EnforceMode`, `EnsurePrivateDir`, or a write or probe given `WithMode` or `WithMkdirMode`. Returned before anything is created |
+| `ErrModeUnsupported` | Windows only. `EnforceMode`, `EnsurePrivateDir`, or a write or probe given a nonzero `WithMode` or `WithMkdirMode`; a zero mode is `ErrInvalidArgument`. Returned before anything is created |
 
 `ErrNotRegular` arrives as a `*NotRegularError` carrying `Name` and `Mode`. Use `errors.As` to report what was there instead of parsing the message.
 

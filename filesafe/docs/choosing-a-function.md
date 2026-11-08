@@ -34,7 +34,7 @@ Every write returns `(Result, error)`. [Durability and errors](durability.md) ex
 
 `NewPendingFile` opens a temp file in the target's directory. `PendingFile` embeds `*os.File`, so `io.Writer`, `io.ReaderFrom` and `fmt.Fprintf` all work on it. `Name()` reports the temp's path, so another tool can inspect the staged file before it is published.
 
-`Commit` runs the same sync and rename as `WriteFile`. Calling it again returns the first result. After `Cleanup` it returns `ErrAborted`. `Cleanup` closes and removes the temp, does nothing after `Commit`, and is safe to `defer` right after `NewPendingFile`.
+`Commit` runs the same sync and rename as `WriteFile`. Calling it again returns the first result. After `Cleanup` it returns `ErrAborted`. `Cleanup` closes and removes the temp, does nothing after `Commit`, and is safe to `defer` right after `NewPendingFile`. `Close` aborts an uncommitted write as `Cleanup` does, so a deferred `Close` is safe too. `File.Close` closes only the descriptor and makes `Commit` fail.
 
 A `WithMaxBytes` cap is enforced as you write. `BytesWritten()` reports the count, `Truncate` re-syncs it, and a call that would cross the cap is rejected whole. `Commit` checks the cap again against the staged file's real size. Bytes written outside that stream, through `WriteAt`, `Write` after `Seek` or a reopen of the temp by path, cannot publish an over-cap file either.
 
@@ -54,8 +54,8 @@ Writes and probes take `WriteOption` values, sweeps take `SweepOption` values an
 
 | Option | Applies to | Effect |
 | --- | --- | --- |
-| `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins. A zero `mode` fails with `ErrInvalidArgument`. On Windows it fails with `ErrModeUnsupported` |
-| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it or `WithMkdirAll(true)` a missing parent is an error. A zero `mode` fails with `ErrInvalidArgument`. On Windows it fails with `ErrModeUnsupported` |
+| `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins. A zero `mode` fails with `ErrInvalidArgument` on every platform. On Windows a nonzero `mode` fails with `ErrModeUnsupported` |
+| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it or `WithMkdirAll(true)` a missing parent is an error. A zero `mode` fails with `ErrInvalidArgument` on every platform. On Windows a nonzero `mode` fails with `ErrModeUnsupported` |
 | `WithMkdirAll(create)` | writes, probes | `true` creates missing parent directories as `os.MkdirAll` does, at 0777 through the umask, and syncs each one's parent where the platform syncs directories. It sets and checks no mode, so it works on Windows too. `false` creates nothing. It and `WithMkdirMode` replace each other; the last call wins |
 | `WithMaxBytes(n)` | writes, probes | Caps staged content at `n` bytes, checked while staging and before the rename. Over-cap writes match `ErrFileTooLarge`. `n <= 0` means no cap. A probe stages one byte, so no cap refuses it |
 | `WithLogger(l)` | every call that takes options | The `*slog.Logger` for diagnostics. A nil logger, like none, uses `slog.Default()` |
