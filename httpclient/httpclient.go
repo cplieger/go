@@ -270,8 +270,8 @@ func IsAttemptTimeout(err error) bool {
 // ParseRetryAfterResponse and StatusError.RetryAfter keep the raw value; Do's
 // rate-limit options cap it at their maxWait, and a non-positive maxWait takes
 // RetryAfterCap. Its value is part of the v1 API, so a caller may derive its
-// own bounds from it (a server timeout covering the longest wait of GetBytes
-// or the transport).
+// own bounds from it (a server timeout covering the longest Retry-After wait
+// of GetBytes or the transport).
 const RetryAfterCap = 60 * time.Second
 
 // The retry and body defaults are unexported so tuning one is not an API

@@ -4,7 +4,7 @@ This page is for a developer choosing between the three ways httpclient retries 
 
 ## Three ways to retry
 
-Each has a different owner for the request, the body and the response. All three run one retry loop, with the same attempt budget, backoff and `Retry-After` handling, and differ only in how they judge an attempt.
+Each has a different owner for the request, the body and the response. All three run one retry loop, with the same attempt budget and backoff, and differ in how they judge an attempt and where an explicit wait comes from (see [Waits and Retry-After](#waits-and-retry-after)).
 
 | Call | You give it | It returns | Use it when |
 | --- | --- | --- | --- |
@@ -132,7 +132,7 @@ body, err := httpclient.Do(ctx, func(ctx context.Context) ([]byte, error) {
 }, httpclient.WithRateLimitRetry(30*time.Second))
 ```
 
-`Do` retries a 408, a retryable 5xx or a transient network error by itself, because `IsTransient` reads the `*StatusError` or the network error inside the exhaustion error. A 429 is retried only because of `WithRateLimitRetry`, which waits the response's `Retry-After` but never longer than `maxWait`. Without that option a 429 ends the loop, like a 401, a 403 or any settled status. For the other retried failures, the exhaustion error keeps the `Retry-After` hint, so `Do` waits what the server asked for instead of its own backoff.
+`Do` retries a 408, a retryable 5xx or a transient network error by itself, because `IsTransient` reads the `*StatusError` or the network error inside the exhaustion error. A 429 is retried only because of `WithRateLimitRetry`, which waits the response's `Retry-After` but never longer than `maxWait`. Without that option a 429 ends the loop, like a 401, a 403 or any settled status. For the other retried failures, the exhaustion error keeps the `Retry-After` hint, so `Do` waits what the server asked for, capped at 60 seconds, instead of its own backoff.
 
 ## Logging
 
