@@ -673,7 +673,7 @@ func (c *logConfig) resolveClientIP(r *http.Request) string {
 //
 // Each caller-supplied observability callback — the WithPathFunc transform,
 // the WithClientIPFunc resolver, the WithLogLevel policy, and the
-// WithRecordRouteMetric hook — run through recover guards. This defer sits in
+// WithRecordRouteMetric hook — runs through a recover guard. This defer sits in
 // the outer Logging layer, OUTSIDE Recoverer (Logging is outermost so it can log
 // the recovered 500), so a panic raised here happens after Recoverer has already
 // returned and would escape to net/http and close the connection. Isolating each

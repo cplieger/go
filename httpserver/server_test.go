@@ -298,9 +298,9 @@ func TestRun_nilServeExitIgnored(t *testing.T) {
 // refused with a panic the caller can recover, before Serve's goroutine
 // starts.
 func TestRun_nilServerOrListenerPanicsInTheCaller(t *testing.T) {
-	for name, call := range map[string]func(){
-		"nil srv": func() { _ = httpserver.Run(t.Context(), nil, closedListener(t)) },
-		"nil ln":  func() { _ = httpserver.Run(t.Context(), httpserver.New(nil), nil) },
+	for name, call := range map[string]func(t *testing.T){
+		"nil srv": func(t *testing.T) { _ = httpserver.Run(t.Context(), nil, closedListener(t)) },
+		"nil ln":  func(t *testing.T) { _ = httpserver.Run(t.Context(), httpserver.New(nil), nil) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
@@ -308,7 +308,7 @@ func TestRun_nilServerOrListenerPanicsInTheCaller(t *testing.T) {
 					t.Errorf("Run with a %s returned, want a panic", name)
 				}
 			}()
-			call()
+			call(t)
 		})
 	}
 }
