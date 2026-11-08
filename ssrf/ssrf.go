@@ -266,9 +266,13 @@ type URLPolicy struct {
 
 // WithLogger returns a copy of p whose RedirectPolicy writes its refusals to
 // l, so a caller running one client per peer can attribute each line. A nil l
-// means slog.Default at the time of each line, the default.
+// is ignored, as the transport's WithLogger ignores it, so the copy keeps p's
+// logger; a policy that never had one writes to slog.Default at the time of
+// each line.
 func (p URLPolicy) WithLogger(l *slog.Logger) URLPolicy {
-	p.logger = l
+	if l != nil {
+		p.logger = l
+	}
 	return p
 }
 
@@ -752,6 +756,15 @@ var reasonLabels = map[ErrorKind]string{
 	KindInvalidHost:      "invalid_host",
 }
 
+// String returns the Kind's snake_case reason label, or "blocked" for a value
+// outside the constants. It is the "reason" the redirect policy and the
+// address-policy refusals log for this Kind. The transport's structural and
+// port refusals log finer labels of their own (such as "port_not_allowed" for
+// KindBadPort, or "disallowed_network" and "unparseable_ip" for
+// KindNonPublicIP), so a caller correlating an Error with a transport log line
+// matches on the Kind, not on this text.
+func (k ErrorKind) String() string { return reasonLabel(k) }
+
 // reasonLabel maps an ErrorKind to the bounded, low-cardinality "reason" label
 // emitted by the redirect policy and by the policy-denial branch of the
 // socket-level paths ([safeControl], [safeDialContext]) -- which pass
@@ -768,11 +781,6 @@ var reasonLabels = map[ErrorKind]string{
 // this helper. A Kind with no entry in the [reasonLabels] table degrades to
 // "blocked"; add an entry there when a routed path emits a new Kind. Never
 // embed hosts/IPs in any reason label.
-// String returns the Kind's snake_case reason label, the same value the
-// package's own log lines carry as "reason", or "blocked" for a value outside
-// the constants.
-func (k ErrorKind) String() string { return reasonLabel(k) }
-
 func reasonLabel(kind ErrorKind) string {
 	if label, ok := reasonLabels[kind]; ok {
 		return label

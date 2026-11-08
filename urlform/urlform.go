@@ -493,8 +493,9 @@ func IsASCIIHost(host string) bool {
 }
 
 // Domain is a known ASCII domain that host evidence is matched against. It is
-// a type of its own so the domain and the untrusted host cannot be passed in
-// each other's place.
+// a type of its own so the call site names which value is the domain: a
+// conversion such as Domain(cfg.Domain).Matches(host) reads as the role it
+// plays, where two bare strings in a row did not.
 type Domain string
 
 // Matches reports whether host equals d or is a real dot-delimited subdomain

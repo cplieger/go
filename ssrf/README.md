@@ -70,7 +70,7 @@ if ssrf.IsPublicAddr(netip.MustParseAddr("8.8.8.8")) {
 - Validation: `ValidateURL`, `IsPublicHost`, `IsPublicAddr`, and `URLPolicy` with `NewURLPolicy` and its `Validate` and `WithLogger` methods.
 - Transport: `SafeTransport` with the options `WithAllowedPorts`, `WithAddressPolicy`, `WithResolver`, `WithDialer` and `WithLogger`, and the `TransportOption`, `AddressPolicy` and `Resolver` types.
 - Redirects: `SafeRedirectPolicy` and `URLPolicy.RedirectPolicy`, which check every hop and stop after 10.
-- Errors: `Error`, with its `Kind`, `Host`, `Msg` and `Err` fields, and the `ErrorKind` constants, whose `String` is the `reason` label the log lines carry.
+- Errors: `Error`, with its `Kind`, `Host`, `Msg` and `Err` fields, and the `ErrorKind` constants, whose `String` is the `reason` label the redirect and address-policy log lines carry. The transport's structural and port refusals log finer labels of their own.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/ssrf).
 

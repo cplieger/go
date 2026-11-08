@@ -13,7 +13,7 @@ textsafe is built for Go code that logs or re-emits text it did not write, such 
 - It replaces C0 and C1 controls, DEL, the 12 bidi controls, and U+2028 and U+2029 with a space.
 - `encoding/json` and slog's `JSONHandler` write C1 and bidi controls unescaped, so JSON alone does not stop a terminal escape or a [Trojan Source](https://trojansource.codes) reordering.
 - `Sanitize` keeps CR and LF for JSON, and `SanitizeSingleLine` replaces them for a one-line sink.
-- Caps cut on a rune boundary, and the budgeted forms bound the sanitizer's work too.
+- Caps cut on a rune boundary, and `SanitizeCapped`, `SanitizeSingleLineCapped` and `Budget` bound the sanitizer's work too.
 - An `Untrusted` value emits its sanitized form whenever slog, an encoder or a `fmt` verb writes it, as a field, a slice element or a map key. The exceptions are `%#v`, which prints an ASCII-escaped constructor call, and `%T`, `%p` and a `%w` on a non-error, which `fmt` prints without calling its methods. It stores no raw unsafe rune for such a reflection-based printer to find.
 - `Sanitize`, `SanitizeSingleLine` and `Untrusted` in slog and in `fmt`'s `%v` and `%s` do not allocate for clean text.
 

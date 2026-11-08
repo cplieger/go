@@ -86,20 +86,32 @@ func SanitizeSingleLine(s string) string {
 	return strings.Map(mapSingleLine, s)
 }
 
-// SanitizeCapped is Sanitize followed by a byte cap that INCLUDES the
-// marker. It sanitizes s under the multi-line policy (IsUnsafeMultiLine: CR
-// and LF survive, for a sink whose encoder escapes them — JSON, slog's
-// handlers), and if the result exceeds n bytes it is cut on a rune boundary
-// at n-len(marker) bytes with marker appended, so the returned text is at most
-// max(n, 0) bytes whatever marker is. A within-cap value comes back
-// untouched — byte-identical to Sanitize, no marker.
+// SanitizeCapped bounds s to n bytes, marker included, under the multi-line
+// policy (IsUnsafeMultiLine: CR and LF survive, for a sink whose encoder
+// escapes them — JSON, slog's handlers). It cuts s on a rune boundary at n
+// bytes FIRST, sanitizes that chunk, re-caps on a rune boundary if sanitizing
+// grew it (each invalid UTF-8 byte becomes the three-byte U+FFFD), and, when
+// either cap dropped bytes, cuts the text back to n-len(marker) bytes and
+// appends marker. The returned text is therefore at most max(n, 0) bytes
+// whatever marker is. A value that fits, raw and sanitized, comes back
+// byte-identical to Sanitize, with no marker.
 //
-// cut reports whether the sanitized form was SHORTENED, not whether
-// sanitizing rewrote anything: it is true exactly when that form did not fit
-// in n bytes, and false whenever the returned text is the whole sanitized
-// form. It exists because a marker cannot prove a cut — a value may end in
-// the marker on its own — so a caller that must report truncation as a fact
-// would otherwise re-implement this composition just to set its own flag.
+// Because the cap comes first, n bounds the WORK done on s as well as the
+// size of what comes back, which matters when s comes from an upstream whose
+// size the caller does not control. For a valid-UTF-8 value with no unsafe
+// rune the result is byte for byte what sanitizing first and then capping
+// gives. Two input classes differ. A value whose raw form exceeds n but whose
+// sanitized form would fit (enough multi-byte unsafe runes, each becoming one
+// space) is cut and marked, and its kept bytes can differ too. An invalid-UTF-8
+// value can keep fewer bytes, because the raw cap backs off over stray
+// continuation bytes before the sanitizer turns them into U+FFFD. The mark is
+// honest in both: bytes were dropped before sanitizing.
+//
+// cut reports whether bytes were DROPPED, by the raw cap or the re-cap, not
+// whether sanitizing rewrote anything. It exists because a marker cannot prove
+// a cut — a value may end in the marker on its own — so a caller that must
+// report truncation as a fact would otherwise re-implement this composition
+// just to set its own flag.
 //
 // n bounds the TOTAL, which is what a caller with a real budget needs: a
 // record persisted under a write limit, a payload assembled under a vendor
@@ -108,28 +120,17 @@ func SanitizeSingleLine(s string) string {
 //
 // A marker longer than n cannot be shown intact, and a partial marker is
 // indistinguishable from content, so for n < len(marker) the result is the
-// rune-boundary prefix of the sanitized form alone — the empty string for a
-// non-positive n — and the elision is reported through cut only. An empty
-// marker is legal and yields a silent cap (CapBytes over the sanitized form)
-// with the fact still returned. An empty s returns "" and false under any n,
-// negative included. marker is emitted verbatim, never sanitized: it is the
-// caller's own program text, and rewriting it would silently alter a chosen
-// mark — a marker assembled from untrusted input must be sanitized by the
-// caller first.
+// capped, sanitized text alone, at most n bytes on a rune boundary — the empty
+// string for a non-positive n — and the elision is reported through cut only.
+// An empty marker is legal and yields a silent cap with the fact still
+// returned. An empty s returns "" and false under any n, negative included.
+// marker is emitted verbatim, never sanitized: it is the caller's own program
+// text, and rewriting it would silently alter a chosen mark — a marker
+// assembled from untrusted input must be sanitized by the caller first.
 //
 // The CR/LF policy is a second function rather than a parameter, so a call site
 // names its sink instead of passing an opaque boolean next to two other tuning
 // arguments. SanitizeSingleLineCapped is the strict twin.
-//
-// The cap is applied AHEAD of the sanitizer: s is cut on a rune boundary at n
-// bytes first, that chunk is sanitized, sanitization growth is re-capped, and
-// the marker is charged inside n. So n bounds the WORK done on s as well as
-// the size of what comes back, which matters when s comes from an upstream
-// whose size the caller does not control. For a valid-UTF-8 value with no
-// unsafe rune this is byte for byte what sanitizing first and then capping
-// gives. A value whose raw form exceeds n but whose sanitized form would fit
-// (enough multi-byte unsafe runes, each becoming one space) is cut and
-// marked, and the mark is honest: bytes were dropped before sanitizing.
 //
 // Two shapes this pair does not serve: several values under one shared
 // budget, which is Budget itself and keeps ONE truncation fact across the

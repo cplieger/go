@@ -442,8 +442,8 @@ func legacySanitizeSingleLineBounded(s string, n int) string {
 
 // legacyCapped is the sanitize-first form: it sanitizes ALL of the value and
 // bounds the SANITIZED form. The Capped pair caps first; this oracle pins that
-// the two agree on every honest value and differ only on the documented
-// class.
+// the two agree on every valid-UTF-8 value with no unsafe rune, and it is the
+// sanitize-first arm the work-bound test and benchmark measure against.
 func legacyCapped(s string, n int, marker string, sanitize func(string) string) (string, bool) {
 	s = sanitize(s)
 	if s == "" || len(s) <= n {
@@ -457,15 +457,16 @@ func legacyCapped(s string, n int, marker string, sanitize func(string) string) 
 
 // TestSanitizeCappedParity holds the pair byte-for-byte against the
 // hand-composed cap-first form across the adversarial corpus, every
-// interesting cap and several marker widths. The corpus carries the one class
-// where cap-first differs from sanitizing first (a value whose raw bytes
-// exceed the cap while its sanitized form fits, because multi-byte unsafe runes
-// collapse to single-byte spaces): this pair cuts and marks those rows.
+// interesting cap and several marker widths. The corpus carries both classes
+// where cap-first differs from sanitizing first: a value whose raw bytes exceed
+// the cap while its sanitized form fits, because multi-byte unsafe runes
+// collapse to single-byte spaces, which this pair cuts and marks; and invalid
+// UTF-8, where the raw cut backs off over stray bytes and keeps fewer.
 func TestSanitizeCappedParity(t *testing.T) {
 	inputs := []string{
 		"", "a", "hello world", "already ends in...", "a\r\nb", "ab\ncd",
 		"a\x1b[2Jb", "a\u009b2Jb", "a\u202evil\u202cb", "葬送のフリーレン",
-		"a\U0001f600b", "aé", "\xff\xff\xff", "\xed\xa0\x80",
+		"a\U0001f600b", "aé", "\xff\xff\xff", "\xed\xa0\x80", "0\xa4\xa4",
 		strings.Repeat("\u202e", 5), "A" + strings.Repeat("\u202e", 64),
 	}
 	markers := []string{"...", "", "*", "…", "...(truncated)"}

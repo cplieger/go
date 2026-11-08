@@ -41,8 +41,9 @@ func composedCapFirst(s string, n int, marker string, sanitize func(string) stri
 // a cap too small for the marker drops the marker rather than emitting a
 // fragment, an empty marker caps silently, sanitization growth is re-capped,
 // every truncation lands on a rune boundary, and the raw pre-cap shows up as
-// the one documented divergence from sanitizing first (an oversized value
-// that SHRINKS when sanitized is cut and marked here).
+// the two documented divergences from sanitizing first (an oversized value
+// that SHRINKS when sanitized is cut and marked here, and an invalid-UTF-8
+// value keeps fewer bytes).
 func TestSanitizeCappedCapFirst(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -73,12 +74,17 @@ func TestSanitizeCappedCapFirst(t *testing.T) {
 		{"two-byte rune backoff below marker width", "aé", 2, "...", "a", "a", true},
 		{"four-byte rune backoff with one-byte marker", "a\U0001f600b", 5, "*", "a*", "a*", true},
 		{"sanitizer growth is re-capped", "\xff\xff\xff", 8, "...", "\ufffd...", "\ufffd...", true},
-		// The pre-cap's one observable divergence from SanitizeCapped: five
-		// three-byte bidi overrides are 15 raw bytes but collapse to five
-		// single-byte spaces, so the Capped pair returns the whole sanitized
-		// form unmarked while this order cuts the raw input at the budget
-		// first and marks what it dropped.
+		// The cap-first result for a value that shrinks: five three-byte
+		// bidi overrides are 15 raw bytes but collapse to five single-byte
+		// spaces. Capping the raw input at 10 bytes first drops two
+		// overrides and marks the cut, where sanitizing first would return
+		// five spaces and cut false.
 		{"oversized value that shrinks is cut and marked", "\u202e\u202e\u202e\u202e\u202e", 10, "...", "   ...", "   ...", true},
+		// The other divergence: the raw cut at 2 bytes backs off over the two
+		// stray continuation bytes to byte 0, so nothing of the value is kept
+		// and the marker fills the cap. Sanitizing first would turn them into
+		// U+FFFD and keep the leading "0" before the marker.
+		{"invalid UTF-8 raw cut backs off over stray bytes", "0\xa4\xa4", 2, "*", "*", "*", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

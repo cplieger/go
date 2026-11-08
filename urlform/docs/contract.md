@@ -79,7 +79,7 @@ A form with a host but no path reads `/`, which is how a browser resolves `https
 - `FoldHostASCII(host)` returns that fold, for host evidence you hold from elsewhere, such as a configured domain, a request header or a host you parsed yourself.
 - `EqualASCIIFold(a, b)` compares under that fold, for ASCII tokens that are not hosts, such as a path token or a query parameter name.
 - `IsASCIIHost(host)` reports whether every byte is ASCII. Run it first, so a Cyrillic lookalike or a U+0130 or U+212A spelling never matches a real domain. To accept international hosts, convert punycode yourself instead of relaxing this check.
-- `Domain(domain).Matches(host)` reports whether the host equals the domain or is a real subdomain of it. The domain has its own type, so the two cannot be passed in each other's place.
+- `Domain(domain).Matches(host)` reports whether the host equals the domain or is a real subdomain of it. The domain has its own type, so the call site names which value is the domain.
 
 The standard library's case functions are unsafe here. `strings.ToLower` turns U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE into `i` and U+212A KELVIN SIGN into `k`. `strings.EqualFold` reads U+212A as `k` and U+017F LATIN SMALL LETTER LONG S as `s`. The two accept different inputs, so neither can stand in for the other.
 

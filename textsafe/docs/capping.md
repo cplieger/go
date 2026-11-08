@@ -54,7 +54,7 @@ When the caller does not control a value's size, such as an upstream response fi
 
 So `SanitizeCapped` and `SanitizeSingleLineCapped` apply the cap ahead of the sanitizer. They cut the raw bytes on a rune boundary first, sanitize only that chunk, cap again if sanitizing grew it, and count your marker inside the cap. A huge value costs no more work than a short one.
 
-For a valid UTF-8 value with no unsafe rune, that gives the same bytes and the same `cut` as sanitizing the whole value and then capping. The two orders differ only when the raw value past the cap holds multi-byte unsafe runes, because each one shrinks to a one-byte space: such a value can be cut and marked although its sanitized form would have fit. The mark is honest, because bytes really were dropped before sanitizing.
+For a valid UTF-8 value with no unsafe rune, that gives the same bytes and the same `cut` as sanitizing the whole value and then capping. The two orders differ in two cases. When the raw value past the cap holds multi-byte unsafe runes, each one shrinks to a one-byte space, so such a value can be cut and marked although its sanitized form would have fit. When the value is invalid UTF-8, the raw cut backs off over stray continuation bytes before the sanitizer turns them into U+FFFD, so it can keep fewer bytes. The mark is honest in both cases, because bytes really were dropped before sanitizing.
 
 ## Several values under one budget
 

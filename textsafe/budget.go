@@ -8,23 +8,23 @@ import "strings"
 // bounds the sanitizer's WORK and not merely its output, and the marker is
 // charged inside the budget exactly as SanitizeCapped charges it.
 //
-// It is a SEPARATE primitive from the Capped pair rather than an option on it,
-// because SanitizeCapped sanitizes all of s by construction — its cap must
-// survive sanitization growth — and no marker placement changes that. A caller
-// whose value is NOT known to be small needs the opposite order, and a caller
-// assembling SEVERAL values under one shared bound needs a running remainder and
-// a latched fact that a single-call function cannot express. What the two share —
-// the rune-boundary cut, the marker charged inside the cap, the cut FACT returned
-// rather than inferred from the marker — is identical on purpose, so a call site
-// can move between them without re-reading either contract.
+// It is a type of its own rather than an option on the Capped pair because a
+// caller assembling SEVERAL values under one shared bound needs a running
+// remainder and one latched truncation fact across the writes, which a
+// single-value function cannot express. The Capped pair is its one-write form:
+// the cap-first order, the rune-boundary cut, the marker charged inside the
+// cap and the cut FACT returned rather than inferred from the marker are the
+// same, so a call site can move between them without re-reading either
+// contract.
 //
 // The order is the whole point of the type. A multi-megabyte upstream value
 // walked by strings.Map in a memory-limited process is a work-amplification
 // denial of service (CWE-400) whatever the output bound is, so a caller reading
 // an upstream field whose size it does not control caps first. For a value that
-// carries no unsafe rune and is valid UTF-8 the two orders are byte-identical,
-// so adopting this one changes nothing an honest value emits; the two diverge
-// for exactly one input class, described on SanitizeCapped.
+// carries no unsafe rune and is valid UTF-8, capping first is byte-identical to
+// sanitizing first, so this order changes nothing an honest value emits. The
+// two orders differ for multi-byte unsafe runes past the cap and for invalid
+// UTF-8, both described on SanitizeCapped; cut is honest either way.
 //
 // A Budget is a running remainder over values that ACCUMULATE. A caller
 // bounding several separate output fields by re-measuring an envelope after
