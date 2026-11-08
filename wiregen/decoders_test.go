@@ -240,3 +240,22 @@ func TestDecoders_OptionalMappedField(t *testing.T) {
 		})
 	}
 }
+
+// TestPathNameOverride_KeyedByGoName pins the key the map takes: a type renamed
+// in TS by TSNameOverride still takes its path override under its Go name, and
+// a key spelt as the TS name names no registered type and is refused.
+func TestPathNameOverride_KeyedByGoName(t *testing.T) {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.Address]()}
+	r.TSNameOverride = map[string]string{"Address": "Addr"}
+	r.PathNameOverride = map[string]string{"Address": "the_addr"}
+	dec := mustGen(t, r.decodersFile)
+	if !strings.Contains(dec, `asObject(v, "$.the_addr")`) || strings.Contains(dec, `"$.addr"`) {
+		t.Errorf("decoder does not use the override keyed by the Go name:\n%s", dec)
+	}
+
+	r.PathNameOverride = map[string]string{"Addr": "the_addr"}
+	if _, err := r.decodersFile(t.Context()); err == nil || !strings.Contains(err.Error(), `PathNameOverride["Addr"]`) {
+		t.Errorf("a PathNameOverride keyed by the TS name = %v, want it refused", err)
+	}
+}

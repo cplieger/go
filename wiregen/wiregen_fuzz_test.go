@@ -125,7 +125,7 @@ func unescapedQuotes(line string) int {
 	return n
 }
 
-func FuzzWireConstTSName(f *testing.F) {
+func FuzzConstTSName(f *testing.F) {
 	f.Add("MaxRetries")
 	f.Add("export const evil = 0;\n//")
 	f.Add("123bad")

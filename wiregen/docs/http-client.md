@@ -9,10 +9,10 @@ The table is authoritative: build the server's routes, the client and the docume
 ```go
 type Endpoint struct {
     Extensions  map[string]any // OpenAPI x- members of the operation
-    Params      Type       // the path placeholders' struct
-    Query       Type       // the query string's struct
-    Request     Type       // the JSON request body
-    Response    Type       // the JSON response body; zero: none
+    Params      Type           // the path placeholders' struct
+    Query       Type           // the query string's struct
+    Request     Type           // the JSON request body
+    Response    Type           // the JSON response body; zero: none
     Name        string         // a TS identifier: the function's name
     Method      string         // GET, POST, PUT, PATCH or DELETE
     Path        string         // "/api/items/{id}"

@@ -96,6 +96,12 @@ func TestUntaggedFieldByOption(t *testing.T) {
 			t.Errorf("Generate: %v", err)
 		}
 	})
+	t.Run("a later false turns the option off", func(t *testing.T) {
+		r := strictReg([]wiregen.Option{wiregen.WithRequireJSONTags(true), wiregen.WithRequireJSONTags(false)}, wiregen.TypeRef[strict.T]())
+		if err := generateErr(t, r); err != nil {
+			t.Errorf("Generate with the option turned off: %v", err)
+		}
+	})
 }
 
 // encoding/json writes a type with a marshaler through it, so a registered
