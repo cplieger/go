@@ -758,11 +758,11 @@ var reasonLabels = map[ErrorKind]string{
 
 // String returns the Kind's snake_case reason label, or "blocked" for a value
 // outside the constants. It is the "reason" the redirect policy and the
-// address-policy refusals log for this Kind. The transport's structural and
-// port refusals log finer labels of their own (such as "port_not_allowed" for
-// KindBadPort, or "disallowed_network" and "unparseable_ip" for
-// KindNonPublicIP), so a caller correlating an Error with a transport log line
-// matches on the Kind, not on this text.
+// address-policy refusals log for this Kind. The transport's structural
+// refusals and its disallowed-port refusal log finer labels of their own
+// ("port_not_allowed" for KindBadPort, and "disallowed_network" and
+// "unparseable_ip" for KindNonPublicIP, among others), so a transport line's
+// reason can be finer than String for the Kind the call returns.
 func (k ErrorKind) String() string { return reasonLabel(k) }
 
 // reasonLabel maps an ErrorKind to the bounded, low-cardinality "reason" label

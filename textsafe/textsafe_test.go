@@ -458,10 +458,11 @@ func legacyCapped(s string, n int, marker string, sanitize func(string) string) 
 // TestSanitizeCappedParity holds the pair byte-for-byte against the
 // hand-composed cap-first form across the adversarial corpus, every
 // interesting cap and several marker widths. The corpus carries both classes
-// where cap-first differs from sanitizing first: a value whose raw bytes exceed
-// the cap while its sanitized form fits, because multi-byte unsafe runes
-// collapse to single-byte spaces, which this pair cuts and marks; and invalid
-// UTF-8, where the raw cut backs off over stray bytes and keeps fewer.
+// where cap-first differs from sanitizing first: a value over the cap holding
+// multi-byte unsafe runes, which collapse to single-byte spaces, so this pair
+// keeps fewer bytes and cuts and marks it even when its sanitized form fits;
+// and invalid UTF-8, where the raw cut backs off over stray bytes and keeps
+// fewer.
 func TestSanitizeCappedParity(t *testing.T) {
 	inputs := []string{
 		"", "a", "hello world", "already ends in...", "a\r\nb", "ab\ncd",

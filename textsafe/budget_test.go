@@ -42,8 +42,8 @@ func composedCapFirst(s string, n int, marker string, sanitize func(string) stri
 // fragment, an empty marker caps silently, sanitization growth is re-capped,
 // every truncation lands on a rune boundary, and the raw pre-cap shows up as
 // the two documented divergences from sanitizing first (an oversized value
-// that SHRINKS when sanitized is cut and marked here, and an invalid-UTF-8
-// value keeps fewer bytes).
+// holding multi-byte unsafe runes keeps fewer bytes and is cut and marked even
+// when it SHRINKS to fit, and an invalid-UTF-8 value keeps fewer bytes).
 func TestSanitizeCappedCapFirst(t *testing.T) {
 	tests := []struct {
 		name       string

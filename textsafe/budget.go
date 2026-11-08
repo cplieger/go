@@ -23,8 +23,9 @@ import "strings"
 // an upstream field whose size it does not control caps first. For a value that
 // carries no unsafe rune and is valid UTF-8, capping first is byte-identical to
 // sanitizing first, so this order changes nothing an honest value emits. The
-// two orders differ for multi-byte unsafe runes past the cap and for invalid
-// UTF-8, both described on SanitizeCapped; cut is honest either way.
+// two orders differ for a value over the cap that holds multi-byte unsafe
+// runes and for invalid UTF-8, both described on SanitizeCapped; cut is honest
+// either way.
 //
 // A Budget is a running remainder over values that ACCUMULATE. A caller
 // bounding several separate output fields by re-measuring an envelope after
