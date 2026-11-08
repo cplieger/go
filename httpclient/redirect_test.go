@@ -28,8 +28,8 @@ func redirectVia(n int) []*http.Request {
 	return via
 }
 
-func TestRedirectPolicyFunc(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(
+func TestRedirectPolicy(t *testing.T) {
+	policy := httpclient.RedirectPolicy(
 		httpclient.WithAllowedHosts("example.com"),
 		httpclient.WithAllowedSuffixes(".example.org"),
 		httpclient.WithMaxHops(3),
@@ -60,35 +60,35 @@ func TestRedirectPolicyFunc(t *testing.T) {
 	}
 
 	// no options refuses all
-	nilPolicy := httpclient.RedirectPolicyFunc()
+	nilPolicy := httpclient.RedirectPolicy()
 	if err := nilPolicy(redirectReq("example.com"), nil); err == nil {
 		t.Error("no-options policy should refuse all redirects")
 	}
 }
 
-// TestRedirectPolicyFunc_hosts_only_allows_configured_host pins that an
+// TestRedirectPolicy_hosts_only_allows_configured_host pins that an
 // allowlist of hosts (no suffixes) still selects the allow path, not the
 // refuse-all branch (which only applies when BOTH lists are empty).
-func TestRedirectPolicyFunc_hosts_only_allows_configured_host(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("example.com"))
+func TestRedirectPolicy_hosts_only_allows_configured_host(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithAllowedHosts("example.com"))
 	if err := policy(redirectReq("example.com"), nil); err != nil {
-		t.Errorf("RedirectPolicyFunc(hosts only) to example.com = %v, want nil", err)
+		t.Errorf("RedirectPolicy(hosts only) to example.com = %v, want nil", err)
 	}
 }
 
-// TestRedirectPolicyFunc_suffixes_only_allows_configured_suffix is the suffix
+// TestRedirectPolicy_suffixes_only_allows_configured_suffix is the suffix
 // twin of the hosts-only case.
-func TestRedirectPolicyFunc_suffixes_only_allows_configured_suffix(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".example.org"))
+func TestRedirectPolicy_suffixes_only_allows_configured_suffix(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".example.org"))
 	if err := policy(redirectReq("sub.example.org"), nil); err != nil {
-		t.Errorf("RedirectPolicyFunc(suffixes only) to sub.example.org = %v, want nil", err)
+		t.Errorf("RedirectPolicy(suffixes only) to sub.example.org = %v, want nil", err)
 	}
 }
 
-// TestRedirectPolicyFunc_default_max_hops verifies the default hop cap when
+// TestRedirectPolicy_default_max_hops verifies the default hop cap when
 // WithMaxHops is not set: the 5th redirect is followed, the 6th refused.
-func TestRedirectPolicyFunc_default_max_hops(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("example.com"))
+func TestRedirectPolicy_default_max_hops(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithAllowedHosts("example.com"))
 	if err := policy(redirectReq("example.com"), redirectVia(5)); err != nil {
 		t.Errorf("the 5th redirect should be followed: %v", err)
 	}
@@ -160,31 +160,31 @@ func TestRedirect_case_insensitive_host_matching(t *testing.T) {
 	// RFC 3986 6.2.2.1 host comparison is case-insensitive; url.Parse preserves
 	// host case, so these uppercase/mixed-case targets drive the asciiLower fold
 	// the (all-lowercase) other redirect tests never reach.
-	policy := httpclient.RedirectPolicyFunc(
+	policy := httpclient.RedirectPolicy(
 		httpclient.WithAllowedHosts("example.com"),
 		httpclient.WithAllowedSuffixes(".example.org"),
 	)
 	if err := policy(redirectReq("EXAMPLE.COM"), nil); err != nil {
-		t.Errorf("RedirectPolicyFunc allowed-host uppercase EXAMPLE.COM = %v, want nil", err)
+		t.Errorf("RedirectPolicy allowed-host uppercase EXAMPLE.COM = %v, want nil", err)
 	}
 	if err := policy(redirectReq("Sub.Example.ORG"), nil); err != nil {
-		t.Errorf("RedirectPolicyFunc suffix mixed-case Sub.Example.ORG = %v, want nil", err)
+		t.Errorf("RedirectPolicy suffix mixed-case Sub.Example.ORG = %v, want nil", err)
 	}
 }
 
-// TestRedirectPolicyFunc_empty_suffix_fails_closed pins that an empty,
+// TestRedirectPolicy_empty_suffix_fails_closed pins that an empty,
 // dot-only or whitespace-only allowed suffix is dropped and matches no
 // target, a trailing-dot reg-name included, so a policy configured with only
-// such a suffix (and no hosts) refuses every redirect. FuzzRedirectPolicyFunc
+// such a suffix (and no hosts) refuses every redirect. FuzzRedirectPolicy
 // skips empty suffixes, so nothing else exercises this.
-func TestRedirectPolicyFunc_empty_suffix_fails_closed(t *testing.T) {
+func TestRedirectPolicy_empty_suffix_fails_closed(t *testing.T) {
 	for _, suffix := range []string{"", ".", "   "} {
-		policy := httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(suffix))
+		policy := httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(suffix))
 		if err := policy(redirectReq("evil.example."), nil); err == nil {
-			t.Errorf("RedirectPolicyFunc(WithAllowedSuffixes(%q)) allowed a trailing-dot FQDN, want refused (empty/bare-dot suffix must be dropped, failing closed)", suffix)
+			t.Errorf("RedirectPolicy(WithAllowedSuffixes(%q)) allowed a trailing-dot FQDN, want refused (empty/bare-dot suffix must be dropped, failing closed)", suffix)
 		}
 		if err := policy(redirectReq("anything.example"), nil); err == nil {
-			t.Errorf("RedirectPolicyFunc(WithAllowedSuffixes(%q)) allowed anything.example, want refused (no usable suffix, no hosts)", suffix)
+			t.Errorf("RedirectPolicy(WithAllowedSuffixes(%q)) allowed anything.example, want refused (no usable suffix, no hosts)", suffix)
 		}
 	}
 }
@@ -220,13 +220,13 @@ func viaWithOriginMethod(t *testing.T, rawURL, method string) []*http.Request {
 	return via
 }
 
-// TestRedirectPolicyFunc_sameHost pins the WithSameHost behavior: same-host
+// TestRedirectPolicy_sameHost pins the WithSameHost behavior: same-host
 // redirects (including an http->https upgrade) are followed, a cross-host hop
 // and a same-host https->http downgrade are refused, host matching is
 // ASCII-case-insensitive, and a differing port on the same host is still same
 // host.
-func TestRedirectPolicyFunc_sameHost(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithMaxHops(10))
+func TestRedirectPolicy_sameHost(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithMaxHops(10))
 	tests := []struct {
 		name    string
 		orig    string
@@ -250,23 +250,23 @@ func TestRedirectPolicyFunc_sameHost(t *testing.T) {
 	}
 }
 
-// TestRedirectPolicyFunc_sameHost_nil_via_refuses pins the nil-origin guard on
+// TestRedirectPolicy_sameHost_nil_via_refuses pins the nil-origin guard on
 // the WithSameHost clause: with no via chain there is no origin to match
 // against, so the policy must refuse gracefully rather than panic. Every other
 // same-host test supplies a non-nil origin, leaving this branch undriven.
-func TestRedirectPolicyFunc_sameHost_nil_via_refuses(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true))
+func TestRedirectPolicy_sameHost_nil_via_refuses(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithSameHost(true))
 	if err := policy(reqTo(t, "https://arr.example/b"), nil); err == nil {
 		t.Error("WithSameHost policy with nil via = nil, want refusal (no origin to match against)")
 	}
 }
 
-// TestRedirectPolicyFunc_downgrade_refused_for_allowlist confirms the
+// TestRedirectPolicy_downgrade_refused_for_allowlist confirms the
 // scheme-downgrade guard also applies to an allowlisted host, not only the
 // same-host path: a custom auth header must not follow onto a cleartext hop
 // even to an allowed host.
-func TestRedirectPolicyFunc_downgrade_refused_for_allowlist(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("cdn.example"))
+func TestRedirectPolicy_downgrade_refused_for_allowlist(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithAllowedHosts("cdn.example"))
 	if err := policy(reqTo(t, "http://cdn.example/x"), viaWithOrigin(t, "https://api.example/start")); err == nil {
 		t.Error("https->http redirect to an allowlisted host should be refused by default")
 	}
@@ -358,14 +358,14 @@ func methodVia(t *testing.T, rawURL string, methods ...string) []*http.Request {
 	return via
 }
 
-// TestRedirectPolicyFunc_preserveMethod pins the option's decision table at the
+// TestRedirectPolicy_preserveMethod pins the option's decision table at the
 // policy level: a method-changing hop is refused with http.ErrUseLastResponse
 // (so the 3xx surfaces to the caller rather than failing the request), a
 // same-method hop is untouched, an empty Method is read as GET (net/http's own
 // reading), the comparison is against the ORIGINAL request so a 307-then-302
 // chain is caught, and an empty via chain fails closed.
-func TestRedirectPolicyFunc_preserveMethod(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true))
+func TestRedirectPolicy_preserveMethod(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true))
 	const origin = "https://api.example/start"
 	const target = "https://api.example/next"
 	tests := []struct {
@@ -418,12 +418,12 @@ func TestRedirectPolicyFunc_preserveMethod(t *testing.T) {
 	}
 }
 
-// TestRedirectPolicyFunc_preserveMethod_empty_via_fails_closed pins the
+// TestRedirectPolicy_preserveMethod_empty_via_fails_closed pins the
 // fail-closed branch: with no via chain the original method is unknowable, so
 // the hop is not followed (net/http never calls CheckRedirect this way; a
 // hand-built chain can).
-func TestRedirectPolicyFunc_preserveMethod_empty_via_fails_closed(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("api.example"), httpclient.WithPreserveMethod(true))
+func TestRedirectPolicy_preserveMethod_empty_via_fails_closed(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithAllowedHosts("api.example"), httpclient.WithPreserveMethod(true))
 	for _, via := range [][]*http.Request{nil, {}} {
 		err := policy(methodReq(t, http.MethodGet, "https://api.example/next"), via)
 		if err == nil {
@@ -435,13 +435,13 @@ func TestRedirectPolicyFunc_preserveMethod_empty_via_fails_closed(t *testing.T) 
 	}
 }
 
-// TestRedirectPolicyFunc_preserveMethod_precedence pins the ORDER inside the
+// TestRedirectPolicy_preserveMethod_precedence pins the ORDER inside the
 // policy: the hop cap, the target allowlist, and the scheme-downgrade guard are
 // the stronger refusals and must win, because they fail the request with a hard
 // error while WithPreserveMethod returns ErrUseLastResponse (a nil-error 3xx the
 // caller must classify). A hop that both leaves the allowlist and changes the
 // method must be reported as the allowlist violation.
-func TestRedirectPolicyFunc_preserveMethod_precedence(t *testing.T) {
+func TestRedirectPolicy_preserveMethod_precedence(t *testing.T) {
 	const origin = "https://api.example/start"
 	tests := []struct {
 		name    string
@@ -452,21 +452,21 @@ func TestRedirectPolicyFunc_preserveMethod_precedence(t *testing.T) {
 	}{
 		{
 			name:    "cross-host refusal wins",
-			policy:  httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("api.example"), httpclient.WithPreserveMethod(true)),
+			policy:  httpclient.RedirectPolicy(httpclient.WithAllowedHosts("api.example"), httpclient.WithPreserveMethod(true)),
 			target:  "https://evil.example/x",
 			via:     []string{http.MethodPost},
 			wantMsg: "refusing redirect to https://evil.example",
 		},
 		{
 			name:    "scheme-downgrade refusal wins",
-			policy:  httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true)),
+			policy:  httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true)),
 			target:  "http://api.example/x",
 			via:     []string{http.MethodPost},
 			wantMsg: "refusing scheme downgrade to http://api.example",
 		},
 		{
 			name:    "hop cap wins",
-			policy:  httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithMaxHops(2), httpclient.WithPreserveMethod(true)),
+			policy:  httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithMaxHops(2), httpclient.WithPreserveMethod(true)),
 			target:  "https://api.example/x",
 			via:     []string{http.MethodPost, http.MethodPost, http.MethodPost},
 			wantMsg: "too many redirects",
@@ -488,11 +488,11 @@ func TestRedirectPolicyFunc_preserveMethod_precedence(t *testing.T) {
 	}
 }
 
-// TestRedirectPolicyFunc_preserveMethod_grants_nothing pins that the option only
+// TestRedirectPolicy_preserveMethod_grants_nothing pins that the option only
 // ever narrows: on its own (no allowlist, WithSameHost or WithSameOrigin) the
 // policy still refuses every redirect via the fail-closed no-target branch.
-func TestRedirectPolicyFunc_preserveMethod_grants_nothing(t *testing.T) {
-	policy := httpclient.RedirectPolicyFunc(httpclient.WithPreserveMethod(true))
+func TestRedirectPolicy_preserveMethod_grants_nothing(t *testing.T) {
+	policy := httpclient.RedirectPolicy(httpclient.WithPreserveMethod(true))
 	err := policy(methodReq(t, http.MethodGet, "https://api.example/next"),
 		methodVia(t, "https://api.example/start", http.MethodGet))
 	if err == nil {
@@ -549,7 +549,7 @@ func TestWithPreserveMethod_end_to_end(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, hopMethod := preserveMethodChain(t, tt.status)
 			client := srv.Client()
-			client.CheckRedirect = httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true))
+			client.CheckRedirect = httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true))
 
 			var body io.Reader = http.NoBody
 			if tt.method == http.MethodPost {
@@ -610,7 +610,7 @@ func TestWithPreserveMethod_end_to_end_307_then_302(t *testing.T) {
 	defer srv.Close()
 
 	client := srv.Client()
-	client.CheckRedirect = httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true))
+	client.CheckRedirect = httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(true))
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/start", strings.NewReader("payload"))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
@@ -672,23 +672,23 @@ func TestRefuseAllRedirects_surfaces_3xx_and_never_follows(t *testing.T) {
 // last value wins — both pinned here because nothing else passes false: a
 // mutant that hard-wires either config field to true survives every other
 // redirect test.
-func TestRedirectPolicyFunc_false_equals_absent_and_last_wins(t *testing.T) {
+func TestRedirectPolicy_false_equals_absent_and_last_wins(t *testing.T) {
 	t.Run("WithSameHost(false) refuses like no option", func(t *testing.T) {
-		policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(false), httpclient.WithMaxHops(10))
+		policy := httpclient.RedirectPolicy(httpclient.WithSameHost(false), httpclient.WithMaxHops(10))
 		err := policy(reqTo(t, "https://arr.example/b"), viaWithOrigin(t, "https://arr.example/a"))
 		if err == nil {
 			t.Error("policy(same-host hop) with WithSameHost(false) = nil err, want refusal (false must equal leaving the option out)")
 		}
 	})
 	t.Run("later WithSameHost(false) overrides earlier true", func(t *testing.T) {
-		policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithSameHost(false), httpclient.WithMaxHops(10))
+		policy := httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithSameHost(false), httpclient.WithMaxHops(10))
 		err := policy(reqTo(t, "https://arr.example/b"), viaWithOrigin(t, "https://arr.example/a"))
 		if err == nil {
 			t.Error("policy(same-host hop) with WithSameHost(true) then (false) = nil err, want refusal (last value wins)")
 		}
 	})
 	t.Run("WithPreserveMethod(false) follows a method-rewriting hop like no option", func(t *testing.T) {
-		policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(false), httpclient.WithMaxHops(10))
+		policy := httpclient.RedirectPolicy(httpclient.WithSameHost(true), httpclient.WithPreserveMethod(false), httpclient.WithMaxHops(10))
 		req := reqTo(t, "https://arr.example/b")
 		via := viaWithOriginMethod(t, "https://arr.example/a", "POST")
 		if err := policy(req, via); err != nil {
@@ -725,8 +725,8 @@ func TestSameOriginRefusesOtherPort(t *testing.T) {
 		{"http to https on the same host", "http://arr.example/a", "https://arr.example/b", "https://arr.example"},
 		{"other host", "https://arr.example/a", "https://other.example/b", "https://other.example"},
 	}
-	sameOrigin := httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true))
-	sameHost := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true))
+	sameOrigin := httpclient.RedirectPolicy(httpclient.WithSameOrigin(true))
+	sameHost := httpclient.RedirectPolicy(httpclient.WithSameHost(true))
 	for _, tt := range refusedHops {
 		t.Run(tt.name, func(t *testing.T) {
 			err := sameOrigin(reqTo(t, tt.target), viaWithOrigin(t, tt.orig))
@@ -776,49 +776,49 @@ func TestRedirectRefusalsTyped(t *testing.T) {
 	}{
 		{
 			name:   "no allowlist",
-			policy: httpclient.RedirectPolicyFunc(),
+			policy: httpclient.RedirectPolicy(),
 			target: target, via: viaWithOrigin(t, "https://api.example/a"),
 			reason: httpclient.RedirectNotAllowed, origin: "https://evil.example:8443",
 			message: "redirects not allowed",
 		},
 		{
 			name:   "cross host",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameHost(true)),
 			target: target, via: viaWithOrigin(t, "https://api.example/a"),
 			reason: httpclient.RedirectOtherOrigin, origin: "https://evil.example:8443",
 			message: "refusing redirect to https://evil.example:8443",
 		},
 		{
 			name:   "downgrade",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("cdn.example")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedHosts("cdn.example")),
 			target: "http://cdn.example/x?apikey=k", via: viaWithOrigin(t, "https://api.example/a"),
 			reason: httpclient.RedirectDowngrade, origin: "http://cdn.example",
 			message: "refusing scheme downgrade to http://cdn.example",
 		},
 		{
 			name:   "hop cap names the hop's target",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("api.example", "cdn.example"), httpclient.WithMaxHops(1)),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedHosts("api.example", "cdn.example"), httpclient.WithMaxHops(1)),
 			target: "https://cdn.example:8443/c?apikey=k", via: append(viaWithOrigin(t, "https://api.example/a"), &http.Request{}),
 			reason: httpclient.RedirectTooMany, origin: "https://cdn.example:8443",
 			message: "too many redirects",
 		},
 		{
 			name:   "zoned IPv6 target keeps its zone escaped",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameOrigin(true)),
 			target: "http://[fe80::1%25eth1]:8080/b", via: viaWithOrigin(t, "http://[fe80::1%25eth0]:8080/a"),
 			reason: httpclient.RedirectOtherOrigin, origin: "http://[fe80::1%25eth1]:8080",
 			message: "refusing redirect to http://[fe80::1%25eth1]:8080",
 		},
 		{
 			name:   "suffix allowlist other host",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".docker.com")),
 			target: target, via: viaWithOrigin(t, "https://hub.docker.com/a"),
 			reason: httpclient.RedirectOtherOrigin, origin: "https://evil.example:8443",
 			message: "refusing redirect to https://evil.example:8443",
 		},
 		{
 			name:   "suffix allowlist downgrade",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".docker.com")),
 			target: "http://hub.docker.com/b", via: viaWithOrigin(t, "https://hub.docker.com/a"),
 			reason: httpclient.RedirectDowngrade, origin: "http://hub.docker.com",
 			message: "refusing scheme downgrade to http://hub.docker.com",
@@ -853,60 +853,60 @@ func TestRedirectRefusalsHandBuilt(t *testing.T) {
 	}{
 		{
 			name:   "nil target URL",
-			policy: httpclient.RedirectPolicyFunc(),
+			policy: httpclient.RedirectPolicy(),
 			req:    &http.Request{},
 			reason: httpclient.RedirectNotAllowed,
 		},
 		{
 			name:   "host-less target and nil original URL under WithSameOrigin",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameOrigin(true)),
 			req:    &http.Request{URL: &url.URL{Path: "/b"}},
 			via:    []*http.Request{{}},
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
 			name:   "nil target URL under WithSameHost",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameHost(true)),
 			req:    &http.Request{},
 			via:    viaWithOrigin(t, "https://arr.example/a"),
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
 			name:   "empty allowlist entry never matches a host-less target",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedHosts("")),
 			req:    &http.Request{URL: &url.URL{Path: "/b"}},
 			via:    viaWithOrigin(t, "https://arr.example/a"),
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
 			name:   "nil target URL under a suffix allowlist",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".docker.com")),
 			req:    &http.Request{},
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
 			name:   "host-less target and host-less original URL under WithSameOrigin",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameOrigin(true)),
 			req:    &http.Request{URL: &url.URL{Path: "/b"}},
 			via:    []*http.Request{{URL: &url.URL{Path: "/a"}}},
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
 			name:   "host-less target and host-less original URL under WithSameHost",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameHost(true)),
 			req:    &http.Request{URL: &url.URL{Path: "/b"}},
 			via:    []*http.Request{{URL: &url.URL{Path: "/a"}}},
 			reason: httpclient.RedirectOtherOrigin,
 		},
 		{
 			name:   "upper-case target scheme",
-			policy: httpclient.RedirectPolicyFunc(),
+			policy: httpclient.RedirectPolicy(),
 			req:    &http.Request{URL: &url.URL{Scheme: "HTTPS", Host: "evil.example"}},
 			reason: httpclient.RedirectNotAllowed, origin: "https://evil.example",
 		},
 		{
 			name:   "upper-case original scheme is the same origin",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true)),
+			policy: httpclient.RedirectPolicy(httpclient.WithSameOrigin(true)),
 			req:    &http.Request{URL: &url.URL{Scheme: "https", Host: "arr.example"}},
 			via:    []*http.Request{{URL: &url.URL{Scheme: "HTTPS", Host: "arr.example"}}},
 		},
@@ -991,7 +991,7 @@ func TestSameOriginComposition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := httpclient.RedirectPolicyFunc(tt.opts...)(reqTo(t, tt.target), viaWithOrigin(t, orig))
+			err := httpclient.RedirectPolicy(tt.opts...)(reqTo(t, tt.target), viaWithOrigin(t, orig))
 			if tt.reason == 0 {
 				if err != nil {
 					t.Errorf("%s -> %s = %v, want followed", orig, tt.target, err)
@@ -1010,8 +1010,8 @@ func TestSameOriginComposition(t *testing.T) {
 // exactly after url.Parse decodes its %25 form once. A domain allowlist never
 // matches an IP literal, whose zone is free text.
 func TestRedirectHostIdentity(t *testing.T) {
-	sameOrigin := httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true))
-	sameHost := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true))
+	sameOrigin := httpclient.RedirectPolicy(httpclient.WithSameOrigin(true))
+	sameHost := httpclient.RedirectPolicy(httpclient.WithSameHost(true))
 	tests := []struct {
 		name         string
 		policy       httpclient.CheckRedirect
@@ -1104,29 +1104,29 @@ func TestRedirectHostIdentity(t *testing.T) {
 		},
 		{
 			name:   "WithAllowedHosts zone differing only in case",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("fe80::1%eth0")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedHosts("fe80::1%eth0")),
 			orig:   "https://api.example/a", target: "https://[fe80::1%25ETH0]/b",
 			reason: httpclient.RedirectOtherOrigin, origin: "https://[fe80::1%25ETH0]",
 		},
 		{
 			name:   "WithAllowedHosts same zone",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("fe80::1%eth0")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedHosts("fe80::1%eth0")),
 			orig:   "https://api.example/a", target: "https://[fe80::1%25eth0]/b",
 		},
 		{
 			name:   "WithAllowedHosts IPv6 spelled another way",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedHosts("2001:db8::a")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedHosts("2001:db8::a")),
 			orig:   "https://api.example/a", target: "https://[2001:db8:0::a]/b",
 		},
 		{
 			name:   "WithAllowedSuffixes does not match an IP literal's zone",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".example.com")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".example.com")),
 			orig:   "https://api.example.com/a", target: "https://[::1%25x.example.com]/b",
 			reason: httpclient.RedirectOtherOrigin, origin: "https://[::1%25x.example.com]",
 		},
 		{
 			name:   "WithAllowedSuffixes does not match an IPv4 literal",
-			policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".2.1")),
+			policy: httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".2.1")),
 			orig:   "https://api.example/a", target: "https://192.0.2.1/b",
 			reason: httpclient.RedirectOtherOrigin, origin: "https://192.0.2.1",
 		},
@@ -1140,7 +1140,7 @@ func TestRedirectHostIdentity(t *testing.T) {
 			reason: httpclient.RedirectOtherOrigin, origin: "https://arr.example:70000",
 		},
 		{
-			name: "a suffix does not match an IP literal's zone", policy: httpclient.RedirectPolicyFunc(httpclient.WithAllowedSuffixes(".docker.com")),
+			name: "a suffix does not match an IP literal's zone", policy: httpclient.RedirectPolicy(httpclient.WithAllowedSuffixes(".docker.com")),
 			orig: "https://hub.docker.com/a", target: "https://[::1%25.docker.com]/b",
 			reason: httpclient.RedirectOtherOrigin, origin: "https://[::1%25.docker.com]",
 		},
@@ -1165,7 +1165,7 @@ func TestRedirectHostIdentity(t *testing.T) {
 func TestRedirectHostIdentityEndToEnd(t *testing.T) {
 	var sent atomic.Int32
 	client := &http.Client{
-		CheckRedirect: httpclient.RedirectPolicyFunc(httpclient.WithSameOrigin(true)),
+		CheckRedirect: httpclient.RedirectPolicy(httpclient.WithSameOrigin(true)),
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			sent.Add(1)
 			return &http.Response{
@@ -1238,7 +1238,7 @@ func TestMaxHopsFollowsExactlyN(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			policy := httpclient.RedirectPolicyFunc(append([]httpclient.RedirectOption{httpclient.WithSameOrigin(true)}, tt.opts...)...)
+			policy := httpclient.RedirectPolicy(append([]httpclient.RedirectOption{httpclient.WithSameOrigin(true)}, tt.opts...)...)
 
 			srv, hits := redirectChain(t, tt.n)
 			resp, err := get(t, policy, srv.URL+"/hop/0")
@@ -1266,5 +1266,22 @@ func TestMaxHopsFollowsExactlyN(t *testing.T) {
 				t.Errorf("a chain of %d redirects reached the server %d times, want %d", tt.n+1, got, tt.n+1)
 			}
 		})
+	}
+}
+
+func TestRedirectReason_String(t *testing.T) {
+	t.Parallel()
+	for r, want := range map[httpclient.RedirectReason]string{
+		httpclient.RedirectNotAllowed:  "not_allowed",
+		httpclient.RedirectOtherOrigin: "other_origin",
+		httpclient.RedirectDowngrade:   "downgrade",
+		httpclient.RedirectTooMany:     "too_many",
+		0:                              "RedirectReason(0)",
+		-1:                             "RedirectReason(-1)",
+		99:                             "RedirectReason(99)",
+	} {
+		if got := r.String(); got != want {
+			t.Errorf("RedirectReason(%d).String() = %q, want %q", int(r), got, want)
+		}
 	}
 }

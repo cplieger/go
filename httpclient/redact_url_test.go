@@ -93,7 +93,7 @@ func TestLogSafeError(t *testing.T) {
 
 	// A *StatusError passes through (its Error() already redacts) and the
 	// unwrap chain is preserved.
-	se := &StatusError{Code: 429, URL: "https://example.com/p?apikey=supersecret"}
+	se := &StatusError{Code: 429, rawURL: "https://example.com/p?apikey=supersecret"}
 	got2 := LogSafeError(se)
 	if _, ok := errors.AsType[*StatusError](got2); !ok {
 		t.Error("LogSafeError(*StatusError) broke the unwrap chain")

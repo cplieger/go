@@ -16,7 +16,7 @@ import (
 )
 
 func TestStatusError_ErrorRedactsURL(t *testing.T) {
-	se := &httpclient.StatusError{Code: 429, URL: "https://user:pw@host.example/api?apikey=supersecret"}
+	se := httpclient.NewStatusErrorForURL("https://user:pw@host.example/api?apikey=supersecret", 429)
 	msg := se.Error()
 	for _, s := range []string{"supersecret", "pw"} {
 		if strings.Contains(msg, s) {
@@ -26,9 +26,9 @@ func TestStatusError_ErrorRedactsURL(t *testing.T) {
 	if !strings.Contains(msg, "HTTP 429") {
 		t.Errorf("StatusError.Error() = %q, want status code", msg)
 	}
-	// The raw URL field is still available for programmatic access.
-	if !strings.Contains(se.URL, "supersecret") {
-		t.Error("raw StatusError.URL should be preserved for callers")
+	// The raw URL is kept unexported for the redacted rendering only.
+	if !strings.Contains(httpclient.StatusErrorURL(se), "supersecret") {
+		t.Error("the raw URL should be kept for Error() to redact")
 	}
 }
 
@@ -164,7 +164,7 @@ func TestStatusErrorRenderingIsANormalizingTransform(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			raw := "https://example.com/hooks/" + tc.secret + "/deliver"
-			rendered := (&httpclient.StatusError{Code: 500, URL: raw}).Error()
+			rendered := httpclient.NewStatusErrorForURL(raw, 500).Error()
 
 			if !strings.Contains(rendered, tc.want) {
 				t.Errorf("StatusError.Error() = %q, want it to contain %q", rendered, tc.want)
@@ -179,10 +179,7 @@ func TestStatusErrorRenderingIsANormalizingTransform(t *testing.T) {
 				t.Errorf("after-only redaction of %q = %q; want the rewritten form %q to survive exactly when the raw needle missed", tc.secret, afterOnly, tc.want)
 			}
 			// And the caller's remedy: redact before the URL reaches httpclient.
-			safe := (&httpclient.StatusError{
-				Code: 500,
-				URL:  httpclient.RedactSecretString(raw, httpclient.Secret(tc.secret)),
-			}).Error()
+			safe := httpclient.NewStatusErrorForURL(httpclient.RedactSecretString(raw, httpclient.Secret(tc.secret)), 500).Error()
 			if strings.Contains(safe, tc.secret) || strings.Contains(safe, tc.want) {
 				t.Errorf("redacting before the rendering still leaked: %q", safe)
 			}
@@ -193,7 +190,7 @@ func TestStatusErrorRenderingIsANormalizingTransform(t *testing.T) {
 	// contentless placeholder rather than echoing the raw string.
 	t.Run("unparseable url fails closed", func(t *testing.T) {
 		t.Parallel()
-		rendered := (&httpclient.StatusError{Code: 500, URL: "https://example.com/hooks/tok%en/deliver"}).Error()
+		rendered := httpclient.NewStatusErrorForURL("https://example.com/hooks/tok%en/deliver", 500).Error()
 		if strings.Contains(rendered, "tok") {
 			t.Errorf("StatusError.Error() = %q, want no fragment of the path", rendered)
 		}
@@ -209,10 +206,7 @@ func TestStatusErrorRenderingIsANormalizingTransform(t *testing.T) {
 	// above) and would prove nothing about removal.
 	t.Run("query values and userinfo are removed wholesale", func(t *testing.T) {
 		t.Parallel()
-		rendered := (&httpclient.StatusError{
-			Code: 500,
-			URL:  "https://tokenABC:pw@example.com/p?apikey=tokenABC&sig=tokenABC",
-		}).Error()
+		rendered := httpclient.NewStatusErrorForURL("https://tokenABC:pw@example.com/p?apikey=tokenABC&sig=tokenABC", 500).Error()
 		if strings.Contains(rendered, "tokenABC") || strings.Contains(rendered, "pw") {
 			t.Errorf("StatusError.Error() = %q, want no fragment of the credential from the query or userinfo", rendered)
 		}
@@ -254,7 +248,7 @@ func TestSchemeDowngradeFoldIsUnicodeIndependent(t *testing.T) {
 	// not part of the 1.27 delta.
 	const longS = "\u017f"
 	for _, from := range []string{"https", "HTTPS", "HtTpS", "http" + longS, "HTTP" + longS} {
-		policy := httpclient.RedirectPolicyFunc(httpclient.WithSameHost(true))
+		policy := httpclient.RedirectPolicy(httpclient.WithSameHost(true))
 		orig, _ := http.NewRequest(http.MethodGet, "https://example.com/a", http.NoBody)
 		orig.URL.Scheme = from // set directly: url.Parse would never emit the long-s form
 		next, _ := http.NewRequest(http.MethodGet, "http://example.com/b", http.NoBody)

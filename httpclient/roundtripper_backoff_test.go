@@ -35,8 +35,8 @@ func TestRetryRoundTripper_MaxElapsedTime(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from MaxElapsedTime")
 	}
-	if !strings.Contains(err.Error(), "max elapsed time 80ms exceeded") {
-		t.Errorf("error = %v, want it to name the 80ms ceiling", err)
+	if !errors.Is(err, httpclient.ErrMaxElapsed) || !strings.Contains(err.Error(), "(80ms)") {
+		t.Errorf("error = %v, want ErrMaxElapsed naming the 80ms ceiling", err)
 	}
 	// The always-503 server leaves RoundTrip's elapsed stop with no error to
 	// wrap, which must read cleanly (no fmt.Errorf("...: %w", nil) artifact).
@@ -63,8 +63,8 @@ func TestRetryRoundTripper_MaxElapsedTime_wraps_transport_error(t *testing.T) {
 	if err == nil {
 		t.Fatal("RoundTrip = nil, want max-elapsed-time error")
 	}
-	if !strings.Contains(err.Error(), "max elapsed time") {
-		t.Errorf("error = %v, want containing 'max elapsed time'", err)
+	if !errors.Is(err, httpclient.ErrMaxElapsed) {
+		t.Errorf("error = %v, want ErrMaxElapsed", err)
 	}
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("error = %v, want errors.Is(err, io.ErrUnexpectedEOF)", err)
@@ -97,7 +97,7 @@ func TestRetryRoundTripper_MaxElapsedTime_stop_releases_discarded_response(t *te
 		resp.Body.Close()
 		t.Fatalf("RoundTrip resp = %d, want nil on the elapsed stop", resp.StatusCode)
 	}
-	if err == nil || !strings.Contains(err.Error(), "max elapsed time") {
+	if !errors.Is(err, httpclient.ErrMaxElapsed) {
 		t.Errorf("RoundTrip err = %v, want the max-elapsed-time stop", err)
 	}
 	if got := closed.Load(); got != 1 {
@@ -109,7 +109,7 @@ func TestRetryRoundTripper_MaxElapsedTime_stop_releases_discarded_response(t *te
 }
 
 // TestRetryRoundTripper_zero_base_delay_defaults_to_base: a zero base delay must
-// default to DefaultBaseDelay (1s); the single retry sleep blows the 100ms
+// default to the 1s base delay; the single retry sleep blows the 100ms
 // deadline. A boundary mutant that keeps the delay at 0 runs the retry instantly.
 func TestRetryRoundTripper_zero_base_delay_defaults_to_base(t *testing.T) {
 	t.Parallel()
@@ -304,8 +304,8 @@ func TestRetryRoundTripper_aborts_when_wait_consumes_remaining_budget(t *testing
 	if err == nil {
 		t.Fatal("RoundTrip = nil, want max-elapsed-time abort (next wait consumes the remaining budget)")
 	}
-	if !strings.Contains(err.Error(), "max elapsed time") {
-		t.Errorf("error = %v, want containing 'max elapsed time'", err)
+	if !errors.Is(err, httpclient.ErrMaxElapsed) {
+		t.Errorf("error = %v, want ErrMaxElapsed", err)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Errorf("transport calls = %d, want 1 (abort before the second attempt)", got)

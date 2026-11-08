@@ -10,7 +10,7 @@ Go strips `Authorization`, `Cookie` and `WWW-Authenticate` on a cross-domain red
 | --- | --- |
 | `DefaultRedirectPolicy` | same-host redirects only, on any port, including an `http` to `https` upgrade on that host. `New` installs it |
 | `RefuseAllRedirects` | nothing. It returns `http.ErrUseLastResponse`, so the client hands back the 3xx with a nil error |
-| `RedirectPolicyFunc(opts...)` | the hosts its options allow |
+| `RedirectPolicy(opts...)` | the hosts its options allow |
 
 `RefuseAllRedirects` is the policy for a client that carries a token to an API that issues no redirects. The 3xx it surfaces is an error under `CheckStatus`.
 
@@ -18,7 +18,7 @@ Every shipped policy refuses an `https` to `http` downgrade, even to an allowed 
 
 `CheckRedirect` is a type alias for the `http.Client.CheckRedirect` function shape, and every shipped policy is one.
 
-### RedirectPolicyFunc options
+### RedirectPolicy options
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -78,11 +78,11 @@ The `github.com/cplieger/go/httpclient/certtest` package makes throwaway self-si
 
 ## URLs in logs and errors
 
-Credentials in logs are [CWE-532](https://cwe.mitre.org/data/definitions/532.html). `GetBytes` removes userinfo and query values from every URL in its log lines and error messages. The error value it returns still carries the original URL in one exported field, described below.
+Credentials in logs are [CWE-532](https://cwe.mitre.org/data/definitions/532.html). `GetBytes` removes userinfo and query values from every URL in its log lines and error messages.
 
 - Every logged `url` attribute replaces the whole userinfo with `REDACTED`. That is stronger than `url.URL.Redacted`, which masks only the password and would leave a token passed as the username in the clear.
 - Every query value becomes `REDACTED`, because query values often carry API keys. Query keys, the scheme, the host and the path are kept for debugging, and the fragment is dropped. A URL that does not parse is logged as a fixed placeholder.
-- `StatusError.Error()` shows the same redacted URL. The exported `StatusError.URL` field holds the original URL for your code, so do not log or serialize that field.
+- `StatusError.Error()` shows the same redacted URL. The error keeps the original URL in an unexported field: `encoding/json` skips it and `%v` prints the redacted `Error()` text, but `%#v`, or any verb on a dereferenced `StatusError` value, prints every field, so log the `*StatusError` itself or its `Error()` text.
 - A transport `*url.Error` embeds the full URL, so it is reduced to its cause before it is logged or returned. The reduction repeats until no `*url.Error` is left in the chain, so a `*url.Error` a RoundTripper or redirect policy returned under net/http's own is reduced too. A chain nested more than eight deep becomes the fixed text `request failed`.
 - The revalidation cache keys an entry by a SHA-256 digest of the request's `Authorization` lines, so requests with different credentials never share an entry and the credential is never held.
 

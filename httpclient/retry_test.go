@@ -451,8 +451,8 @@ func TestGetBytes_returns_typed_StatusError_on_exhaustion(t *testing.T) {
 	if target.Code != 503 {
 		t.Errorf("Code = %d, want 503", target.Code)
 	}
-	if target.URL != srv.URL {
-		t.Errorf("URL = %q, want %q", target.URL, srv.URL)
+	if got := httpclient.StatusErrorURL(target); got != srv.URL {
+		t.Errorf("URL = %q, want %q", got, srv.URL)
 	}
 	if !errors.Is(err, httpclient.ErrServerError) {
 		t.Error("want errors.Is(ErrServerError)")
@@ -494,32 +494,8 @@ func TestGetBytes_4xx_returns_typed_StatusError(t *testing.T) {
 	if target.Code != 404 {
 		t.Errorf("Code = %d, want 404", target.Code)
 	}
-	if target.URL != srv.URL {
-		t.Errorf("URL = %q, want %q", target.URL, srv.URL)
-	}
-}
-
-func TestLimitedBody_limits_read(t *testing.T) {
-	body := io.NopCloser(strings.NewReader("hello world, this is a long body"))
-	resp := &http.Response{Body: body}
-	lr := httpclient.LimitedBody(resp, 5)
-	data, err := io.ReadAll(lr)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if string(data) != "hello" {
-		t.Errorf("got %q, want %q", data, "hello")
-	}
-}
-
-func TestLimitedBody_close_propagates(t *testing.T) {
-	closed := false
-	body := &trackingCloser{Reader: strings.NewReader("data"), onClose: func() { closed = true }}
-	resp := &http.Response{Body: body}
-	lr := httpclient.LimitedBody(resp, 100)
-	lr.Close()
-	if !closed {
-		t.Error("Close did not propagate to underlying body")
+	if got := httpclient.StatusErrorURL(target); got != srv.URL {
+		t.Errorf("URL = %q, want %q", got, srv.URL)
 	}
 }
 
@@ -839,6 +815,9 @@ func TestParseRetryAfterResponse(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusTooManyRequests, Header: h}
 	}
 
+	if d := httpclient.ParseRetryAfterResponse(nil); d != 0 {
+		t.Errorf("ParseRetryAfterResponse(nil) = %v, want 0", d)
+	}
 	if d := httpclient.ParseRetryAfterResponse(resp("")); d != 0 {
 		t.Errorf("ParseRetryAfterResponse(no header) = %v, want 0", d)
 	}
@@ -881,7 +860,7 @@ func TestGetBytes_zero_base_delay_defaults_to_base(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
-	// A zero base delay must be coerced to DefaultBaseDelay (1s), so the pre-retry
+	// A zero base delay must be coerced to the 1s default, so the pre-retry
 	// sleep blows the 100ms deadline and surfaces the context error.
 	_, err := httpclient.GetBytes(ctx, srv.Client(), srv.URL, httpclient.WithMaxAttempts(2), httpclient.WithBaseDelay(0))
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -896,7 +875,7 @@ func TestGetBytes_zero_max_body_bytes_defaults_to_full_body(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Zero must be coerced to DefaultMaxBodyBytes, returning the whole body.
+	// Zero must be coerced to the 10 MB default, returning the whole body.
 	body, err := httpclient.GetBytes(t.Context(), srv.Client(), srv.URL,
 		httpclient.WithBaseDelay(time.Millisecond), httpclient.WithMaxBodyBytes(0))
 	if err != nil {
@@ -1276,8 +1255,8 @@ func TestRetryRoundTripper_empty_method_is_GET(t *testing.T) {
 		t.Fatalf("RoundTrip err = %v, want the 503", err)
 	}
 	resp.Body.Close()
-	if got := calls.Load(); got != httpclient.DefaultMaxAttempts {
-		t.Errorf("calls = %d, want %d", got, httpclient.DefaultMaxAttempts)
+	if got := calls.Load(); got != 3 {
+		t.Errorf("calls = %d, want 3 (the default)", got)
 	}
 }
 

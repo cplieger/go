@@ -758,7 +758,7 @@ func TestRetryRoundTripper_CheckRetry_error_closes_response(t *testing.T) {
 	}
 }
 
-func TestRetryRoundTripper_PermanentError_stops_retry(t *testing.T) {
+func TestRetryRoundTripper_Permanent_stops_retry(t *testing.T) {
 	var calls atomic.Int32
 	permErr := httpclient.Permanent(errors.New("do not retry"))
 	transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -774,7 +774,7 @@ func TestRetryRoundTripper_PermanentError_stops_retry(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if got := calls.Load(); got != 1 {
-		t.Errorf("calls = %d, want 1 (PermanentError should not retry)", got)
+		t.Errorf("calls = %d, want 1 (a Permanent mark should not retry)", got)
 	}
 }
 

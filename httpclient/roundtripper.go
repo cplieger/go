@@ -38,18 +38,18 @@ type TransportConfig struct {
 	// (e.g. refresh an auth token).
 	PrepareRetry PrepareRetry
 	// MaxAttempts is the TOTAL attempt count including the initial request.
-	// Zero means unset and takes DefaultMaxAttempts (3); a NEGATIVE value
+	// Zero means unset and takes the default of 3; a NEGATIVE value
 	// means exactly one attempt (a zero struct field cannot distinguish absent
 	// from zero, so try-once is spelled as a negative).
 	MaxAttempts int
 	// BaseDelay is the initial backoff delay; non-positive means
-	// DefaultBaseDelay (1s). Waits are equal-jitter with overflow-safe
+	// the default of one second. Waits are equal-jitter with overflow-safe
 	// doubling, and a retryable response's Retry-After header (capped at
 	// RetryAfterCap) overrides the computed wait.
 	BaseDelay time.Duration
 	// MaxElapsedTime is a hard ceiling on total time across retries,
 	// including any honored Retry-After: when now+wait would meet or pass it,
-	// the round-tripper aborts with an error instead of sleeping. It is
+	// the round-tripper aborts with [ErrMaxElapsed] instead of sleeping. It is
 	// checked BETWEEN attempts and cannot interrupt a stalled in-flight
 	// attempt; bound single attempts on the base transport (e.g.
 	// ResponseHeaderTimeout) and the whole call with the request context.
@@ -67,6 +67,9 @@ type TransportConfig struct {
 //
 // Unlike hashicorp/go-retryablehttp, it takes a plain *http.Request and counts
 // total attempts (TransportConfig.MaxAttempts), not retries.
+//
+// The zero value retries over http.DefaultTransport with the TransportConfig{}
+// defaults; NewRetryRoundTripper sets the rest.
 type RetryRoundTripper struct {
 	next               http.RoundTripper
 	checkRetry         CheckRetry
@@ -145,17 +148,17 @@ func retryAfterOf(resp *http.Response) time.Duration {
 }
 
 // schedule returns the transport's budget: a zero MaxAttempts takes
-// DefaultMaxAttempts and a negative one means one attempt.
+// defaultMaxAttempts and a negative one means one attempt.
 func (rt *RetryRoundTripper) schedule() schedule {
 	s := schedule{attempts: rt.maxAttempts, baseDelay: rt.baseDelay, maxElapsed: rt.maxElapsedTime}
 	switch {
 	case s.attempts == 0:
-		s.attempts = DefaultMaxAttempts
+		s.attempts = defaultMaxAttempts
 	case s.attempts < 0:
 		s.attempts = 1
 	}
 	if s.baseDelay <= 0 {
-		s.baseDelay = DefaultBaseDelay
+		s.baseDelay = defaultBaseDelay
 	}
 	return s
 }
@@ -216,10 +219,10 @@ func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		drainResp(resp)
 	})
 	switch {
-	case errors.Is(stopErr, errElapsed) && err != nil:
-		return nil, fmt.Errorf("max elapsed time %s exceeded: %w", rt.maxElapsedTime, err)
-	case errors.Is(stopErr, errElapsed):
-		return nil, fmt.Errorf("max elapsed time %s exceeded", rt.maxElapsedTime)
+	case errors.Is(stopErr, ErrMaxElapsed) && err != nil:
+		return nil, fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err)
+	case errors.Is(stopErr, ErrMaxElapsed):
+		return nil, fmt.Errorf("%w (%s)", ErrMaxElapsed, rt.maxElapsedTime)
 	case stopErr != nil:
 		return nil, stopErr
 	}
@@ -271,12 +274,12 @@ func drainResp(resp *http.Response) {
 // RetryRoundTripper over base (nil means http.DefaultTransport) and whose
 // CheckRedirect is policy. It panics on a nil policy, because nil means
 // net/http's follow-anywhere default; pass DefaultRedirectPolicy,
-// RefuseAllRedirects or a RedirectPolicyFunc. It sets no Client.Timeout, which
+// RefuseAllRedirects or a RedirectPolicy. It sets no Client.Timeout, which
 // would cap the whole retry sequence: bound one attempt on the base transport
 // and the total with a context deadline or TransportConfig.MaxElapsedTime.
 func NewRetry(base http.RoundTripper, policy CheckRedirect, cfg TransportConfig) *http.Client {
 	if policy == nil {
-		panic("httpclient.NewRetry: nil redirect policy (pass DefaultRedirectPolicy, RefuseAllRedirects, or a RedirectPolicyFunc allowlist)")
+		panic("httpclient.NewRetry: nil redirect policy (pass DefaultRedirectPolicy, RefuseAllRedirects, or a RedirectPolicy allowlist)")
 	}
 	return &http.Client{
 		Transport:     NewRetryRoundTripper(base, cfg),

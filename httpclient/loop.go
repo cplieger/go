@@ -19,8 +19,8 @@ import (
 
 // DoOption configures Do. Options constructed as Option values apply to both
 // loop doors; Do-only options (WithLabel, WithRateLimitRetry,
-// WithRateLimitOnly) implement only this interface, so passing one to
-// GetBytes is a compile error.
+// WithRateLimitOnly, WithAttemptTimeout) implement only this interface, so
+// passing one to GetBytes is a compile error.
 type DoOption interface {
 	applyDo(*loopConfig)
 }
@@ -33,7 +33,8 @@ type GetOption interface {
 }
 
 // Option is a retry option accepted by BOTH loop doors, Do and GetBytes:
-// WithMaxAttempts, WithBaseDelay, and WithLogger construct Option values.
+// WithMaxAttempts, WithBaseDelay, WithLogger and WithExhaustedLevel construct
+// Option values.
 type Option interface {
 	DoOption
 	GetOption
@@ -60,7 +61,6 @@ type loopConfig struct {
 	exhaustedLvl   slog.Level
 	exhaustedLvlOn bool
 	rlMode         rlMode
-	rlConflict     bool
 }
 
 // getConfig holds GetBytes settings: the shared loop settings plus the
@@ -78,8 +78,8 @@ func (o maxAttemptsOption) applyDo(c *loopConfig) { c.maxAttempts = int(o) }
 func (o maxAttemptsOption) applyGet(c *getConfig) { o.applyDo(&c.loopConfig) }
 
 // WithMaxAttempts sets the maximum number of attempts (TOTAL, including the
-// first call). Default: DefaultMaxAttempts (3). A value below 1 is treated as
-// 1, so the operation always runs at least once (never a silent no-op).
+// first call). Default: 3. A value below 1 is treated as 1, so the operation
+// always runs at least once (never a silent no-op).
 func WithMaxAttempts(n int) Option { return maxAttemptsOption(n) }
 
 // baseDelayOption implements Option for WithBaseDelay.
@@ -88,8 +88,8 @@ type baseDelayOption time.Duration
 func (o baseDelayOption) applyDo(c *loopConfig) { c.baseDelay = time.Duration(o) }
 func (o baseDelayOption) applyGet(c *getConfig) { o.applyDo(&c.loopConfig) }
 
-// WithBaseDelay sets the initial backoff delay. Default: DefaultBaseDelay
-// (1s). A non-positive value falls back to the default.
+// WithBaseDelay sets the initial backoff delay. Default: one second. A
+// non-positive value falls back to the default.
 func WithBaseDelay(d time.Duration) Option { return baseDelayOption(d) }
 
 // loggerOption implements Option for WithLogger.
@@ -176,9 +176,6 @@ type rateLimitOption struct {
 }
 
 func (o rateLimitOption) applyDo(c *loopConfig) {
-	if c.rlMode != rlNone && c.rlMode != o.mode {
-		c.rlConflict = true
-	}
 	c.rlMode = o.mode
 	c.rlMaxWait = o.maxWait
 }
@@ -187,8 +184,10 @@ func (o rateLimitOption) applyDo(c *loopConfig) {
 // min(RetryAfter, maxWait) when it carries a positive RetryAfter, else maxWait.
 // A non-positive maxWait means RetryAfterCap, so the wait is always positive
 // and a canceled context is observed before every retry. Transient errors keep
-// their backoff waits and the exponential base advances on every retry.
-// Combined with WithRateLimitOnly, Do returns a configuration error.
+// their usual waits (the backoff, or a positive RetryAfterHint), and the
+// exponential base advances on every retry.
+// WithRateLimitRetry and WithRateLimitOnly set one mode: the later of the two
+// wins, with its maxWait.
 func WithRateLimitRetry(maxWait time.Duration) DoOption {
 	return rateLimitOption{maxWait: maxWait, mode: rlRetry}
 }
@@ -198,8 +197,8 @@ func WithRateLimitRetry(maxWait time.Duration) DoOption {
 // is returned immediately. The wait semantics match WithRateLimitRetry, the
 // terminal Warn is "rate limit retries exhausted", and the FINAL attempt's
 // error wins even under an already-canceled context (cancellation is observed
-// in the always-positive inter-attempt sleep instead). Mutually exclusive
-// with WithRateLimitRetry.
+// in the always-positive inter-attempt sleep instead). The later of
+// WithRateLimitOnly and WithRateLimitRetry wins.
 func WithRateLimitOnly(maxWait time.Duration) DoOption {
 	return rateLimitOption{maxWait: maxWait, mode: rlOnly}
 }
@@ -218,7 +217,7 @@ type maxBodyBytesOption int64
 func (o maxBodyBytesOption) applyGet(c *getConfig) { c.maxBodyBytes = int64(o) }
 
 // WithMaxBodyBytes sets the maximum response body size to read.
-// Default: DefaultMaxBodyBytes (10 MB). A non-positive value falls back to
+// Default: 10 MB (10 << 20 bytes). A non-positive value falls back to
 // the default.
 func WithMaxBodyBytes(n int64) GetOption { return maxBodyBytesOption(n) }
 
@@ -233,7 +232,7 @@ func (c *loopConfig) normalize() {
 		c.maxAttempts = 1
 	}
 	if c.baseDelay <= 0 {
-		c.baseDelay = DefaultBaseDelay
+		c.baseDelay = defaultBaseDelay
 	}
 	if c.logger == nil {
 		c.logger = slog.Default()
@@ -249,7 +248,7 @@ func (c *loopConfig) normalize() {
 // newLoopConfig builds a Do configuration from opts (nil options are skipped)
 // and applies defaults.
 func newLoopConfig(opts []DoOption) loopConfig {
-	cfg := loopConfig{maxAttempts: DefaultMaxAttempts}
+	cfg := loopConfig{maxAttempts: defaultMaxAttempts}
 	for _, o := range opts {
 		if o != nil {
 			o.applyDo(&cfg)
@@ -262,7 +261,7 @@ func newLoopConfig(opts []DoOption) loopConfig {
 // newGetConfig builds a GetBytes configuration from opts (nil options are
 // skipped) and applies defaults.
 func newGetConfig(opts []GetOption) getConfig {
-	cfg := getConfig{maxAttempts: DefaultMaxAttempts}
+	cfg := getConfig{maxAttempts: defaultMaxAttempts}
 	for _, o := range opts {
 		if o != nil {
 			o.applyGet(&cfg)
@@ -270,7 +269,7 @@ func newGetConfig(opts []GetOption) getConfig {
 	}
 	cfg.normalize()
 	if cfg.maxBodyBytes <= 0 {
-		cfg.maxBodyBytes = DefaultMaxBodyBytes
+		cfg.maxBodyBytes = defaultMaxBodyBytes
 	}
 	return cfg
 }
@@ -286,14 +285,16 @@ type schedule struct {
 	maxElapsed time.Duration // zero means no ceiling
 }
 
-// errElapsed stops a schedule whose next wait would meet or pass maxElapsed.
-var errElapsed = errors.New("max elapsed time exceeded")
+// ErrMaxElapsed is the error a [RetryRoundTripper] returns, wrapped with the
+// ceiling and the last attempt's error when there is one, when its next wait
+// would meet or pass TransportConfig.MaxElapsedTime. Match it with errors.Is.
+var ErrMaxElapsed = errors.New("max elapsed time exceeded")
 
 // run calls attempt with its 0-based index until attempt reports done or the
 // budget is spent, and reports which through exhausted. Between attempts it
 // resolves the wait (attempt's explicit wait, else the jittered backoff),
 // calls pause with the 1-based retry number and that wait, then sleeps. It
-// stops early with errElapsed, or with the sleep's error once ctx ends.
+// stops early with ErrMaxElapsed, or with the sleep's error once ctx ends.
 // pause runs before either early stop, so a door's pause hook can release the
 // failed attempt's resources however the loop ends.
 func (s schedule) run(ctx context.Context, attempt func(n int) (done bool, wait time.Duration), pause func(retry int, wait time.Duration)) (exhausted bool, err error) {
@@ -310,7 +311,7 @@ func (s schedule) run(ctx context.Context, attempt func(n int) (done bool, wait 
 		wait := resolveWait(explicit, backoff)
 		pause(n+1, wait)
 		if s.elapsedExceeded(wait, start) {
-			return false, errElapsed
+			return false, ErrMaxElapsed
 		}
 		if err := SleepCtx(ctx, wait); err != nil {
 			return false, err
@@ -405,6 +406,9 @@ func markAttemptTimeout(ctx, attemptCtx context.Context, err error) error {
 // classify reports whether err is retryable under the configured mode and the
 // explicit wait to honor (zero means jittered backoff).
 func (c *loopConfig) classify(err error) (retryable bool, explicitWait time.Duration) {
+	if IsPermanent(err) {
+		return false, 0
+	}
 	if c.rlMode != rlNone {
 		if rl, ok := errors.AsType[*StatusError](err); ok && rl.Code == http.StatusTooManyRequests {
 			wait := c.rlMaxWait
@@ -470,9 +474,6 @@ func (c *loopConfig) exhaustedLevel() slog.Level {
 func Do[T any](ctx context.Context, fn func(ctx context.Context) (T, error), opts ...DoOption) (T, error) {
 	var zero T
 	cfg := newLoopConfig(opts)
-	if cfg.rlConflict {
-		return zero, errors.New("httpclient: WithRateLimitRetry and WithRateLimitOnly are mutually exclusive")
-	}
 	var result T
 	var err error
 	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
@@ -512,6 +513,8 @@ func Do[T any](ctx context.Context, fn func(ctx context.Context) (T, error), opt
 // (*ResponseTooLargeError past it). Any other non-2xx is a permanent
 // *StatusError. Every logged url and returned error is redacted. Each attempt
 // is judged as the RetryRoundTripper's default policy judges a round trip.
+// client must not be nil: pass New(timeout) or a client of your own, never
+// http.DefaultClient, whose nil CheckRedirect follows a redirect to any host.
 func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...GetOption) ([]byte, error) {
 	cfg := newGetConfig(opts)
 	log := cfg.logger
