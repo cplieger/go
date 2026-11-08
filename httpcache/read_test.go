@@ -1,4 +1,4 @@
-package httpclient_test
+package httpcache_test
 
 import (
 	"bufio"
@@ -17,6 +17,7 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/cplieger/go/httpcache"
 	"github.com/cplieger/go/httpclient"
 )
 
@@ -414,12 +415,12 @@ func TestANotModifiedToAnUnconditionalOwnerReadIsSentOnceMore(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		req   ownerRead
-		cache httpclient.CacheConfig
+		cache httpcache.Config
 		kept  bool
 	}{
 		{name: "a_stored_read", kept: true},
 		{name: "a_read_forbidding_storage", req: ownerRead{header: http.Header{"Cache-Control": {"no-store"}}}},
-		{name: "the_cache_switched_off", cache: httpclient.CacheConfig{MaxBytes: -1}},
+		{name: "the_cache_switched_off", cache: httpcache.Config{MaxBytes: -1}},
 		{name: "a_read_not_stored", req: ownerRead{unstored: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -566,7 +567,7 @@ func TestARequiredFieldTheNotModifiedOmitsSendsTheReadOnceMore(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			o := newOrigin(`{"login":"octo"}`, `"v1"`)
 			o.header = test.first.Clone()
-			c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpclient.CacheConfig{Held: []httpclient.HeldField{{Name: "X-Total-Count", Required: true}}}})
+			c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpcache.Config{Held: []httpcache.HeldField{{Name: "X-Total-Count", Required: true}}}})
 			if _, _, err := c.get(t, "/user"); err != nil {
 				t.Fatal(err)
 			}
@@ -588,8 +589,8 @@ func TestARequiredFieldTheNotModifiedOmitsSendsTheReadOnceMore(t *testing.T) {
 func TestAHeldFieldNamedTwiceIsHeldOnce(t *testing.T) {
 	o := newOrigin(`{"login":"octo"}`, `"v1"`)
 	o.header = http.Header{"Link": {"<page2>"}}
-	held := []httpclient.HeldField{{Name: "link"}, {Name: "Link", Required: true}}
-	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpclient.CacheConfig{Held: held}})
+	held := []httpcache.HeldField{{Name: "link"}, {Name: "Link", Required: true}}
+	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpcache.Config{Held: held}})
 	if _, _, err := c.get(t, "/user"); err != nil {
 		t.Fatal(err)
 	}
@@ -614,13 +615,13 @@ func TestEveryAnsweredReadCountsOnce(t *testing.T) {
 	for _, test := range []struct {
 		change func(*origin)
 		name   string
-		want   httpclient.CacheState
+		want   httpcache.State
 		abort  bool
 	}{
-		{name: "a_404", want: httpclient.CacheState{Misses: 2}, change: func(o *origin) { o.status = http.StatusNotFound }},
-		{name: "a_500", want: httpclient.CacheState{Misses: 2}, change: func(o *origin) { o.status = http.StatusInternalServerError }},
-		{name: "a_304_served", want: httpclient.CacheState{Hits: 1, Misses: 1}, change: func(*origin) {}},
-		{name: "a_transport_failure", want: httpclient.CacheState{Misses: 1}, abort: true, change: func(*origin) {}},
+		{name: "a_404", want: httpcache.State{Misses: 2}, change: func(o *origin) { o.status = http.StatusNotFound }},
+		{name: "a_500", want: httpcache.State{Misses: 2}, change: func(o *origin) { o.status = http.StatusInternalServerError }},
+		{name: "a_304_served", want: httpcache.State{Hits: 1, Misses: 1}, change: func(*origin) {}},
+		{name: "a_transport_failure", want: httpcache.State{Misses: 1}, abort: true, change: func(*origin) {}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			o := newOrigin(`{"login":"octo"}`, `"v1"`)
@@ -712,7 +713,7 @@ func TestAnsweredAndFinishReportWhatTheReadCounts(t *testing.T) {
 func TestTheCacheHoldsItsBound(t *testing.T) {
 	const bound = 8 << 10
 	big := `{"login":"` + strings.Repeat("a", 600) + `"}`
-	bounded := ownerConfig{cache: httpclient.CacheConfig{MaxBytes: bound}}
+	bounded := ownerConfig{cache: httpcache.Config{MaxBytes: bound}}
 	user := func(i int) string { return fmt.Sprintf("/user/%d", i) }
 	t.Run("eviction_keeps_the_bound", func(t *testing.T) {
 		o := newOrigin(big, `"v1"`)
@@ -779,7 +780,7 @@ func TestTheCacheHoldsItsBound(t *testing.T) {
 	})
 	t.Run("a_negative_bound_switches_the_cache_off", func(t *testing.T) {
 		o := newOrigin(`{"login":"octo"}`, `"v1"`)
-		c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpclient.CacheConfig{MaxBytes: -1}})
+		c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpcache.Config{MaxBytes: -1}})
 		for range 2 {
 			if _, _, err := c.get(t, "/user"); err != nil {
 				t.Fatal(err)
@@ -788,7 +789,7 @@ func TestTheCacheHoldsItsBound(t *testing.T) {
 		if got := o.last().Get("If-None-Match"); got != "" {
 			t.Errorf("MaxBytes -1 sent If-None-Match %q, want every read unconditional", got)
 		}
-		if got := c.cache.State(); got != (httpclient.CacheState{}) {
+		if got := c.cache.State(); got != (httpcache.State{}) {
 			t.Errorf("MaxBytes -1 reports %+v, want the zero state", got)
 		}
 	})
@@ -941,9 +942,9 @@ func TestAReadWhoseContextEndsBeforeFinishKeepsNothing(t *testing.T) {
 func TestASecondFinishChangesNothing(t *testing.T) {
 	o := newOrigin(`{"login":"octo"}`, `"v1"`)
 	url := serveOrigin(t, o)
-	cache := httpclient.NewCache(httpclient.CacheConfig{})
-	client := &http.Client{Transport: httpclient.CacheGuard(nil)}
-	read := cache.Begin(httpclient.CacheReadConfig{Store: true, Resend: true})
+	cache := httpcache.New(httpcache.Config{})
+	client := &http.Client{Transport: httpcache.Guard(nil)}
+	read := cache.Begin(httpcache.ReadConfig{Store: true, Resend: true})
 	resp, err := read.Send(func(prepare func(*http.Request) *http.Request) (*http.Response, error) {
 		r, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 		if err != nil {
@@ -1338,7 +1339,7 @@ func TestANilNextSendsThroughTheDefaultTransport(t *testing.T) {
 	o := newOrigin(`{"login":"octo"}`, `"v1"`)
 	url := serveOrigin(t, o)
 	t.Run("a_cache_round_tripper", func(t *testing.T) {
-		tr := httpclient.NewCacheRoundTripper(nil, httpclient.CacheConfig{})
+		tr := httpcache.NewRoundTripper(nil, httpcache.Config{})
 		for range 2 {
 			if status, _, body := cacheGet(t, tr, http.MethodGet, url, nil); status != http.StatusOK || body != `{"login":"octo"}` {
 				t.Errorf("a read through a nil next = %d %q, want the server's answer", status, body)
@@ -1349,7 +1350,7 @@ func TestANilNextSendsThroughTheDefaultTransport(t *testing.T) {
 		}
 	})
 	t.Run("a_guard", func(t *testing.T) {
-		resp, err := (&http.Client{Transport: httpclient.CacheGuard(nil)}).Get(url)
+		resp, err := (&http.Client{Transport: httpcache.Guard(nil)}).Get(url)
 		if err != nil {
 			t.Fatalf("a request through a guard over nil = %v, want the server's answer", err)
 		}
@@ -1362,7 +1363,7 @@ func TestANilNextSendsThroughTheDefaultTransport(t *testing.T) {
 
 func TestClosingAGuardedClientsIdleConnectionsReachesNext(t *testing.T) {
 	next := &idleCounter{RoundTripper: http.DefaultTransport}
-	(&http.Client{Transport: httpclient.CacheGuard(next)}).CloseIdleConnections()
+	(&http.Client{Transport: httpcache.Guard(next)}).CloseIdleConnections()
 	if got := next.closed.Load(); got != 1 {
 		t.Errorf("next's idle connections were closed %d time(s), want 1", got)
 	}
@@ -1373,7 +1374,7 @@ func TestClosingAGuardedClientsIdleConnectionsReachesNext(t *testing.T) {
 func TestAFieldANotModifiedUpdatesServesTheLaterReads(t *testing.T) {
 	o := newOrigin(`{"login":"octo"}`, `"v1"`)
 	o.header = http.Header{"Link": {"<page2>"}}
-	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpclient.CacheConfig{Held: []httpclient.HeldField{{Name: "Link"}}}})
+	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpcache.Config{Held: []httpcache.HeldField{{Name: "Link"}}}})
 	for i, link := range []string{"<page2>", "<page3>", ""} {
 		o.set(func(o *origin) {
 			o.header = http.Header{}

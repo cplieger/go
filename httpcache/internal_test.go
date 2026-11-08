@@ -1,4 +1,4 @@
-package httpclient
+package httpcache
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ func TestTheCacheHoldsNoCredentialInClear(t *testing.T) {
 		_, _ = io.WriteString(w, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	tr := NewCacheRoundTripper(nil, CacheConfig{MaxBytes: 1 << 20, Held: []HeldField{{Name: "Link"}}})
+	tr := NewRoundTripper(nil, Config{MaxBytes: 1 << 20, Held: []HeldField{{Name: "Link"}}})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,48 @@ func TestAnEntryIsChargedEverythingItHolds(t *testing.T) {
 }
 
 func TestAZeroBoundHoldsTheDefault(t *testing.T) {
-	if got := NewCache(CacheConfig{}).max; got != 32<<20 {
+	if got := New(Config{}).max; got != 32<<20 {
 		t.Errorf("a zero MaxBytes bounds the cache at %d bytes, want the documented 32 MiB", got)
+	}
+}
+
+// TestZeroCacheHoldsNothing pins the zero Cache's documented behaviour: its
+// methods do not panic, it reports nothing held, and Clear is safe.
+func TestZeroCacheHoldsNothing(t *testing.T) {
+	t.Parallel()
+	var c Cache
+	c.Clear()
+	if st := c.State(); st != (State{}) {
+		t.Errorf("zero Cache State = %+v, want the zero State", st)
+	}
+	if c.on() {
+		t.Error("the zero Cache reports it holds answers")
+	}
+
+	// A read passes through: no validator is added, nothing is answered from
+	// the cache, and Finish reports no hit.
+	read := c.Begin(ReadConfig{Variant: "v", Store: true, Resend: true})
+	resp, err := read.Send(func(prepare func(*http.Request) *http.Request) (*http.Response, error) {
+		req := prepare(httptest.NewRequest(http.MethodGet, "http://example.test/", nil))
+		if req.Header.Get("If-None-Match") != "" || req.Header.Get("If-Modified-Since") != "" {
+			t.Error("the zero Cache added a validator")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Etag": {`"v1"`}},
+			Body: io.NopCloser(strings.NewReader("x")), Request: req,
+		}, nil
+	})
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("Send through the zero Cache = %v, %v; want the 200", resp, err)
+	}
+	_ = resp.Body.Close()
+	if read.Answered() {
+		t.Error("the zero Cache answered a read")
+	}
+	if hit, err := read.Finish(t.Context(), true); hit || err != nil {
+		t.Errorf("Finish = %v, %v; want no hit and no error", hit, err)
+	}
+	if st := c.State(); st.Bytes != 0 || st.Hits != 0 {
+		t.Errorf("zero Cache State after a read = %+v, want nothing held or hit", st)
 	}
 }

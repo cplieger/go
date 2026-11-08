@@ -1,17 +1,17 @@
-package httpclient_test
+package httpcache_test
 
 import (
 	"fmt"
 	"sync"
 	"testing"
 
-	"github.com/cplieger/go/httpclient"
+	"github.com/cplieger/go/httpcache"
 )
 
 func TestConcurrentReadsKeepTheCacheConsistent(t *testing.T) {
 	const bound = 16 << 10
 	o := newOrigin(`{"login":"octo"}`, `"v1"`)
-	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpclient.CacheConfig{MaxBytes: bound}})
+	c := newOwner(serveOrigin(t, o), ownerConfig{cache: httpcache.Config{MaxBytes: bound}})
 	var wg sync.WaitGroup
 	for worker := range 16 {
 		wg.Go(func() {

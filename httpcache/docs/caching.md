@@ -1,6 +1,6 @@
 # Revalidation cache
 
-This page is for a developer who wants repeated GET requests to cost less. httpclient keeps earlier answers in memory and replays each one's validator, so a server that sees nothing changed can answer `304 Not Modified` instead of the whole body. It covers what is kept, when a `304` serves it, the key, the memory bound and the two ways to use the cache.
+This page is for a developer who wants repeated GET requests to cost less. httpcache keeps earlier answers in memory and replays each one's validator, so a server that sees nothing changed can answer `304 Not Modified` instead of the whole body. It covers what is kept, when a `304` serves it, the key, the memory bound and the two ways to use the cache.
 
 ## What it does
 
@@ -33,7 +33,7 @@ A `304` that fails any of these, or that answers a request carrying no validator
 
 ## Held fields
 
-A held copy keeps the body and only the response header fields you name in `CacheConfig.Held`, the ones you read from a served answer, such as `Link` for paging. Every other field of a served answer, rate headers and cookies included, is the `304`'s own.
+A held copy keeps the body and only the response header fields you name in `Config.Held`, the ones you read from a served answer, such as `Link` for paging. Every other field of a served answer, rate headers and cookies included, is the `304`'s own.
 
 - A held field the `304` carries takes the `304`'s lines.
 - One the `304` omits keeps the held lines, which the `304` did not confirm. A field sent on several lines, such as `Set-Cookie`, keeps each line.
@@ -47,18 +47,18 @@ An entry's key is a SHA-256 digest of a digest of the request's `Authorization` 
 
 ## Memory
 
-A cache holds at most `CacheConfig.MaxBytes`, 32 MiB by default, and evicts the least recently used entry first. An entry is charged everything it holds: its key, its validators, its held fields with the storage each line takes, the full capacity of its body, and 512 bytes of overhead. An entry larger than a quarter of the bound is not kept, so one large answer cannot flush the rest. A negative `MaxBytes` holds nothing and adds no validator; a `304` to a GET is still sent once more without one.
+A cache holds at most `Config.MaxBytes`, 32 MiB by default, and evicts the least recently used entry first. An entry is charged everything it holds: its key, its validators, its held fields with the storage each line takes, the full capacity of its body, and 512 bytes of overhead. An entry larger than a quarter of the bound is not kept, so one large answer cannot flush the rest. A negative `MaxBytes` holds nothing and adds no validator; a `304` to a GET is still sent once more without one.
 
-`State` reports `Hits`, the reads a held copy served, `Misses`, every other stored read the server answered in full, error statuses included, `Saved`, and `Bytes` held. `Saved` counts the served `304`s to requests carrying an `Authorization` header, and only where `CacheConfig.FreeNotModified` says the server bills none. A read sent once more after a `304` counts once.
+`State` reports `Hits`, the reads a held copy served, `Misses`, every other stored read the server answered in full, error statuses included, `Saved`, and `Bytes` held. `Saved` counts the served `304`s to requests carrying an `Authorization` header, and only where `Config.FreeNotModified` says the server bills none. A read sent once more after a `304` counts once.
 
 The cache lives in this process only. A tier on disk or in a shared store would hold response bodies outside the process, and would save one full read per answer after a restart.
 
 ## On an http.Client
 
-`NewCacheRoundTripper(next, cfg)` puts a cache on any `http.Client`:
+`NewRoundTripper(next, cfg)` puts a cache on any `http.Client`:
 
 ```go
-cache := httpclient.NewCacheRoundTripper(nil, httpclient.CacheConfig{FreeNotModified: true})
+cache := httpcache.NewRoundTripper(nil, httpcache.Config{FreeNotModified: true})
 client := &http.Client{Transport: cache, Timeout: 30 * time.Second}
 ```
 
@@ -70,7 +70,7 @@ client := &http.Client{Transport: cache, Timeout: 30 * time.Second}
 - A response that `next` returns beside an error breaks the `http.RoundTripper` contract. `RoundTrip` returns it beside that error with its body closed, and `http.Client` ignores it. A redirect your `CheckRedirect` refuses is not this case: `RoundTrip` answers that hop with no error, and `http.Client.Do` returns the refusal itself.
 - `CloseIdleConnections` reaches `next`.
 
-The cache never answers without the server, and it does no retries. To retry, put a `RetryRoundTripper` beneath it, as `next`.
+The cache never answers without the server, and it does no retries. To retry, put httpclient's `RetryRoundTripper` beneath it, as `next`.
 
 ## Observers and the guard
 
@@ -80,17 +80,17 @@ Each answer from `next` must report the request it answered as its `Request`, as
 
 ## Reading your own answers
 
-`NewCache(cfg)` is the same cache for code that sends, reads and decodes its own answers, and keeps something smaller than the raw body, such as the decoded value re-encoded. Each read is one `CacheRead`:
+`New(cfg)` is the same cache for code that sends, reads and decodes its own answers, and keeps something smaller than the raw body, such as the decoded value re-encoded. Each read is one `Read`:
 
 ```go
-read := cache.Begin(httpclient.CacheReadConfig{Variant: "[]Item", Store: true, Resend: true})
+read := cache.Begin(httpcache.ReadConfig{Variant: "[]Item", Store: true, Resend: true})
 resp, err := read.Send(func(prepare func(*http.Request) *http.Request) (*http.Response, error) {
     req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
     if err != nil {
         return nil, err
     }
     req.Header.Set("Authorization", "Bearer "+token)
-    return client.Do(prepare(req)) // client's transport sits over httpclient.CacheGuard
+    return client.Do(prepare(req)) // client's transport sits over httpcache.Guard
 })
 var wire []byte
 if err == nil {
@@ -109,8 +109,8 @@ if err == nil {
 _, ended := read.Finish(ctx, err == nil)
 ```
 
-- `Send` runs the attempts: the first, and with `Resend` the one a `304` nothing held may serve forces. Your function builds the request and calls `prepare` last, after every other header is set, because `prepare` keys the request and sets the held copy's validator. A `CacheRead` is sent once: a second `Send` sends nothing and fails.
-- The request must travel through `CacheGuard`, placed beneath every round tripper that may change a request or an answer, such as a retry round tripper or an observer. The guard sends a request that differs from the keyed one without validators, and marks an answer it did not get from the wire as given. A read that reaches no guard is never served or kept. A `CacheRoundTripper` guards its own `next`.
+- `Send` runs the attempts: the first, and with `Resend` the one a `304` nothing held may serve forces. Your function builds the request and calls `prepare` last, after every other header is set, because `prepare` keys the request and sets the held copy's validator. A `Read` is sent once: a second `Send` sends nothing and fails.
+- The request must travel through `Guard`, placed beneath every round tripper that may change a request or an answer, such as a retry round tripper or an observer. The guard sends a request that differs from the keyed one without validators, and marks an answer it did not get from the wire as given. A read that reaches no guard is never served or kept. A `RoundTripper` guards its own `next`.
 - `Answered` records that you read the answer in full, and reports whether `State` counts this read. Skip it when the body fails to read, so the read counts nothing.
 - `Serve` answers a `304` the held copy serves: the `304`'s header with the held fields, and a copy of the held body. For any other answer it reports false, and a `304` it refuses is yours to treat as the `304` it is.
 - `Keep` keeps what its function returns, for a `200` whose body you read in full and pass, where the wire vouches for the answer, the body you pass is the wire's byte for byte, and the answer has a validator and no `no-store`. A body that a round tripper above the guard replaced is not kept.

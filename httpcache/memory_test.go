@@ -1,4 +1,4 @@
-package httpclient_test
+package httpcache_test
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/httpclient"
+	"github.com/cplieger/go/httpcache"
 )
 
 // These tests measure the heap, so they run serially.
@@ -37,7 +37,7 @@ func TestADroppedHeaderIsNotHeldPastTheBound(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			o := newOrigin(`{}`, `"v1"`)
 			url := serveOrigin(t, o)
-			tr := httpclient.NewCacheRoundTripper(nil, httpclient.CacheConfig{MaxBytes: bound, Held: []httpclient.HeldField{{Name: "Link"}}})
+			tr := httpcache.NewRoundTripper(nil, httpcache.Config{MaxBytes: bound, Held: []httpcache.HeldField{{Name: "Link"}}})
 			header := func(h http.Header) {
 				o.set(func(o *origin) {
 					o.header = h.Clone()
@@ -92,7 +92,7 @@ func TestAKeptEntryOwnsItsBytes(t *testing.T) {
 				test.answer(h, strings.Repeat("c", 1<<20))
 				return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
 			})
-			tr := httpclient.NewCacheRoundTripper(wire, httpclient.CacheConfig{MaxBytes: bound, Held: []httpclient.HeldField{{Name: "Link"}}})
+			tr := httpcache.NewRoundTripper(wire, httpcache.Config{MaxBytes: bound, Held: []httpcache.HeldField{{Name: "Link"}}})
 			before := heapInUse()
 			for i := range entries {
 				cacheGet(t, tr, http.MethodGet, fmt.Sprintf("http://server.example/user/%d", i), nil)

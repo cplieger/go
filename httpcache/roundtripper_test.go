@@ -1,4 +1,4 @@
-package httpclient_test
+package httpcache_test
 
 import (
 	"compress/gzip"
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cplieger/go/httpclient"
+	"github.com/cplieger/go/httpcache"
 )
 
 // The tests in this file are written from RFC 9110 section 13.1 (the validators a
@@ -83,9 +83,9 @@ func (s *cacheServer) lastValidator() string {
 	return got[len(got)-1].Header.Get("If-None-Match")
 }
 
-func newCacheTransport(t *testing.T, next http.RoundTripper, cfg httpclient.CacheConfig) *httpclient.CacheRoundTripper {
+func newCacheTransport(t *testing.T, next http.RoundTripper, cfg httpcache.Config) *httpcache.RoundTripper {
 	t.Helper()
-	return httpclient.NewCacheRoundTripper(next, cfg)
+	return httpcache.NewRoundTripper(next, cfg)
 }
 
 // get sends one request through tr and reads its answer in full.
@@ -118,7 +118,7 @@ func authorized(token string) http.Header {
 
 func TestAnUnchangedReadIsServedFromTheHeldAnswer(t *testing.T) {
 	s, url := newCacheServer(t, `{"n":1}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for i, want := range []string{"", `"v1"`} {
 		status, _, body := cacheGet(t, tr, http.MethodGet, url, nil)
 		if status != http.StatusOK || body != `{"n":1}` {
@@ -135,7 +135,7 @@ func TestAnUnchangedReadIsServedFromTheHeldAnswer(t *testing.T) {
 
 func TestEntriesAreSeparatedByCredential(t *testing.T) {
 	s, url := newCacheServer(t, `{}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for _, step := range []struct {
 		token, want string
 	}{
@@ -197,7 +197,7 @@ func TestARequestsIdentityIsKeyedHoweverItIsWritten(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			url := identityCacheServer(t, test.identity)
-			tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, nil, httpcache.Config{})
 			for _, value := range []string{"one.example", "two.example"} {
 				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 				if err != nil {
@@ -240,7 +240,7 @@ func TestACredentialNextSetsIsNeverShared(t *testing.T) {
 				}
 				return resp, err
 			})
-			tr := newCacheTransport(t, next, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, next, httpcache.Config{})
 			for _, value := range []string{"Bearer one", "Bearer two"} {
 				token.Store(value)
 				if _, _, body := cacheGet(t, tr, http.MethodGet, url, nil); body != value {
@@ -256,7 +256,7 @@ func TestACredentialNextSetsIsNeverShared(t *testing.T) {
 
 func TestALowercaseNoStoreIsNeverKept(t *testing.T) {
 	s, url := newCacheServer(t, `{}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for range 2 {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 		if err != nil {
@@ -288,7 +288,7 @@ func TestAServedAnswerCarriesNoCodingOverItsHeldBody(t *testing.T) {
 		_ = zw.Close()
 	}))
 	t.Cleanup(srv.Close)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for i := range 2 {
 		status, header, body := cacheGet(t, tr, http.MethodGet, srv.URL, nil)
 		if status != http.StatusOK || body != `{"n":1}` {
@@ -306,7 +306,7 @@ func TestAServedAnswerCarriesNoCodingOverItsHeldBody(t *testing.T) {
 func TestAHeldFieldKeepsEachOfItsLines(t *testing.T) {
 	s, url := newCacheServer(t, `[]`)
 	s.header = http.Header{"Set-Cookie": {"a=1; Path=/", "b=2; Path=/"}}
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{Held: []httpclient.HeldField{{Name: "set-cookie"}}})
+	tr := newCacheTransport(t, nil, httpcache.Config{Held: []httpcache.HeldField{{Name: "set-cookie"}}})
 	cacheGet(t, tr, http.MethodGet, url, nil)
 	for i := range 2 {
 		_, header, _ := cacheGet(t, tr, http.MethodGet, url, nil)
@@ -324,20 +324,20 @@ func TestAHeldFieldKeepsEachOfItsLines(t *testing.T) {
 func TestOnlyTheDeclaredFieldsAreHeld(t *testing.T) {
 	for _, test := range []struct {
 		name        string
-		held        []httpclient.HeldField
+		held        []httpcache.HeldField
 		notModified http.Header
 		// later is what a third read's 304 carries; nil sends no third read.
 		later      http.Header
 		wantLink   string
 		wantCustom string
 	}{
-		{name: "a_declared_field_the_304_omits_keeps_the_held_value", held: []httpclient.HeldField{{Name: "Link"}}, wantLink: "<page2>"},
+		{name: "a_declared_field_the_304_omits_keeps_the_held_value", held: []httpcache.HeldField{{Name: "Link"}}, wantLink: "<page2>"},
 		{
-			name: "a_declared_field_the_304_carries_takes_the_304s_value", held: []httpclient.HeldField{{Name: "Link"}},
+			name: "a_declared_field_the_304_carries_takes_the_304s_value", held: []httpcache.HeldField{{Name: "Link"}},
 			notModified: http.Header{"Link": {"<page3>"}}, wantLink: "<page3>",
 		},
 		{
-			name: "a_declared_field_one_304_replaced_and_the_next_omits", held: []httpclient.HeldField{{Name: "Link"}},
+			name: "a_declared_field_one_304_replaced_and_the_next_omits", held: []httpcache.HeldField{{Name: "Link"}},
 			notModified: http.Header{"Link": {"<page3>"}}, later: http.Header{}, wantLink: "<page3>",
 		},
 		{name: "an_undeclared_field_is_never_held"},
@@ -347,7 +347,7 @@ func TestOnlyTheDeclaredFieldsAreHeld(t *testing.T) {
 			s, url := newCacheServer(t, `[]`)
 			s.header = http.Header{"Link": {"<page2>"}, "X-Custom": {"held"}}
 			s.notModified = test.notModified
-			tr := newCacheTransport(t, nil, httpclient.CacheConfig{Held: test.held})
+			tr := newCacheTransport(t, nil, httpcache.Config{Held: test.held})
 			cacheGet(t, tr, http.MethodGet, url, nil)
 			status, header, body := cacheGet(t, tr, http.MethodGet, url, nil)
 			wantHits := 1
@@ -385,7 +385,7 @@ func TestSavedFollowsWhatTheServerIsDeclaredToBill(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, url := newCacheServer(t, `{}`)
-			tr := newCacheTransport(t, nil, httpclient.CacheConfig{FreeNotModified: test.free})
+			tr := newCacheTransport(t, nil, httpcache.Config{FreeNotModified: test.free})
 			for range 2 {
 				cacheGet(t, tr, http.MethodGet, url, authorized(test.token))
 			}
@@ -427,7 +427,7 @@ func TestAnObserverBeneathSeesEveryWireAttemptAsTheServerAnswered(t *testing.T) 
 			s, url := newCacheServer(t, `{}`)
 			s.always304 = test.always304
 			observer := &statusRecorder{next: http.DefaultTransport}
-			tr := newCacheTransport(t, observer, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, observer, httpcache.Config{})
 			for i := range 2 {
 				if status, _, body := cacheGet(t, tr, http.MethodGet, url, nil); status != http.StatusOK || body != `{}` {
 					t.Errorf("read %d = %d %q, want 200 and the server's body", i, status, body)
@@ -442,14 +442,14 @@ func TestAnObserverBeneathSeesEveryWireAttemptAsTheServerAnswered(t *testing.T) 
 
 func TestOnlyAGetIsCached(t *testing.T) {
 	s, url := newCacheServer(t, `{}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for range 2 {
 		cacheGet(t, tr, http.MethodPost, url, nil)
 	}
 	if got := s.lastValidator(); got != "" {
 		t.Errorf("a repeated POST carried If-None-Match %q, want none", got)
 	}
-	if got := tr.State(); got != (httpclient.CacheState{}) {
+	if got := tr.State(); got != (httpcache.State{}) {
 		t.Errorf("State after two POSTs = %+v, want nothing counted or held", got)
 	}
 }
@@ -466,7 +466,7 @@ func TestAnAnswerNotKeptForgetsTheHeldOne(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, url := newCacheServer(t, `{}`)
-			tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, nil, httpcache.Config{})
 			cacheGet(t, tr, http.MethodGet, url, nil)
 			s.set(test.second)
 			cacheGet(t, tr, http.MethodGet, url, nil)
@@ -484,7 +484,7 @@ func TestAnAnswerNotKeptForgetsTheHeldOne(t *testing.T) {
 
 func TestARequestForbiddingStorageIsNeverRevalidated(t *testing.T) {
 	s, url := newCacheServer(t, `{}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for range 2 {
 		cacheGet(t, tr, http.MethodGet, url, http.Header{"Cache-Control": {"no-store"}})
 	}
@@ -500,14 +500,14 @@ func TestAnUnvouchedNotModifiedIsSentOnceMore(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		header     http.Header
-		cfg        httpclient.CacheConfig
+		cfg        httpcache.Config
 		always304  int
 		wantStatus int
 		wantSent   int
 	}{
 		{name: "a_304_to_no_validator", always304: 1, wantStatus: http.StatusOK, wantSent: 2},
 		{name: "a_second_304", always304: 2, wantStatus: http.StatusNotModified, wantSent: 2},
-		{name: "with_the_cache_off", always304: 1, cfg: httpclient.CacheConfig{MaxBytes: -1}, wantStatus: http.StatusOK, wantSent: 2},
+		{name: "with_the_cache_off", always304: 1, cfg: httpcache.Config{MaxBytes: -1}, wantStatus: http.StatusOK, wantSent: 2},
 		{name: "on_a_no_store_read", always304: 1, header: http.Header{"Cache-Control": {"no-store"}}, wantStatus: http.StatusOK, wantSent: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -539,7 +539,7 @@ func TestACallersOwnConditionalRequestPassesThrough(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, url := newCacheServer(t, `{}`)
-			tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, nil, httpcache.Config{})
 			if test.held {
 				cacheGet(t, tr, http.MethodGet, url, nil)
 			}
@@ -562,7 +562,7 @@ func TestACallersOwnConditionalRequestPassesThrough(t *testing.T) {
 func TestAnAnswerOverItsShareOfTheBoundIsNotKept(t *testing.T) {
 	big := strings.Repeat("x", 4096)
 	s, url := newCacheServer(t, big)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{MaxBytes: 8192})
+	tr := newCacheTransport(t, nil, httpcache.Config{MaxBytes: 8192})
 	for i := range 2 {
 		if _, _, body := cacheGet(t, tr, http.MethodGet, url, nil); body != big {
 			t.Errorf("read %d answered %d bytes, want the server's %d", i, len(body), len(big))
@@ -578,21 +578,21 @@ func TestAnAnswerOverItsShareOfTheBoundIsNotKept(t *testing.T) {
 
 func TestANegativeBoundSwitchesTheCacheOff(t *testing.T) {
 	s, url := newCacheServer(t, `{}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{MaxBytes: -1})
+	tr := newCacheTransport(t, nil, httpcache.Config{MaxBytes: -1})
 	for range 2 {
 		cacheGet(t, tr, http.MethodGet, url, nil)
 	}
 	if got := s.lastValidator(); got != "" {
 		t.Errorf("a read with the cache off carried If-None-Match %q, want none", got)
 	}
-	if got := tr.State(); got != (httpclient.CacheState{}) {
+	if got := tr.State(); got != (httpcache.State{}) {
 		t.Errorf("State with the cache off = %+v, want nothing counted or held", got)
 	}
 }
 
 func TestANotModifiedNamingAnotherRepresentationIsReadInFull(t *testing.T) {
 	s, url := newCacheServer(t, `{"n":1}`)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	cacheGet(t, tr, http.MethodGet, url, nil)
 	s.set(func(s *cacheServer) {
 		s.body, s.always304 = `{"n":2}`, 1
@@ -628,7 +628,7 @@ func TestAReadWhoseContextEndsKeepsNothing(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		<-started
@@ -656,10 +656,10 @@ func TestAReadWhoseContextEndsKeepsNothing(t *testing.T) {
 
 func TestTheLeastRecentlyUsedEntryIsEvictedFirst(t *testing.T) {
 	s, url := newCacheServer(t, `{}`)
-	probe := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	probe := newCacheTransport(t, nil, httpcache.Config{})
 	cacheGet(t, probe, http.MethodGet, url+"/a", nil)
 	entry := probe.State().Bytes
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{MaxBytes: 4*entry + entry/2})
+	tr := newCacheTransport(t, nil, httpcache.Config{MaxBytes: 4*entry + entry/2})
 	for _, path := range []string{"/a", "/b", "/c", "/d", "/a", "/e"} {
 		cacheGet(t, tr, http.MethodGet, url+path, nil)
 	}
@@ -713,7 +713,7 @@ func TestAReadWhoseContextEndsAsItsAnswerIsReadKeepsNothing(t *testing.T) {
 					Body: &endingBody{Reader: strings.NewReader(`{}`), cancel: cancel}, Request: r,
 				}, nil
 			})
-			tr := newCacheTransport(t, wire, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, wire, httpcache.Config{})
 			for range 2 {
 				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
@@ -751,7 +751,7 @@ func TestAWireFailureAfterTheContextEndedAnswersTheContextsError(t *testing.T) {
 			Body: io.NopCloser(strings.NewReader(`{}`)), Request: r,
 		}, nil
 	})
-	tr := newCacheTransport(t, wire, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, wire, httpcache.Config{})
 	if _, _, body := cacheGet(t, tr, http.MethodGet, "http://server.example/x", nil); body != `{}` || tr.State().Bytes == 0 {
 		t.Fatalf("Setup: the first read answered %q holding %d bytes, want its answer kept", body, tr.State().Bytes)
 	}
@@ -787,7 +787,7 @@ func (c *idleCloser) CloseIdleConnections() { c.closed++ }
 
 func TestClosingTheClientsIdleConnectionsReachesNext(t *testing.T) {
 	next := &idleCloser{RoundTripper: http.DefaultTransport}
-	(&http.Client{Transport: newCacheTransport(t, next, httpclient.CacheConfig{})}).CloseIdleConnections()
+	(&http.Client{Transport: newCacheTransport(t, next, httpcache.Config{})}).CloseIdleConnections()
 	if next.closed != 1 {
 		t.Errorf("next's idle connections were closed %d time(s), want 1", next.closed)
 	}
@@ -819,7 +819,7 @@ func TestEachRedirectHopIsARequestOfItsOwn(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	tr := newCacheTransport(t, nil, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, nil, httpcache.Config{})
 	for i := range 2 {
 		if status, _, body := cacheGet(t, tr, http.MethodGet, srv.URL+"/old", nil); status != http.StatusOK || body != `{}` {
 			t.Errorf("read %d through the hop = %d %q, want 200 and the hop's body", i, status, body)
@@ -846,7 +846,7 @@ func TestABodyReadFailureReachesTheCaller(t *testing.T) {
 			Body: io.NopCloser(&failOnce{Reader: strings.NewReader(`{"n":`), err: errReset}), Request: r,
 		}, nil
 	})
-	tr := newCacheTransport(t, wire, httpclient.CacheConfig{})
+	tr := newCacheTransport(t, wire, httpcache.Config{})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://server.example/x", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -860,7 +860,7 @@ func TestABodyReadFailureReachesTheCaller(t *testing.T) {
 	if string(body) != `{"n":` || !errors.Is(err, errReset) {
 		t.Errorf("the caller read %q, %v, want the bytes the server sent and then its error", body, err)
 	}
-	if got := tr.State(); got != (httpclient.CacheState{}) {
+	if got := tr.State(); got != (httpcache.State{}) {
 		t.Errorf("State = %+v, want nothing kept or counted", got)
 	}
 }
@@ -913,7 +913,7 @@ func TestAResponseBesideAnErrorReachesTheCaller(t *testing.T) {
 				}
 				return resp, errRefused
 			})
-			tr := newCacheTransport(t, wire, httpclient.CacheConfig{})
+			tr := newCacheTransport(t, wire, httpcache.Config{})
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://server.example/x", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -931,7 +931,7 @@ func TestAResponseBesideAnErrorReachesTheCaller(t *testing.T) {
 			if resp.Request != req {
 				t.Errorf("the response reports request %p, want the caller's %p", resp.Request, req)
 			}
-			if got := tr.State(); got != (httpclient.CacheState{}) {
+			if got := tr.State(); got != (httpcache.State{}) {
 				t.Errorf("State = %+v, want nothing kept or counted", got)
 			}
 		})

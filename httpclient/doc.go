@@ -1,8 +1,9 @@
 // Package httpclient is a resilient outbound-HTTP toolkit: transient-error
 // classification, retries over one jittered exponential backoff loop,
-// Retry-After parsing, status mapping, secret redaction, body helpers, a
-// revalidation cache, custom-CA TLS transports and redirect allowlists. They live
-// together because they compose into one [net/http.Client].
+// Retry-After parsing, status mapping, secret redaction, body helpers,
+// custom-CA TLS transports and redirect allowlists. They live together because
+// they compose into one [net/http.Client]. The revalidation cache that
+// composes with them is the httpcache module (github.com/cplieger/go/httpcache).
 //
 // # Retry doors
 //
@@ -29,13 +30,6 @@
 // against [ErrUnauthorized], [ErrForbidden], [ErrRateLimited] and
 // [ErrServerError].
 //
-// # Revalidation cache
-//
-// [NewCacheRoundTripper] revalidates the GET requests of any client against the
-// answers it holds, and serves one only on the server's 304 Not Modified.
-// [NewCache] with [Cache.Begin] is the same cache for code that reads its own
-// answers, sent through a [CacheGuard].
-//
 // # Secrets
 //
 // [RedactSecret], [RedactSecretString], [RedactTransportError] and
@@ -45,6 +39,6 @@
 // cap.
 //
 // The README groups the API by task and pkg.go.dev lists every identifier.
-// docs/retries.md, docs/timeouts.md, docs/responses.md, docs/caching.md and
+// docs/retries.md, docs/timeouts.md, docs/responses.md and
 // docs/security-model.md hold the full contracts.
 package httpclient

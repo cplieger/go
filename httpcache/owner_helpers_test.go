@@ -1,4 +1,4 @@
-package httpclient_test
+package httpcache_test
 
 import (
 	"cmp"
@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cplieger/go/httpcache"
 	"github.com/cplieger/go/httpclient"
 )
 
@@ -101,21 +102,21 @@ func serveOrigin(t *testing.T, h http.Handler) string {
 type layer func(http.RoundTripper) http.RoundTripper
 
 // ownerConfig is how a test owner is built. Its chain, from the client down, is
-// request, a one-attempt RetryRoundTripper, attempt, a CacheGuard, and wire.
+// request, a one-attempt RetryRoundTripper, attempt, a Guard, and wire.
 type ownerConfig struct {
 	request layer
 	attempt layer
 	wire    http.RoundTripper
 	token   func(context.Context) (string, error)
-	cache   httpclient.CacheConfig
+	cache   httpcache.Config
 	noGuard bool
 }
 
 // owner reads its own answers through a Cache, as a client that decodes them
-// does: it builds each request, sends it beneath a CacheGuard, decodes the body
+// does: it builds each request, sends it beneath a Guard, decodes the body
 // into a Go value and keeps that value re-encoded.
 type owner struct {
-	cache     *httpclient.Cache
+	cache     *httpcache.Cache
 	client    *http.Client
 	token     func(context.Context) (string, error)
 	base      string
@@ -129,7 +130,7 @@ func newOwner(base string, cfg ownerConfig) *owner {
 		rt = cfg.wire
 	}
 	if !cfg.noGuard {
-		rt = httpclient.CacheGuard(rt)
+		rt = httpcache.Guard(rt)
 	}
 	if cfg.attempt != nil {
 		rt = cfg.attempt(rt)
@@ -138,7 +139,7 @@ func newOwner(base string, cfg ownerConfig) *owner {
 	if cfg.request != nil {
 		rt = cfg.request(rt)
 	}
-	return &owner{cache: httpclient.NewCache(cfg.cache), client: &http.Client{Transport: rt}, token: cfg.token, base: base}
+	return &owner{cache: httpcache.New(cfg.cache), client: &http.Client{Transport: rt}, token: cfg.token, base: base}
 }
 
 // ownerRead is one read an owner makes.
@@ -189,7 +190,7 @@ func (o *owner) do(ctx context.Context, req ownerRead) (ownerAnswer, error) {
 	if into == nil {
 		into = &account{}
 	}
-	read := o.cache.Begin(httpclient.CacheReadConfig{
+	read := o.cache.Begin(httpcache.ReadConfig{
 		Variant: fmt.Sprintf("%T", into), Store: !req.unstored, Resend: !req.noResend, Discarded: o.discard,
 	})
 	target := o.base + req.path
@@ -223,7 +224,7 @@ func (o *owner) do(ctx context.Context, req ownerRead) (ownerAnswer, error) {
 	return answer, err
 }
 
-func readAnswer(read *httpclient.CacheRead, resp *http.Response, err error, req ownerRead, into any) (ownerAnswer, error) {
+func readAnswer(read *httpcache.Read, resp *http.Response, err error, req ownerRead, into any) (ownerAnswer, error) {
 	if err != nil {
 		if resp != nil {
 			resp.Body.Close()

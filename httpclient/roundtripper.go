@@ -286,3 +286,11 @@ func NewRetry(base http.RoundTripper, policy CheckRedirect, cfg TransportConfig)
 		CheckRedirect: policy,
 	}
 }
+
+// closeIdle closes rt's idle connections where rt has a CloseIdleConnections
+// method, as [http.Client.CloseIdleConnections] does.
+func closeIdle(rt http.RoundTripper) {
+	if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
