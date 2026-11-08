@@ -413,6 +413,9 @@ func TestSecret_non_regular_file_is_refused_at_once(t *testing.T) {
 				if err != nil && !strings.Contains(err.Error(), "not a regular file") {
 					t.Errorf("Secret(%s) = %v, want the not-a-regular-file reason", name, err)
 				}
+				if err != nil && !strings.Contains(err.Error(), path) {
+					t.Errorf("Secret(%s) = %v, want the message to name %s, as an OS refusal's does", name, err, path)
+				}
 				if pe, ok := errors.AsType[*fs.PathError](err); !ok || pe.Path != path {
 					t.Errorf("Secret(%s) = %v, want a *fs.PathError naming %s, as every unreadable-file failure carries", name, err, path)
 				}

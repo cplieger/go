@@ -209,11 +209,11 @@ func readSecretFile(path string) ([]byte, error) {
 		secretStatHook()
 	}
 	if !info.Mode().IsRegular() {
-		return nil, &classifiedError{
-			msg:   fmt.Sprintf("secret file is not a regular file (mode %s)", info.Mode()),
-			class: ErrSecretFileUnreadable,
-			cause: &fs.PathError{Op: "open", Path: path, Err: errNotRegularFile},
-		}
+		// Classified like an OS refusal, so the message names the path as
+		// "open <path>: not a regular file (mode ...)" does.
+		return nil, unreadableSecretFile(&fs.PathError{
+			Op: "open", Path: path, Err: fmt.Errorf("%w (mode %s)", errNotRegularFile, info.Mode()),
+		})
 	}
 	if info.Size() > maxSecretFileSize {
 		return nil, &classifiedError{
