@@ -82,7 +82,7 @@ Credentials in logs are [CWE-532](https://cwe.mitre.org/data/definitions/532.htm
 
 - Every logged `url` attribute replaces the whole userinfo with `REDACTED`. That is stronger than `url.URL.Redacted`, which masks only the password and would leave a token passed as the username in the clear.
 - Every query value becomes `REDACTED`, because query values often carry API keys. Query keys, the scheme, the host and the path are kept for debugging, and the fragment is dropped. A URL that does not parse is logged as a fixed placeholder.
-- `StatusError.Error()` shows the same redacted URL. The error keeps the original URL in an unexported field: `encoding/json` skips it and `%v` prints the redacted `Error()` text, but `%#v` prints every field, so do not log the error with `%#v`.
+- `StatusError.Error()` shows the same redacted URL. The error keeps the original URL in an unexported field: `encoding/json` skips it and `%v` prints the redacted `Error()` text, but `%#v`, or any verb on a dereferenced `StatusError` value, prints every field, so log the `*StatusError` itself or its `Error()` text.
 - A transport `*url.Error` embeds the full URL, so it is reduced to its cause before it is logged or returned. The reduction repeats until no `*url.Error` is left in the chain, so a `*url.Error` a RoundTripper or redirect policy returned under net/http's own is reduced too. A chain nested more than eight deep becomes the fixed text `request failed`.
 - The revalidation cache keys an entry by a SHA-256 digest of the request's `Authorization` lines, so requests with different credentials never share an entry and the credential is never held.
 

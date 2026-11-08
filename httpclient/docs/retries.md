@@ -82,7 +82,7 @@ A 5xx code no RFC registers is retried like a 500, as RFC 9110 section 15 asks. 
 | 501, 505, 506, 508, 510, 511, and 600 or more | no | no | no |
 | Other 4xx | no | no | no |
 
-`Do` sees only the error your function returns, and `IsTransient` decides whether it is worth another attempt. When your function returns the error from `CheckStatus`, its `*StatusError` reports itself transient exactly when `IsRetryableStatus` accepts its code, except a 429, which only a rate-limit option retries. A transient error is a network timeout, a connection reset, refused or broken pipe, a server that closed the connection before it answered, an unexpected end of body, a DNS failure, or an error whose `IsTransient()` method says so. `IsTransient` never accepts a `*PermanentError`, a `*StatusError` for 401, 403 or 429, or an expired or canceled caller context.
+`Do` sees only the error your function returns, and `IsTransient` decides whether it is worth another attempt. When your function returns the error from `CheckStatus`, its `*StatusError` reports itself transient exactly when `IsRetryableStatus` accepts its code, except a 429, which only a rate-limit option retries. A transient error is a network timeout, a connection reset, refused or broken pipe, a server that closed the connection before it answered, an unexpected end of body, a DNS failure, or an error whose `IsTransient()` method says so. `IsTransient` never accepts an error marked by `Permanent`, a `*StatusError` for 401, 403 or 429, or an expired or canceled caller context.
 
 The transport's default policy retries an error `IsTransient` accepts and a status `IsRetryableStatus` accepts. `GetBytes` judges each attempt the same way. Set `TransportConfig.CheckRetry` to retry a different set.
 

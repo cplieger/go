@@ -73,7 +73,7 @@ var (
 type StatusError struct {
 	// rawURL is the URL GetBytes was given, unredacted; Error() renders it
 	// redacted. CheckStatus leaves it empty. It is unexported so encoding/json
-	// and a caller's struct copy cannot carry its credentials into a log.
+	// cannot carry its credentials into a log.
 	rawURL string
 	Code   int
 	// RetryAfter is the response's Retry-After, raw and uncapped, zero when
@@ -265,10 +265,12 @@ func IsAttemptTimeout(err error) bool {
 
 // --- Constants ---
 
-// RetryAfterCap is the longest Retry-After wait this package honors: every
-// parser here caps a server's value at it, and a non-positive rate-limit
-// maxWait takes it. Its value is part of the v1 API, so a caller may derive
-// its own bounds from it (a server timeout covering a retry's longest wait).
+// RetryAfterCap is the longest Retry-After wait this package honors:
+// ParseRetryAfter and the retry doors cap a server's value at it
+// (ParseRetryAfterResponse and StatusError.RetryAfter keep the raw value), and
+// a non-positive rate-limit maxWait takes it. Its value is part of the v1
+// API, so a caller may derive its own bounds from it (a server timeout
+// covering a retry's longest wait).
 const RetryAfterCap = 60 * time.Second
 
 // The retry and body defaults are unexported so tuning one is not an API

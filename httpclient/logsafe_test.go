@@ -27,7 +27,9 @@ func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) 
 				t.Errorf("got %v: IsPermanent=%v, want the mark kept over the cause", got, IsPermanent(got))
 			}
 		}},
-		{"MarkTransient", MarkTransient(urlErr()), func(t *testing.T, got error) {
+		// The cause is not transient by itself, so only the kept mark makes
+		// the reduced error transient.
+		{"MarkTransient", MarkTransient(&url.Error{Op: "Get", URL: secretURL, Err: errors.New("boom")}), func(t *testing.T, got error) {
 			if !IsTransient(got) {
 				t.Errorf("got %v, want the transient mark kept", got)
 			}
