@@ -39,5 +39,7 @@ func dirOpenName(name string) string {
 // childDirOpenName is an in-root name with "/." appended, for Root.OpenRoot.
 // os.Root opens every component but the last with O_DIRECTORY, so name is
 // opened as a directory and "." inside it: a FIFO swapped in for name answers
-// ENOTDIR instead of blocking. os.Root names the child root cleanly.
+// ENOTDIR instead of blocking. The child root keeps the "/." in its Name()
+// ("<root>/d/."); every path this package reports goes through filepath.Join
+// or filepath.Clean, or is rewritten by dirOpenErr.
 func childDirOpenName(name string) string { return name + string(filepath.Separator) + "." }
