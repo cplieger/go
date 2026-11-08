@@ -112,8 +112,10 @@ func TestZeroCacheHoldsNothing(t *testing.T) {
 		if req.Header.Get("If-None-Match") != "" || req.Header.Get("If-Modified-Since") != "" {
 			t.Error("the zero Cache added a validator")
 		}
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Etag": {`"v1"`}},
-			Body: io.NopCloser(strings.NewReader("x")), Request: req}, nil
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Etag": {`"v1"`}},
+			Body: io.NopCloser(strings.NewReader("x")), Request: req,
+		}, nil
 	})
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("Send through the zero Cache = %v, %v; want the 200", resp, err)
