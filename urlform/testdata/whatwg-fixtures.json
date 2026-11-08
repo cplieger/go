@@ -1,0 +1,194 @@
+{
+  "provenance": "Curated conformance fixtures for the covered browser-vs-net/url divergence set. Rows with source=wpt derive from web-platform-tests url/resources/urltestdata.json @ 181476aa16e8 (2026-07-05); the wpt field records the browser truth (hostname, or FAIL) those rows pin against. Rows with source=hand cover the address-bar classes (outside the URL spec) and the deliberate model boundaries. Expectations are urlform's facts, hand-vetted against the WHATWG reading - NOT regenerated from the implementation. On mismatch, re-derive the expectation from the spec before touching the row. Drift maintenance: periodically re-check the spec and the WPT corpus for changes to the covered set and refresh the commit pin - see the header comment in fixtures_test.go.",
+  "cases": [
+    {
+      "name": "single-slash http recovers the authority",
+      "input": "http:/example.com/",
+      "class": "hidden_host", "host": "example.com", "scheme": "http",
+      "wpt": "hostname=example.com", "source": "wpt",
+      "note": "WHATWG special-authority-ignore-slashes: one slash after a special scheme still reads an authority"
+    },
+    {
+      "name": "single-slash https recovers the authority",
+      "input": "https:/example.com/",
+      "class": "hidden_host", "host": "example.com", "scheme": "https",
+      "wpt": "hostname=example.com", "source": "wpt"
+    },
+    {
+      "name": "single-slash ftp recovers the authority",
+      "input": "ftp:/example.com/",
+      "class": "hidden_host", "host": "example.com", "scheme": "ftp",
+      "wpt": "hostname=example.com", "source": "wpt"
+    },
+    {
+      "name": "zero-slash http recovers the authority",
+      "input": "http:example.com/",
+      "class": "hidden_host", "host": "example.com", "scheme": "http",
+      "wpt": "hostname=example.com", "source": "wpt",
+      "note": "zero slashes: net/url parses an opaque path, the browser reads the authority"
+    },
+    {
+      "name": "zero-slash wss recovers the authority",
+      "input": "wss:example.com/",
+      "class": "hidden_host", "host": "example.com", "scheme": "wss",
+      "wpt": "hostname=example.com", "source": "wpt"
+    },
+    {
+      "name": "zero-slash userinfo authority recovers host and flag",
+      "input": "http:a:b@www.example.com",
+      "class": "hidden_host", "host": "www.example.com", "scheme": "http", "hasUserInfo": true,
+      "wpt": "hostname=www.example.com", "source": "wpt"
+    },
+    {
+      "name": "non-special scheme recovers nothing",
+      "input": "madeupscheme:/example.com/",
+      "class": "hidden_host", "scheme": "madeupscheme",
+      "wpt": "hostname= (opaque path)", "source": "wpt",
+      "note": "the browser reads an opaque path for a non-special scheme; fabricating host evidence here would be a false fact"
+    },
+    {
+      "name": "file single-slash recovers nothing",
+      "input": "file:/example.com/",
+      "class": "hidden_host", "scheme": "file",
+      "wpt": "hostname= (empty file host)", "source": "wpt",
+      "note": "file is special for slash handling but its slash forms read an empty host; excluded from authority recovery"
+    },
+    {
+      "name": "backslash authority canonicalizes for a special scheme",
+      "input": "http:\\\\www.google.com\\foo",
+      "class": "absolute", "host": "www.google.com", "scheme": "http", "hasBackslash": true,
+      "wpt": "hostname=www.google.com", "source": "wpt"
+    },
+    {
+      "name": "backslashes inside a special-scheme path canonicalize",
+      "input": "http://example.com\\\\foo\\\\bar",
+      "class": "absolute", "host": "example.com", "scheme": "http", "hasBackslash": true,
+      "wpt": "hostname=example.com", "source": "wpt"
+    },
+    {
+      "name": "backslash terminates a special authority",
+      "input": "http://a:b@c\\",
+      "class": "absolute", "host": "c", "scheme": "http", "hasUserInfo": true, "hasBackslash": true,
+      "wpt": "hostname=c", "source": "wpt"
+    },
+    {
+      "name": "backslash terminates a ws authority",
+      "input": "ws://a@b\\c",
+      "class": "absolute", "host": "b", "scheme": "ws", "hasUserInfo": true, "hasBackslash": true,
+      "wpt": "hostname=b", "source": "wpt"
+    },
+    {
+      "name": "non-special backslashes stay opaque",
+      "input": "non-special:\\\\opaque\\x",
+      "class": "hidden_host", "scheme": "non-special", "hasBackslash": true,
+      "wpt": "hostname= (opaque path)", "source": "hand",
+      "note": "scoping fix: a global backslash rewrite would fabricate host evidence 'opaque' a browser never sees"
+    },
+    {
+      "name": "query and fragment backslashes are ordinary characters",
+      "input": "https://h/p\\q?a\\b#c\\d",
+      "class": "absolute", "host": "h", "scheme": "https", "hasBackslash": true,
+      "wpt": "hostname=h", "source": "hand",
+      "note": "the WHATWG slash equivalence ends at the query; host facts are unaffected either way"
+    },
+    {
+      "name": "embedded tab in the host is removed",
+      "input": "https://anime\tbytes.tv/x",
+      "class": "absolute", "host": "animebytes.tv", "scheme": "https", "hasTabOrNewline": true,
+      "wpt": "preprocessing: remove all ASCII tab or newline", "source": "hand",
+      "note": "the tab-smuggling divergence that motivated the preprocessing; net/url alone rejects the control byte"
+    },
+    {
+      "name": "embedded tab in the path is removed",
+      "input": "http://example.com/foo\tbar",
+      "class": "absolute", "host": "example.com", "scheme": "http", "hasTabOrNewline": true,
+      "wpt": "hostname=example.com", "source": "wpt"
+    },
+    {
+      "name": "newline-split scheme reassembles",
+      "input": "ht\ntps://anime\rbytes.tv/x",
+      "class": "absolute", "host": "animebytes.tv", "scheme": "https", "hasTabOrNewline": true,
+      "wpt": "preprocessing precedes scheme reading", "source": "hand",
+      "note": "removal runs before the parse in the spec's basic parser, so a newline split anywhere - even inside the scheme - reassembles; a string-level scheme allowlist on the raw input would have been bypassed"
+    },
+    {
+      "name": "leading C0 controls and trailing controls trim",
+      "input": "\u0000\u001b\u0004\u0012 http://example.com/\u001f \r ",
+      "class": "absolute", "host": "example.com", "scheme": "http",
+      "wpt": "hostname=example.com", "source": "wpt",
+      "note": "WHATWG edge rule: strip leading/trailing C0-or-space; net/url alone rejects the control bytes"
+    },
+    {
+      "name": "interior non-tab C0 control stays malformed",
+      "input": "https://anime\u0001bytes.tv/x",
+      "class": "malformed", "hasBackslash": false,
+      "wpt": "FAIL (forbidden host code point)", "source": "hand",
+      "note": "aligned boundary: the browser also fails on a C0 control inside a host; only tab/newline are removed"
+    },
+    {
+      "name": "port-only special authority recovers no host",
+      "input": "https://:443/x",
+      "class": "hidden_host", "scheme": "https", "port": "443",
+      "wpt": "FAIL (empty special host)", "source": "wpt",
+      "note": "the browser fails outright, so exposing no host evidence matches; the port fact is reported for the consumer"
+    },
+    {
+      "name": "out-of-range port is reported, not rejected",
+      "input": "http://example.com:65536/x",
+      "class": "absolute", "host": "example.com", "scheme": "http", "port": "65536",
+      "wpt": "FAIL (port out of range)", "source": "wpt",
+      "note": "DELIBERATE model boundary: urlform reports the fact and the publisher validates the range (Port doc); the browser rejects"
+    },
+    {
+      "name": "opaque host-as-scheme recovers nothing",
+      "input": "animebytes.tv:443/x",
+      "class": "hidden_host", "scheme": "animebytes.tv",
+      "wpt": "n/a (address-bar territory)", "source": "hand",
+      "note": "'animebytes.tv' parses as a non-special scheme; the URL-spec reading is an opaque path, and only an address bar would fix it up - evidence stays hidden, consumers fail closed"
+    },
+    {
+      "name": "javascript scheme stays opaque",
+      "input": "javascript:alert(1)",
+      "class": "hidden_host", "scheme": "javascript",
+      "wpt": "hostname= (opaque path)", "source": "wpt"
+    },
+    {
+      "name": "mailto opaque form carries no userinfo fact",
+      "input": "mailto:user@example.com",
+      "class": "hidden_host", "scheme": "mailto",
+      "wpt": "hostname= (opaque path)", "source": "hand",
+      "note": "the @ sits in an opaque path, not an authority; HasUserInfo stays false"
+    },
+    {
+      "name": "schemeless host reads as the address bar would",
+      "input": "animebytes.tv/torrents.php?id=1",
+      "class": "schemeless_host", "host": "animebytes.tv",
+      "wpt": "n/a (address-bar model)", "source": "hand"
+    },
+    {
+      "name": "protocol-relative form carries its host",
+      "input": "//animebytes.tv/x",
+      "class": "protocol_relative", "host": "animebytes.tv",
+      "wpt": "n/a (needs a base; ambient-scheme model)", "source": "hand"
+    },
+    {
+      "name": "three slashes stay ambiguous protocol-relative",
+      "input": "///animebytes.tv/x",
+      "class": "protocol_relative",
+      "wpt": "n/a (needs a base)", "source": "hand"
+    },
+    {
+      "name": "rooted relative path",
+      "input": "/torrents.php?id=1",
+      "class": "relative",
+      "wpt": "n/a (needs a base)", "source": "hand"
+    },
+    {
+      "name": "homograph host survives without IDNA mapping",
+      "input": "https://an\u0130mebytes.tv/x",
+      "class": "absolute", "host": "an\u0130mebytes.tv", "scheme": "https",
+      "wpt": "hostname would be IDNA-mapped/punycoded", "source": "hand",
+      "note": "DELIBERATE model boundary: no IDNA/UTS46 transform ever runs, so non-ASCII evidence survives for the fail-closed IsASCIIHost gates"
+    }
+  ]
+}

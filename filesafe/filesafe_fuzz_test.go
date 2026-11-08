@@ -1,0 +1,567 @@
+package filesafe
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+func FuzzWriteFile(f *testing.F) {
+	f.Add([]byte("hello"), "data.txt", false)
+	f.Add([]byte("hello"), "data.txt", true)
+	f.Add([]byte{}, "empty", false)
+	f.Add([]byte("\x00\xff\xfe"), "../escape", true)
+	f.Add([]byte("big"), "sub/dir/file.json", false)
+
+	baseDir := f.TempDir()
+	ctx := f.Context()
+
+	f.Fuzz(func(t *testing.T, content []byte, name string, withMode bool) {
+		if len(name) == 0 || len(name) > 255 {
+			return
+		}
+		base := filepath.Base(name)
+		if base == "." || base == ".." || base == "/" || strings.ContainsRune(base, 0) {
+			return
+		}
+		path := filepath.Join(baseDir, base)
+
+		res, err := WriteFile(ctx, path, content, fuzzModeOpts(withMode)...)
+		if err != nil {
+			return
+		}
+		if mErr := checkFuzzMode(path, withMode); mErr != nil {
+			t.Fatal(mErr)
+		}
+		if res.Path != path {
+			t.Fatalf("Result.Path = %q, want %q", res.Path, path)
+		}
+
+		real, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+		// The temp dir itself can sit behind a symlink (/var on macOS) or an
+		// 8.3 short name (RUNNER~1 on Windows), so it is resolved too.
+		realBase, err := filepath.EvalSymlinks(baseDir)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) = %v", baseDir, err)
+		}
+		if !strings.HasPrefix(real, realBase) {
+			t.Fatalf("file escaped temp dir: %q not under %q", real, realBase)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(content))
+		}
+	})
+}
+
+func FuzzReadBounded(f *testing.F) {
+	f.Add([]byte("hello world"), int64(100))
+	f.Add([]byte("x"), int64(0))
+	f.Add([]byte{}, int64(1))
+	f.Add([]byte("\x00\xff"), int64(1))
+
+	ctx := f.Context()
+
+	f.Fuzz(func(t *testing.T, content []byte, maxBytes int64) {
+		if maxBytes < 0 {
+			maxBytes = 0
+		}
+		path := filepath.Join(t.TempDir(), "fuzz_read.dat")
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		// The harness always writes a valid absolute path, so the only
+		// behaviorally acceptable outcomes are an exact read when the file
+		// fits within maxBytes or ErrFileTooLarge when it does not.
+		got, err := ReadBounded(ctx, path, maxBytes)
+		if int64(len(content)) > maxBytes {
+			if !errors.Is(err, ErrFileTooLarge) {
+				t.Fatalf("ReadBounded(%d bytes, max %d) = %v, want ErrFileTooLarge", len(content), maxBytes, err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("ReadBounded(%d bytes, max %d) = %v, want nil", len(content), maxBytes, err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Fatalf("ReadBounded(%d bytes, max %d) returned different content", len(content), maxBytes)
+		}
+	})
+}
+
+func FuzzValidateAbsClean(f *testing.F) {
+	f.Add("/tmp/safe")
+	f.Add("/tmp/../etc/passwd")
+	f.Add("relative/path")
+	f.Add("/has\x00null")
+	f.Add("")
+	f.Add("/..")
+
+	f.Fuzz(func(t *testing.T, path string) {
+		// Oracle for current behavior: reject empty/null-bearing input, anything
+		// that doesn't clean to an absolute path, or a cleaned path still
+		// holding "..". Scans wantClean, not the raw input, to track the
+		// production post-Clean traversal check.
+		wantErr := path == "" || strings.ContainsRune(path, 0)
+		wantClean := ""
+		if !wantErr {
+			wantClean = filepath.Clean(path)
+			if !filepath.IsAbs(wantClean) {
+				wantErr = true
+			}
+			for seg := range strings.SplitSeq(wantClean, string(filepath.Separator)) {
+				if seg == ".." {
+					wantErr = true
+					break
+				}
+			}
+		}
+
+		clean, err := validateAbsClean(path)
+
+		// ValidatePath is the exported face of this same rule, so its verdict
+		// must be identical for every input — otherwise a caller's acceptance
+		// check and the write it guards disagree.
+		exported := ValidatePath(path)
+		switch {
+		case (exported == nil) != (err == nil):
+			t.Fatalf("ValidatePath(%q) = %v but validateAbsClean = %v; the exported gate must be the same rule", path, exported, err)
+		case exported != nil && exported.Error() != err.Error():
+			t.Fatalf("ValidatePath(%q) = %q, want the validator's own %q", path, exported, err)
+		}
+
+		if wantErr {
+			if err == nil {
+				t.Fatalf("validateAbsClean(%q) = %q, nil error; want rejection", path, clean)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("validateAbsClean(%q) = error %v, want nil", path, err)
+		}
+		if clean != wantClean {
+			t.Fatalf("validateAbsClean(%q) = %q, want %q", path, clean, wantClean)
+		}
+	})
+}
+
+func FuzzWriteReader(f *testing.F) {
+	f.Add([]byte("hello"), false)
+	f.Add([]byte("hello"), true)
+	f.Add([]byte{}, false)
+	f.Add([]byte("\x00\xff\xfe\xfd"), true)
+
+	baseDir := f.TempDir()
+	ctx := f.Context()
+
+	f.Fuzz(func(t *testing.T, content []byte, withMode bool) {
+		path := filepath.Join(baseDir, "fuzz_writer.dat")
+
+		if _, err := WriteReader(ctx, path, bytes.NewReader(content), fuzzModeOpts(withMode)...); err != nil {
+			return
+		}
+		if mErr := checkFuzzMode(path, withMode); mErr != nil {
+			t.Fatal(mErr)
+		}
+
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(content))
+		}
+
+		// No temp file may leak after a successful write.
+		entries, err := os.ReadDir(baseDir)
+		if err != nil {
+			t.Fatalf("ReadDir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), tempPrefix) && strings.HasSuffix(e.Name(), tempSuffix) {
+				t.Fatalf("temp file leaked: %s", e.Name())
+			}
+		}
+	})
+}
+
+func FuzzValidateRootName(f *testing.F) {
+	f.Add("out.pfx")
+	f.Add("a/../b.txt")
+	f.Add("../escape")
+	f.Add("/etc/passwd")
+	f.Add("has\x00null")
+	f.Add("")
+	f.Add(".")
+	f.Add("nested/deep/file")
+
+	f.Fuzz(func(t *testing.T, name string) {
+		// Oracle for current validateRootName behavior: reject empty,
+		// null-bearing and non-relative names (absolute, or on Windows rooted
+		// or carrying a volume), else accept the cleaned relative form. An
+		// internal ".." is allowed here since *os.Root refuses escapes at
+		// operation time.
+		notRelative := filepath.IsAbs(name) || filepath.VolumeName(name) != "" ||
+			(name != "" && os.IsPathSeparator(name[0]))
+		wantErr := name == "" || strings.ContainsRune(name, 0) || notRelative
+		wantClean := filepath.Clean(name)
+
+		clean, err := validateRootName(name)
+		if wantErr {
+			if err == nil {
+				t.Fatalf("validateRootName(%q) = %q, nil error; want rejection", name, clean)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("validateRootName(%q) = error %v, want nil", name, err)
+		}
+		if clean != wantClean {
+			t.Fatalf("validateRootName(%q) = %q, want cleaned form %q", name, clean, wantClean)
+		}
+		if filepath.IsAbs(clean) {
+			t.Fatalf("validateRootName(%q) = %q, want a relative path", name, clean)
+		}
+	})
+}
+
+func FuzzIsStaleTempName(f *testing.F) {
+	// Seed with the fixtures from TestIsStaleTempName.
+	f.Add(".atomicfile-123456.tmp")
+	f.Add(".atomicfile-7.tmp")
+	f.Add(".atomicfile-notes.tmp")
+	f.Add(".atomicfile-backup.tmp")
+	f.Add(".atomicfile-12ab34.tmp")
+	f.Add(".atomicfile-.tmp")
+	f.Add(".atomicfilebackup.tmp")
+	f.Add("config.tmp-backup")
+	f.Add("")
+	f.Add("a.tmp-\x00")
+	// Adversarial shapes promoted from cert-converter's app-side target when its
+	// hand-rolled sweep adopted CleanupStaleTempsInRoot: near-misses that a
+	// prefix/suffix check alone would wave through, and lookalikes that must not be
+	// unlinked. A false positive here deletes a file this package does not own.
+	for _, seed := range []string{
+		".", "..", "x", "existing.pfx",
+		".atomicfile-0.tmp",
+		".atomicfile-109.tmp",
+		".atomicfile-12a3.tmp",
+		"atomicfile-123.tmp",
+		".atomicfile-123.tmp.bak",
+		".atomicfile-123.tmp.tmp",
+		".atomicfile-123.TMP",
+		".atomicfile-\uff11\uff12\uff13.tmp",
+		".atomicfile-1_2.tmp",
+		".atomicfile--1.tmp",
+		".atomicfile-+1.tmp",
+		".atomicfile-1.tmp\n",
+		".atomicfile-1.tmp/../evil",
+		".atomicfile-\x00123.tmp",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, name string) {
+		got := isStaleTempName(name)
+
+		// The exported face must be the same predicate, on every input: a
+		// caller asking IsPackageTemp whether its file is reclaimable has to
+		// get the answer the sweeps will act on.
+		if exported := IsPackageTemp(name); exported != got {
+			t.Fatalf("IsPackageTemp(%q) = %v but isStaleTempName = %v; the exported contract drifted from the sweep",
+				name, exported, got)
+		}
+
+		// An independent oracle, not a restatement of the implementation: the exact
+		// shape this package stages, spelled as a regexp. A structural check that
+		// only inspects the prefix/suffix agrees with a buggy matcher on inputs like
+		// ".atomicfile-\uff11.tmp" (a fullwidth digit is a digit to unicode.IsDigit
+		// but not to this format), which is precisely where an over-broad matcher
+		// starts unlinking files the package never wrote.
+		if want := staleTempNameOracle.MatchString(name); got != want {
+			t.Fatalf("isStaleTempName(%q) = %v, want %v (only .atomicfile-<digits>.tmp is ours to delete)", name, got, want)
+		}
+
+		// The structural invariant still has to hold on a true result.
+		if got {
+			if !strings.HasPrefix(name, tempPrefix) || !strings.HasSuffix(name, tempSuffix) {
+				t.Fatalf("true but %q lacks the package prefix/suffix", name)
+			}
+			middle := name[len(tempPrefix) : len(name)-len(tempSuffix)]
+			if !isAllDigits(middle) {
+				t.Fatalf("true but middle %q is not all-digit", middle)
+			}
+		}
+	})
+}
+
+func FuzzPendingFileRoundTrip(f *testing.F) {
+	f.Add("file.txt", []byte("content"), false)
+	f.Add("file.txt", []byte("content"), true)
+	f.Add("", []byte{}, false)
+	f.Add("../bad", []byte("x"), true)
+
+	f.Fuzz(func(t *testing.T, name string, content []byte, withMode bool) {
+		baseDir := t.TempDir()
+		base := filepath.Base(name)
+		path := filepath.Join(baseDir, base)
+		if name == "" || base == "." || base == ".." {
+			path = name // exercise validation
+		}
+
+		pf, err := NewPendingFile(t.Context(), path, fuzzModeOpts(withMode)...)
+		if err != nil {
+			return
+		}
+
+		if _, err := pf.Write(content); err != nil {
+			_ = pf.Cleanup()
+			return
+		}
+
+		res, err := pf.Commit(t.Context())
+		if err != nil {
+			return
+		}
+
+		got, err := os.ReadFile(res.Path)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Fatalf("content mismatch")
+		}
+		if mErr := checkFuzzMode(res.Path, withMode); mErr != nil {
+			t.Fatal(mErr)
+		}
+
+		// No temp file may leak in baseDir.
+		entries, _ := os.ReadDir(baseDir)
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), tempPrefix) && strings.HasSuffix(e.Name(), tempSuffix) {
+				t.Fatalf("temp file leaked: %s", e.Name())
+			}
+		}
+	})
+}
+
+func FuzzCleanupStaleTemps(f *testing.F) {
+	f.Add(".atomicfile-123456.tmp\nregular.json\n.atomicfile-notes.tmp", uint(60))
+	f.Add(".atomicfile-987654321.tmp\n.atomicfilebackup.tmp\nkeep.json", uint(60))
+
+	f.Fuzz(func(t *testing.T, fileNames string, maxAgeSec uint) {
+		if maxAgeSec > 86400*365 {
+			maxAgeSec = 86400 * 365
+		}
+		maxAge := time.Duration(maxAgeSec) * time.Second
+
+		dir := t.TempDir()
+		names := strings.Split(fileNames, "\n")
+		if len(names) > 20 {
+			names = names[:20]
+		}
+
+		created := make(map[string]bool)
+		for _, n := range names {
+			n = strings.TrimSpace(n)
+			if n == "" || strings.ContainsAny(n, "/\\") || len(n) > 200 {
+				continue
+			}
+			base := filepath.Base(n)
+			if base == "." || base == ".." || created[base] {
+				continue
+			}
+			p := filepath.Join(dir, base)
+			if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+				continue
+			}
+			// Backdate so any genuine stale temp qualifies for cleanup.
+			old := time.Now().Add(-time.Duration(maxAgeSec+1) * time.Second)
+			_ = os.Chtimes(p, old, old)
+			created[base] = true
+		}
+
+		preEntries, _ := os.ReadDir(dir)
+		preSet := make(map[string]bool, len(preEntries))
+		for _, e := range preEntries {
+			preSet[e.Name()] = true
+		}
+
+		removed, err := CleanupStaleTemps(t.Context(), dir, maxAge)
+		if err != nil {
+			t.Fatalf("CleanupStaleTemps: %v", err)
+		}
+
+		postEntries, _ := os.ReadDir(dir)
+		postSet := make(map[string]bool, len(postEntries))
+		for _, e := range postEntries {
+			postSet[e.Name()] = true
+		}
+
+		// Only genuine stale temps may be removed, and the count must match.
+		gone := 0
+		for name := range preSet {
+			if postSet[name] {
+				continue
+			}
+			gone++
+			if !isStaleTempName(name) {
+				t.Fatalf("non-stale file %q was removed", name)
+			}
+		}
+		if gone != removed.Removed {
+			t.Fatalf("removed count = %d, but %d files disappeared", removed, gone)
+		}
+	})
+}
+
+func FuzzWriteFileInRoot(f *testing.F) {
+	f.Add([]byte("payload"), "out.pfx", true)
+	f.Add([]byte("payload"), "out.pfx", false)
+	f.Add([]byte{}, "a/../b.txt", false)
+	f.Add([]byte("x"), "../escape", true)
+	f.Add([]byte("y"), "nested/deep/file", false)
+	f.Add([]byte("z"), "/etc/passwd", false)
+	f.Add([]byte("n"), "has\x00null", true)
+	f.Add([]byte("\x00\xff"), "bin.dat", false)
+
+	f.Fuzz(func(t *testing.T, content []byte, name string, withMode bool) {
+		dir := t.TempDir()
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatalf("OpenRoot(%q) = %v", dir, err)
+		}
+		defer root.Close()
+
+		withMode = withMode && !isWindows()
+		opts := fuzzModeOpts(withMode)
+		if !isWindows() {
+			opts = append(opts, WithMkdirMode(0o755))
+		}
+		res, err := WriteFileInRoot(t.Context(), root, name, content, opts...)
+		if err != nil {
+			return
+		}
+		if mErr := checkFuzzMode(res.Path, withMode); mErr != nil {
+			t.Fatal(mErr)
+		}
+
+		got, err := os.ReadFile(res.Path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) = %v", res.Path, err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Fatalf("content mismatch for name %q: got %d bytes, want %d", name, len(got), len(content))
+		}
+
+		real, err := filepath.EvalSymlinks(res.Path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) = %v", res.Path, err)
+		}
+		realDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) = %v", dir, err)
+		}
+		if !strings.HasPrefix(real, realDir) {
+			t.Fatalf("write escaped root: %q not under %q", real, realDir)
+		}
+	})
+}
+
+// staleTempNameOracle is the exact shape CleanupStaleTemps and
+// CleanupStaleTempsInRoot are willing to unlink, as an independent regexp. ASCII
+// digits only: \d with no unicode class, anchored at both ends.
+var staleTempNameOracle = regexp.MustCompile(`^\.atomicfile-[0-9]+\.tmp$`)
+
+// FuzzProbeWritable drives the writability probe at arbitrary directory names
+// and asserts the two properties a preflight depends on regardless of outcome:
+// a stage failure never arrives as the error return (that would make every
+// caller's `err != nil` mean "not writable"), and the probe never abandons a
+// file it cannot account for — either it removed it, or it says so in Leaked
+// and named it in Name, where the package's own sweep can reclaim it.
+func FuzzProbeWritable(f *testing.F) {
+	f.Add("probe-dir", true, false)
+	f.Add("probe-dir", false, true)
+	f.Add("nested/deeper", true, true)
+	f.Add(".atomicfile-1.tmp", false, false)
+	f.Add("\x80\x80", true, false)
+
+	baseDir := f.TempDir()
+	ctx := f.Context()
+
+	f.Fuzz(func(t *testing.T, name string, mkdir, withMode bool) {
+		if len(name) == 0 || len(name) > 200 || strings.ContainsRune(name, 0) {
+			return
+		}
+		base := filepath.Base(name)
+		if base == "." || base == ".." || base == "/" {
+			return
+		}
+		dir := filepath.Join(baseDir, base)
+
+		// Windows refuses both mode options as an argument error (ErrModeUnsupported).
+		mkdir = mkdir && !isWindows()
+		opts := fuzzModeOpts(withMode && !isWindows())
+		if mkdir {
+			opts = append(opts, WithMkdirMode(0o750))
+		}
+		res, err := ProbeWritable(ctx, dir, opts...)
+		if err != nil {
+			t.Fatalf("ProbeWritable(%q) = err %v; a filesystem outcome must never surface as an error", dir, err)
+		}
+		if (res.Err != nil) != !res.OK() {
+			t.Fatalf("Phase = %v but Err = %v; the two must agree", res.Phase, res.Err)
+		}
+		if res.Name != "" && !IsPackageTemp(res.Name) {
+			t.Fatalf("probe file %q is not reclaimable by the sweep", res.Name)
+		}
+		if res.Leaked && res.OK() {
+			t.Fatalf("OK() with Leaked = true: a clean probe left %q behind", res.Name)
+		}
+
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			return // the directory does not exist, so nothing can have leaked into it
+		}
+		for _, e := range entries {
+			if IsPackageTemp(e.Name()) && !res.Leaked {
+				t.Fatalf("probe left %q in %q while reporting Leaked = false", e.Name(), dir)
+			}
+		}
+	})
+}
+
+func fuzzModeOpts(withMode bool) []WriteOption {
+	if withMode {
+		return []WriteOption{WithMode(0o600)}
+	}
+	return nil
+}
+
+func checkFuzzMode(path string, withMode bool) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	perm := fi.Mode().Perm()
+	switch {
+	case withMode && perm != 0o600:
+		return fmt.Errorf("%s: mode %#o under WithMode(0o600), want 0600", path, perm)
+	case !withMode && perm&^0o666 != 0:
+		return fmt.Errorf("%s: mode %#o without WithMode, want no bits beyond 0666", path, perm)
+	}
+	return nil
+}

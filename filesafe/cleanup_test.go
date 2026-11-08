@@ -1,0 +1,432 @@
+package filesafe
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestCleanupStaleTemps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removes_old_keeps_recent_and_returns_count", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		oldTime := time.Now().Add(-2 * time.Hour)
+
+		stale := filepath.Join(dir, ".atomicfile-987654321.tmp")
+		if err := os.WriteFile(stale, []byte("partial"), 0o644); err != nil {
+			t.Fatalf("seed stale: %v", err)
+		}
+		if err := os.Chtimes(stale, oldTime, oldTime); err != nil {
+			t.Fatalf("Chtimes: %v", err)
+		}
+
+		recent := filepath.Join(dir, ".atomicfile-111222333.tmp")
+		if err := os.WriteFile(recent, []byte("new"), 0o644); err != nil {
+			t.Fatalf("seed recent: %v", err)
+		}
+
+		removed, err := CleanupStaleTemps(t.Context(), dir, time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupStaleTemps: %v", err)
+		}
+		if removed.Removed != 1 {
+			t.Errorf("removed = %d, want 1", removed)
+		}
+		if _, err := os.Stat(stale); !os.IsNotExist(err) {
+			t.Errorf("stale temp not removed: stat err = %v", err)
+		}
+		if _, err := os.Stat(recent); err != nil {
+			t.Errorf("recent temp wrongly removed: %v", err)
+		}
+	})
+
+	t.Run("missing_dir_is_not_an_error", func(t *testing.T) {
+		t.Parallel()
+		removed, err := CleanupStaleTemps(t.Context(), filepath.Join(t.TempDir(), "nope"), time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupStaleTemps(missing) = %v, want nil", err)
+		}
+		if removed.Removed != 0 {
+			t.Errorf("removed = %d, want 0", removed)
+		}
+	})
+
+	t.Run("spares_caller_files_that_share_prefix_or_suffix", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		oldTime := time.Now().Add(-2 * time.Hour)
+
+		// Caller-owned files that must never be reclaimed even when old.
+		spared := []string{
+			".atomicfile-notes.tmp",  // non-digit middle
+			"config.tmp-backup",      // not the package shape at all
+			".atomicfilebackup.tmp",  // no separating digits
+			".atomicfile-12ab34.tmp", // mixed alnum middle
+		}
+		for _, name := range spared {
+			p := filepath.Join(dir, name)
+			if err := os.WriteFile(p, []byte("keep"), 0o644); err != nil {
+				t.Fatalf("seed %q: %v", name, err)
+			}
+			if err := os.Chtimes(p, oldTime, oldTime); err != nil {
+				t.Fatalf("Chtimes %q: %v", name, err)
+			}
+		}
+
+		// A genuine package temp, old enough to reclaim.
+		realTemp := filepath.Join(dir, ".atomicfile-123456.tmp")
+		if err := os.WriteFile(realTemp, []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed real temp: %v", err)
+		}
+		if err := os.Chtimes(realTemp, oldTime, oldTime); err != nil {
+			t.Fatalf("Chtimes real temp: %v", err)
+		}
+
+		removed, err := CleanupStaleTemps(t.Context(), dir, time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupStaleTemps: %v", err)
+		}
+		if removed.Removed != 1 {
+			t.Errorf("removed = %d, want 1 (only the digit-suffixed temp)", removed)
+		}
+		for _, name := range spared {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Errorf("caller file %q wrongly removed: %v", name, err)
+			}
+		}
+		if _, err := os.Stat(realTemp); !os.IsNotExist(err) {
+			t.Errorf("real temp not removed")
+		}
+	})
+
+	t.Run("real_writes_leave_reclaimable_temps_only_when_orphaned", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "live.txt")
+		if _, err := WriteFile(t.Context(), path, []byte("data")); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		// A successful write leaves no temp, so even a sweep that reclaims
+		// every temp older than a nanosecond finds nothing.
+		removed, err := CleanupStaleTemps(t.Context(), dir, time.Nanosecond)
+		if err != nil {
+			t.Fatalf("CleanupStaleTemps: %v", err)
+		}
+		if removed.Removed != 0 {
+			t.Errorf("removed = %d, want 0 (no orphaned temps after a clean write)", removed)
+		}
+	})
+}
+
+// TestCleanupStaleTemps_reaps_past_the_first_read_batch pins the property the batched
+// readdir exists for: the sweep drains a directory a batch at a time so a directory
+// holding thousands of orphans is never materialized whole, and that only helps if the
+// drain keeps going until the directory is exhausted.
+//
+// A drain that stopped after its first batch is the worst shape this function can take,
+// because nothing outside it can tell: the count it returns is the count it did, so a
+// caller watching SweepResult.Removed sees a healthy number every run while orphans
+// accumulate behind the batch boundary. Only a directory bigger than one batch shows it.
+func TestCleanupStaleTemps_reaps_past_the_first_read_batch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// More than the 128 entries one ReadDir call takes, so the drain has to span
+	// at least two of them.
+	const orphans = 165
+	old := time.Now().Add(-2 * time.Hour)
+	for i := range orphans {
+		p := filepath.Join(dir, fmt.Sprintf(".atomicfile-%06d.tmp", i))
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed %q = %v, want nil", p, err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("Chtimes %q = %v, want nil", p, err)
+		}
+	}
+
+	got, err := CleanupStaleTemps(t.Context(), dir, time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleTemps = %v, want nil", err)
+	}
+	want := SweepResult{Removed: orphans}
+	if got != want {
+		t.Errorf("CleanupStaleTemps(dir holding %d stale temps) = %+v, want %+v", orphans, got, want)
+	}
+}
+
+func TestCleanupStaleTemps_NonPositiveMaxAge_SparesOldTemp(t *testing.T) {
+	t.Parallel()
+	for _, maxAge := range []time.Duration{0, -time.Hour} {
+		dir := t.TempDir()
+		stale := filepath.Join(dir, ".atomicfile-987654321.tmp")
+		if err := os.WriteFile(stale, []byte("partial"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		old := time.Now().Add(-48 * time.Hour)
+		if err := os.Chtimes(stale, old, old); err != nil {
+			t.Fatalf("Chtimes: %v", err)
+		}
+		removed, err := CleanupStaleTemps(t.Context(), dir, maxAge)
+		if !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("CleanupStaleTemps(%v) = %v, want ErrInvalidArgument", maxAge, err)
+		}
+		if removed.Removed != 0 {
+			t.Errorf("CleanupStaleTemps(maxAge=%v) removed = %d, want 0", maxAge, removed)
+		}
+		if _, err := os.Stat(stale); err != nil {
+			t.Errorf("CleanupStaleTemps(maxAge=%v) wrongly removed old temp: %v", maxAge, err)
+		}
+	}
+}
+
+func TestIsStaleTempName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"digit suffix temp", ".atomicfile-123456.tmp", true},
+		{"single digit", ".atomicfile-7.tmp", true},
+		{"word tail spared", ".atomicfile-notes.tmp", false},
+		{"backup tail spared", ".atomicfile-backup.tmp", false},
+		{"mixed alnum spared", ".atomicfile-12ab34.tmp", false},
+		{"empty middle spared", ".atomicfile-.tmp", false},
+		{"no prefix", "atomicfile-123.tmp", false},
+		{"wrong prefix", ".atomicfilebackup.tmp", false},
+		{"wrong suffix", ".atomicfile-123.bak", false},
+		{"unrelated", "config.tmp-backup", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isStaleTempName(tt.in); got != tt.want {
+				t.Errorf("isStaleTempName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsAllDigits(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"0", true},
+		{"123456", true},
+		{"", false},
+		{"12a", false},
+		{"a12", false},
+		{" 12", false},
+		{"-12", false},
+	}
+	for _, tt := range tests {
+		if got := isAllDigits(tt.in); got != tt.want {
+			t.Errorf("isAllDigits(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// CleanupStaleTemps must never reclaim a non-regular entry that merely shares
+// the .atomicfile-<digits>.tmp shape (os.CreateTemp only makes regular files).
+// The dir is aged past the cutoff so only the non-regular skip spares it, not
+// the mtime guard.
+func TestCleanupStaleTemps_SkipsNonRegularTempNamedDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	staleDir := filepath.Join(dir, ".atomicfile-555000111.tmp")
+	if err := os.Mkdir(staleDir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(staleDir, old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	removed, err := CleanupStaleTemps(t.Context(), dir, time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleTemps: %v", err)
+	}
+	if removed.Removed != 0 {
+		t.Errorf("removed = %d, want 0 (a temp-named directory must never be reclaimed)", removed)
+	}
+	if fi, statErr := os.Stat(staleDir); statErr != nil || !fi.IsDir() {
+		t.Errorf("temp-named directory removed/altered (stat err=%v); IsRegular guard must spare it", statErr)
+	}
+}
+
+// The sweep reports its outcome via SweepResult and does not also narrate it
+// with an aggregate Info/Warn line; per-entry Debug diagnostics stay, since
+// those carry details the counts cannot.
+func TestCleanupStaleTemps_ReportsCountsWithoutNarratingThem(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stale := filepath.Join(dir, ".atomicfile-123456.tmp")
+	if err := os.WriteFile(stale, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed stale temp: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	h := &captureHandler{}
+
+	got, err := CleanupStaleTemps(t.Context(), dir, time.Hour, WithLogger(slog.New(h)))
+	if err != nil {
+		t.Fatalf("CleanupStaleTemps = %v, want nil", err)
+	}
+	want := SweepResult{Removed: 1}
+	if got != want {
+		t.Errorf("SweepResult = %+v, want %+v", got, want)
+	}
+	if n := h.CountLevelExact(slog.LevelInfo, msgStaleRemoved); n != 0 {
+		t.Errorf("Info %q count = %d, want 0: the counts are the report", msgStaleRemoved, n)
+	}
+	if n := h.CountLevelExact(slog.LevelWarn, msgStaleRemoveFail); n != 0 {
+		t.Errorf("Warn %q count = %d, want 0: the counts are the report", msgStaleRemoveFail, n)
+	}
+}
+
+// An already-cancelled context does no work, and a context cancelled mid-sweep
+// stops it, so a sweep of a large tree cannot hold up shutdown.
+func TestCleanupStaleTemps_HonorsContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stale := filepath.Join(dir, ".atomicfile-123456.tmp")
+	if err := os.WriteFile(stale, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed stale temp: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, recursive := range []bool{false, true} {
+		got, err := CleanupStaleTemps(ctx, dir, time.Hour, WithRecursive(recursive))
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("CleanupStaleTemps(cancelled, recursive=%v) = %v, want context.Canceled", recursive, err)
+		}
+		if got.Removed != 0 {
+			t.Errorf("Removed = %d on a cancelled sweep, want 0", got.Removed)
+		}
+	}
+	if _, statErr := os.Stat(stale); statErr != nil {
+		t.Errorf("Stat(stale) = %v; a cancelled sweep must remove nothing", statErr)
+	}
+}
+
+// TestReapStaleTemp_RevalidatesBeforeRemove pins the TOCTOU repair: the reap
+// decision must come from a fresh os.Lstat immediately before the unlink, not
+// from the readdir-cached DirEntry info. A temp-shaped name whose file was
+// replaced AFTER the directory scan — the cached entry says stale, the disk
+// says fresh — must be spared, because the fresh file is someone's in-flight
+// write, not the scanned orphan.
+func TestReapStaleTemp_RevalidatesBeforeRemove(t *testing.T) {
+	t.Parallel()
+
+	t.Run("freshened_file_is_spared", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		name := ".atomicfile-424242.tmp"
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("orphan"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		old := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("Chtimes: %v", err)
+		}
+
+		// Scan while the file is stale: the DirEntry's cached info says old.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("entries = %d, want 1", len(entries))
+		}
+		// Simulate the race: the name is replaced by a fresh in-flight temp
+		// between the scan and this entry's reap turn.
+		now := time.Now()
+		if err := os.Chtimes(p, now, now); err != nil {
+			t.Fatalf("Chtimes(fresh): %v", err)
+		}
+
+		didRemove, didFail := reapStaleTemp(dir, entries[0], time.Now().Add(-time.Hour), slog.Default())
+		if didRemove || didFail {
+			t.Errorf("reapStaleTemp(freshened file) = (%v, %v), want (false, false)", didRemove, didFail)
+		}
+		if _, statErr := os.Stat(p); statErr != nil {
+			t.Errorf("freshened file was removed: %v (the fresh Lstat gate must spare it)", statErr)
+		}
+	})
+
+	t.Run("file_replaced_by_dir_is_spared", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		name := ".atomicfile-434343.tmp"
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("orphan"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		old := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("Chtimes: %v", err)
+		}
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir: %v", err)
+		}
+		// Replace the regular file with a directory of the same name after the
+		// scan; the fresh Lstat must see the non-regular entry and spare it.
+		if err := os.Remove(p); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+		if err := os.Mkdir(p, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("Chtimes(dir): %v", err)
+		}
+
+		didRemove, didFail := reapStaleTemp(dir, entries[0], time.Now().Add(-time.Hour), slog.Default())
+		if didRemove || didFail {
+			t.Errorf("reapStaleTemp(replaced by dir) = (%v, %v), want (false, false)", didRemove, didFail)
+		}
+		if fi, statErr := os.Stat(p); statErr != nil || !fi.IsDir() {
+			t.Errorf("directory at temp-shaped name was altered (stat err=%v)", statErr)
+		}
+	})
+
+	t.Run("vanished_file_is_a_silent_skip", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		name := ".atomicfile-454545.tmp"
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("orphan"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir: %v", err)
+		}
+		if err := os.Remove(p); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+
+		didRemove, didFail := reapStaleTemp(dir, entries[0], time.Now(), slog.Default())
+		if didRemove || didFail {
+			t.Errorf("reapStaleTemp(vanished file) = (%v, %v), want (false, false)", didRemove, didFail)
+		}
+	})
+}

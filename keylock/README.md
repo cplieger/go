@@ -4,7 +4,7 @@
 
 keylock gives your Go code one lock per key, so work on one file, user or record waits for itself while work on other keys runs.
 
-It replaces the hand-written map of mutexes behind a mutex. It uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the hand-written map of mutexes behind a mutex. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -60,7 +60,7 @@ The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/
 
 ## Contributing
 
-Issues and pull requests are welcome. The [shared contributing rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md) apply.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 

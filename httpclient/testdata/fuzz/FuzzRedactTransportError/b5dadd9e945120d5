@@ -1,0 +1,4 @@
+go test fuzz v1
+string("mykemykey123y123")
+string("0")
+string("mykey123")

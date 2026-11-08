@@ -1,0 +1,309 @@
+package filesafe_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/cplieger/go/filesafe"
+)
+
+func ExampleWriteFile() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "data.txt")
+	res, _ := filesafe.WriteFile(context.Background(), path, []byte("hello"))
+	data, _ := os.ReadFile(path)
+	fmt.Println(string(data), res.Durable)
+	// Output: hello true
+}
+
+func ExampleReadBounded() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "data.txt")
+	_ = os.WriteFile(path, []byte("bounded"), 0o644)
+	data, _ := filesafe.ReadBounded(context.Background(), path, 1<<20)
+	fmt.Println(string(data))
+	// Output: bounded
+}
+
+func ExampleWriteReader() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "stream.txt")
+	_, _ = filesafe.WriteReader(context.Background(), path,
+		strings.NewReader("streamed"))
+	data, _ := os.ReadFile(path)
+	fmt.Println(string(data))
+	// Output: streamed
+}
+
+func ExampleNewPendingFile() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "pending.txt")
+	pf, _ := filesafe.NewPendingFile(context.Background(), path)
+	defer func() { _ = pf.Cleanup() }()
+	_, _ = pf.Write([]byte("incremental"))
+	res, _ := pf.Commit(context.Background())
+	data, _ := os.ReadFile(res.Path)
+	fmt.Println(string(data))
+	// Output: incremental
+}
+
+func ExampleCleanupStaleTemps() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	// Simulate an orphaned temp left by an interrupted write.
+	stale := filepath.Join(dir, ".atomicfile-123456.tmp")
+	_ = os.WriteFile(stale, []byte("partial"), 0o644)
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(stale, old, old)
+
+	res, _ := filesafe.CleanupStaleTemps(context.Background(), dir, time.Hour)
+	fmt.Println(res.Removed)
+	// Output: 1
+}
+
+func ExamplePendingFile() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "pending.txt")
+	pf, _ := filesafe.NewPendingFile(context.Background(), path)
+	defer func() { _ = pf.Cleanup() }()
+	_, _ = pf.Write([]byte("incremental"))
+	_, _ = pf.Commit(context.Background())
+	data, _ := os.ReadFile(path)
+	fmt.Println(string(data))
+	// Output: incremental
+}
+
+func ExampleWriteFileInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	root, _ := os.OpenRoot(dir)
+	defer func() { _ = root.Close() }()
+	// name is relative to the root; a symlink or ".." in it cannot escape the
+	// root's tree (Go 1.24+).
+	_, _ = filesafe.WriteFileInRoot(context.Background(), root, "rooted.txt",
+		[]byte("confined"))
+	f, _ := root.Open("rooted.txt")
+	defer func() { _ = f.Close() }()
+	data, _ := filesafe.ReadBoundedFile(context.Background(), f, 1<<20)
+	fmt.Println(string(data))
+	// Output: confined
+}
+
+func ExampleNewPendingFileInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	root, _ := os.OpenRoot(dir)
+	defer func() { _ = root.Close() }()
+	// The pending temp and its eventual rename are confined to the root's
+	// tree; the caller keeps ownership of the root.
+	pf, _ := filesafe.NewPendingFileInRoot(context.Background(), root, "staged.txt")
+	defer func() { _ = pf.Cleanup() }()
+	_, _ = pf.Write([]byte("confined incremental"))
+	res, _ := pf.Commit(context.Background())
+	data, _ := os.ReadFile(res.Path)
+	fmt.Println(string(data))
+	// Output: confined incremental
+}
+
+func ExampleReadBoundedInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	_ = os.WriteFile(filepath.Join(dir, "cert.pem"), []byte("-----BEGIN..."), 0o600)
+
+	// A root confines every read to this tree: a symlink or ".." in the name cannot
+	// redirect the read outside it.
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+
+	data, _ := filesafe.ReadBoundedInRoot(context.Background(), root, "cert.pem", 1<<20)
+	fmt.Println(len(data))
+	// Output: 13
+}
+
+func ExampleCleanupStaleTempsInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	// An orphaned temp left by an interrupted write, in a NESTED directory: temps are
+	// staged next to their target, so only a recursive sweep finds this one.
+	nested := filepath.Join(dir, "example.com")
+	_ = os.MkdirAll(nested, 0o750)
+	stale := filepath.Join(nested, ".atomicfile-123456.tmp")
+	_ = os.WriteFile(stale, []byte("partial"), 0o600)
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(stale, old, old)
+
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+
+	res, _ := filesafe.CleanupStaleTempsInRoot(context.Background(), root, time.Hour, filesafe.WithRecursive(true))
+	fmt.Println(res.Removed, res.Failed, res.Unreadable)
+	// Output: 1 0 0
+}
+
+func ExampleProbeWritable() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+
+	res, err := filesafe.ProbeWritable(context.Background(), dir)
+	if err != nil {
+		return // the probe could not be attempted (empty dir, cancelled ctx)
+	}
+	// The phase decides the policy, not the library: this caller refuses to
+	// start when the directory cannot take a write, and only warns when the
+	// write worked but the probe file could not be cleaned up.
+	switch {
+	case !res.Writable():
+		fmt.Println("not writable:", res.Phase, res.Err)
+	case !res.OK():
+		fmt.Println("writable, but cleanup failed:", res.Phase, "leaked:", res.Leaked)
+	default:
+		fmt.Println("writable, nothing left behind")
+	}
+	// The probe file carries this package's temp shape, so a leaked one is
+	// reclaimed by CleanupStaleTemps.
+	fmt.Println(filesafe.IsPackageTemp(res.Name))
+	// Output:
+	// writable, nothing left behind
+	// true
+}
+
+func ExampleProbeWritableInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	root, _ := os.OpenRoot(dir)
+	defer func() { _ = root.Close() }()
+
+	// Probing through the root a caller already holds checks the same object
+	// its writes will use; "." is the root itself.
+	res, _ := filesafe.ProbeWritableInRoot(context.Background(), root, ".")
+	fmt.Println(res.OK(), res.Leaked)
+
+	// An escaping name is refused by the root, reported as a phase failure.
+	escaped, _ := filesafe.ProbeWritableInRoot(context.Background(), root, "../outside")
+	fmt.Println(escaped.Phase, escaped.Writable())
+	// Output:
+	// true false
+	// create probe file false
+}
+
+func ExampleTempName() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+
+	// A caller staging its own file in a directory this package sweeps takes
+	// the name from TempName instead of rebuilding the convention, so an
+	// orphan is reclaimed like any other temp.
+	path := filepath.Join(dir, filesafe.TempName())
+	_ = os.WriteFile(path, []byte("mine"), 0o600)
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(path, old, old)
+
+	res, _ := filesafe.CleanupStaleTemps(context.Background(), dir, time.Hour)
+	fmt.Println(filesafe.IsPackageTemp(filepath.Base(path)), res.Removed)
+	// Output: true 1
+}
+
+func ExampleWalkDirInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(filepath.Join(dir, "example.com"), 0o750)
+	_ = os.WriteFile(filepath.Join(dir, "example.com", "cert.pfx"), []byte("bundle"), 0o600)
+	// A symlinked directory is reported and never descended, so nothing is
+	// enumerated under a path whose ancestors do not physically hold it.
+	_ = os.Symlink("example.com", filepath.Join(dir, "alias"))
+
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+
+	var found []string
+	_ = filesafe.WalkDirInRoot(context.Background(), root, func(rel string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// A sub-path the walk cannot enter: count it and carry on with the
+			// rest of the tree, or return the error to abort.
+			return nil
+		}
+		if !d.IsDir() && strings.HasSuffix(rel, ".pfx") {
+			found = append(found, rel)
+		}
+		return nil
+	})
+	fmt.Println(found)
+	// Output: [example.com/cert.pfx]
+}
+
+func ExampleRemoveFileInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(filepath.Join(dir, "example.com"), 0o750)
+	_ = os.WriteFile(filepath.Join(dir, "example.com", "cert.pfx"), []byte("bundle"), 0o600)
+
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+
+	// The unlink runs through a parent directory pinned component by component, so
+	// an ancestor swapped for a symlink cannot redirect it at another file in the
+	// tree — which a plain root.Remove of this same name would allow.
+	err := filesafe.RemoveFileInRoot(root, "example.com/cert.pfx")
+	_, statErr := os.Lstat(filepath.Join(dir, "example.com", "cert.pfx"))
+	fmt.Println(err, os.IsNotExist(statErr))
+	// Output: <nil> true
+}
+
+func ExampleOpenRegularInRoot() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	_ = os.WriteFile(filepath.Join(dir, "feed.json"), []byte(`{"items":[]}`), 0o600)
+
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+
+	// One descriptor carries the shape check, the identity and the bytes. A
+	// caller streaming the file (through a decoder, a decryptor) uses f and
+	// never materializes it; this one reads it under a cap.
+	f, info, err := filesafe.OpenRegularInRoot(root, "feed.json")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	// The FileInfo came from the descriptor the bytes come from, so recording
+	// it needs no second stat of the pathname.
+	id := filesafe.Identify(info)
+	data, _ := filesafe.ReadBoundedFile(context.Background(), f, 1<<20)
+	fmt.Println(len(data), id.Recorded())
+	// Output: 12 true
+}
+
+func ExampleOpenRegularNoFollow() {
+	dir, _ := os.MkdirTemp("", "example")
+	defer os.RemoveAll(dir)
+	target := filepath.Join(dir, "state.json")
+	_ = os.WriteFile(target, []byte(`{}`), 0o600)
+	link := filepath.Join(dir, "state-link.json")
+	_ = os.Symlink(target, link)
+
+	f, _, err := filesafe.OpenRegularNoFollow(target)
+	if err == nil {
+		f.Close()
+	}
+	fmt.Println("regular file:", err)
+
+	// The open itself refuses a symlink under the name, so there is no
+	// check-then-open window. ReadBounded still follows links by design.
+	_, _, err = filesafe.OpenRegularNoFollow(link)
+	fmt.Println("symlink:", errors.Is(err, filesafe.ErrSymlinkTarget))
+	// Output:
+	// regular file: <nil>
+	// symlink: true
+}

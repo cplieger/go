@@ -1,0 +1,224 @@
+package httpserver_test
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/cplieger/go/httpserver"
+)
+
+func TestJSONHeaders(t *testing.T) {
+	rr := httptest.NewRecorder()
+	httpserver.JSONHeaders(rr)
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	if xo := rr.Header().Get("X-Content-Type-Options"); xo != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", xo)
+	}
+
+	t.Run("defers to an upstream nosniff writer", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		// SecurityHeaders (or any upstream middleware) already set the guard;
+		// JSONHeaders must leave that single writer in charge, not re-set it.
+		rr.Header().Set("X-Content-Type-Options", "nosniff")
+		httpserver.JSONHeaders(rr)
+		if got := rr.Header().Values("X-Content-Type-Options"); len(got) != 1 || got[0] != "nosniff" {
+			t.Errorf("X-Content-Type-Options values = %q, want exactly [nosniff]", got)
+		}
+	})
+}
+
+func TestWriteJSON(t *testing.T) {
+	rr := httptest.NewRecorder()
+	httpserver.WriteJSON(rr, map[string]int{"n": 5})
+	if rr.Code != http.StatusOK {
+		t.Errorf("code = %d, want 200", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var got map[string]int
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["n"] != 5 {
+		t.Errorf("body n = %d, want 5", got["n"])
+	}
+}
+
+func TestWriteJSONStatus(t *testing.T) {
+	rr := httptest.NewRecorder()
+	httpserver.WriteJSONStatus(rr, http.StatusCreated, map[string]string{"k": "v"})
+	if rr.Code != http.StatusCreated {
+		t.Errorf("code = %d, want 201", rr.Code)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["k"] != "v" {
+		t.Errorf("body k = %q, want v", got["k"])
+	}
+}
+
+func TestWriteJSONStatus_encodeFailureCommitsStatusAndWarns(t *testing.T) {
+	logCap := &captureHandler{}
+	swapDefaultLogger(t, slog.New(logCap))
+
+	rr := httptest.NewRecorder()
+	// A channel cannot be JSON-encoded, so Encode fails after the status is
+	// already committed.
+	httpserver.WriteJSONStatus(rr, http.StatusBadGateway, make(chan int))
+
+	if rr.Code != http.StatusBadGateway {
+		t.Errorf("status not committed before encode failure: got %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	recs := logCap.snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("got %d log records, want 1 warn", len(recs))
+	}
+	if recs[0].Level != slog.LevelWarn {
+		t.Errorf("log level = %v, want Warn", recs[0].Level)
+	}
+	if recs[0].Message != "httpserver: json encode failed after status committed" {
+		t.Errorf("log message = %q", recs[0].Message)
+	}
+	m := attrsOf(recs[0])
+	if m["status"] != int64(http.StatusBadGateway) {
+		t.Errorf("status attr = %v, want %d", m["status"], http.StatusBadGateway)
+	}
+	if m["error"] == nil {
+		t.Error("missing error attr on encode-failure warn")
+	}
+}
+
+func TestOk(t *testing.T) {
+	rr := httptest.NewRecorder()
+	httpserver.OK(rr)
+	if rr.Code != http.StatusOK {
+		t.Errorf("code = %d, want 200", rr.Code)
+	}
+	if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
+		t.Errorf("body = %q, want %q", got, `{"ok":true}`)
+	}
+}
+
+func TestWriteError_withRequestID(t *testing.T) {
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(httpserver.WithRequestID(req.Context(), "rid-9"))
+
+	httpserver.WriteError(rr, req, http.StatusForbidden, "forbidden", "no access")
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("code = %d, want 403", rr.Code)
+	}
+	var got httpserver.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Error != "no access" || got.Code != "forbidden" || got.RequestID != "rid-9" {
+		t.Errorf("body = %+v, want {no access forbidden rid-9}", got)
+	}
+}
+
+func TestWriteError_nilRequestIsSafe(t *testing.T) {
+	rr := httptest.NewRecorder()
+	// Must not panic when r is nil.
+	httpserver.WriteError(rr, nil, http.StatusInternalServerError, "internal", "boom")
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("code = %d, want 500", rr.Code)
+	}
+	var got httpserver.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.RequestID != "" {
+		t.Errorf("RequestID = %q, want empty for nil request", got.RequestID)
+	}
+	if got.Error != "boom" || got.Code != "internal" {
+		t.Errorf("body = %+v", got)
+	}
+}
+
+func TestWriteError_omitsEmptyOptionalFields(t *testing.T) {
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil) // no request id in context
+	httpserver.WriteError(rr, req, http.StatusBadRequest, "", "just a message")
+
+	body := rr.Body.String()
+	if strings.Contains(body, "\"code\"") {
+		t.Errorf("empty code not omitted: %s", body)
+	}
+	if strings.Contains(body, "request_id") {
+		t.Errorf("empty request_id not omitted: %s", body)
+	}
+}
+
+// TestWriteError_malformedCodeIsReplaced covers the envelope's code grammar on
+// the wire: ErrorCode is a machine token, so a value carrying a space (the
+// classic transposition — the sentence landing in the code slot) must not reach
+// a client. The encoder substitutes InvalidErrorCode and leaves the status and
+// the human message alone; it never panics, because this runs per request on an
+// error path. The diagnostic that accompanies the substitution is asserted in
+// the internal test, which can reset its once-per-process bound.
+func TestWriteError_malformedCodeIsReplaced(t *testing.T) {
+	cases := []struct {
+		name string
+		code httpserver.ErrorCode
+	}{
+		{"a sentence in the code slot", "host not allowed"},
+		{"uppercase", "Host_Not_Allowed"},
+		{"a newline", "host_not_allowed\ninjected"},
+		{"a hyphen", "host-not-allowed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			httpserver.WriteError(rr, req, http.StatusForbidden, tc.code, "host not allowed")
+
+			if rr.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403 (a bad code must not change the status)", rr.Code)
+			}
+			var got httpserver.ErrorResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got.Code != httpserver.InvalidErrorCode {
+				t.Errorf("Code = %q, want %q", got.Code, httpserver.InvalidErrorCode)
+			}
+			if got.Error != "host not allowed" {
+				t.Errorf("Error = %q, want the human message untouched", got.Error)
+			}
+		})
+	}
+}
+
+// TestWriteError_wellFormedCodesSurvive pins the grammar's accepting half: the
+// tokens this library and its consumers actually spell must pass through
+// untouched, so the guard cannot quietly rewrite a real code.
+func TestWriteError_wellFormedCodesSurvive(t *testing.T) {
+	for _, code := range []httpserver.ErrorCode{
+		"host_not_allowed", "rate_limited", "too_many_auth_failures",
+		"timeout", "internal_error", "sse_unavailable", "http2_upgrade_failed",
+	} {
+		t.Run(string(code), func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			httpserver.WriteError(rr, nil, http.StatusBadRequest, code, "message")
+			var got httpserver.ErrorResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got.Code != code {
+				t.Errorf("Code = %q, want %q unchanged", got.Code, code)
+			}
+		})
+	}
+}

@@ -1,0 +1,16 @@
+// Package httpserver is server-side HTTP plumbing on top of net/http:
+// request-id and bounded access logging (Logging), a transparent
+// StatusRecorder, composable middleware (Chain, Recoverer, SecurityHeaders,
+// Gzip, RouteTimeout, RouteDeadline, RateLimiter and its FailedAuthRateLimit
+// preset, NoStore, LoopbackOnly), a spoof-aware ClientIP and ResolveClient, a
+// Host allowlist against DNS rebinding (HostPolicy, CanonicalHost), an
+// embedded StaticHandler, JSON envelope helpers (WriteJSON, WriteError),
+// request preludes (LimitBody, RequireMethod, DecodeBody), a constant-time
+// NewStaticTokenVerifier, ClassifyBind, and a graceful server (New, Run).
+//
+// Middleware is func(http.Handler) http.Handler and Chain lists the outermost
+// first, so Chain(mux, Logging(), Recoverer(), SecurityHeaders()) logs a
+// recovered panic as its 500, and a stdlib middleware such as
+// http.CrossOriginProtection's Handler composes with no adapter. The package
+// depends on nothing beyond the standard library.
+package httpserver

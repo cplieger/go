@@ -1,0 +1,117 @@
+# Client IP, hosts and credentials
+
+This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, classifying a listen address and checking one static credential.
+
+## Client IP
+
+`ResolveClient(r, trusted...)` resolves the client address against the trusted proxy prefixes, a `[]netip.Prefix`, and says where the answer came from.
+
+With no trusted prefixes, or when the direct peer is outside them, it ignores `X-Forwarded-For` and answers the host of `r.RemoteAddr`. That is the TCP peer, which a client cannot spoof at this layer.
+
+Behind a trusted proxy it reads `X-Forwarded-For` from right to left, skipping each trusted hop, and answers the first untrusted entry. That is the correct reading when a proxy appends the peer it saw, as Caddy and most reverse proxies do. The leftmost entry is whatever the client sent.
+
+`X-Forwarded-For` is read as an RFC 9110 list. Every field line is joined into one value, each entry is trimmed of spaces and tabs only, and empty entries are skipped. An entry that is not an address on its own, such as one with a port, quotes or a zone, stops the walk and the peer is answered.
+
+Each forwarding header is read up to 64 entries, counted across its field lines, which is far more hops than any real proxy chain has. A header holding more entries, or a `Forwarded` element holding more than 16 parameters, is invalid as a whole and is never read in part. Parsing costs time in proportion to the header's length, however many entries it holds, so `http.Server`'s `MaxHeaderBytes` is what bounds it. From a trusted proxy, an invalid `X-Forwarded-For` answers the peer. From any other peer, an invalid header sets `UntrustedForwarding` and names no address.
+
+`X-Real-IP` and `Forwarded` never set the address, because Caddy passes a client's copy through. The library hardcodes no trusted range. You supply them.
+
+The trusted set must hold every proxy hop between the client and the server. If a hop is missing, the walk stops there and returns that hop's address.
+
+Addresses compare unmapped, so an IPv4 proxy reaching a dual-stack listener as `::ffff:10.0.0.7` matches `10.0.0.0/8`.
+
+The answer is a `ClientResolution`:
+
+| Field | Meaning |
+| --- | --- |
+| `IP` | The client address |
+| `Peer` | The socket peer, unmapped, or the zero address when `r.RemoteAddr` is not an IP |
+| `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
+| `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |
+| `IgnoredPublic` | One of those ignored headers named a public address, meaning global unicast and outside the private ranges |
+
+Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
+
+For `IgnoredPublic`, an `X-Forwarded-For` or `X-Real-IP` entry names an address even when quoted, bracketed or followed by a port. A `Forwarded` element counts only when it follows RFC 7239 exactly. Its `name=value` pairs are joined by `;` with no spaces, and each name appears once. A `for` value with a port or an IPv6 address must be in quotes.
+
+`ClientIP(r, trusted...)` returns `ResolveClient`'s `IP` as text, for a log line or a rate-limit key. An IPv4-mapped peer reads as its IPv4 address, and a `RemoteAddr` that is not an IP reads as `invalid IP`.
+
+`ParseCIDRs(entries)` turns an operator list of CIDRs or bare IPs into that trusted set. A bare IP becomes a `/32` or `/128` prefix, a CIDR is masked to its network, and an IPv4-mapped entry becomes its IPv4 prefix. Blank entries are skipped. Malformed entries, zoned addresses included, come back in a separate list in input order, so a strict caller can reject them and a lenient one can log them and use the rest.
+
+### Moving from v3
+
+- `ParseCIDRs` returns `[]netip.Prefix`, and `ClientIP` and `WithClientIP` take `netip.Prefix` values.
+- `ClientIP` falls back to the unmapped peer address: `::ffff:10.0.0.1` reads `10.0.0.1`, and an unparseable `RemoteAddr` reads `invalid IP` instead of coming back as written.
+- `ClientIP` skips empty `X-Forwarded-For` entries, so `203.0.113.9,` and `203.0.113.9,,10.0.0.2` answer `203.0.113.9` where v3 answered the peer. It trims only spaces and tabs, so an entry padded with other whitespace now answers the peer.
+- `ClientIP` reads at most 64 `X-Forwarded-For` entries. A longer header answers the peer, where v3 walked it whole.
+
+## Host allowlist
+
+A DNS rebinding attack starts on a page the attacker controls. The page's own hostname is made to resolve to your service's address, so the victim's browser sends requests to your service with the attacker's name in `Host`. The allowlist refuses any request whose `Host` you did not list, which breaks the attack. It is listed as CWE-346.
+
+- `ParseHostList(entries, opts...)` parses an operator allowlist, such as a config array or a comma-split environment variable, into an immutable `*HostPolicy`. Malformed entries come back separately, as with `ParseCIDRs`.
+- `(*HostPolicy).Middleware()` answers 403 with the code `host_not_allowed` for a request whose `Host` is not listed, and logs one Warn line, `httpserver: host not allowed`. An inactive policy returns the handler unwrapped.
+- `(*HostPolicy).Allows(r)` is the same decision for one request. `Active()` and `Size()` describe the policy, for startup logs.
+- `WithHostAllowlistError(code, msg)` changes the 403's code and message, for example to name your configuration setting.
+- `WithLoopbackExempt(true)` admits a request when both the socket peer and the `Host` are loopback, described below.
+- `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.
+
+The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the 403's message) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
+
+Place the middleware before any cross-origin or CSRF check. A rebinding request makes `Origin` and `Host` agree, so a same-origin check alone admits it.
+
+### How matching works
+
+`CanonicalHost(hostport)` is the strict canonicalizer that both the entries and each request's `Host` go through. It lowercases ASCII only, drops the port and the brackets, allows at most one trailing FQDN dot and normalizes IP literals so different spellings of one address compare equal. It returns `""` for anything malformed.
+
+The lowercasing stops at ASCII on purpose. `strings.ToLower` maps U+212A and U+0130 to `k` and `i`, which would let a non-ASCII name canonicalize onto an allowlisted ASCII one. Configure a non-ASCII name as its Punycode A-label, because matching is byte-exact.
+
+Matching is exact and purely textual. There is no name resolution, because resolving would reopen the race the check closes. `X-Forwarded-Host` is ignored, because a client controls it. A malformed `Host` is rejected rather than repaired, because a repair would map distinct wire values onto allowlisted entries.
+
+Activation fails closed. A nil or all-blank entry list leaves the policy inactive, so requests pass through. Any non-blank entry turns the check on, so even a list where every entry is invalid denies every request rather than silently turning protection off.
+
+### The loopback exemption
+
+`WithLoopbackExempt(true)` keeps a container healthcheck or an in-container client working under an allowlist meant for browsers. It admits a request only when the socket peer and the `Host` are both loopback.
+
+A rebinding attack cannot reach it, because the attack's `Host` is not loopback. A remote client cannot forge it, because a remote peer is not loopback. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
+
+## Loopback-only endpoints
+
+`LoopbackOnly(opts...)` admits a request only when `LoopbackRequest` passes and `ProxiedRequest` finds no forwarding header. Every other request is answered 403 with the standard error envelope and the code `loopback_only`. `WithLoopbackError(code, msg)` sets your own code and message, and `WithLoopbackResponder(fn)` renders the refusal yourself, for an envelope your clients already depend on or a refusal you want to log, as the matching options do for `RateLimiter`.
+
+`LoopbackRequest(r)` reports whether a request is local. The socket peer must be loopback and the `Host` must name the local host, and either check failing refuses. It reads `r.RemoteAddr` and `r.Host` and nothing else, so forwarded headers never admit or refuse a request. The `Host` check accepts every spelling `CanonicalHost` collapses: `localhost` in any case, `127.0.0.0/8` and `::1`, with an optional port or trailing dot.
+
+`ProxiedRequest(h)` reports whether the headers show that a proxy forwarded the request or a browser sent it. The set is `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-Ip`, `Sec-Fetch-Site` and `Origin`. A missing header proves nothing. Use it directly when your app has its own admission chain and cannot take the middleware whole.
+
+### Why the middleware also checks forwarding headers
+
+A normal in-container command-line client sends none of those headers. Their presence points to a browser or a proxy, so `LoopbackOnly` refuses the request. Host networking or a shared network namespace puts a reverse proxy on the server's own loopback interface. Both nginx and Apache then rewrite `Host` to their upstream address by default, which passes the `Host` check, and the proxy itself passes the peer check. Without the header check, a remote request would pass both.
+
+The check has a limit. It admits a proxy on the same loopback interface that removes every forwarding header, because nothing then tells it apart from an in-container caller. Only authentication closes that gap.
+
+This is a different question from `HostPolicy`. The allowlist asks whether the `Host` is one the operator named, so it admits a remote client sending `Host: localhost` when the operator lists that name. `LoopbackOnly` asks whether the request came from inside.
+
+## Bind classification
+
+`ClassifyBind(addr)` classifies a configured listen address, given as `host:port`, by exposure. Use it at startup to warn when an unauthenticated service listens beyond loopback.
+
+| Class | Covers |
+| --- | --- |
+| `BindLoopback` | Loopback IP literals, and `localhost` under an ASCII case fold. `LOCALHOST` matches, a non-ASCII lookalike does not |
+| `BindExposed` | Wildcard binds, routable IPs and every other hostname. No name is resolved, so an unresolvable name is exposed |
+| `BindInvalid` | Not `host:port`. It is the zero value, so an uninitialized class never reads as safe |
+
+`ClassifyBindHost(host)` classifies a bare host with no port and never returns `BindInvalid`. It is the fallback for a bind value that has no port. `BindClass.String()` returns `invalid`, `loopback` or `exposed` for a log attribute.
+
+What to do with an invalid address is your app's decision. The godoc shows three ways to handle it.
+
+## One static credential
+
+`NewStaticTokenVerifier(configured)` builds a verifier once, at startup, from the single operator-configured secret that guards an endpoint. That can be an API key, a bearer token, or a basic-auth user or password. `Verify(presented)` reports a match in constant time and is safe for concurrent use.
+
+The configured secret is hashed with SHA-256 once, at construction. `Verify` hashes the presented value and compares the two fixed-length digests with `subtle.ConstantTimeCompare`. So no call's timing varies with the secret's length or content.
+
+An empty configured secret fails closed. `Verify` then returns false for every value, the empty string included. Otherwise `sha256("")` would equal `sha256("")`, and an unset secret would admit a client presenting nothing. Treat an empty configured value as "auth not configured", never as "no credential required".
+
+This checks one shared secret, not user identities. Per-user credentials, password hashing and sessions belong to the [access](https://github.com/cplieger/access) library.

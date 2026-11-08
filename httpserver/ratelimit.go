@@ -1,0 +1,260 @@
+package httpserver
+
+import (
+	"math"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+)
+
+// RateLimitOption configures RateLimiter.
+type RateLimitOption func(*rateLimitConfig)
+
+// rateLimitConfig holds resolved RateLimiter configuration.
+type rateLimitConfig struct {
+	when      func(*http.Request) bool
+	responder ErrorResponder
+	code      ErrorCode
+	msg       string
+}
+
+// WithRateLimitError sets the error code and message written in the 429 JSON
+// envelope (via WriteError). Defaults to "rate_limited" / "rate limit
+// exceeded".
+//
+// code is the machine token and msg the sentence; they are separately typed
+// (see ErrorCode) so the pair cannot be supplied transposed. An empty code
+// omits the field.
+func WithRateLimitError(code ErrorCode, msg string) RateLimitOption {
+	return func(c *rateLimitConfig) {
+		c.code, c.msg = code, msg
+	}
+}
+
+// WithRateLimitResponder sets the ErrorResponder that writes the 429 body when a
+// request is denied. It defaults to WriteError - the JSON envelope; supply one
+// to render the 429 on a different content type, for example an XML endpoint
+// returning its own error document. The responder owns writing the status and
+// headers (the Retry-After hint is already set on w when it runs). A nil
+// responder is ignored, keeping the default.
+//
+// It composes with WithRateLimitError rather than replacing it: the code and
+// message that option sets are the ones handed to the responder, so an app keeps
+// one error taxonomy across both renderings.
+func WithRateLimitResponder(fn ErrorResponder) RateLimitOption {
+	return func(c *rateLimitConfig) {
+		if fn != nil {
+			c.responder = fn
+		}
+	}
+}
+
+// WithRateLimitWhen restricts limiting to requests for which pred returns true;
+// every other request passes through without consuming a token. Use it to gate
+// a single method+path on a handler that multiplexes several — for example,
+// throttle only POST and leave GET/DELETE on the same path unthrottled. A nil
+// predicate is ignored, so the default (limit every request) stands.
+func WithRateLimitWhen(pred func(*http.Request) bool) RateLimitOption {
+	return func(c *rateLimitConfig) {
+		if pred != nil {
+			c.when = pred
+		}
+	}
+}
+
+// RateLimiter returns middleware that throttles requests through a single
+// shared token bucket (standard library only, no external dependency). burst is
+// the maximum number of tokens and the initial fill; interval is the time to
+// accrue one token (the refill cadence). Each admitted request consumes one
+// token; a request that arrives with the bucket empty is answered with a 429
+// via WriteError(w, r, http.StatusTooManyRequests, "rate_limited", "rate limit
+// exceeded") (code and message overridable with WithRateLimitError, the
+// rendering with WithRateLimitResponder) and does not reach the next handler.
+// The 429 carries a conservative Retry-After hint: the whole seconds for the
+// CURRENT token deficit to refill at the configured
+// rate — at most ceil(interval) when the bucket was just emptied, less when it
+// is already partially refilled — clamped to at least 1s.
+//
+// The bucket is process-wide for the middleware instance — shared across all
+// requests and all clients — so it bounds the AGGREGATE rate of the wrapped
+// route. That is the right tool for capping an expensive shared resource (for
+// example, spawning a heavy child process per request), not for per-client
+// fairness. Per-client limiting is intentionally out of scope; a caller behind
+// a trusted proxy that needs it can key its own buckets on ClientIP.
+//
+// A non-positive burst or a non-positive interval disables limiting: the
+// middleware returns the next handler unwrapped (mirroring RouteTimeout's
+// non-positive "off" contract), so a config-driven zero cleanly means "no
+// limit".
+//
+// Apply it to the specific handler you want to throttle, and pair it with
+// WithRateLimitWhen to gate only the expensive method+path when the handler
+// serves several:
+//
+//	sessions := httpserver.RateLimiter(6, time.Second,
+//		httpserver.WithRateLimitWhen(func(r *http.Request) bool {
+//			return r.Method == http.MethodPost
+//		}),
+//	)(sessionsHandler)
+func RateLimiter(burst int, interval time.Duration, opts ...RateLimitOption) Middleware {
+	if burst <= 0 || interval <= 0 {
+		// "Off": return the handler untouched, so a zero from config means
+		// "no limit" without the caller special-casing it.
+		return func(next http.Handler) http.Handler { return next }
+	}
+	c := &rateLimitConfig{code: "rate_limited", msg: "rate limit exceeded"}
+	for _, o := range opts {
+		if o != nil {
+			o(c)
+		}
+	}
+	if c.responder == nil {
+		c.responder = WriteError
+	}
+	// Convert at the seam, leaving the tokenBucket internals in refillPerSec
+	// terms: interval > 0 and finite (an int64 duration) and burst >= 1, so
+	// refillPerSec is always finite and positive and float64(burst) >= 1 — no
+	// guard or clamp is needed.
+	refillPerSec := 1 / interval.Seconds()
+	b := &tokenBucket{burst: float64(burst), refillPerSec: refillPerSec}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if c.when != nil && !c.when(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if ok, retryAfter := b.allow(); !ok {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				c.responder(w, r, http.StatusTooManyRequests, c.code, c.msg)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// tokenBucket is a minimal mutex-guarded token bucket with no external
+// dependency: a float pool that refills continuously at refillPerSec and is
+// capped at burst.
+type tokenBucket struct {
+	last         time.Time
+	tokens       float64
+	burst        float64
+	refillPerSec float64
+	mu           sync.Mutex
+}
+
+// allow refills the bucket for the elapsed wall-clock time and consumes one
+// token. It reads the clock under the lock and delegates the pure
+// refill/consume math to allowLocked. On a deny it also computes the
+// Retry-After hint from the same locked state, so the decision and the hint
+// are one consistent snapshot (retryAfter is 0 on an admit).
+func (b *tokenBucket) allow() (ok bool, retryAfterSecs int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.allowLocked(time.Now()) {
+		return true, 0
+	}
+	return false, b.retryAfterSecondsLocked()
+}
+
+// allowLocked is the clock-injectable core of allow: it refills the bucket for
+// the time elapsed since the last call, caps the pool at burst, consumes one
+// token, and reports whether a token was available. The caller must hold b.mu.
+// Taking now as a parameter keeps the refill/consume math deterministically
+// testable without sleeping.
+//
+// A now earlier than the last observed time counts as zero elapsed and
+// re-anchors the timeline at now (exactly x/time/rate's advance semantics): the
+// pool can never go negative through a backwards reading, and refill resumes
+// immediately on the new timeline instead of stalling until the clock
+// re-passes the old anchor. The production call site reads the clock under the
+// lock, so successive monotonic readings cannot go backwards; the guard makes
+// the math total over its input domain anyway.
+func (b *tokenBucket) allowLocked(now time.Time) bool {
+	if b.last.IsZero() {
+		b.tokens = b.burst
+	} else {
+		if now.Before(b.last) {
+			b.last = now
+		}
+		b.tokens += now.Sub(b.last).Seconds() * b.refillPerSec
+		if b.tokens > b.burst {
+			b.tokens = b.burst
+		}
+	}
+	b.last = now
+	if b.tokens >= 1 {
+		b.tokens--
+		return true
+	}
+	return false
+}
+
+// retryAfterSecondsLocked returns the whole-second Retry-After hint for a
+// denied request: the time for the CURRENT deficit (the fraction of a token
+// still missing) to accrue at the refill rate, rounded up and clamped to at
+// least 1s. Scaling to the actual deficit rather than a full token is the
+// x/time/rate durationFromTokens approach: a bucket denied at 0.9 tokens hints
+// the seconds to accrue 0.1, not a full interval. The hint stays conservative
+// for the requesting client (rounded up, never below 1s); under contention on
+// the shared bucket it is best-effort either way. The caller must hold b.mu
+// so the deficit is read from the same state that produced the deny.
+func (b *tokenBucket) retryAfterSecondsLocked() int {
+	deficit := 1 - b.tokens
+	if deficit <= 0 {
+		return 1
+	}
+	secs := int(math.Ceil(deficit / b.refillPerSec))
+	if secs < 1 {
+		return 1
+	}
+	return secs
+}
+
+// Failed-auth preset tuning: ten immediate attempts absorb an operator
+// retrying a rotated credential by hand, and the 6s refill turns a guessing
+// run at wire speed into ten attempts a minute. One home for the numbers so
+// the services guarding the same shape cannot drift apart.
+const (
+	failedAuthBurst    = 10
+	failedAuthInterval = 6 * time.Second // time to accrue one attempt token
+)
+
+const (
+	// failedAuthCode is the preset's 429 envelope code. It is not a
+	// parameter of the preset because the code is what an operator's log
+	// queries and alert rules key on across services, and the three consumers
+	// that hand-wrote this preset had already converged on this exact string
+	// while their messages deliberately differ; a WithRateLimitError in the
+	// preset's opts replaces it.
+	failedAuthCode ErrorCode = "too_many_auth_failures"
+	// failedAuthDefaultMsg is what an empty msg falls back to: true of any
+	// credential, and deliberately silent about which one was presented.
+	failedAuthDefaultMsg = "too many failed authentication attempts"
+)
+
+// FailedAuthRateLimit throttles requests for which when reports a failed
+// credential through one aggregate bucket (burst 10, one token per 6s),
+// answering 429 "too_many_auth_failures" with msg (empty: "too many failed
+// authentication attempts"). A valid credential never draws a token; a nil
+// when limits every request, for a caller that filters failed attempts first.
+// when runs on every request, and the access-line flood is bounded only with
+// the limiter outside Logging. Use RateLimiter directly for other numbers.
+//
+// opts apply after the preset's own, so WithRateLimitResponder renders the
+// 429 on another content type; a non-nil WithRateLimitWhen or a
+// WithRateLimitError in opts replaces the preset's predicate or envelope.
+func FailedAuthRateLimit(when func(*http.Request) bool, msg string, opts ...RateLimitOption) Middleware {
+	if msg == "" {
+		msg = failedAuthDefaultMsg
+	}
+	// No nil branch on when: WithRateLimitWhen ignores a nil predicate, so a
+	// nil here leaves RateLimiter's default (draw a token from every request)
+	// in place, which is exactly the documented meaning. Re-checking it would
+	// be a second reading of the same rule, free to disagree with the first.
+	all := make([]RateLimitOption, 0, 2+len(opts))
+	all = append(all, WithRateLimitWhen(when), WithRateLimitError(failedAuthCode, msg))
+	return RateLimiter(failedAuthBurst, failedAuthInterval, append(all, opts...)...)
+}
