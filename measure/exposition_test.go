@@ -230,8 +230,14 @@ func TestHandler_ErroredMetricNeverReachesTheOutput(t *testing.T) {
 			if err := r.Register(tc.metric()); err == nil {
 				t.Fatal("Register accepted a metric carrying a construction error")
 			}
-			if out := body(t, r); strings.Contains(out, tc.family) {
-				t.Errorf("Handler emitted %q for a metric carrying a construction error", out)
+			var leaked []string
+			for line := range strings.SplitSeq(body(t, r), "\n") {
+				if strings.Contains(line, tc.family) {
+					leaked = append(leaked, line)
+				}
+			}
+			if len(leaked) > 0 {
+				t.Errorf("Handler emitted %q for a metric carrying a construction error", leaked)
 			}
 		})
 	}
