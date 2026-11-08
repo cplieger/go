@@ -15,7 +15,7 @@ httpcache is built for clients that read the same resources again and again, suc
 - It holds at most 32 MiB by default and evicts the least recently used answer, and one answer may take at most a quarter of the bound.
 - A round tripper between the cache and the wire that changes a request or an answer cannot make the cache serve the wrong copy.
 
-Consider [gregjones/httpcache](https://github.com/gregjones/httpcache) if you want answers served on age from `Cache-Control` freshness, or a disk-backed store.
+Consider [bartventer/httpcache](https://github.com/bartventer/httpcache) if you want answers served on age from `Cache-Control` freshness under RFC 9111, or a disk-backed store.
 
 ## Install
 

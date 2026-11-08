@@ -103,4 +103,29 @@ func TestZeroCacheHoldsNothing(t *testing.T) {
 	if c.on() {
 		t.Error("the zero Cache reports it holds answers")
 	}
+
+	// A read passes through: no validator is added, nothing is answered from
+	// the cache, and Finish reports no hit.
+	read := c.Begin(ReadConfig{Variant: "v", Store: true, Resend: true})
+	resp, err := read.Send(func(prepare func(*http.Request) *http.Request) (*http.Response, error) {
+		req := prepare(httptest.NewRequest(http.MethodGet, "http://example.test/", nil))
+		if req.Header.Get("If-None-Match") != "" || req.Header.Get("If-Modified-Since") != "" {
+			t.Error("the zero Cache added a validator")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Etag": {`"v1"`}},
+			Body: io.NopCloser(strings.NewReader("x")), Request: req}, nil
+	})
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("Send through the zero Cache = %v, %v; want the 200", resp, err)
+	}
+	_ = resp.Body.Close()
+	if read.Answered() {
+		t.Error("the zero Cache answered a read")
+	}
+	if hit, err := read.Finish(t.Context(), true); hit || err != nil {
+		t.Errorf("Finish = %v, %v; want no hit and no error", hit, err)
+	}
+	if st := c.State(); st.Bytes != 0 || st.Hits != 0 {
+		t.Errorf("zero Cache State after a read = %+v, want nothing held or hit", st)
+	}
 }
