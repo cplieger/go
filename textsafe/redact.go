@@ -16,8 +16,8 @@ type Marker string
 // RedactSingleLineCapped sanitizes s like SanitizeSingleLine, writing
 // "[redacted]" in place of every rune that an occurrence of a non-empty secret
 // touches, in s or in its sanitized form, one mark per run of such runes; then
-// caps like SanitizeSingleLineCapped, dropping a trailing proper prefix of a
-// secret after a cut. No occurrence in s or its sanitized form survives, though
+// caps the result as SanitizeSingleLineCapped does, marker inside n, after
+// reading all of s, and drops a trailing proper prefix of a secret after a cut. No occurrence in s or its sanitized form survives, though
 // a mark and its neighbours can spell a secret that shares text with
 // "[redacted]". Pass s whole: a secret your own truncation split survives as
 // its prefix whenever s then fits n.

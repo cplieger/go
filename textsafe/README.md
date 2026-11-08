@@ -66,7 +66,7 @@ The package has 14 runnable examples on pkg.go.dev, and `go test` keeps them tru
 - `Sanitize` and `SanitizeSingleLine` sanitize a whole string, keeping or replacing CR and LF.
 - `SanitizeSingleLineBounded` sanitizes the whole value and then cuts it to the cap, marking a cut with `...` outside it.
 - `SanitizeCapped` and `SanitizeSingleLineCapped` cut the raw value to the cap before sanitizing, so a huge value costs no more work than a short one. They return whether they cut, and the marker you pass counts toward the cap. A `Budget`, created with `NewBudget` or `NewSingleLineBudget`, does the same for several values that share one cap.
-- `RedactSingleLineCapped` removes known secrets from the text and from its sanitized form for a single line, then caps like `SanitizeSingleLineCapped`.
+- `RedactSingleLineCapped` removes known secrets from the text and from its sanitized form for a single line, then cuts the result to the cap with the marker inside it. It reads the whole value, so it does not bound the work.
 - `CapBytes` keeps the head and `CapBytesTail` keeps the tail, both cut on a rune boundary.
 - `IsUnsafeMultiLine`, `IsUnsafeSingleLine`, `IsUnsafeNonASCII` and `IsBidiControl` classify one rune, for a policy of your own.
 - `Untrusted`, created with `NewUntrusted` or by decoding, has `Raw` and `SingleLine`, plus the `LogValue`, `String`, `Format`, `MarshalText` and `UnmarshalText` methods that slog, `fmt` and encoders call.
