@@ -146,7 +146,7 @@ func FuzzClassify(f *testing.F) {
 	})
 }
 
-// FuzzHostMatchesDomain fuzzes the fail-closed host-evidence matcher with the
+// FuzzDomainMatches fuzzes the fail-closed host-evidence matcher with the
 // security invariants it exists to hold, never a reimplementation of the rule:
 // a match implies the ASCII-folded host either equals the folded domain or ends
 // in "."+domain (so no substring or parent-domain spoof can match); a match
@@ -157,7 +157,7 @@ func FuzzClassify(f *testing.F) {
 // under an ASCII domain is a truthful match, not a spoof); the relation is
 // reflexive exactly for a well-formed non-empty host; and an empty host or
 // domain never matches.
-func FuzzHostMatchesDomain(f *testing.F) {
+func FuzzDomainMatches(f *testing.F) {
 	f.Add("nyaa.si", "nyaa.si")
 	f.Add("sukebei.nyaa.si", "nyaa.si")
 	f.Add("evilnyaa.si", "nyaa.si")
@@ -169,11 +169,11 @@ func FuzzHostMatchesDomain(f *testing.F) {
 	f.Add("", "")
 
 	f.Fuzz(func(t *testing.T, host, domain string) {
-		got := HostMatchesDomain(host, domain)
+		got := Domain(domain).Matches(host)
 
 		if host == "" || domain == "" {
 			if got {
-				t.Fatalf("HostMatchesDomain(%q, %q) = true, want false for an empty side", host, domain)
+				t.Fatalf("Domain(%q).Matches(%q) = true, want false for an empty side", host, domain)
 			}
 			return
 		}
@@ -181,21 +181,21 @@ func FuzzHostMatchesDomain(f *testing.F) {
 		if got {
 			lowHost, lowDomain := asciiLower(host), asciiLower(domain)
 			if lowHost != lowDomain && !strings.HasSuffix(lowHost, "."+lowDomain) {
-				t.Errorf("HostMatchesDomain(%q, %q) = true but the host is neither the domain nor under it", host, domain)
+				t.Errorf("Domain(%q).Matches(%q) = true but the host is neither the domain nor under it", host, domain)
 			}
 			if hasEmptyLabel(host) || hasEmptyLabel(domain) {
-				t.Errorf("HostMatchesDomain(%q, %q) = true with an empty DNS label", host, domain)
+				t.Errorf("Domain(%q).Matches(%q) = true with an empty DNS label", host, domain)
 			}
 			if !IsASCIIHost(host) && IsASCIIHost(domain) && len(host) == len(domain) {
-				t.Errorf("HostMatchesDomain(%q, %q) = true: a non-ASCII host matched an ASCII domain outright", host, domain)
+				t.Errorf("Domain(%q).Matches(%q) = true: a non-ASCII host matched an ASCII domain outright", host, domain)
 			}
 		}
 
 		// Reflexivity holds exactly for a well-formed name: a value carrying an
 		// empty label is refused even against itself, so the malformation never
 		// lends itself to a match.
-		if want := !hasEmptyLabel(host); HostMatchesDomain(host, host) != want {
-			t.Errorf("HostMatchesDomain(%q, %q) = %v, want %v", host, host, !want, want)
+		if want := !hasEmptyLabel(host); Domain(host).Matches(host) != want {
+			t.Errorf("Domain(%q).Matches(%q) = %v, want %v", host, host, !want, want)
 		}
 	})
 }

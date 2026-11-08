@@ -3,7 +3,6 @@ package textsafe_test
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/cplieger/go/textsafe"
 )
@@ -156,25 +155,6 @@ func ExampleSanitizeSingleLineCapped() {
 	reason, cut := textsafe.SanitizeSingleLineCapped("bad request\nlevel=ERROR forged", 14, "...")
 	fmt.Printf("%q %v %d\n", reason, cut, len(reason))
 	// Output: "bad request..." true 14
-}
-
-// ExampleSanitizeBudgeted bounds an upstream value whose size the caller does
-// not control. The value is three megabytes of right-to-left overrides behind
-// one letter, and the budget is eight bytes: the pre-cap form cuts the RAW
-// input at the budget and sanitizes only that, while SanitizeCapped sanitizes
-// the whole value first and then fills the same budget from the megabyte of
-// spaces that produces.
-func ExampleSanitizeBudgeted() {
-	huge := "A" + strings.Repeat("\u202e", 1<<20)
-
-	text, cut := textsafe.SanitizeBudgeted(huge, 8, "...")
-	fmt.Printf("%q %v\n", text, cut)
-
-	text, cut = textsafe.SanitizeCapped(huge, 8, "...")
-	fmt.Printf("%q %v\n", text, cut)
-	// Output:
-	// "A  ..." true
-	// "A    ..." true
 }
 
 // ExampleBudget spends one shared byte budget across several untrusted values

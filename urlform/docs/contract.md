@@ -56,7 +56,7 @@ The raw string is never rewritten. `HasBackslash` lets a publisher that must emi
 
 ## The normalized path
 
-`(*Form).NormalizedPath` returns the path a browser resolves for the classified string, with dot segments removed. `/view/1/../2` reads `/view/2`, and `/beat/api/../../ghost` reads `/ghost`. Use it to compare or display two spellings of one destination.
+`Form.NormalizedPath` returns the path a browser resolves for the classified string, with dot segments removed. `/view/1/../2` reads `/view/2`, and `/beat/api/../../ghost` reads `/ghost`. Use it to compare or display two spellings of one destination.
 
 Every non-empty result is rooted. It is resolved by `net/url`'s own [RFC 3986 section 5.2.4](https://www.rfc-editor.org/rfc/rfc3986#section-5.2.4) resolution, so repeated slashes stay exactly as the WHATWG parser keeps them. `path.Clean`, which `net/http`'s `ServeMux` uses, collapses them and answers a question about Go's router, not about the browser.
 
@@ -74,12 +74,12 @@ A form with a host but no path reads `/`, which is how a browser resolves `https
 
 ## Host and token comparisons
 
-`Form.Host`, `FoldHostASCII`, `EqualASCIIFold` and `HostMatchesDomain` all fold only the bytes A to Z. A caller folding a host, a path and a query name therefore works from one idea of ASCII case. The four helpers do these jobs:
+`Form.Host`, `FoldHostASCII`, `EqualASCIIFold` and `Domain.Matches` all fold only the bytes A to Z. A caller folding a host, a path and a query name therefore works from one idea of ASCII case. The four helpers do these jobs:
 
 - `FoldHostASCII(host)` returns that fold, for host evidence you hold from elsewhere, such as a configured domain, a request header or a host you parsed yourself.
 - `EqualASCIIFold(a, b)` compares under that fold, for ASCII tokens that are not hosts, such as a path token or a query parameter name.
 - `IsASCIIHost(host)` reports whether every byte is ASCII. Run it first, so a Cyrillic lookalike or a U+0130 or U+212A spelling never matches a real domain. To accept international hosts, convert punycode yourself instead of relaxing this check.
-- `HostMatchesDomain(host, domain)` reports whether the host equals the domain or is a real subdomain of it.
+- `Domain(domain).Matches(host)` reports whether the host equals the domain or is a real subdomain of it. The domain has its own type, so the two cannot be passed in each other's place.
 
 The standard library's case functions are unsafe here. `strings.ToLower` turns U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE into `i` and U+212A KELVIN SIGN into `k`. `strings.EqualFold` reads U+212A as `k` and U+017F LATIN SMALL LETTER LONG S as `s`. The two accept different inputs, so neither can stand in for the other.
 
@@ -89,7 +89,7 @@ For tokens, `strings.EqualFold` accepts a KELVIN SIGN spelling of `apikey` and a
 
 The fold works on bytes, not runes. Mapping runes would turn an invalid UTF-8 byte into U+FFFD and merge distinct non-ASCII evidence into one spelling. The rule reads no Unicode table, so no Unicode release can change what it folds. The one Unicode table urlform reads is the whitespace set the edge trim uses.
 
-`HostMatchesDomain` refuses three readings a plain suffix test accepts:
+`Domain.Matches` refuses three readings a plain suffix test accepts:
 
 - Suffix confusion, such as `evilnyaa.si` for `nyaa.si`.
 - Parent-domain spoofing, such as `nyaa.si.evil.example`.

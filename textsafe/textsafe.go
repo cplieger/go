@@ -27,9 +27,7 @@ func IsBidiControl(r rune) bool {
 // terminal-escape introducers), a Unicode bidi control (IsBidiControl), or
 // the U+2028/U+2029 line separators. CR and LF are SAFE under this policy.
 // It is the per-rune predicate behind [Sanitize]; the single-line policy is
-// [IsUnsafeSingleLine]. It replaces the v1 form IsUnsafe(r, keepCRLF); neither
-// replacement keeps the old name, so mechanically deleting the bool cannot
-// silently pick a policy.
+// [IsUnsafeSingleLine].
 func IsUnsafeMultiLine(r rune) bool {
 	return r != '\n' && r != '\r' && isUnsafeCore(r)
 }
@@ -57,9 +55,9 @@ func isUnsafeCore(r rune) bool {
 // escapers whose sink already covers ASCII: a URL percent-encoder escapes
 // C0, DEL, and whitespace itself, but url.Parse accepts these non-ASCII
 // runes raw, and a terminal or Markdown viewer must never receive them.
-// The CR/LF policy switch is moot above ASCII, so there is no keepCRLF
-// parameter: IsUnsafeNonASCII(r) equals IsUnsafeMultiLine(r) && r >
-// unicode.MaxASCII under either policy.
+// The CR/LF distinction is moot above ASCII, so one predicate serves both
+// policies: IsUnsafeNonASCII(r) equals IsUnsafeMultiLine(r) && r >
+// unicode.MaxASCII, and IsUnsafeSingleLine(r) && r > unicode.MaxASCII.
 func IsUnsafeNonASCII(r rune) bool {
 	return r > unicode.MaxASCII && IsUnsafeMultiLine(r)
 }
@@ -80,8 +78,8 @@ func Sanitize(s string) string {
 
 // SanitizeSingleLine makes an untrusted string safe for a single-line sink —
 // a plain-text log line, a one-line error message, a rendered table cell —
-// by replacing each unsafe rune with a space under the strict keepCRLF=false
-// policy: everything Sanitize replaces, plus CR and LF, whose raw appearance
+// by replacing each unsafe rune with a space under the single-line policy
+// (IsUnsafeSingleLine): everything Sanitize replaces, plus CR and LF, whose raw appearance
 // in a single-line sink forges a record boundary. Invalid UTF-8 bytes become
 // U+FFFD, so the result is always valid UTF-8 and carries no line break.
 func SanitizeSingleLine(s string) string {
@@ -89,10 +87,10 @@ func SanitizeSingleLine(s string) string {
 }
 
 // SanitizeCapped is Sanitize followed by a byte cap that INCLUDES the
-// marker. It sanitizes s under the keepCRLF=true policy (CR and LF survive,
-// for a sink whose encoder escapes them — JSON, slog's handlers), and if the
-// sanitized form exceeds n bytes it cuts that form on a rune boundary at
-// n-len(marker) bytes and appends marker, so the returned text is at most
+// marker. It sanitizes s under the multi-line policy (IsUnsafeMultiLine: CR
+// and LF survive, for a sink whose encoder escapes them — JSON, slog's
+// handlers), and if the result exceeds n bytes it is cut on a rune boundary
+// at n-len(marker) bytes with marker appended, so the returned text is at most
 // max(n, 0) bytes whatever marker is. A within-cap value comes back
 // untouched — byte-identical to Sanitize, no marker.
 //
@@ -123,44 +121,41 @@ func SanitizeSingleLine(s string) string {
 // names its sink instead of passing an opaque boolean next to two other tuning
 // arguments. SanitizeSingleLineCapped is the strict twin.
 //
-// Two consumer shapes this pair deliberately does NOT serve, and must not be
-// widened to serve:
+// The cap is applied AHEAD of the sanitizer: s is cut on a rune boundary at n
+// bytes first, that chunk is sanitized, sanitization growth is re-capped, and
+// the marker is charged inside n. So n bounds the WORK done on s as well as
+// the size of what comes back, which matters when s comes from an upstream
+// whose size the caller does not control. For a valid-UTF-8 value with no
+// unsafe rune this is byte for byte what sanitizing first and then capping
+// gives. A value whose raw form exceeds n but whose sanitized form would fit
+// (enough multi-byte unsafe runes, each becoming one space) is cut and
+// marked, and the mark is honest: bytes were dropped before sanitizing.
 //
-//   - Capping BEFORE sanitizing, to bound the sanitizer's WORK rather than
-//     its output. This function sanitizes all of s by construction, and no
-//     marker placement changes that. Such a caller also tends to aggregate one
-//     truncation fact across several appends, which a single-call primitive
-//     cannot express. Both shapes belong to SanitizeBudgeted and Budget, which
-//     carry the cap ahead of the sanitizer and a running remainder while
-//     sharing this pair's rune-boundary cut, marker-inside-the-cap and
-//     cut-as-a-fact rules.
-//   - Keeping the TAIL behind a PREFIXED marker. When the identifying part of
-//     a value sits at its end (a path's file name), the caller wants
-//     marker + suffix; this function keeps the head. CapBytesTail is the
-//     rune-boundary walk for that half; the marker stays the caller's.
+// Two shapes this pair does not serve: several values under one shared
+// budget, which is Budget itself and keeps ONE truncation fact across the
+// writes; and keeping the TAIL behind a PREFIXED marker (a path's file name),
+// for which CapBytesTail is the rune-boundary walk and the marker stays the
+// caller's.
 func SanitizeCapped(s string, n int, marker string) (text string, cut bool) {
 	// The rune-boundary cut, the marker charged inside the cap and the cut
-	// FACT are the Budget engine's, so there is one copy of that arithmetic
-	// rather than one per bound. Sanitizing FIRST is what keeps this pair's
-	// OUTPUT bound, and with it the pair's side of the one divergence
-	// documented on SanitizeBudgeted: the budget is spent on the sanitized
-	// form, so a value whose RAW bytes exceed n while its sanitized form fits
-	// still comes back whole and unmarked here.
-	return SanitizeBudgeted(Sanitize(s), n, marker)
+	// FACT are the Budget engine's, so there is one copy of that arithmetic.
+	b := NewBudget(n, marker)
+	b.Write(s)
+	return b.Result()
 }
 
-// SanitizeSingleLineCapped is SanitizeCapped under the strict keepCRLF=false
-// policy: CR and LF become spaces along with every other unsafe rune, for a
-// single-line sink where a raw newline forges a record boundary — a
-// plain-text log line, a one-line error message, a rendered table cell. The
-// cap, marker and cut contract are identical, marker counted INSIDE n and
-// the n < len(marker) degenerate case included; see SanitizeCapped for the
-// full contract, for why the CR/LF policy is a separate function, and for
-// the two consumer shapes the pair does not serve.
+// SanitizeSingleLineCapped is SanitizeCapped under the single-line policy
+// (IsUnsafeSingleLine): CR and LF become spaces along with every other unsafe
+// rune, for a single-line sink where a raw newline forges a record boundary —
+// a plain-text log line, a one-line error message, a rendered table cell. The
+// cap-first order, the marker counted INSIDE n, the n < len(marker)
+// degenerate case and the cut fact are identical; see SanitizeCapped for the
+// full contract, for why the CR/LF policy is a separate function, and for the
+// shapes the pair does not serve.
 func SanitizeSingleLineCapped(s string, n int, marker string) (text string, cut bool) {
-	// Sanitize-then-budget under the strict policy on both halves; see
-	// SanitizeCapped for why that order is what preserves this pair's bound.
-	return SanitizeSingleLineBudgeted(SanitizeSingleLine(s), n, marker)
+	b := NewSingleLineBudget(n, marker)
+	b.Write(s)
+	return b.Result()
 }
 
 // SanitizeSingleLineBounded is SanitizeSingleLine followed by a byte cap: an

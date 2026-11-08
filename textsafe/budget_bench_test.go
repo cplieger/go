@@ -9,7 +9,7 @@ import (
 	"github.com/cplieger/go/textsafe"
 )
 
-// Budget and the Budgeted pair are sold entirely on a COST property: for a value
+// Budget and the Capped pair are sold entirely on a COST property: for a value
 // carrying no unsafe rune they are byte-identical to the Capped pair, cut for cut, but
 // the cap sits AHEAD of the sanitizer, so walking a multi-megabyte upstream value
 // inside a memory-limited process (CWE-400 work amplification) stops being possible.
@@ -87,7 +87,7 @@ func allocBytesPerRun(runs int, f func()) float64 {
 	return float64(after.TotalAlloc-before.TotalAlloc) / float64(runs)
 }
 
-// TestSanitizeBudgetedWorkBoundDoesNotScaleWithInput gates the reason the Budgeted
+// TestSanitizeCappedWorkBoundDoesNotScaleWithInput gates the reason the Capped
 // pair exists: it caps the RAW bytes on a rune boundary before the sanitizer walks
 // them, so its cost is a function of the CAP and not of the value an upstream chose to
 // send.
@@ -105,7 +105,7 @@ func allocBytesPerRun(runs int, f func()) float64 {
 //
 // The class is invalid UTF-8 because it is where the two orders separate furthest:
 // sanitizing grows each invalid byte into the three-byte U+FFFD.
-func TestSanitizeBudgetedWorkBoundDoesNotScaleWithInput(t *testing.T) {
+func TestSanitizeCappedWorkBoundDoesNotScaleWithInput(t *testing.T) {
 	const (
 		runs      = 5
 		limit     = 64
@@ -118,7 +118,7 @@ func TestSanitizeBudgetedWorkBoundDoesNotScaleWithInput(t *testing.T) {
 	for _, n := range sizes {
 		in := invalidUTF8(n)
 		budgeted := func() {
-			sinkString, sinkBool = textsafe.SanitizeSingleLineBudgeted(in, limit, "...")
+			sinkString, sinkBool = textsafe.SanitizeSingleLineCapped(in, limit, "...")
 		}
 		budgetedBytes = append(budgetedBytes, allocBytesPerRun(runs, budgeted))
 		budgetedAllocs = append(budgetedAllocs, testing.AllocsPerRun(runs, budgeted))
@@ -128,13 +128,13 @@ func TestSanitizeBudgetedWorkBoundDoesNotScaleWithInput(t *testing.T) {
 	}
 	for i, got := range budgetedBytes {
 		if got > budgetedBytes[0]*tolerance {
-			t.Errorf("SanitizeSingleLineBudgeted(invalid UTF-8, %d bytes, %d, \"...\") "+
+			t.Errorf("SanitizeSingleLineCapped(invalid UTF-8, %d bytes, %d, \"...\") "+
 				"allocated %.0f bytes per run but %.0f at %d bytes, want no more than %.0fx: "+
 				"the cap sits ahead of the sanitizer, so the raw value's size must not "+
 				"reach the cost", sizes[i], limit, got, budgetedBytes[0], sizes[0], tolerance)
 		}
 		if budgetedAllocs[i] != budgetedAllocs[0] {
-			t.Errorf("SanitizeSingleLineBudgeted(invalid UTF-8, %d bytes, %d, \"...\") "+
+			t.Errorf("SanitizeSingleLineCapped(invalid UTF-8, %d bytes, %d, \"...\") "+
 				"allocated %v times per run but %v at %d bytes, want the same count: a "+
 				"bounded chunk cannot need more buffer regrowths than a smaller one",
 				sizes[i], limit, budgetedAllocs[i], budgetedAllocs[0], sizes[0])
@@ -267,7 +267,7 @@ func BenchmarkWorkBound(b *testing.B) {
 			return textsafe.SanitizeSingleLineCapped(s, limit, marker)
 		}},
 		{"budgeted", func(s string) (string, bool) {
-			return textsafe.SanitizeSingleLineBudgeted(s, limit, marker)
+			return textsafe.SanitizeSingleLineCapped(s, limit, marker)
 		}},
 	} {
 		b.Run(order.name, func(b *testing.B) {

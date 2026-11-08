@@ -440,11 +440,10 @@ func legacySanitizeSingleLineBounded(s string, n int) string {
 	return textsafe.CapBytes(s, n) + "..."
 }
 
-// legacyCapped is a verbatim copy of the private sanitize-cap-mark engine the
-// Capped pair ran on before that pair was collapsed onto the Budget engine,
-// kept as the parity oracle for its published contract: it sanitizes ALL of the
-// value and bounds the SANITIZED form, which is the side of the documented
-// Capped/Budgeted divergence its existing call sites depend on.
+// legacyCapped is the sanitize-first form: it sanitizes ALL of the value and
+// bounds the SANITIZED form. The Capped pair caps first; this oracle pins that
+// the two agree on every honest value and differ only on the documented
+// class.
 func legacyCapped(s string, n int, marker string, sanitize func(string) string) (string, bool) {
 	s = sanitize(s)
 	if s == "" || len(s) <= n {
@@ -456,18 +455,12 @@ func legacyCapped(s string, n int, marker string, sanitize func(string) string) 
 	return textsafe.CapBytes(s, n-len(marker)) + marker, true
 }
 
-// TestSanitizeCappedParity holds the collapsed pair byte-for-byte against that
-// oracle across the adversarial corpus, every interesting cap and several marker
-// widths, and pins the delegation in the same sweep: a Capped call equals its
-// Budget equivalent over the sanitized value, which is what makes the two bounds
-// one implementation rather than two that happen to agree.
-//
-// The corpus carries the divergence class deliberately — a value whose RAW bytes
+// TestSanitizeCappedParity holds the pair byte-for-byte against the
+// hand-composed cap-first form across the adversarial corpus, every
+// interesting cap and several marker widths. The corpus carries the one class
+// where cap-first differs from sanitizing first (a value whose raw bytes
 // exceed the cap while its sanitized form fits, because multi-byte unsafe runes
-// collapse to single-byte spaces. That is where the work-bounding order cuts and
-// marks (TestSanitizeBudgetedPair's last row) and this pair must still return
-// the whole sanitized form unmarked; feeding the raw value to the budget instead
-// of the sanitized one would flip exactly these rows.
+// collapse to single-byte spaces): this pair cuts and marks those rows.
 func TestSanitizeCappedParity(t *testing.T) {
 	inputs := []string{
 		"", "a", "hello world", "already ends in...", "a\r\nb", "ab\ncd",
@@ -480,27 +473,20 @@ func TestSanitizeCappedParity(t *testing.T) {
 	policies := []struct {
 		name     string
 		capped   func(string, int, string) (string, bool)
-		budgeted func(string, int, string) (string, bool)
 		sanitize func(string) string
 	}{
-		{"SanitizeCapped", textsafe.SanitizeCapped, textsafe.SanitizeBudgeted, textsafe.Sanitize},
-		{"SanitizeSingleLineCapped", textsafe.SanitizeSingleLineCapped, textsafe.SanitizeSingleLineBudgeted, textsafe.SanitizeSingleLine},
+		{"SanitizeCapped", textsafe.SanitizeCapped, textsafe.Sanitize},
+		{"SanitizeSingleLineCapped", textsafe.SanitizeSingleLineCapped, textsafe.SanitizeSingleLine},
 	}
-
 	for _, in := range inputs {
 		for _, marker := range markers {
 			for _, n := range caps {
 				for _, p := range policies {
 					got, cut := p.capped(in, n, marker)
-					wantText, wantCut := legacyCapped(in, n, marker, p.sanitize)
+					wantText, wantCut := composedCapFirst(in, n, marker, p.sanitize)
 					if got != wantText || cut != wantCut {
-						t.Errorf("%s(%q, %d, %q) = (%q, %v), pre-collapse form was (%q, %v)",
+						t.Errorf("%s(%q, %d, %q) = (%q, %v), the cap-first form is (%q, %v)",
 							p.name, in, n, marker, got, cut, wantText, wantCut)
-					}
-					delegated, delegatedCut := p.budgeted(p.sanitize(in), n, marker)
-					if got != delegated || cut != delegatedCut {
-						t.Errorf("%s(%q, %d, %q) = (%q, %v), its budgeted equivalent over the sanitized value is (%q, %v)",
-							p.name, in, n, marker, got, cut, delegated, delegatedCut)
 					}
 				}
 			}

@@ -386,72 +386,6 @@ func FuzzSanitizeSingleLineBounded(f *testing.F) {
 	})
 }
 
-// FuzzSanitizeCapped drives the caller-marker primitive on both CR/LF
-// policies with arbitrary input, cap, and marker, and pins three
-// guarantees: the returned text NEVER exceeds max(n, 0) bytes however long
-// the marker is, cut is true exactly when the sanitized form did not fit
-// (and the text is then that form's rune-safe prefix, plus the marker
-// verbatim whenever the cap can hold it), and an uncut result is
-// byte-identical to the matching unbounded preset. The marker is caller
-// program text and deliberately not sanitized, so the rune-policy and
-// UTF-8 assertions apply to the body the primitive itself produced.
-func FuzzSanitizeCapped(f *testing.F) {
-	for _, s := range fuzzSeeds {
-		f.Add(s, 5, "...")
-	}
-	f.Add("hello world", 8, "...")
-	f.Add("hello world", 2, "...")
-	f.Add("hello", 3, "...")
-	f.Add("hello world", 10, "...(truncated)")
-	f.Add("葬送のフリーレン", 10, "...")
-	f.Add("a\U0001f600b", 5, "*")
-	f.Add("abc", 0, "")
-	f.Add("abc", -1, "...")
-	f.Add("", 4, "…")
-	f.Fuzz(func(t *testing.T, s string, n int, marker string) {
-		variants := []struct {
-			name   string
-			fn     func(string, int, string) (string, bool)
-			full   string
-			unsafe func(rune) bool
-		}{
-			{"SanitizeCapped", textsafe.SanitizeCapped, textsafe.Sanitize(s), textsafe.IsUnsafeMultiLine},
-			{"SanitizeSingleLineCapped", textsafe.SanitizeSingleLineCapped, textsafe.SanitizeSingleLine(s), textsafe.IsUnsafeSingleLine},
-		}
-		for _, v := range variants {
-			out, cut := v.fn(s, n, marker)
-			if bound := max(n, 0); len(out) > bound {
-				t.Fatalf("%s(%q, %d, %q) = %q: %d bytes exceeds the hard cap %d", v.name, s, n, marker, out, len(out), bound)
-			}
-			if want := v.full != "" && len(v.full) > n; cut != want {
-				t.Fatalf("%s(%q, %d, %q) cut = %v, want %v (sanitized form is %d bytes)", v.name, s, n, marker, cut, want, len(v.full))
-			}
-			body := out
-			if cut {
-				if n >= len(marker) {
-					if !strings.HasSuffix(out, marker) {
-						t.Fatalf("%s(%q, %d, %q) = %q: cap holds the marker but the output does not end in it", v.name, s, n, marker, out)
-					}
-					body = out[:len(out)-len(marker)]
-				}
-				if !strings.HasPrefix(v.full, body) {
-					t.Fatalf("%s(%q, %d, %q) = %q: body %q is not a prefix of the sanitized form %q", v.name, s, n, marker, out, body, v.full)
-				}
-			} else if out != v.full {
-				t.Fatalf("%s(%q, %d, %q) = %q: an uncut result must equal the unbounded form %q", v.name, s, n, marker, out, v.full)
-			}
-			if !utf8.ValidString(body) {
-				t.Fatalf("%s(%q, %d, %q) = %q: body %q is not valid UTF-8", v.name, s, n, marker, out, body)
-			}
-			for _, r := range body {
-				if v.unsafe(r) {
-					t.Fatalf("%s(%q, %d, %q) = %q: unsafe rune %U survived in the body", v.name, s, n, marker, out, r)
-				}
-			}
-		}
-	})
-}
-
 // FuzzBudget drives the work-bounding primitive on both CR/LF policies with
 // arbitrary input, budget, and marker. Three guarantees are shared with the
 // Capped pair and asserted the same way: the text never exceeds max(n, 0) bytes
@@ -462,7 +396,7 @@ func FuzzSanitizeCapped(f *testing.F) {
 // sanitized form of a rune-boundary prefix of s at most max(n, 0) bytes long, so
 // nothing in the result can have come from beyond the budget — which is only
 // possible if the raw cap ran before the sanitizer. And the packaged form must
-// equal composedBudgeted, the hand-rolled composition it replaces. The aggregate
+// equal composedCapFirst, the hand-rolled composition it replaces. The aggregate
 // form is held to the same total bound across two writes, with the truncation
 // fact monotone once latched.
 func FuzzBudget(f *testing.F) {
@@ -488,8 +422,8 @@ func FuzzBudget(f *testing.F) {
 			sanitize  func(string) string
 			unsafe    func(rune) bool
 		}{
-			{"SanitizeBudgeted", textsafe.SanitizeBudgeted, textsafe.NewBudget, textsafe.Sanitize, textsafe.IsUnsafeMultiLine},
-			{"SanitizeSingleLineBudgeted", textsafe.SanitizeSingleLineBudgeted, textsafe.NewSingleLineBudget, textsafe.SanitizeSingleLine, textsafe.IsUnsafeSingleLine},
+			{"SanitizeCapped", textsafe.SanitizeCapped, textsafe.NewBudget, textsafe.Sanitize, textsafe.IsUnsafeMultiLine},
+			{"SanitizeSingleLineCapped", textsafe.SanitizeSingleLineCapped, textsafe.NewSingleLineBudget, textsafe.SanitizeSingleLine, textsafe.IsUnsafeSingleLine},
 		}
 		bound := max(n, 0)
 		for _, v := range variants {
@@ -497,7 +431,7 @@ func FuzzBudget(f *testing.F) {
 			if len(out) > bound {
 				t.Fatalf("%s(%q, %d, %q) = %q: %d bytes exceeds the hard cap %d", v.name, s, n, marker, out, len(out), bound)
 			}
-			wantText, wantCut := composedBudgeted(s, n, marker, v.sanitize)
+			wantText, wantCut := composedCapFirst(s, n, marker, v.sanitize)
 			if out != wantText || cut != wantCut {
 				t.Fatalf("%s(%q, %d, %q) = (%q, %v), hand-composed form is (%q, %v)", v.name, s, n, marker, out, cut, wantText, wantCut)
 			}

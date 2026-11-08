@@ -9,9 +9,10 @@
 // providing defense-in-depth against DNS rebinding/TOCTOU attacks even if the
 // resolve-once layer is somehow bypassed.
 //
-// # Unsupported by design (SKIP list)
+// # Unsupported by design
 //
-// The following features are intentionally NOT implemented:
+// The following features are intentionally NOT implemented (docs/non-goals.md
+// has the reasons):
 //   - Custom allow/deny IP lists: WithAddressPolicy(func(netip.Addr) bool) already provides this.
 //   - Hostname allowlist/denylist: Application-layer policy, not core SSRF defense.
 //   - Happy Eyeballs (RFC 8305): Security library prioritizes correctness over speed.
@@ -101,9 +102,11 @@ const (
 	// KindInvalidHost indicates the host is not a canonical host at all: it
 	// carries a byte no DNS label may hold, or an IP literal carries a zone
 	// identifier. Distinct from KindNonPublicIP, which means a well-formed host
-	// that points somewhere private. Appended after the other Kinds so the iota
-	// values above it keep the numbers consumers already branch on.
+	// that points somewhere private.
 	KindInvalidHost
+
+	// Append new Kinds here, before kindEnd, so the values above keep their
+	// numbers.
 
 	// kindEnd is one past the last Kind. It must stay last: the exhaustive
 	// Kind tests iterate up to it, so a Kind declared below it goes unchecked.
@@ -126,6 +129,7 @@ type Error struct {
 	msgCoversErr bool
 }
 
+// Error renders Msg, followed by Err's text when Msg does not already say it.
 func (e *Error) Error() string {
 	if e.Err != nil && !e.msgCoversErr {
 		return e.Msg + ": " + e.Err.Error()
@@ -133,6 +137,7 @@ func (e *Error) Error() string {
 	return e.Msg
 }
 
+// Unwrap returns Err, so errors.Is and errors.As reach the underlying cause.
 func (e *Error) Unwrap() error { return e.Err }
 
 func ssrfErr(kind ErrorKind, host, msg string, err error) *Error {
@@ -147,6 +152,8 @@ type AddressPolicy func(addr netip.Addr) bool
 // Resolver abstracts DNS resolution for testing and custom environments.
 // The standard library's [net.Resolver] satisfies this interface.
 type Resolver interface {
+	// LookupNetIP resolves host to its addresses for network ("ip", "ip4" or
+	// "ip6"), as net.Resolver.LookupNetIP does.
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
@@ -181,7 +188,9 @@ func WithAddressPolicy(p AddressPolicy) TransportOption {
 //
 // The dialer's Control hook is always overwritten with the SSRF socket-time
 // IP re-validation hook and cannot be supplied by the caller; this is the
-// defense-in-depth layer against DNS rebinding and must not be bypassed.
+// defense-in-depth layer against DNS rebinding and must not be bypassed. Its
+// ControlContext is cleared on the transport's copy for the same reason,
+// since a set ControlContext would run in place of Control.
 func WithDialer(d *net.Dialer) TransportOption {
 	return func(c *transportConfig) {
 		if d != nil {
@@ -204,8 +213,8 @@ func WithResolver(r Resolver) TransportOption {
 // WithLogger sets the logger the transport writes its dial and Control
 // refusals to, so a caller running one transport per peer can attribute each
 // line. A nil logger is ignored; with none, each line goes to slog.Default as
-// it is written. The redirect policies are not transport options and keep
-// logging through slog.Default.
+// it is written. The redirect policies take their logger from
+// URLPolicy.WithLogger.
 func WithLogger(l *slog.Logger) TransportOption {
 	return func(c *transportConfig) {
 		if l != nil {
@@ -252,10 +261,21 @@ func WithAllowedPorts(ports ...uint16) TransportOption {
 // requests so resolved and connected addresses are validated at the dial boundary.
 type URLPolicy struct {
 	allowedSchemes map[string]struct{}
+	logger         *slog.Logger
+}
+
+// WithLogger returns a copy of p whose RedirectPolicy writes its refusals to
+// l, so a caller running one client per peer can attribute each line. A nil l
+// means slog.Default at the time of each line, the default.
+func (p URLPolicy) WithLogger(l *slog.Logger) URLPolicy {
+	p.logger = l
+	return p
 }
 
 // NewURLPolicy returns a URL policy allowing the given schemes. With no
-// schemes it returns the HTTPS-only default.
+// schemes it returns the HTTPS-only default. An empty scheme is skipped: a
+// protocol-relative URL has an empty scheme, so allowing "" would let
+// //8.8.8.8/ through; if no scheme remains, the HTTPS-only default applies.
 //
 // Scheme matching is case-insensitive over ASCII and byte-exact outside it,
 // which is the whole of RFC 3986's scheme grammar. Folding it over Unicode would
@@ -268,20 +288,32 @@ func NewURLPolicy(schemes ...string) URLPolicy {
 	}
 	allowed := make(map[string]struct{}, len(schemes))
 	for _, scheme := range schemes {
-		allowed[lowerASCIIString(scheme)] = struct{}{}
+		if scheme != "" {
+			allowed[lowerASCIIString(scheme)] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		return URLPolicy{}
 	}
 	return URLPolicy{allowedSchemes: allowed}
 }
 
-// Validate checks that raw uses an allowed scheme and points to a public host.
+// Validate checks that raw uses an allowed scheme and that its host, as
+// written, is a literal public address or a dotted name other than localhost.
+// It performs no DNS lookup, so a public name that resolves to a private
+// address passes: pair it with SafeTransport, which checks every resolved and
+// connected address.
 func (p URLPolicy) Validate(raw string) error {
 	return validateURLWithSchemes(raw, p.allowedSchemes)
 }
 
-// ValidateURL checks that a URL uses HTTPS and points to a public host.
-// Rejects HTTP (cleartext), non-HTTP schemes, loopback, private, and
-// link-local addresses. Hostnames without dots (bare names like
-// "localhost" or "internal") are also rejected.
+// ValidateURL checks that a URL uses HTTPS and that its host, as written, is
+// a literal public address or a dotted name other than localhost. It rejects
+// HTTP (cleartext), non-HTTP schemes, loopback, private and link-local
+// literals, and hostnames without dots ("localhost", "internal"). It performs
+// no DNS lookup, so a public name that resolves to a private address passes:
+// pair it with SafeTransport, which checks every resolved and connected
+// address.
 func ValidateURL(raw string) error {
 	return validateURLWithSchemes(raw, nil)
 }
@@ -353,9 +385,12 @@ func validateURLWithSchemes(raw string, schemes map[string]struct{}) error {
 	return nil
 }
 
-// IsPublicHost checks that a hostname is not a private/loopback/CGNAT address.
-// Returns false for localhost, bare hostnames, RFC 1918/link-local IPs,
-// and RFC 6598 shared address space.
+// IsPublicHost reports whether host, as written, is a literal public address
+// or a dotted name other than localhost. It returns false for localhost, bare
+// hostnames, RFC 1918 and link-local literals, and RFC 6598 shared address
+// space. It performs no DNS lookup, so a public name that resolves to a
+// private address is reported public: pair it with SafeTransport, which checks
+// every resolved and connected address.
 //
 // Like [ValidateURL] it emits no log line: the whole validation path returns
 // its verdict and lets the caller decide whether to record it.
@@ -733,6 +768,11 @@ var reasonLabels = map[ErrorKind]string{
 // this helper. A Kind with no entry in the [reasonLabels] table degrades to
 // "blocked"; add an entry there when a routed path emits a new Kind. Never
 // embed hosts/IPs in any reason label.
+// String returns the Kind's snake_case reason label, the same value the
+// package's own log lines carry as "reason", or "blocked" for a value outside
+// the constants.
+func (k ErrorKind) String() string { return reasonLabel(k) }
+
 func reasonLabel(kind ErrorKind) string {
 	if label, ok := reasonLabels[kind]; ok {
 		return label
@@ -998,7 +1038,7 @@ func (p URLPolicy) RedirectPolicy(
 ) func(req *http.Request, via []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
-			slog.Default().Warn("ssrf redirect blocked",
+			orDefault(p.logger).Warn("ssrf redirect blocked",
 				"reason", "too_many_redirects", "hops", len(via))
 			return ssrfErr(KindTooManyRedirects, "", fmt.Sprintf("stopped after %d redirects", maxRedirects), nil)
 		}
@@ -1007,7 +1047,7 @@ func (p URLPolicy) RedirectPolicy(
 			// errors.As(&ssrf.Error).Kind sees the real reason (bad scheme,
 			// empty host, non-public IP, ...) rather than a blanket value.
 			kind := verr.Kind
-			slog.Default().Warn("ssrf redirect blocked",
+			orDefault(p.logger).Warn("ssrf redirect blocked",
 				"url", urlForLog(req.URL.Redacted()), "reason", reasonLabel(kind), "error", errTextForLog(verr))
 			e := ssrfErr(kind, req.URL.Hostname(), "redirect blocked (SSRF): "+verr.Error(), verr)
 			e.msgCoversErr = true

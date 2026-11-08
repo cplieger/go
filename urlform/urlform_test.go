@@ -158,12 +158,12 @@ func TestClassifyHomographHostsFailClosed(t *testing.T) {
 	}
 }
 
-// TestHostMatchesDomain pins the three unsafe readings a plain suffix test
+// TestDomainMatches pins the three unsafe readings a plain suffix test
 // would accept (suffix confusion, parent-domain spoofing, empty DNS labels),
 // the fail-closed handling of a degenerate host or domain, and the ASCII-only
 // fold - including the homograph case, where the fold must NOT produce a match
 // the IsASCIIHost gate exists to refuse.
-func TestHostMatchesDomain(t *testing.T) {
+func TestDomainMatches(t *testing.T) {
 	tests := []struct {
 		name   string
 		host   string
@@ -195,8 +195,8 @@ func TestHostMatchesDomain(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := HostMatchesDomain(tt.host, tt.domain); got != tt.want {
-				t.Errorf("HostMatchesDomain(%q, %q) = %v, want %v", tt.host, tt.domain, got, tt.want)
+			if got := Domain(tt.domain).Matches(tt.host); got != tt.want {
+				t.Errorf("Domain(%q).Matches(%q) = %v, want %v", tt.host, tt.domain, got, tt.want)
 			}
 		})
 	}
@@ -511,7 +511,7 @@ func TestFoldHostASCIIRefusesToLaunderHomographs(t *testing.T) {
 }
 
 // TestFoldHostASCIIIsTheFoldClassifyApplies pins the one-implementation claim:
-// the exported fold is the same operation Form.Host and HostMatchesDomain
+// the exported fold is the same operation Form.Host and Domain.Matches
 // already apply, so a consumer folding its own host evidence and the
 // classifier's facts can never disagree about what folding a host means.
 func TestFoldHostASCIIIsTheFoldClassifyApplies(t *testing.T) {
@@ -523,8 +523,8 @@ func TestFoldHostASCIIIsTheFoldClassifyApplies(t *testing.T) {
 			}
 			// The matcher folds with it too, so a caller may fold either side
 			// itself without changing the verdict.
-			if !HostMatchesDomain(FoldHostASCII(host), FoldHostASCII(host)) {
-				t.Errorf("HostMatchesDomain(%q, %q) = false on a pre-folded pair", host, host)
+			if !Domain(FoldHostASCII(host)).Matches(FoldHostASCII(host)) {
+				t.Errorf("Domain(%q).Matches(%q) = false on a pre-folded pair", host, host)
 			}
 		})
 	}
@@ -802,5 +802,14 @@ func TestFormNormalizedPathEqualsSpellingsOfOneDestination(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNormalizedPath_ChainsOffClassify pins the value receiver: the method is
+// reachable on the Form Classify returns, with no variable in between.
+func TestNormalizedPath_ChainsOffClassify(t *testing.T) {
+	t.Parallel()
+	if got := Classify("https://nyaa.si/view/1/../2").NormalizedPath(); got != "/view/2" {
+		t.Errorf("Classify(...).NormalizedPath() = %q, want %q", got, "/view/2")
 	}
 }

@@ -27,8 +27,8 @@ Each call site chooses one of two named policies instead of passing a boolean.
 
 | Policy | Functions | Use it for |
 | --- | --- | --- |
-| Multi-line, CR and LF kept | `Sanitize`, `IsUnsafeMultiLine`, `SanitizeCapped`, `SanitizeBudgeted`, `NewBudget` | a sink whose encoder escapes CR and LF, such as JSON or slog's handlers |
-| Single-line, CR and LF replaced | `SanitizeSingleLine`, `IsUnsafeSingleLine`, `SanitizeSingleLineBounded`, `SanitizeSingleLineCapped`, `SanitizeSingleLineBudgeted`, `NewSingleLineBudget` | a plain-text log line, a one-line error message, a rendered table cell |
+| Multi-line, CR and LF kept | `Sanitize`, `IsUnsafeMultiLine`, `SanitizeCapped`, `NewBudget` | a sink whose encoder escapes CR and LF, such as JSON or slog's handlers |
+| Single-line, CR and LF replaced | `SanitizeSingleLine`, `IsUnsafeSingleLine`, `SanitizeSingleLineBounded`, `SanitizeSingleLineCapped`, `NewSingleLineBudget` | a plain-text log line, a one-line error message, a rendered table cell |
 
 The predicates expose the policy one rune at a time:
 

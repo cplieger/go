@@ -44,24 +44,17 @@ attr, cut := textsafe.SanitizeSingleLineCapped(key, maxLoggedKeyBytes, "...")
 slog.Warn("unknown upstream keys", "key", attr, "key_truncated", cut)
 ```
 
-`cut` is true exactly when the sanitized form did not fit. It says nothing about whether sanitizing rewrote a rune. A cap too small to hold the marker drops the marker rather than writing part of it, and `cut` still reports the cut. An empty marker caps silently. An empty input returns `""` and `false` under any cap.
+`cut` is true exactly when bytes were dropped (see [Bounding the work](#bounding-the-work) for the order). It says nothing about whether sanitizing rewrote a rune. A cap too small to hold the marker drops the marker rather than writing part of it, and `cut` still reports the cut. An empty marker caps silently. An empty input returns `""` and `false` under any cap.
 
 The marker is written as given and never sanitized. Build it from your program's own text, not from untrusted input.
 
 ## Bounding the work
 
-Everything above bounds what comes back. When the caller does not control a value's size, such as an upstream response field, an error message that quotes one or a file name, the bound has to cover the work too. Walking a multi-megabyte value with `strings.Map` in a memory-limited process is a work-amplification denial of service ([CWE-400](https://cwe.mitre.org/data/definitions/400.html)), whatever the output cap is.
+When the caller does not control a value's size, such as an upstream response field, an error message that quotes one or a file name, the bound has to cover the work too. Walking a multi-megabyte value with `strings.Map` in a memory-limited process is a work-amplification denial of service ([CWE-400](https://cwe.mitre.org/data/definitions/400.html)), whatever the output cap is.
 
-`SanitizeBudgeted` and `SanitizeSingleLineBudgeted` move the cap ahead of the sanitizer. They cut the raw bytes on a rune boundary first, sanitize only that chunk, cap again if sanitizing grew it, and count your marker inside the cap.
+So `SanitizeCapped` and `SanitizeSingleLineCapped` apply the cap ahead of the sanitizer. They cut the raw bytes on a rune boundary first, sanitize only that chunk, cap again if sanitizing grew it, and count your marker inside the cap. A huge value costs no more work than a short one.
 
-```go
-label, cut := textsafe.SanitizeSingleLineBudgeted(upstreamLabel, 64, "...(truncated)")
-slog.Warn("skipped block", "type", label, "type_truncated", cut)
-```
-
-For a valid UTF-8 value with no unsafe rune, both orders give the same bytes and the same `cut`. Moving a call site to the budgeted form therefore changes nothing an honest value emits.
-
-The orders can differ when the raw value past the cap holds multi-byte unsafe runes, because each one shrinks to a one-byte space. The budgeted form reads no bytes past the raw cap, so it can return fewer sanitized bytes than `SanitizeCapped`, or cut and mark a value that `SanitizeCapped` returns whole. The mark is honest, because bytes really were dropped before sanitizing.
+For a valid UTF-8 value with no unsafe rune, that gives the same bytes and the same `cut` as sanitizing the whole value and then capping. The two orders differ only when the raw value past the cap holds multi-byte unsafe runes, because each one shrinks to a one-byte space: such a value can be cut and marked although its sanitized form would have fit. The mark is honest, because bytes really were dropped before sanitizing.
 
 ## Several values under one budget
 
@@ -81,7 +74,7 @@ attr, cut := b.Result()
 slog.Warn("better release available", "groups", attr, "groups_truncated", cut)
 ```
 
-- Each `Write` caps its value before sanitizing it, like `SanitizeBudgeted`. `NewBudget` keeps CR and LF, and `NewSingleLineBudget` replaces them.
+- Each `Write` caps its value before sanitizing it, like `SanitizeCapped`. `NewBudget` keeps CR and LF, and `NewSingleLineBudget` replaces them.
 - Separators go through `Write` too, so a hostile number of values cannot grow the attribute past the budget either.
 - `Write` returns false once anything has been dropped. It does not report whether room is left. Keep writing until a write returns false, because the refused write is what records the cut. If you stopped when the budget was full, the skipped values would be lost and `Result` would report no cut.
 - After a cut, later writes add nothing, and a non-empty write is refused whole. A write of `""` never records a cut.
@@ -110,4 +103,4 @@ No match of a secret in the text, or in its sanitized form, survives. A match re
 
 Pass the whole value. If you cut it yourself first, a secret split by your cut can survive as its first bytes whenever the shortened value then fits the cap. Register each wire form a secret takes in the text, such as its JSON-escaped or percent-encoded form, as a secret of its own, because matching is byte for byte.
 
-`SanitizeSingleLineBounded`, the Capped and Budgeted pairs and `Budget` all contain a cap, and `Budget.Write` caps before it sanitizes. A redaction after one of them may miss a secret the cap split. A redaction built from separate passes around a sanitizer can also leave part of a secret behind, because a match in the text and one that only exists after sanitizing can overlap. `RedactSingleLineCapped` finds both in one pass. It has no multi-line form.
+`SanitizeSingleLineBounded`, the Capped pair and `Budget` all contain a cap, and the Capped pair and `Budget.Write` cap before they sanitize. A redaction after one of them may miss a secret the cap split. A redaction built from separate passes around a sanitizer can also leave part of a secret behind, because a match in the text and one that only exists after sanitizing can overlap. `RedactSingleLineCapped` finds both in one pass. It has no multi-line form.
