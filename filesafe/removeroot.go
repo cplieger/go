@@ -96,7 +96,7 @@ var pinOpenHook func(name string)
 // racedOpen classifies an open of name that failed after an Lstat of it
 // returned before. ENOTDIR, ELOOP and ENXIO can only mean the name changed:
 // each caller's Lstat proved a directory or a regular file and no symlink, a
-// directory is opened as name with a trailing separator (so a non-directory there answers
+// directory is opened through name/. (so a non-directory there answers
 // ENOTDIR), and open(2) answers ENXIO only for a socket or a device with no
 // driver. An error os.Root makes itself ("not a directory", "path escapes
 // from parent") means the resolution met something the Lstat did not see;
@@ -173,7 +173,7 @@ func pinChildInRoot(parent *os.Root, name string) (*os.Root, error) {
 	if pinOpenHook != nil {
 		pinOpenHook(name)
 	}
-	next, err := parent.OpenRoot(dirOpenName(name))
+	next, err := parent.OpenRoot(childDirOpenName(name))
 	if err != nil {
 		return nil, fmt.Errorf("filesafe: open path component %q: %w", name, racedOpen(parent, name, fi, dirOpenErr(err, name)))
 	}

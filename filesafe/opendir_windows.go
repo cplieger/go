@@ -29,3 +29,6 @@ func openDirInRoot(root *os.Root, dir string) (*os.File, error) {
 
 // dirOpenName is name unchanged: Windows has no FIFO to wait on.
 func dirOpenName(name string) string { return name }
+
+// childDirOpenName is name unchanged, for the same reason.
+func childDirOpenName(name string) string { return name }
