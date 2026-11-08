@@ -100,7 +100,7 @@ func TestRacedOpen_Classification(t *testing.T) {
 		"ENOENT, name still there": {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENOENT}, true},
 		"os.Root not a directory":  {&fs.PathError{Op: "open", Path: "f", Err: errors.New("not a directory")}, true},
 		"closed root":              {&fs.PathError{Op: "openat", Path: "f", Err: os.ErrClosed}, false},
-		"ENXIO, regular file seen": {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENXIO}, true},
+		"ENXIO":                    {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENXIO}, true},
 		"unchanged EMFILE":         {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EMFILE}, false},
 		"unchanged io error":       {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EIO}, false},
 	} {

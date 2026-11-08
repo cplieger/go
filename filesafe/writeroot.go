@@ -151,7 +151,7 @@ func mkdirAllInRoot(root *os.Root, dir string, mode os.FileMode, enforce, syncEx
 		}
 		if syncErr := syncCreatedDirParent(root, filepath.Dir(prefix)); syncErr != nil {
 			logger.Warn("filesafe: fsync of a created directory's parent failed; write is not durable",
-				"root", root.Name(), "dir", prefix, "error", syncErr)
+				"root", filepath.Clean(root.Name()), "dir", prefix, "error", syncErr)
 			durable = false
 		}
 	}

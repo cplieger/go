@@ -6,6 +6,7 @@ import (
 	"context"
 	"io/fs"
 	"os"
+	"path/filepath"
 )
 
 // closeTempBeforeRename closes the synced temp while the old target is still
@@ -28,7 +29,7 @@ func commitTempInRoot(_ context.Context, root *os.Root, _ *os.File, tmpName, nam
 	}
 	if syncErr := fsyncRootDir(root, dir); syncErr != nil {
 		c.logger.Warn("filesafe: parent-directory fsync failed; write is not durable",
-			"root", root.Name(), "path", name, "error", syncErr)
+			"root", filepath.Clean(root.Name()), "path", name, "error", syncErr)
 		return false, nil
 	}
 	return true, nil

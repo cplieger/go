@@ -144,7 +144,7 @@ func ProbeWritable(ctx context.Context, dir string, opts ...WriteOption) (ProbeR
 	}
 	root, err := os.OpenRoot(dirOpenName(clean))
 	if err != nil {
-		return ProbeResult{Dir: clean, Phase: ProbePhaseCreate, Err: err}, nil
+		return ProbeResult{Dir: clean, Phase: ProbePhaseCreate, Err: dirOpenErr(err, clean)}, nil
 	}
 	defer root.Close()
 	res := probeInRoot(root, ".", c)

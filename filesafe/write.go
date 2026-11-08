@@ -54,7 +54,7 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 	}
 	root, err = os.OpenRoot(dirOpenName(dir))
 	if err != nil {
-		return nil, "", false, &WriteError{Phase: PhaseTempCreate, Err: err}
+		return nil, "", false, &WriteError{Phase: PhaseTempCreate, Err: dirOpenErr(err, dir)}
 	}
 	return root, filepath.Base(cleanPath), dirSyncFailed, nil
 }
@@ -83,7 +83,7 @@ func mkdirBelowExisting(base, rel string, mode os.FileMode, enforce bool, logger
 	}
 	root, err := os.OpenRoot(dirOpenName(base))
 	if err != nil {
-		return false, err
+		return false, dirOpenErr(err, base)
 	}
 	defer root.Close()
 	durable, err := mkdirAllInRoot(root, rel, mode, enforce, true, logger)

@@ -157,23 +157,33 @@ func CleanupStaleTemps(ctx context.Context, dir string, maxAge time.Duration, op
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return SweepResult{}, fmt.Errorf("filesafe: %w", ctxErr)
 	}
-	d, rdErr := os.Open(dirOpenName(dir))
-	if rdErr != nil {
-		if errors.Is(rdErr, fs.ErrNotExist) {
-			return SweepResult{}, nil
+	s := &ambientSweep{ctx: ctx, cutoff: time.Now().Add(-maxAge), logger: c.logger}
+	if c.recursive {
+		root, err := os.OpenRoot(dirOpenName(dir))
+		if err != nil {
+			return sweepOpenFailed(dirOpenErr(err, dir))
 		}
-		return SweepResult{}, rdErr
+		defer func() { _ = root.Close() }()
+		err = s.reapTree(root, dir)
+		return s.result, err
+	}
+	d, err := os.Open(dirOpenName(dir))
+	if err != nil {
+		return sweepOpenFailed(dirOpenErr(err, dir))
 	}
 	defer d.Close()
-
-	s := &ambientSweep{ctx: ctx, cutoff: time.Now().Add(-maxAge), logger: c.logger}
-	var err error
-	if c.recursive {
-		err = s.reapTree(dir)
-	} else {
-		err = s.reapDir(d, dir)
-	}
+	err = s.reapDir(d, dir)
 	return s.result, err
+}
+
+// sweepOpenFailed is CleanupStaleTemps' answer when dir cannot be opened: a
+// dir that does not exist has nothing to reclaim, and any other failure is
+// returned.
+func sweepOpenFailed(err error) (SweepResult, error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		return SweepResult{}, nil
+	}
+	return SweepResult{}, err
 }
 
 // ambientSweep carries the mutable accounting of one CleanupStaleTemps walk, the
@@ -202,7 +212,7 @@ func (s *ambientSweep) reapDir(d *os.File, dir string) error {
 			return nil
 		}
 		if readErr != nil {
-			return readErr
+			return dirOpenErr(readErr, dir)
 		}
 	}
 }
@@ -219,15 +229,12 @@ func (s *ambientSweep) reapDir(d *os.File, dir string) error {
 // caller. Every path stays ambient here, matching this function's siblings — a caller
 // that needs the removals confined against a co-mounting writer wants
 // CleanupStaleTempsInRoot instead.
-func (s *ambientSweep) reapTree(dir string) error {
-	// Walked through an os.Root with WalkDirInRoot, not filepath.WalkDir: its
-	// directory opens are O_DIRECTORY and non-blocking, so a FIFO swapped in
-	// for a subdirectory mid-walk is refused rather than waited on.
-	root, err := os.OpenRoot(dirOpenName(dir))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
+//
+// The walk is WalkDirInRoot over root, opened by the caller as dir/., the walker
+// CleanupStaleTempsInRoot uses. So a symlink to a directory is swept as the flat
+// sweep sweeps it, where filepath.WalkDir would Lstat it and stop, and a dir that
+// is not a directory is refused with ENOTDIR rather than reaped as its own entry.
+func (s *ambientSweep) reapTree(root *os.Root, dir string) error {
 	return WalkDirInRoot(s.ctx, root, func(rel string, d fs.DirEntry, walkErr error) error {
 		if ctxErr := s.ctx.Err(); ctxErr != nil {
 			return ctxErr

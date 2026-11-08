@@ -94,10 +94,10 @@ func RemoveFileInRoot(root *os.Root, name string) error {
 var pinOpenHook func(name string)
 
 // racedOpen classifies an open of name that failed after an Lstat of it
-// returned before. ENOTDIR and ELOOP can only mean the name changed, since
-// the Lstat saw neither a non-directory where a directory is opened nor a
-// symlink; so can ENXIO when the Lstat saw a directory or a regular file,
-// because open(2) answers ENXIO only for a socket or a device with no
+// returned before. ENOTDIR, ELOOP and ENXIO can only mean the name changed:
+// each caller's Lstat proved a directory or a regular file and no symlink, a
+// directory is opened through name/. (so a non-directory there answers
+// ENOTDIR), and open(2) answers ENXIO only for a socket or a device with no
 // driver. An error os.Root makes itself ("not a directory", "path escapes
 // from parent") means the resolution met something the Lstat did not see;
 // a closed root is the caller's misuse. Any other failure is a race when
@@ -108,8 +108,7 @@ var pinOpenHook func(name string)
 func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
 	var errno syscall.Errno
 	isErrno := errors.As(err, &errno)
-	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP ||
-		errno == syscall.ENXIO && (before.IsDir() || before.Mode().IsRegular())) ||
+	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP || errno == syscall.ENXIO) ||
 		!isErrno && !errors.Is(err, os.ErrClosed)
 	if !changed {
 		now, lErr := root.Lstat(name)
@@ -176,7 +175,7 @@ func pinChildInRoot(parent *os.Root, name string) (*os.Root, error) {
 	}
 	next, err := parent.OpenRoot(dirOpenName(name))
 	if err != nil {
-		return nil, fmt.Errorf("filesafe: open path component %q: %w", name, racedOpen(parent, name, fi, err))
+		return nil, fmt.Errorf("filesafe: open path component %q: %w", name, racedOpen(parent, name, fi, dirOpenErr(err, name)))
 	}
 	opened, err := next.Stat(".")
 	if err != nil {
