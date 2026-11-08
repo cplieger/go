@@ -141,6 +141,9 @@ func TestLoopbackOnlyDefaultRefusalCarriesTheStandardEnvelope(t *testing.T) {
 	if !strings.Contains(body, string(loopbackRefusalCode)) {
 		t.Errorf("default refusal body %q does not carry the %q code", body, loopbackRefusalCode)
 	}
+	if !strings.Contains(body, loopbackRefusalMsg) {
+		t.Errorf("default refusal body %q does not carry the default message %q", body, loopbackRefusalMsg)
+	}
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
 		t.Errorf("Content-Type = %q, want JSON: the default refusal must match the package envelope", got)
 	}
@@ -194,5 +197,14 @@ func TestProxyProvenanceHeaderSetMembership(t *testing.T) {
 	}
 	for name := range want {
 		t.Errorf("header %q was dropped from the set", name)
+	}
+}
+
+// A nil responder is ignored, so the default envelope still answers.
+func TestLoopbackOnlyNilResponderKeepsTheDefault(t *testing.T) {
+	t.Parallel()
+	_, rec := loopbackOnlyProbe(t, LoopbackOnly(WithLoopbackResponder(nil)), "203.0.113.9:1", "evil.example", nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), string(loopbackRefusalCode)) {
+		t.Errorf("refusal = %d %q, want the default 403 envelope", rec.Code, rec.Body.String())
 	}
 }

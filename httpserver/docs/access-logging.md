@@ -43,7 +43,7 @@ Use it instead of a skip rule over the upgrade route. A skip rule decides before
 
 Suppression removes the whole record, with no line and no metric hook, while the request id is still minted and echoed. Two cases keep their record. A handler that never calls `WriteHeader` sends an implicit 200, so ordinary requests are untouched. A handler that writes an explicit status and then hijacks, such as a `CONNECT` tunnel answering 200, also keeps its record.
 
-The skip options win over this one. `WithSkipPaths` and `WithSkipFunc` act before the handler runs, so this option can only remove a record, never restore one. It takes no status argument. To quiet a noisy route without losing records, lower its level with `WithLogLevel` or `ProbeLogLevel`.
+The skip options win over this one. `WithSkipPaths` and `WithSkipFunc` act before the handler runs, so this option can only remove a record, never restore one. It takes no status argument. To quiet a noisy route without losing records, lower its level with `WithLogLevel` or `WithProbeLogLevel`.
 
 ## What the line records
 
@@ -55,7 +55,7 @@ The path is capped at 512 bytes. An over-cap value keeps at most that many bytes
 
 The method is capped at 24 bytes, with no option. The longest method in IANA's registry is `UPDATEREDIRECTREF` at 17 characters. A longer method is recorded as the fixed `(overlong)` placeholder rather than a cut token.
 
-Both caps bound the log only. Request size stays the job of `WithMaxHeaderBytes`, and neither cap touches routing, the status or the `Allow` header.
+Both caps bound the log only. Request size stays the job of the server's `MaxHeaderBytes` field, and neither cap touches routing, the status or the `Allow` header.
 
 ### Route templates for paths that carry a credential
 

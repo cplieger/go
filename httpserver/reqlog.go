@@ -184,7 +184,7 @@ func WithSkipFunc(fn func(*http.Request) bool) LogOption {
 // exchange ended rather than completed, so a general skip-these-statuses option
 // would add exactly one capability: silencing refusals. A 404 flood is a broken
 // route and a 401 flood is an attack, and deleting their records is CWE-778
-// rather than noise control — which WithLogLevel (or the ProbeLogLevel preset)
+// rather than noise control — which WithLogLevel (or the WithProbeLogLevel preset)
 // already does properly, by lowering a line's level instead of removing it.
 //
 // HTTP/2's extended-CONNECT upgrade (RFC 8441) answers 2xx rather than 101 and
@@ -330,7 +330,7 @@ func templatePath(r *http.Request, prefixes []string) string {
 // while cutting the hostile case by roughly 2000x.
 //
 // It bounds the LOG, nothing else. The request is read, routed, and served
-// exactly as before: request SIZE stays WithMaxHeaderBytes' job, so RFC 9112
+// exactly as before: request SIZE stays http.Server.MaxHeaderBytes' job, so RFC 9112
 // §3's recommendation that a recipient support request-lines of at least 8000
 // octets is untouched.
 const defaultMaxLoggedPath = 512
@@ -420,8 +420,9 @@ const overlongMethodMarker = "(overlong)"
 // boundLoggedMethod applies the method cap. It runs at every place this package
 // records a method VERBATIM — the access line and the hook-failure
 // diagnostics. It is a LENGTH bound, so it is not the metric-label bound:
-// routeMetricLabels maps the method onto a closed ten-value set instead. Routing, the status, and any Allow header are untouched:
-// this changes what is RECORDED, never what is served.
+// routeMetricLabels maps the method onto a closed ten-value set instead.
+// Routing, the status, and any Allow header are untouched: this changes what
+// is RECORDED, never what is served.
 func boundLoggedMethod(m string) string {
 	if len(m) <= maxLoggedMethod {
 		return m
@@ -441,7 +442,7 @@ func boundLoggedMethod(m string) string {
 // same way: net/http/httptrace's GotConn and DNSDone take GotConnInfo and
 // DNSDoneInfo rather than positional arguments.
 type RequestMetric struct {
-	// Method is the request method, bounded by the hook that produced it.
+	// Method is one of the nine standard methods, or "other" for any other.
 	Method string
 	// Path is the matched route template, or the fixed "unmatched" marker
 	// when nothing matched.
@@ -670,7 +671,7 @@ func (c *logConfig) resolveClientIP(r *http.Request) string {
 // hook. Logging defers it, so a panicking handler is still logged with its
 // recorded status (rec is read when the deferred call runs).
 //
-// Both caller-supplied observability callbacks — the WithPathFunc transform,
+// Each caller-supplied observability callback — the WithPathFunc transform,
 // the WithClientIPFunc resolver, the WithLogLevel policy, and the
 // WithRecordRouteMetric hook — run through recover guards. This defer sits in
 // the outer Logging layer, OUTSIDE Recoverer (Logging is outermost so it can log

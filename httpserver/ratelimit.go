@@ -223,11 +223,12 @@ const (
 )
 
 const (
-	// failedAuthCode is the 429 envelope code every failed-auth throttle
-	// answers with. It is fixed rather than a parameter: the code is what an
-	// operator's log queries and alert rules key on across services, and the
-	// three consumers that hand-wrote this preset had already converged on this
-	// exact string while their messages deliberately differ.
+	// failedAuthCode is the preset's 429 envelope code. It is not a
+	// parameter of the preset because the code is what an operator's log
+	// queries and alert rules key on across services, and the three consumers
+	// that hand-wrote this preset had already converged on this exact string
+	// while their messages deliberately differ; a WithRateLimitError in the
+	// preset's opts replaces it.
 	failedAuthCode ErrorCode = "too_many_auth_failures"
 	// failedAuthDefaultMsg is what an empty msg falls back to: true of any
 	// credential, and deliberately silent about which one was presented.
@@ -243,8 +244,8 @@ const (
 // the limiter outside Logging. Use RateLimiter directly for other numbers.
 //
 // opts apply after the preset's own, so WithRateLimitResponder renders the
-// 429 on another content type; a WithRateLimitWhen or WithRateLimitError in
-// opts replaces the preset's predicate or envelope.
+// 429 on another content type; a non-nil WithRateLimitWhen or a
+// WithRateLimitError in opts replaces the preset's predicate or envelope.
 func FailedAuthRateLimit(when func(*http.Request) bool, msg string, opts ...RateLimitOption) Middleware {
 	if msg == "" {
 		msg = failedAuthDefaultMsg

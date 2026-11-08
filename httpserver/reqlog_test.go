@@ -1134,7 +1134,38 @@ func TestLogging_levelHookPanicDiagnosticCarriesTransformedPath(t *testing.T) {
 	}
 }
 
-// probeLevelOf serves one request through a ProbeLogLevel-configured logger
+// The metric hook's failure diagnostic carries the recorded path, never the
+// raw one, so a panicking hook cannot leak a token WithPathFunc redacted.
+func TestWithRecordRouteMetric_panicDiagnosticCarriesTransformedPath(t *testing.T) {
+	logCap := &captureHandler{}
+	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)),
+		httpserver.WithPathFunc(func(*http.Request) string { return "/redacted" }),
+		httpserver.WithRecordRouteMetric(func(httpserver.RequestMetric) { panic("metric boom") }),
+	)(okHandler())
+
+	serve(h, http.MethodGet, "/t/secret-token", nil)
+
+	var found bool
+	for _, rec := range logCap.snapshot() {
+		m := attrsOf(rec)
+		for k, v := range m {
+			if s, ok := v.(string); ok && strings.Contains(s, "secret-token") {
+				t.Errorf("raw path leaked through %q attr %q = %q", rec.Message, k, s)
+			}
+		}
+		if rec.Message == "httpserver: metric hook failed" {
+			found = true
+			if m["path"] != "/redacted" {
+				t.Errorf("diagnostic path attr = %v, want the transformed path", m["path"])
+			}
+		}
+	}
+	if !found {
+		t.Error("no metric hook failure diagnostic was logged")
+	}
+}
+
+// probeLevelOf serves one request through a WithProbeLogLevel-configured logger
 // and returns the level of the emitted access line.
 func probeLevelOf(t *testing.T, target string, status int, probePaths ...string) slog.Level {
 	t.Helper()
@@ -1148,7 +1179,7 @@ func probeLevelOf(t *testing.T, target string, status int, probePaths ...string)
 	return recs[0].Level
 }
 
-func TestProbeLogLevel_mapsProbeStatusesToLevels(t *testing.T) {
+func TestWithProbeLogLevel_mapsProbeStatusesToLevels(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
@@ -1170,19 +1201,19 @@ func TestProbeLogLevel_mapsProbeStatusesToLevels(t *testing.T) {
 	}
 }
 
-func TestProbeLogLevel_nonProbePathStaysInfo(t *testing.T) {
+func TestWithProbeLogLevel_nonProbePathStaysInfo(t *testing.T) {
 	if got := probeLevelOf(t, "/api/things", http.StatusInternalServerError, "/api/health"); got != slog.LevelInfo {
 		t.Errorf("non-probe 500 level = %v, want Info (the preset must not touch real traffic)", got)
 	}
 }
 
-func TestProbeLogLevel_emptySetLogsEverythingAtInfo(t *testing.T) {
+func TestWithProbeLogLevel_emptySetLogsEverythingAtInfo(t *testing.T) {
 	if got := probeLevelOf(t, "/api/health", http.StatusOK); got != slog.LevelInfo {
 		t.Errorf("empty-set probe level = %v, want Info", got)
 	}
 }
 
-func TestProbeLogLevel_skippedPathStillEmitsNothing(t *testing.T) {
+func TestWithProbeLogLevel_skippedPathStillEmitsNothing(t *testing.T) {
 	logCap := &captureHandler{}
 	h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithSkipPaths("/ws"), httpserver.WithProbeLogLevel("/ws"))(okHandler())
 	serve(h, http.MethodGet, "/ws", nil)
@@ -1731,7 +1762,7 @@ const (
 	hostileMethodToken = "M!#$%&'*+-.^_`|~"
 )
 
-// routeLabelRequest builds the minimal request RouteMetricLabels reads — the
+// routeLabelRequest builds the minimal request routeMetricLabels reads — the
 // method, the matched pattern, a path — as a struct literal.
 // httptest.NewRequest cannot express two of the cases this derivation must
 // bound: it substitutes GET for an empty method, and it panics on a method
@@ -1805,7 +1836,7 @@ func TestRouteMetricLabels_labelPairs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			method, path := httpserver.RouteMetricLabelsForTest(routeLabelRequest(tc.method, tc.pattern))
 			if method != tc.wantMethod || path != tc.wantPath {
-				t.Errorf("RouteMetricLabels(method %.40q, pattern %q) = (%.40q, %q), want (%q, %q)",
+				t.Errorf("routeMetricLabels(method %.40q, pattern %q) = (%.40q, %q), want (%q, %q)",
 					tc.method, tc.pattern, method, path, tc.wantMethod, tc.wantPath)
 			}
 		})

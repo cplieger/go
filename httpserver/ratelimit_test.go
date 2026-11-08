@@ -664,3 +664,23 @@ func TestFailedAuthRateLimitTakesAResponder(t *testing.T) {
 		t.Errorf("responder got (%q, %q), want the preset's code and the caller's message", gotCode, gotMsg)
 	}
 }
+
+// TestFailedAuthRateLimitCallerErrorReplacesThePresets pins the order the doc
+// promises: the caller's options apply after the preset's, so its
+// WithRateLimitError is the envelope a throttled request gets.
+func TestFailedAuthRateLimitCallerErrorReplacesThePresets(t *testing.T) {
+	hits := 0
+	h := FailedAuthRateLimit(nil, "m", WithRateLimitError("x_code", "x msg"))(okHandler(&hits))
+	for range failedAuthBurst {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/x", nil))
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", nil))
+	var env ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("429 body is not the JSON envelope: %v (body=%q)", err, rec.Body.String())
+	}
+	if rec.Code != http.StatusTooManyRequests || env.Code != "x_code" || env.Error != "x msg" {
+		t.Errorf("refusal = %d %+v, want 429 with the caller's code and message", rec.Code, env)
+	}
+}

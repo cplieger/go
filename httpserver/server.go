@@ -86,8 +86,8 @@ func WithSlogErrorLog(level slog.Level) ServerOption {
 // reading is time-bounded (by ReadHeaderTimeout); a slow request BODY is not.
 // A non-streaming handler should set srv.ReadTimeout to bound slowloris-style
 // slow bodies; WriteTimeout must stay unset for a streaming one, because it
-// would cut off an in-progress stream. A streaming handler, which cannot use a whole-request timeout,
-// should instead apply per-request deadlines via
+// would cut off an in-progress stream. A streaming handler, which cannot use
+// a whole-request timeout, should instead apply per-request deadlines via
 // http.ResponseController.SetReadDeadline/SetWriteDeadline. Note that
 // MaxBytesReader (see LimitBody) bounds body SIZE, not the time taken to send
 // it.
@@ -224,6 +224,11 @@ func WithServeExit(fn func(ctx context.Context)) RunOption {
 // once srv.Shutdown starts. Bind ln first so a port-in-use error precedes Run.
 // srv and ln must be non-nil; Run panics on either before serving.
 func Run(ctx context.Context, srv *http.Server, ln net.Listener, opts ...RunOption) error {
+	if srv == nil || ln == nil {
+		// Checked here so the panic is the caller's to recover: a nil ln would
+		// otherwise panic inside Serve's goroutine and kill the process.
+		panic("httpserver: Run needs a non-nil srv and ln")
+	}
 	c := &runConfig{shutdownGrace: defaultShutdownGrace}
 	for _, o := range opts {
 		if o != nil {
@@ -351,10 +356,10 @@ func graceExpiryError(shutdownErr error) error {
 // grace constant, whether to count it.
 //
 // It deliberately creates NO timeout of its own and logs nothing. Run hands
-// onShutdown a context carrying whatever remains of the ONE shutdown grace
-// after the pre-drain phase and the HTTP drain have spent their share, so a
-// fresh deadline invented here would hand the teardown a budget the shutdown
-// sequence does not actually have.
+// the WithTeardown hook a context carrying whatever remains of the ONE
+// shutdown grace after the pre-drain phase and the HTTP drain have spent
+// their share, so a fresh deadline invented here would hand the teardown a
+// budget the shutdown sequence does not actually have.
 //
 // The post-expiry recheck is the reason this is worth sharing. A drain that
 // consumed the whole grace hands the teardown an ALREADY-EXPIRED context, and a

@@ -440,10 +440,9 @@ func setIfNonEmpty(h http.Header, key, val string) {
 }
 
 // Logging returns a Chain-composable Middleware that gives each request a
-// request id, echoes
-// it on the response HeaderRequestID header, threads it through the request
-// context (see RequestIDFromContext), and emits one access-log line at Info
-// after next returns:
+// request id, echoes it on the response HeaderRequestID header, threads it
+// through the request context (see RequestIDFromContext), and emits one
+// access-log line at Info after next returns:
 //
 //	logger.Info("http", "method", …, "path", …, "status", …,
 //		"duration_ms", …, "request_id", …)
