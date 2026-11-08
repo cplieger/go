@@ -7,7 +7,7 @@ type PresenceCause string
 
 // The causes a disconnected event carries. Closed and dead are the socket's
 // account; evicted and shutdown are the two sse:reset reasons; hook_failed is
-// the application ending its own connection from OnConnect.
+// the application ending its own connection from its WithOnConnect hook.
 const (
 	PresenceClosed     PresenceCause = "closed"
 	PresenceDead       PresenceCause = "dead"
@@ -39,9 +39,10 @@ type PresenceEvent struct {
 	Verdict Verdict
 	// Cause is set on disconnected; empty on connected.
 	Cause PresenceCause
-	// Write names the failed write: "keepalive", "frame" or "hook" on a dead
-	// event, "reset" on an evicted or shutdown event whose reset write failed.
-	Write string
+	// Write names the failed write: PresenceWriteKeepalive, PresenceWriteFrame
+	// or PresenceWriteHook on a dead event, PresenceWriteReset on an evicted or
+	// shutdown event whose reset write failed; empty otherwise.
+	Write PresenceWrite
 	Epoch string
 	// Tag is the WithClientTag value, or "" when none was passed or it failed
 	// the grammar. A presence table folds clients by it.
@@ -51,10 +52,22 @@ type PresenceEvent struct {
 	ClientID uint64
 }
 
+// PresenceWrite names the write that failed when a stream ended dead, or the
+// reset write that failed when it was evicted or shut down.
+type PresenceWrite string
+
+// The writes a disconnected PresenceEvent can name.
+const (
+	PresenceWriteKeepalive PresenceWrite = "keepalive"
+	PresenceWriteFrame     PresenceWrite = "frame"
+	PresenceWriteHook      PresenceWrite = "hook"
+	PresenceWriteReset     PresenceWrite = "reset"
+)
+
 // departure is a stream goroutine's account of why it returned.
 type departure struct {
 	cause PresenceCause
-	write string
+	write PresenceWrite
 }
 
 // presence delivers ev to the hook on the calling goroutine, never under the
@@ -94,7 +107,7 @@ func resetDeparture(c *client, resetErr error) departure {
 		d.cause = PresenceShutdown
 	}
 	if resetErr != nil {
-		d.write = "reset"
+		d.write = PresenceWriteReset
 	}
 	return d
 }

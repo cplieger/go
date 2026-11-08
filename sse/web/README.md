@@ -44,6 +44,8 @@ The first frame of every connection is a hello: it names the server epoch, the r
 
 The client keeps its cursor as `epoch:offset`, presents it as `Last-Event-ID` on every connect, and advances it only as frames are delivered to `onFrame`, so a reconnect after a gap either replays exactly the missed frames or reports through the hello that the gap could not be covered, and the application reconciles instead of trusting the replay.
 
+`stream.state()` returns a `StreamState`: the connection kind (`stopped`, `connecting`, `open`, `backoff`, `offline` or `hidden_closed`), its generation and attempt, and the readings that kind acts on, such as `visible`, `online`, the hello's `keepaliveMs` and when a backoff ends. The package exports the factories, the wire helpers and the types they take and return; its parser, reducer and tab fold are internal.
+
 While `revalidate` runs, incoming frames are held and delivered in order once it settles; runs are single-flight, a second cause queues at most one more run, and a held queue past 2000 frames or 64 MiB ends the connection so the next connect resumes from the cursor instead.
 
 With `alive` set, every keepalive (or every `everyBeats`-th) is acknowledged with a `POST` to that URL carrying the stream's headers, so a server-side presence table keyed on `SSE-Client` sees which clients are still reading; a failed acknowledgement is reported as an `alive_ack` record.
@@ -54,7 +56,7 @@ A 401 ends the session's stream instead of retrying it: a 401 on the stream requ
 
 The host presents the first non-empty tag a tab attaches with and replaces it, reconnecting once, when a later attach or `setTag` carries a different one; the empty tag is ignored.
 
-The host's `revalidate(ctx, tabs)` body performs one digest for the profile and fans the verdict to every tab through `tabs.run(ctx, { changed, removed })`, so each tab's `revalidate` receives a `TabRevalidateContext` carrying `changed` and `removed` beside its own `signal`. A `state` message reaches a tab before the `lifecycle` record of the same transition, so `attachment.state()` is current inside the handler, and a tab attaching to a live stream receives `state` and then a `tab_attached` record naming that state.
+The host's `revalidate(ctx, tabs)` body performs one digest for the profile and fans the verdict to every tab through `tabs.run(ctx, { changed, removed })`, so each tab's `revalidate` receives a `TabRevalidateContext` carrying `changed` and `removed` beside its own `signal`. A `state` message reaches a tab before the `lifecycle` record of the same transition, so `attachment.state()`, a `StreamState`, is current inside the handler, and a tab attaching to a live stream receives `state` and then a `tab_attached` record naming that state.
 
 The package typechecks under `lib: ["ESNext", "WebWorker"]` as well as under the DOM lib (`tsconfig.worker.json` is the check), so a consumer's worker entry can import `createWorkerHost` from a worker-only program: the DOM visibility and online sources read `document` and `window` through `globalThis` and are inert where they are absent.
 

@@ -55,8 +55,9 @@ type State struct {
 // principal comes from ctx however the application's middleware stored it.
 type Resolver func(ctx context.Context, held []Held) ([]State, error)
 
-// DigestOption configures one DigestHandler.
-type DigestOption func(*digestConfig)
+// DigestOption configures one DigestHandler. Like a Hub Option, it refuses a
+// value it cannot honour with an error wrapping ErrConfig.
+type DigestOption func(*digestConfig) error
 
 type digestConfig struct {
 	maxBody     int64
@@ -73,23 +74,27 @@ const (
 )
 
 // WithDigestMaxSubjects caps the subjects one request may carry (default 256);
-// a larger request is 400. Non-positive keeps the default.
+// a larger request is 400. A non-positive n is ErrConfig.
 func WithDigestMaxSubjects(n int) DigestOption {
-	return func(c *digestConfig) {
-		if n > 0 {
-			c.maxSubjects = n
+	return func(c *digestConfig) error {
+		if n <= 0 {
+			return fmt.Errorf("%w: digest max subjects %d must be positive", ErrConfig, n)
 		}
+		c.maxSubjects = n
+		return nil
 	}
 }
 
 // WithDigestMaxBody caps the request body in bytes (default 512 KiB, sized so
 // a full default batch of worst-case escaped refs and versions cannot 413).
-// Non-positive keeps the default.
+// A non-positive n is ErrConfig.
 func WithDigestMaxBody(n int64) DigestOption {
-	return func(c *digestConfig) {
-		if n > 0 {
-			c.maxBody = n
+	return func(c *digestConfig) error {
+		if n <= 0 {
+			return fmt.Errorf("%w: digest max body %d must be positive", ErrConfig, n)
 		}
+		c.maxBody = n
+		return nil
 	}
 }
 
@@ -133,14 +138,17 @@ type digestResponse struct {
 // and head. Mount it inside the application's authentication and cross-origin
 // middleware; it performs neither check itself. The response is must_refetch
 // when the request epoch is absent or not this hub's, when resolve fails, or
-// when its output does not match the request by key; every well-formed
-// request is answered 200.
-func (h *Hub) DigestHandler(resolve Resolver, opts ...DigestOption) http.Handler {
-	cfg := digestConfig{maxBody: defaultDigestMaxBody, maxSubjects: defaultDigestMaxSubjects}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&cfg)
-		}
+// when its output does not match the request by key, including a Status
+// outside StatusCurrent, StatusGone and StatusForbidden; every well-formed
+// request is answered 200. A nil resolve or a refused option returns an error
+// wrapping ErrConfig and no handler. A nil option is skipped.
+func (h *Hub) DigestHandler(resolve Resolver, opts ...DigestOption) (http.Handler, error) {
+	if resolve == nil {
+		return nil, fmt.Errorf("%w: DigestHandler needs a Resolver", ErrConfig)
+	}
+	cfg, err := buildDigestConfig(opts)
+	if err != nil {
+		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -171,7 +179,22 @@ func (h *Hub) DigestHandler(resolve Resolver, opts ...DigestOption) http.Handler
 			return
 		}
 		h.answerDigest(w, r, &req, resolve)
-	})
+	}), nil
+}
+
+// buildDigestConfig applies opts over the defaults, skipping a nil option and
+// returning the first refusal.
+func buildDigestConfig(opts []DigestOption) (digestConfig, error) {
+	cfg := digestConfig{maxBody: defaultDigestMaxBody, maxSubjects: defaultDigestMaxSubjects}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(&cfg); err != nil {
+			return digestConfig{}, err
+		}
+	}
+	return cfg, nil
 }
 
 func (h *Hub) answerDigest(w http.ResponseWriter, r *http.Request, req *digestRequest, resolve Resolver) {
@@ -233,7 +256,8 @@ type keyMismatch struct {
 
 // matchByKey pairs the resolver's output with the request by (Kind, Ref) and
 // reports the first defect: a key the request did not carry, a key answered
-// twice, or a requested key with no answer.
+// twice, a requested key with no answer, or a Status outside the three this
+// package defines, which the wire has no removal reason for.
 func matchByKey(held []Held, states []State) ([]digestChanged, []digestRemoved, keyMismatch) {
 	byKey := make(map[Subject]*State, len(held))
 	for i := range held {
@@ -257,6 +281,8 @@ func matchByKey(held []Held, states []State) ([]digestChanged, []digestRemoved, 
 		switch {
 		case s == nil:
 			return nil, nil, keyMismatch{class: "missing", key: hd.Subject}
+		case s.Status != StatusCurrent && s.Status != StatusGone && s.Status != StatusForbidden:
+			return nil, nil, keyMismatch{class: "status", key: hd.Subject}
 		case s.Status != StatusCurrent:
 			removed = append(removed, digestRemoved{Kind: hd.Kind, Ref: hd.Ref, Reason: s.Status})
 		case s.Version != hd.Version:

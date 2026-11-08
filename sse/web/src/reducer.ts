@@ -157,7 +157,7 @@ export function initialState(): ClientState {
 }
 
 /** Full-jitter backoff delay for `attempt`; `rand` is drawn in [0, 1) by the runtime. */
-export function jitter(attempt: number, rand: number, cfg: TimingConfig): number {
+function jitter(attempt: number, rand: number, cfg: TimingConfig): number {
   return rand * Math.min(cfg.capMs, cfg.baseMs * 2 ** attempt);
 }
 

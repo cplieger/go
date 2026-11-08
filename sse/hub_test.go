@@ -21,14 +21,6 @@ func TestPublish_assignsSequentialOffsets(t *testing.T) {
 	}
 }
 
-func TestPublish_nilHubReturnsZero(t *testing.T) {
-	var h *Hub
-	got, err := h.Publish(Event{Data: []byte("x")})
-	if got != 0 || err != nil {
-		t.Errorf("(*Hub)(nil).Publish = (%d, %v), want (0, nil)", got, err)
-	}
-}
-
 func TestPublish_afterShutdownDropsValidFrame(t *testing.T) {
 	h := mustNew(t, WithReplay(8), WithReplayTTL(replayTTL))
 	if _, err := h.Publish(Event{Data: []byte("before")}); err != nil {
@@ -50,7 +42,9 @@ func TestPublish_afterShutdownDropsValidFrame(t *testing.T) {
 	if _, err := h.Publish(Event{Data: []byte("\xff")}); !errors.Is(err, ErrInvalidUTF8) {
 		t.Errorf("Publish(invalid UTF-8) after Shutdown error = %v, want ErrInvalidUTF8", err)
 	}
-	mustPanic(t, "sse: event name reserved", func() { _, _ = h.Publish(Event{Name: "sse:hello"}) })
+	if _, err := h.Publish(Event{Name: "sse:hello"}); !errors.Is(err, ErrEventName) {
+		t.Errorf("Publish(sse:hello) after Shutdown error = %v, want ErrEventName", err)
+	}
 }
 
 func TestPublish_maxOffsetPanics(t *testing.T) {
@@ -225,38 +219,6 @@ func TestSubscribe_registersHeadOnce(t *testing.T) {
 	}
 	close(stop)
 	publishers.Wait()
-}
-
-func TestSetMaxClients_admissionOnly(t *testing.T) {
-	h := mustNew(t, WithMaxClients(1))
-	first, err := h.subscribe("", "", Cursor{}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h.unsubscribe(first.c)
-	if _, err := h.subscribe("", "", Cursor{}, false); !errors.Is(err, errClientCap) {
-		t.Fatalf("second subscribe error = %v, want errClientCap", err)
-	}
-	h.SetMaxClients(2)
-	second, err := h.subscribe("", "", Cursor{}, false)
-	if err != nil {
-		t.Fatalf("subscribe after raising the cap error = %v", err)
-	}
-	defer h.unsubscribe(second.c)
-	h.SetMaxClients(1)
-	if got := h.ClientCount(); got != 2 {
-		t.Errorf("ClientCount() after lowering the cap = %d, want 2 (no eviction)", got)
-	}
-	if _, err := h.subscribe("", "", Cursor{}, false); !errors.Is(err, errClientCap) {
-		t.Errorf("subscribe past the lowered cap error = %v, want errClientCap", err)
-	}
-	h.SetMaxClients(-3)
-	third, err := h.subscribe("", "", Cursor{}, false)
-	if err != nil {
-		t.Errorf("subscribe with a negative (unlimited) cap error = %v", err)
-	} else {
-		h.unsubscribe(third.c)
-	}
 }
 
 func TestShutdown_twiceIsIdempotent(t *testing.T) {

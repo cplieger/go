@@ -1,4 +1,4 @@
-package ssetest
+package fixture
 
 import (
 	"context"
@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/sse"
+	"github.com/cplieger/go/sse/v2"
+	"github.com/cplieger/go/sse/v2/ssetest"
 )
 
 const pollTimeout = 5 * time.Second
@@ -95,13 +96,13 @@ func restStatus(t *testing.T, url string) int {
 // openEvents connects to /events and consumes the retry field and the hello.
 // It returns the reader that consumed them so the caller reads the rest of the
 // same stream through it; the caller closes the returned body.
-func openEvents(t *testing.T, base string, header http.Header) (*http.Response, *FrameReader, sse.Hello) {
+func openEvents(t *testing.T, base string, header http.Header) (*http.Response, *ssetest.FrameReader, sse.Hello) {
 	t.Helper()
 	resp := get(t, base+"/events", header)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /events = %d, want 200", resp.StatusCode)
 	}
-	stream := NewFrameReader(resp.Body)
+	stream := ssetest.NewFrameReader(resp.Body)
 	frames, err := stream.Read(2)
 	if err != nil {
 		t.Fatalf("reading the handshake: %v (frames %+v)", err, frames)
@@ -129,7 +130,7 @@ func pollUntil(t *testing.T, what string, cond func() bool) {
 
 // readArrival reads the fixture's connected frame, which its OnConnect writes
 // after the hub ran the presence hook, so the stream's arrival is in the state.
-func readArrival(t *testing.T, stream *FrameReader) {
+func readArrival(t *testing.T, stream *ssetest.FrameReader) {
 	t.Helper()
 	if frames, err := stream.Read(1); err != nil || frames[0].Data != `{"type":"connected"}` {
 		t.Fatalf("hook frame = %+v (%v), want the connected frame, which follows the arrival", frames, err)
@@ -140,12 +141,12 @@ func readArrival(t *testing.T, stream *FrameReader) {
 // time, so a bounded wait for the next frame never leaves a second reader on
 // the body.
 type frameFeed struct {
-	frames chan Frame
+	frames chan ssetest.Frame
 	err    chan error
 }
 
-func feedFrames(stream *FrameReader) *frameFeed {
-	f := &frameFeed{frames: make(chan Frame), err: make(chan error, 1)}
+func feedFrames(stream *ssetest.FrameReader) *frameFeed {
+	f := &frameFeed{frames: make(chan ssetest.Frame), err: make(chan error, 1)}
 	go func() {
 		defer close(f.frames)
 		for {
@@ -162,15 +163,15 @@ func feedFrames(stream *FrameReader) *frameFeed {
 
 // next returns the next frame or context.DeadlineExceeded when none arrives
 // within d.
-func (f *frameFeed) next(d time.Duration) (Frame, error) {
+func (f *frameFeed) next(d time.Duration) (ssetest.Frame, error) {
 	select {
 	case fr, ok := <-f.frames:
 		if !ok {
-			return Frame{}, <-f.err
+			return ssetest.Frame{}, <-f.err
 		}
 		return fr, nil
 	case <-time.After(d):
-		return Frame{}, context.DeadlineExceeded
+		return ssetest.Frame{}, context.DeadlineExceeded
 	}
 }
 
@@ -228,8 +229,8 @@ func TestFixture_controlRoutes(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (headers leave even under a stall)", resp.StatusCode)
 		}
-		feed := feedFrames(NewFrameReader(resp.Body))
-		if fr, err := feed.next(pollTimeout); err != nil || fr.Event != "retry" {
+		feed := feedFrames(ssetest.NewFrameReader(resp.Body))
+		if fr, err := feed.next(pollTimeout); err != nil || fr.Event != ssetest.RetryEvent {
 			t.Fatalf("first frame = %+v (%v), want the retry field to pass", fr, err)
 		}
 		if fr, err := feed.next(300 * time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
@@ -363,7 +364,7 @@ func TestFixture_controlRoutes(t *testing.T) {
 		control(t, base, "publish", `{"data":"never sent"}`)
 		frames, err := stream.Read(0)
 		if !errors.Is(err, io.ErrUnexpectedEOF) {
-			t.Fatalf("ReadFrames to the hard close = %v, want io.ErrUnexpectedEOF (the connection was closed mid-response)", err)
+			t.Fatalf("ssetest.ReadFrames to the hard close = %v, want io.ErrUnexpectedEOF (the connection was closed mid-response)", err)
 		}
 		if len(frames) != 2 || frames[0].Data != `{"type":"connected"}` || frames[1].Data != "third" {
 			t.Errorf("frames after the hello = %+v, want connected, third and nothing after", frames)
@@ -446,7 +447,7 @@ func TestFixture_presenceGoneAtAliveWindow(t *testing.T) {
 }
 
 func TestFixture_aliveWindowMatchesTimingContract(t *testing.T) {
-	raw, err := os.ReadFile("../timing.json")
+	raw, err := os.ReadFile("../../timing.json")
 	if err != nil {
 		t.Fatalf("read timing.json: %v", err)
 	}
@@ -522,7 +523,7 @@ func TestFixture_eventsTopicQueryFiltersTheStream(t *testing.T) {
 	_, base := fixtureServer(t)
 	resp := get(t, base+"/events?topic=mine", nil)
 	defer resp.Body.Close()
-	stream := NewFrameReader(resp.Body)
+	stream := ssetest.NewFrameReader(resp.Body)
 	if frames, err := stream.Read(3); err != nil || frames[2].Data != `{"type":"connected"}` {
 		t.Fatalf("handshake and hook frame = %+v (%v), want retry, hello, connected", frames, err)
 	}

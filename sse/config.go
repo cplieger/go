@@ -191,12 +191,14 @@ func WithWriteTimeout(d time.Duration) Option {
 
 // WithLogger sets the logger for connection and eviction diagnostics. The
 // default is slog.Default() as it is when New runs; a later slog.SetDefault
-// does not reach the hub. A nil logger keeps the default.
+// does not reach the hub. A nil logger means that default, so the last
+// WithLogger wins.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *config) error {
-		if l != nil {
-			c.logger = l
+		if l == nil {
+			l = slog.Default()
 		}
+		c.logger = l
 		return nil
 	}
 }

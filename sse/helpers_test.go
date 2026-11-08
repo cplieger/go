@@ -3,6 +3,7 @@ package sse
 import (
 	"bytes"
 	"log/slog"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -67,4 +68,15 @@ const replayTTL = 10 * time.Minute
 // given digit count encodes to exactly size bytes.
 func dataOfFrameSize(size, offsetDigits int) []byte {
 	return bytes.Repeat([]byte{'x'}, size-frameSize(0, [][]byte{nil}, 0)-idLineBytes(offsetDigits))
+}
+
+// mustDigestHandler builds h's digest handler for a test, failing it on a
+// configuration error.
+func mustDigestHandler(t testing.TB, h *Hub, resolve Resolver, opts ...DigestOption) http.Handler {
+	t.Helper()
+	handler, err := h.DigestHandler(resolve, opts...)
+	if err != nil {
+		t.Fatalf("DigestHandler: %v", err)
+	}
+	return handler
 }

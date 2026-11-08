@@ -75,8 +75,8 @@ func topicMatches(subTopic, eventTopic string) bool {
 }
 
 // Hub is a broadcast fan-out for Server-Sent Events with a replay ring. The
-// zero value is not usable; construct with New. Safe for concurrent use by
-// any number of publishers and subscribers.
+// zero value and a nil *Hub are not usable; construct with New or MustNew.
+// Safe for concurrent use by any number of publishers and subscribers.
 type Hub struct {
 	logger       *slog.Logger
 	ring         *ring
@@ -120,27 +120,28 @@ func New(opts ...Option) (*Hub, error) {
 }
 
 // MustNew is New for package-level construction in main; it panics with the
-// wrapped ErrConfig message on an incoherent option set.
+// error wrapping ErrConfig on an incoherent option set, so a recover can match
+// it with errors.Is.
 func MustNew(opts ...Option) *Hub {
 	h, err := New(opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(err)
 	}
 	return h
 }
 
 // Publish assigns the event the next offset, appends it to the ring and fans
 // it out to every matching client without blocking; a client whose buffer is
-// full is reset as slow and dropped. It returns the offset, or (0, nil) on a
-// nil *Hub and for a valid frame after Shutdown (dropped). A Name outside
-// Event's grammar panics; Data that is not UTF-8 returns ErrInvalidUTF8 and an
-// encoded frame above MaxFrameBytes returns ErrFrameTooLarge, and neither
-// refusal consumes an offset or touches the ring, before or after Shutdown.
+// full is reset as slow and dropped. It returns the offset, or (0, nil) for a
+// valid frame after Shutdown (dropped). A Name outside Event's grammar returns
+// ErrEventName, Data that is not UTF-8 returns ErrInvalidUTF8 and an encoded
+// frame above MaxFrameBytes returns ErrFrameTooLarge; no refusal consumes an
+// offset or touches the ring, before or after Shutdown. Like every Hub method,
+// it needs a Hub from New or MustNew; a nil *Hub panics.
 func (h *Hub) Publish(ev Event) (uint64, error) {
-	if h == nil {
-		return 0, nil
+	if err := checkEventName(ev.Name, h.cfg.keepaliveEvent); err != nil {
+		return 0, err
 	}
-	checkEventName(ev.Name, h.cfg.keepaliveEvent)
 	if err := checkData(ev.Data); err != nil {
 		return 0, err
 	}
@@ -218,7 +219,7 @@ func (h *Hub) Snapshot() []ReplayEvent {
 }
 
 // ClientCount returns the number of subscribed clients: registered and not yet
-// reset as slow. A connection inside its OnConnect hook is counted; one that
+// reset as slow. A connection inside its WithOnConnect hook is counted; one that
 // Publish evicted is not, even while its goroutine is still writing the reset.
 // After Shutdown it counts the goroutines still draining.
 func (h *Hub) ClientCount() int {
@@ -238,17 +239,9 @@ func (h *Hub) QueuedFrames() int {
 	return n
 }
 
-// SetMaxClients replaces the client cap at runtime (0 or negative means
-// unlimited). Lowering it evicts nobody; admission enforces it.
-func (h *Hub) SetMaxClients(n int) {
-	h.mu.Lock()
-	h.cfg.maxClients = max(n, 0)
-	h.mu.Unlock()
-}
-
 // Shutdown refuses new subscriptions, signals every client to write its
 // sse:reset and waits for the stream goroutines to return, bounded by ctx.
-// Per client the wait is the remainder of a running OnConnect hook plus
+// Per client the wait is the remainder of a running WithOnConnect hook plus
 // max(write timeout, 250ms). Returns ctx.Err() when ctx expires first.
 func (h *Hub) Shutdown(ctx context.Context) error {
 	h.mu.Lock()

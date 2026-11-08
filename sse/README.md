@@ -1,6 +1,6 @@
 # sse
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/sse.svg)](https://pkg.go.dev/github.com/cplieger/go/sse) [![npm](https://img.shields.io/npm/v/@cplieger/sse)](https://www.npmjs.com/package/@cplieger/sse) [![JSR](https://jsr.io/badges/@cplieger/sse)](https://jsr.io/@cplieger/sse)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/sse/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/sse/v2) [![npm](https://img.shields.io/npm/v/@cplieger/sse)](https://www.npmjs.com/package/@cplieger/sse) [![JSR](https://jsr.io/badges/@cplieger/sse)](https://jsr.io/@cplieger/sse)
 
 sse keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client.
 
@@ -21,7 +21,7 @@ Consider [Centrifugo](https://github.com/centrifugal/centrifugo) if you want a s
 ## Install
 
 ```sh
-go get github.com/cplieger/go/sse@latest
+go get github.com/cplieger/go/sse/v2@latest
 npx jsr add @cplieger/sse  # or: npm i @cplieger/sse
 ```
 
@@ -35,7 +35,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cplieger/go/sse"
+	"github.com/cplieger/go/sse/v2"
 )
 
 func main() {
@@ -50,8 +50,9 @@ func main() {
 		hub.Serve(w, r, sse.WithTopic(r.URL.Query().Get("room")))
 	})
 
+	ticker := time.NewTicker(time.Second)
 	go func() {
-		for t := range time.Tick(time.Second) {
+		for t := range ticker.C {
 			data := []byte(`{"at":"` + t.Format(time.RFC3339) + `"}`)
 			if _, err := hub.Publish(sse.Event{Name: "tick", Data: data}); err != nil {
 				log.Print(err)
@@ -59,7 +60,9 @@ func main() {
 		}
 	}()
 
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	err := http.ListenAndServe(":8080", mux)
+	ticker.Stop()
+	log.Fatal(err)
 }
 ```
 
@@ -67,24 +70,24 @@ This hub keeps the last 1024 frames for up to 10 minutes and sends at most 256 o
 
 Three compiled examples in `example_test.go` cover the next steps, and `go test` keeps them true:
 
-- `ExampleHub_Serve` writes initial state from an `OnConnect` hook, resumes a client from its cursor and shuts the hub down.
+- `ExampleHub_Serve` writes initial state from a `WithOnConnect` hook, resumes a client from its cursor and shuts the hub down.
 - `ExampleHub_DigestHandler` mounts `DigestHandler` behind `httpserver.RouteTimeout`, which bounds your resolver.
 - `ExampleNew` shows a refused setting.
 
-`Publish` refuses a frame over 1 MiB with `ErrFrameTooLarge` and invalid UTF-8 with `ErrInvalidUTF8`, before any state changes. For a large payload, publish a small frame that tells the client to fetch it. With httpserver, call `Shutdown(ctx)` from the `WithPreDrain` hook of `httpserver.Run`, so streams end before the HTTP server drains.
+`Publish` refuses a frame over 1 MiB with `ErrFrameTooLarge`, invalid UTF-8 with `ErrInvalidUTF8` and a reserved or line-breaking event name with `ErrEventName`, before any state changes. After `Shutdown` it drops a valid frame and returns `(0, nil)`. For a large payload, publish a small frame that tells the client to fetch it. With httpserver, call `Shutdown(ctx)` from the `WithPreDrain` hook of `httpserver.Run`, so streams end before the HTTP server drains.
 
 ## API
 
 - `New`, `MustNew` and twelve `With*` options build a hub. `ErrConfig` wraps every refusal.
-- `Serve`, with `WithTopic`, `OnConnect` and `WithClientTag`, streams one request. `Writer.Event` writes initial state from the hook.
-- `Publish` sends a frame and returns its offset, or `ErrFrameTooLarge` or `ErrInvalidUTF8`.
-- `DigestHandler`, a `Resolver` and two `WithDigest*` options answer a client that reconciles.
-- `Position`, `Snapshot`, `ClientCount`, `QueuedFrames`, `SetMaxClients` and `Shutdown` inspect and stop the hub.
-- `Hello`, `Verdict`, `Cursor`, `ParseCursor`, `Wire`, `MaxOffset` and `MaxFrameBytes` describe the wire. `PresenceEvent` is what the presence hook receives.
-- `ssetest` holds `Serve`, `ReadFrames`, `FrameReader`, `Recorder` and `Fixture` for your tests.
-- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost` and `attachToWorker`, plus its parser and state machine.
+- `Serve`, with `WithTopic`, `WithOnConnect` and `WithClientTag`, streams one request. `Writer.Event` writes initial state from the hook.
+- `Publish` sends a frame and returns its offset, `(0, nil)` once the hub is shut down, or `ErrEventName`, `ErrFrameTooLarge` or `ErrInvalidUTF8`.
+- `DigestHandler`, which takes a `Resolver` and two `WithDigest*` options and returns an error wrapping `ErrConfig` for a refused one, answers a client that reconciles. A resolver receives `Held` subjects and answers one `State` each, with a `Subject`, a `Version` and a `Status` (`StatusCurrent`, `StatusGone` or `StatusForbidden`).
+- `Position`, `Snapshot`, `ClientCount`, `QueuedFrames` and `Shutdown` inspect and stop the hub.
+- `Hello`, `Verdict`, `Cursor`, `ParseCursor`, `Wire`, `MaxOffset` and `MaxFrameBytes` describe the wire. `PresenceEvent`, with its `PresenceKind`, `PresenceCause` and `PresenceWrite` values, is what the presence hook receives.
+- `ssetest` holds `Serve`, `ReadFrames`, `FrameReader`, `Recorder` and `RetryEvent` for your tests.
+- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, and the types they take and return. Its parser, reducer and tab fold are internal.
 
-The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/sse) and [JSR](https://jsr.io/@cplieger/sse/doc). [Running the hub](docs/hub.md) covers every option and method.
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/sse/v2) and [JSR](https://jsr.io/@cplieger/sse/doc). [Running the hub](docs/hub.md) covers every option and method.
 
 ## A client resumes exactly or reconciles
 

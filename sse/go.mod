@@ -1,4 +1,4 @@
-module github.com/cplieger/go/sse
+module github.com/cplieger/go/sse/v2
 
 go 1.27.3
 

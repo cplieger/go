@@ -23,19 +23,9 @@ export {
   validateHello,
 } from "./wire.js";
 export type { Cursor, Hello, HelloRefusal, HelloResult, ResetReason } from "./wire.js";
-export { createParser } from "./parser.js";
-export type { ParsedEvent, Parser, ParserHandlers, ParserOptions } from "./parser.js";
-export { initialState, jitter, reduce } from "./reducer.js";
-export type {
-  ClientEvent,
-  ClientState,
-  ConnectFailure,
-  Effect,
-  Reduction,
-  StreamEnd,
-  Timer,
-} from "./reducer.js";
+export type { ConnectFailure, StreamEnd } from "./reducer.js";
 export type { HeldDiscardCause, LifecycleEvent, RevalidateCause } from "./lifecycle.js";
+export type { StreamState, StreamStateKind } from "./state.js";
 export {
   adaptVisibility,
   createDOMVisibilitySource,
@@ -53,43 +43,16 @@ export { bindListener, createVersionMap, staleListener } from "./versions.js";
 export type { Held, Subject, VersionMap, VersionMapOptions } from "./versions.js";
 export { DigestStatusError, createDigestClient } from "./digest.js";
 export type {
+  Changed,
   DigestClient,
   DigestClientOptions,
   DigestResult,
   DigestSnapshot,
   Removed,
-  State,
 } from "./digest.js";
 export { createStream } from "./stream.js";
 export type { Frame, RevalidateContext, Stream, StreamOptions } from "./stream.js";
-export type {
-  Connection,
-  ConnectOptions,
-  TransportCallbacks,
-  TransportFrame,
-} from "./transport.js";
-export {
-  anyVisible,
-  createFoldState,
-  createProfileOnlineSource,
-  createProfileVisibilitySource,
-  foldTabs,
-} from "./fold.js";
-export type {
-  FoldInput,
-  FoldOutput,
-  FoldState,
-  ProfileOnlineSource,
-  ProfileVisibilitySource,
-  TabState,
-} from "./fold.js";
-export { isTabMessage, isWorkerMessage } from "./port-protocol.js";
-export type {
-  DetachCause,
-  PortRevalidateContext,
-  TabToWorker,
-  WorkerToTab,
-} from "./port-protocol.js";
+export type { TabToWorker, WorkerToTab } from "./port-protocol.js";
 export { createWorkerHost } from "./worker.js";
 export type { DigestVerdict, TabSet, WorkerHost, WorkerHostOptions } from "./worker.js";
 export { attachToWorker } from "./tab.js";

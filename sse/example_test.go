@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/cplieger/go/httpserver"
-	"github.com/cplieger/go/sse"
-	"github.com/cplieger/go/sse/ssetest"
+	"github.com/cplieger/go/sse/v2"
+	"github.com/cplieger/go/sse/v2/ssetest"
 )
 
 func ExampleNew() {
@@ -46,7 +46,7 @@ func ExampleHub_Serve() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		hub.Serve(w, r,
-			sse.OnConnect(func(w *sse.Writer, h sse.Hello) error {
+			sse.WithOnConnect(func(w *sse.Writer, h sse.Hello) error {
 				return w.Event("connected", fmt.Appendf(nil, `{"resumed":%t}`, h.Resumed))
 			}),
 			sse.WithClientTag(r.Header.Get("SSE-Client")),
@@ -111,7 +111,7 @@ func ExampleHub_Serve() {
 	}
 	fmt.Println(reset[0].Event, reset[0].Data)
 	// Output:
-	// retry 1500
+	// sse:retry 1500
 	// sse:hello fresh resumed=false head=0
 	// connected {"resumed":false}
 	// notify 1 {"n":1}
@@ -137,7 +137,11 @@ func ExampleHub_DigestHandler() {
 		}
 		return states, nil
 	}
-	srv := httptest.NewServer(httpserver.RouteTimeout(hub.DigestHandler(resolve), 10*time.Second, "digest timed out"))
+	digest, err := hub.DigestHandler(resolve)
+	if err != nil {
+		panic(err)
+	}
+	srv := httptest.NewServer(httpserver.RouteTimeout(digest, 10*time.Second, "digest timed out"))
 	defer srv.Close()
 
 	body := fmt.Sprintf(`{"epoch":%q,"subjects":[{"kind":"chat","ref":"c1","version":"5"},{"kind":"chat","ref":"c2","version":"1"}]}`, hub.Position().Epoch)

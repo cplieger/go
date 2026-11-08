@@ -6,7 +6,7 @@ import {
   type WorkerToTab,
   isWorkerMessage,
 } from "./port-protocol.js";
-import type { ClientState } from "./reducer.js";
+import type { StreamState } from "./state.js";
 import { type Frame, type Stream, statusOf } from "./stream.js";
 import { DEFAULT_TIMING } from "./timing.js";
 import type { Subject, VersionMap } from "./versions.js";
@@ -75,7 +75,7 @@ export interface TabAttachment {
   /** Leaves the host; `logout` also ends the profile's stream, or this tab's fallback stream. */
   detach(cause?: "unload" | "logout"): void;
   /** The host's last state broadcast, or the fallback stream's own state. */
-  state(): ClientState | null;
+  state(): StreamState | null;
   mode(): "worker" | "fallback";
   /** Reports a stamp this tab applied, into the host's version map or the fallback's. */
   observe(subject: Subject, version: string, epoch: string): void;
@@ -113,7 +113,7 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
   let mode: "worker" | "fallback" = "worker";
   let link: Link | null = null;
   let fallback: TabFallback | null = null;
-  let lastState: ClientState | null = null;
+  let lastState: StreamState | null = null;
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   let lastPortMessageAt = Date.now();
   let heartbeatSeen = false;

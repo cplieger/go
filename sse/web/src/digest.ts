@@ -3,7 +3,7 @@ import type { Held, Subject } from "./versions.js";
 import { compareOffset } from "./wire.js";
 
 /** A subject the server reports at a version other than the presented one: a fetch instruction. */
-export type State = Held;
+export type Changed = Held;
 
 /** A subject the server no longer answers for. */
 export interface Removed extends Subject {
@@ -19,7 +19,7 @@ export interface Removed extends Subject {
  */
 export type DigestResult =
   | { kind: "must_refetch"; epoch: string; head: string }
-  | { kind: "ok"; epoch: string; head: string; changed: State[]; removed: Removed[] };
+  | { kind: "ok"; epoch: string; head: string; changed: Changed[]; removed: Removed[] };
 
 /**
  * What one check asks about: the epoch the held versions were minted under, and the versions
@@ -100,7 +100,7 @@ interface Position {
 
 type BatchAnswer =
   | { kind: "must_refetch"; position: Position }
-  | { kind: "ok"; position: Position; changed: State[]; removed: Removed[] };
+  | { kind: "ok"; position: Position; changed: Changed[]; removed: Removed[] };
 
 /** Reads the position; null when the body is not even a positioned digest answer. */
 function readPosition(body: unknown): Position | null {
@@ -134,7 +134,7 @@ function readAnswer(
   }
   const requested = new Set(batch.map(subjectKey));
   const seen = new Set<string>();
-  const changed: State[] = [];
+  const changed: Changed[] = [];
   const removed: Removed[] = [];
   for (const entry of changedRaw as unknown[]) {
     if (!isRecord(entry)) {
@@ -259,7 +259,7 @@ export function createDigestClient(opts: DigestClientOptions): DigestClient {
         batches.push(snapshot.held.slice(i, i + maxSubjects));
       }
       const [first = [], ...rest] = batches;
-      const changed: State[] = [];
+      const changed: Changed[] = [];
       const removed: Removed[] = [];
       let answer = await post(snapshot.epoch, first, signal);
       for (let i = 0; ; i++) {

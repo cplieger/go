@@ -148,30 +148,50 @@ func mustPanic(t *testing.T, want string, fn func()) {
 	fn()
 }
 
-func TestPublish_reservedNamePanics(t *testing.T) {
+func TestPublish_reservedNameRefused(t *testing.T) {
 	h := mustNew(t)
 	for _, name := range []string{"sse:hello", "sse:reset", "sse:anything", "sse:"} {
-		mustPanic(t, "sse: event name reserved", func() { _, _ = h.Publish(Event{Name: name}) })
+		if _, err := h.Publish(Event{Name: name}); !errors.Is(err, ErrEventName) {
+			t.Errorf("Publish(%q) error = %v, want ErrEventName", name, err)
+		}
 	}
 	if got := h.Position().Head; got != 0 {
-		t.Errorf("Position().Head after reserved-name panics = %d, want 0", got)
+		t.Errorf("Position().Head after refused names = %d, want 0", got)
 	}
 }
 
-func TestPublish_crlfNamePanics(t *testing.T) {
+// TestPublish_crlfNameRefused pins that a CR or LF in a name is refused and
+// that the error never quotes the name, which would carry the line break.
+func TestPublish_crlfNameRefused(t *testing.T) {
 	h := mustNew(t)
 	for _, name := range []string{"beat\nid: 9", "beat\rid: 9", "\n", "\r\n"} {
-		mustPanic(t, "sse: event name reserved", func() { _, _ = h.Publish(Event{Name: name}) })
+		_, err := h.Publish(Event{Name: name})
+		if !errors.Is(err, ErrEventName) {
+			t.Errorf("Publish(%q) error = %v, want ErrEventName", name, err)
+		}
+		if err != nil && strings.ContainsAny(err.Error(), "\r\n") {
+			t.Errorf("Publish(%q) error %q carries a line break", name, err)
+		}
 	}
 }
 
-func TestPublish_keepaliveNameCollisionPanics(t *testing.T) {
+func TestPublish_keepaliveNameCollisionRefused(t *testing.T) {
 	h := mustNew(t, WithKeepaliveEvent("heartbeat"))
-	mustPanic(t, "heartbeat", func() { _, _ = h.Publish(Event{Name: "heartbeat"}) })
+	if _, err := h.Publish(Event{Name: "heartbeat"}); !errors.Is(err, ErrEventName) {
+		t.Errorf("Publish(heartbeat) error = %v, want ErrEventName", err)
+	}
 
 	rec := httptest.NewRecorder()
 	sw := &Writer{w: rec, rc: http.NewResponseController(rec), keepalive: "heartbeat", timeout: h.cfg.writeTimeout}
-	mustPanic(t, "heartbeat", func() { _ = sw.Event("heartbeat", nil) })
+	if err := sw.Event("heartbeat", nil); !errors.Is(err, ErrEventName) {
+		t.Errorf("Writer.Event(heartbeat) error = %v, want ErrEventName", err)
+	}
+	if err := sw.Event("sse:x", nil); !errors.Is(err, ErrEventName) {
+		t.Errorf("Writer.Event(sse:x) error = %v, want ErrEventName", err)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("Writer.Event wrote %q for a refused name, want nothing", rec.Body.String())
+	}
 
 	comment := mustNew(t, WithKeepaliveEvent(""))
 	if _, err := comment.Publish(Event{Name: "heartbeat"}); err != nil {

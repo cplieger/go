@@ -1,4 +1,7 @@
-package ssetest
+// Package fixture is the controllable SSE server the TypeScript integration
+// suites drive through the ssetest/cmd binary. It is internal: its /control
+// routes are a test-harness protocol, not part of the module's API.
+package fixture
 
 import (
 	"context"
@@ -11,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/httpserver"
-	"github.com/cplieger/go/sse"
+	"github.com/cplieger/go/sse/v2"
 )
 
 const (
@@ -183,7 +186,7 @@ func (f *Fixture) handleEvents(w http.ResponseWriter, r *http.Request) {
 	delay := f.delayHello
 	f.mu.Unlock()
 
-	opts := []sse.ServeOption{sse.OnConnect(func(sw *sse.Writer, _ sse.Hello) error { return f.connectHook(sw) })}
+	opts := []sse.ServeOption{sse.WithOnConnect(func(sw *sse.Writer, _ sse.Hello) error { return f.connectHook(sw) })}
 	if tag := r.Header.Get("SSE-Client"); tag != "" {
 		opts = append(opts, sse.WithClientTag(tag))
 	}
@@ -277,7 +280,12 @@ func (f *Fixture) handleDigest(w http.ResponseWriter, r *http.Request) {
 	hub, delay := f.hub, f.delayDigest
 	f.mu.Unlock()
 	time.Sleep(delay)
-	hub.DigestHandler(f.resolve).ServeHTTP(w, r)
+	handler, err := hub.DigestHandler(f.resolve)
+	if err != nil {
+		httpserver.WriteError(w, r, http.StatusInternalServerError, "digest_config", err.Error())
+		return
+	}
+	handler.ServeHTTP(w, r)
 }
 
 func (f *Fixture) resolve(_ context.Context, held []sse.Held) ([]sse.State, error) {
@@ -623,7 +631,7 @@ func (f *Fixture) handleState(w http.ResponseWriter, _ *http.Request) {
 		ev := &f.events[i]
 		resp.Events = append(resp.Events, presenceEvent{
 			At: ev.At, Kind: ev.Kind, Topic: ev.Topic, Verdict: ev.Verdict, Cause: ev.Cause,
-			Write: ev.Write, Epoch: ev.Epoch, Tag: ev.Tag, ClientID: ev.ClientID,
+			Write: string(ev.Write), Epoch: ev.Epoch, Tag: ev.Tag, ClientID: ev.ClientID,
 		})
 	}
 	f.mu.Unlock()

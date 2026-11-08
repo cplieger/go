@@ -19,7 +19,7 @@ The epoch changes whenever a hub is created. A client that reconnects after a re
 1. `retry: <ms>`, the wait before a client reconnects. It is always written and is never 0. The default is 1500.
 2. The hello, `event: sse:hello`.
 3. The missed frames, when the hello says `resumed`.
-4. Any frames the `OnConnect` hook writes. They carry no id.
+4. Any frames the `WithOnConnect` hook writes. They carry no id.
 5. Live frames from `Publish`.
 
 The hub decides the hello, the replay and the start of live delivery under one lock. So the head the hello reports is the offset where the replay ends and live frames begin.
@@ -59,15 +59,15 @@ Every verdict other than `resumed` comes with `resumed: false` and no replay, an
 
 ## The digest
 
-`(*Hub).DigestHandler(resolve Resolver, opts ...DigestOption)` returns an `http.Handler` that answers a client back from sleep. The client sends the versions it holds, pinned to an epoch. The handler answers which items changed or were removed.
+`(*Hub).DigestHandler(resolve Resolver, opts ...DigestOption)` returns an `http.Handler` that answers a client back from sleep, or an error wrapping `ErrConfig` for a nil resolver or a refused option. The client sends the versions it holds, pinned to an epoch. The handler answers which items changed or were removed.
 
-`Resolver` is `func(ctx context.Context, held []Held) ([]State, error)`. It answers exactly one `State{Subject, Version, Status}` per requested `(Kind, Ref)` and none the request did not carry. `Status` is `StatusCurrent`, `StatusGone` or `StatusForbidden`.
+`Resolver` is `func(ctx context.Context, held []Held) ([]State, error)`. It answers exactly one `State{Subject, Version, Status}` per requested `(Kind, Ref)` and none the request did not carry. `Status` is `StatusCurrent`, `StatusGone` or `StatusForbidden`; any other value is treated as a resolver mismatch, so the client is told to refetch.
 
 The resolver runs on the request goroutine, and the library puts no bound on it. Bound it in time and in flight yourself. `ExampleHub_DigestHandler` in `example_test.go` wraps the handler in `httpserver.RouteTimeout` for that.
 
 Mount the handler inside your authentication and cross-origin middleware, because it performs neither check. The resolver reads the caller from `ctx`, however your middleware stored it. When several users share a server, the resolver decides whether a caller may learn that an item exists. When it may not, the resolver answers `gone` for both cases.
 
-`WithDigestMaxSubjects(n)` caps the items in one request at 256 by default, and a larger request is 400. `WithDigestMaxBody(n)` caps the body at 512 KiB by default, and a larger body is 413.
+`WithDigestMaxSubjects(n)` caps the items in one request at 256 by default, and a larger request is 400. `WithDigestMaxBody(n)` caps the body at 512 KiB by default, and a larger body is 413. A non-positive value for either is `ErrConfig`.
 
 | Direction | JSON |
 | --- | --- |

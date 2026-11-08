@@ -94,7 +94,11 @@ const BAD_HELLO: HelloResult = { ok: false, reason: { kind: "bad_hello" } };
 
 // Structural pessimism follows Centrifugo's recovered/was_recovering: only `resumed === true` resumes.
 /** Validates a decoded hello payload against the wire contract and the accepted revision range. */
-export function validateHello(data: unknown, minWire: number, maxWire: number): HelloResult {
+export function validateHello(
+  data: unknown,
+  range: { readonly minWire: number; readonly maxWire: number },
+): HelloResult {
+  const { minWire, maxWire } = range;
   if (typeof data !== "object" || data === null) {
     return BAD_HELLO;
   }

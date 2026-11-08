@@ -59,6 +59,8 @@ func ParseCursor(s string) (Cursor, error) {
 }
 
 // String renders the cursor as "<epoch>:<offset>", the id: field's value.
+// The zero Cursor renders ":0", which ParseCursor rejects: it is no position,
+// and its encoding is the empty string, which a caller writes itself.
 func (c Cursor) String() string {
 	return c.Epoch + ":" + strconv.FormatUint(c.Offset, 10)
 }
@@ -92,8 +94,13 @@ func isOffset(s string) bool {
 	return true
 }
 
+// newEpoch mints a random epoch. crypto/rand.Read documents that it never
+// returns an error, but a zero epoch would match every other hub that got
+// one, so an error is a panic rather than a silent all-zero epoch.
 func newEpoch() string {
 	var b [epochLen / 2]byte
-	_, _ = rand.Read(b[:]) // never fails; crashes irrecoverably on entropy failure
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Errorf("sse: minting an epoch: %w", err))
+	}
 	return hex.EncodeToString(b[:])
 }
