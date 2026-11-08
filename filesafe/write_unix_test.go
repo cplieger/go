@@ -33,16 +33,20 @@ func TestWriteFile_ro_dir(t *testing.T) {
 	}
 }
 
+// TestWriteFile_ZeroPerm pins that WithMode(0) is refused before anything is
+// created: a published 0000 file is one nobody but root can read.
 func TestWriteFile_ZeroPerm(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "noperm.txt")
-	if _, err := WriteFile(t.Context(), path, []byte("secret"), WithMode(0o000)); err != nil {
-		t.Fatalf("WriteFile(0o000): %v", err)
+	if _, err := WriteFile(t.Context(), path, []byte("secret"), WithMode(0o000)); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("WriteFile(0o000) = %v, want ErrInvalidArgument", err)
 	}
-	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0o000 {
-		t.Errorf("mode = %o, want 0000", fi.Mode().Perm())
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_ = os.Chmod(path, 0o644)
+	if len(entries) != 0 {
+		t.Errorf("the refused write left %d entries in the directory", len(entries))
+	}
 }

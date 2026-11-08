@@ -242,7 +242,7 @@ type stagedTemp struct {
 // the relative name, honor ctx, refuse a target already occupied by
 // something a write must not replace, optionally create the parent
 // directory chain, and create the temp file inside root. The guard sequence
-// (nil-root -> validateRootEntry -> modeOptionsErr -> ctx ->
+// (nil-root -> validateRootEntry -> writeOptionsErr -> ctx ->
 // checkWriteTargetInRoot -> mkdir -> createTempInRoot) must not be
 // reordered.
 func openTempForRoot(ctx context.Context, root *os.Root, name string, c *cfg) (stagedTemp, error) {
@@ -253,7 +253,7 @@ func openTempForRoot(ctx context.Context, root *os.Root, name string, c *cfg) (s
 	if err != nil {
 		return stagedTemp{}, err
 	}
-	if modeErr := c.modeOptionsErr(); modeErr != nil {
+	if modeErr := c.writeOptionsErr(); modeErr != nil {
 		return stagedTemp{}, modeErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -322,8 +322,8 @@ func writeAtomicInRoot(ctx context.Context, root *os.Root, name string, c *cfg, 
 // WithMode. A nil error means the data is at name; check Result.Durable for
 // crash durability. Result.Path is root's directory joined with the cleaned
 // relative name. A nil root returns ErrUnsafePath.
-func WriteFileInRoot(ctx context.Context, root *os.Root, name string, data []byte, opts ...Option) (Result, error) {
-	c := buildCfg(opts)
+func WriteFileInRoot(ctx context.Context, root *os.Root, name string, data []byte, opts ...WriteOption) (Result, error) {
+	c := buildWriteCfg(opts)
 	if err := checkWriteCap(int64(len(data)), c.maxBytes); err != nil {
 		return Result{}, err
 	}
@@ -334,15 +334,15 @@ func WriteFileInRoot(ctx context.Context, root *os.Root, name string, data []byt
 // relative to root, confined to root's tree (see WriteFileInRoot). If r
 // implements io.WriterTo it is used for efficient copying, so cancellation
 // is coarse on that path. File mode: see WithMode. A nil root returns
-// ErrUnsafePath.
-func WriteReaderInRoot(ctx context.Context, root *os.Root, name string, r io.Reader, opts ...Option) (Result, error) {
+// ErrUnsafePath and a nil r ErrInvalidArgument.
+func WriteReaderInRoot(ctx context.Context, root *os.Root, name string, r io.Reader, opts ...WriteOption) (Result, error) {
 	if root == nil {
 		return Result{}, fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	if r == nil {
-		return Result{}, errors.New("filesafe: nil reader")
+		return Result{}, fmt.Errorf("%w: nil reader", ErrInvalidArgument)
 	}
-	c := buildCfg(opts)
+	c := buildWriteCfg(opts)
 	return writeAtomicInRoot(ctx, root, name, c, copyReader(ctx, r, c.maxBytes))
 }
 
@@ -352,6 +352,6 @@ func WriteReaderInRoot(ctx context.Context, root *os.Root, name string, r io.Rea
 // PendingFile's lifetime; a caller-provided root is never closed.
 // Result.Path is root's directory joined with the cleaned relative name. A
 // nil root returns ErrUnsafePath.
-func NewPendingFileInRoot(ctx context.Context, root *os.Root, name string, opts ...Option) (*PendingFile, error) {
-	return newPendingFromRoot(ctx, root, name, false, buildCfg(opts))
+func NewPendingFileInRoot(ctx context.Context, root *os.Root, name string, opts ...WriteOption) (*PendingFile, error) {
+	return newPendingFromRoot(ctx, root, name, false, buildWriteCfg(opts))
 }

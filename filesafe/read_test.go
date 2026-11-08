@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestReadBounded(t *testing.T) {
@@ -182,20 +183,21 @@ func TestReadBounded_NegativeMax(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := ReadBounded(t.Context(), path, -1); err == nil {
-		t.Fatal("expected error for negative maxBytes")
+	if _, err := ReadBounded(t.Context(), path, -1); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("ReadBounded(-1) = %v, want ErrInvalidArgument", err)
 	}
 }
 
-func TestReadBounded_GrowsPastLimitDuringRead(t *testing.T) {
+// TestReadBoundedFile_GrowsPastLimitDuringRead drives the post-read length
+// recheck through a FIFO the caller opened itself: it reports Size()==0 from
+// Stat, so only the recheck can catch the overflow.
+func TestReadBoundedFile_GrowsPastLimitDuringRead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "pipe")
 	if err := MkfifoForTest(fifo); err != nil {
 		t.Skipf("Mkfifo unsupported: %v", err)
 	}
-	// A FIFO reports Size()==0 from Stat, so only the post-read length
-	// recheck can catch the overflow.
 	const limit = 8
 	payload := bytes.Repeat([]byte("x"), limit+4)
 	go func() {
@@ -206,8 +208,45 @@ func TestReadBounded_GrowsPastLimitDuringRead(t *testing.T) {
 		defer w.Close()
 		_, _ = w.Write(payload)
 	}()
-	if _, err := ReadBounded(t.Context(), fifo, limit); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("ReadBounded(fifo overflow) = %v, want ErrFileTooLarge", err)
+	f, err := os.Open(fifo)
+	if err != nil {
+		t.Fatalf("open fifo: %v", err)
+	}
+	defer f.Close()
+	if _, err := ReadBoundedFile(t.Context(), f, limit); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("ReadBoundedFile(fifo overflow) = %v, want ErrFileTooLarge", err)
+	}
+}
+
+// TestReadBounded_RefusesNonRegular pins that ReadBounded reads only regular
+// files: a FIFO with no writer is refused at once instead of blocking the
+// open, and a directory is refused rather than read.
+func TestReadBounded_RefusesNonRegular(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	targets := map[string]string{"directory": dir}
+	fifo := filepath.Join(dir, "pipe")
+	if err := MkfifoForTest(fifo); err == nil {
+		targets["fifo"] = fifo
+	}
+	for name, path := range targets {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := ReadBounded(t.Context(), path, 64)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				var nre *NotRegularError
+				if !errors.Is(err, ErrNotRegular) || !errors.As(err, &nre) {
+					t.Fatalf("ReadBounded(%s) = %v, want a *NotRegularError", name, err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("ReadBounded(%s) blocked: the open is not non-blocking", name)
+			}
+		})
 	}
 }
 

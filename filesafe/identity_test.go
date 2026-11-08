@@ -18,7 +18,7 @@ func statOrFail(t *testing.T, path string) os.FileInfo {
 }
 
 // TestFileIdentityZeroValueRecordsNothing pins the fail direction: an identity
-// that captured nothing reports Changed against everything, so a cache holding
+// that captured nothing matches nothing, so a cache holding
 // no generation always loads rather than skipping on an empty comparison.
 func TestFileIdentityZeroValueRecordsNothing(t *testing.T) {
 	t.Parallel()
@@ -35,12 +35,6 @@ func TestFileIdentityZeroValueRecordsNothing(t *testing.T) {
 	}
 	if zero.Matches(info) {
 		t.Error("zero FileIdentity.Matches(info) = true, want false")
-	}
-	if !zero.Changed(info) {
-		t.Error("zero FileIdentity.Changed(info) = false, want true")
-	}
-	if !zero.ModTime().IsZero() {
-		t.Errorf("zero FileIdentity.ModTime() = %v, want the zero Time", zero.ModTime())
 	}
 	if Identify(nil).Recorded() {
 		t.Error("Identify(nil).Recorded() = true, want false")
@@ -62,9 +56,6 @@ func TestFileIdentityNilInfoNeverMatches(t *testing.T) {
 	if id.Matches(nil) {
 		t.Error("Matches(nil) = true, want false")
 	}
-	if !id.Changed(nil) {
-		t.Error("Changed(nil) = false, want true")
-	}
 }
 
 // TestFileIdentityMatchesUntouchedFile pins the skip case the whole primitive
@@ -81,9 +72,6 @@ func TestFileIdentityMatchesUntouchedFile(t *testing.T) {
 
 	if !id.Matches(statOrFail(t, path)) {
 		t.Error("Matches(re-stat of an untouched file) = false, want true")
-	}
-	if id.Changed(statOrFail(t, path)) {
-		t.Error("Changed(re-stat of an untouched file) = true, want false")
 	}
 	if !id.Recorded() {
 		t.Error("Recorded() = false after Identify of a real file")
@@ -164,14 +152,11 @@ func TestFileIdentityDetectsTimestampPreservingReplacement(t *testing.T) {
 	if id.Matches(after) {
 		t.Error("Matches(timestamp-preserving replacement) = true, want false: the identity leg did not fire")
 	}
-	if !id.Changed(after) {
-		t.Error("Changed(timestamp-preserving replacement) = false, want true")
-	}
 }
 
 // TestFileIdentityRecordsFileHeldOpen pins that Identify records the file
 // while another handle holds it open, so a later timestamp-preserving replace
-// still reads as Changed. On Windows os.SameFile loads the file ID with an
+// still does not match. On Windows os.SameFile loads the file ID with an
 // open that requests no data access, which no sharing check refuses
 // ([MS-FSA] 2.1.5.1.2.2,
 // https://learn.microsoft.com/openspecs/windows_protocols/ms-fsa/8c0e3f4f-0729-49f4-a14d-7f7add593819).
@@ -202,8 +187,8 @@ func TestFileIdentityRecordsFileHeldOpen(t *testing.T) {
 	if !after.ModTime().Equal(before.ModTime()) {
 		t.Fatal("the replacement changed mtime; the test no longer isolates the identity leg")
 	}
-	if !id.Changed(after) {
-		t.Error("Changed(replacement after an Identify under an open handle) = false, want true")
+	if id.Matches(after) {
+		t.Error("Matches(replacement after an Identify under an open handle) = true, want false")
 	}
 }
 
@@ -227,27 +212,5 @@ func TestFileIdentityDetectsOlderMtime(t *testing.T) {
 	}
 	if id.Matches(statOrFail(t, path)) {
 		t.Error("Matches(older mtime on the same inode) = true, want false")
-	}
-}
-
-// TestFileIdentityModTimeReportsCapturedGeneration pins the diagnostic
-// accessor: it reports the timestamp that was captured, not whatever the file
-// carries now.
-func TestFileIdentityModTimeReportsCapturedGeneration(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "f")
-	if err := os.WriteFile(path, []byte("a"), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	info := statOrFail(t, path)
-	id := Identify(info)
-
-	newMod := info.ModTime().Add(time.Hour)
-	if err := os.Chtimes(path, newMod, newMod); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-	if got := id.ModTime(); !got.Equal(info.ModTime()) {
-		t.Errorf("ModTime() = %v, want the captured %v", got, info.ModTime())
 	}
 }

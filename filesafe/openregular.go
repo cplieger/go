@@ -1,7 +1,6 @@
 package filesafe
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -9,12 +8,13 @@ import (
 
 // OpenRegularInRoot opens name inside root read-only and returns the open
 // descriptor with that descriptor's FileInfo, refusing anything not a regular
-// file with ErrNotRegular naming the mode. An in-root symlink resolves. The
-// caller owns the file and root. A relative, NUL-free name is required
-// (ErrEmptyPath, ErrUnsafePath); other errors are the root's own.
+// file with ErrNotRegular naming the mode. An in-root symlink resolves;
+// OpenRegularInRootNoFollow refuses one. The caller owns the file and root. A
+// relative, NUL-free name is required (ErrEmptyPath, ErrUnsafePath), a nil
+// root returns ErrUnsafePath, and other errors are the root's own.
 func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error) {
 	if root == nil {
-		return nil, nil, errors.New("filesafe: nil root")
+		return nil, nil, fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	clean, err := validateRootName(name)
 	if err != nil {
@@ -34,13 +34,16 @@ func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error
 	return f, fi, nil
 }
 
-// OpenRegular is OpenRegularInRoot for an absolute path, except that the open
-// itself refuses a symlink at the final component with ErrSymlinkTarget.
-// Ancestor components are not pinned. An empty, NUL-holding or relative path
-// is ErrEmptyPath or ErrUnsafePath; other errors are the filesystem's own (a
-// missing file matches fs.ErrNotExist). On Windows the open handle does not
-// block a filesafe write of the file.
-func OpenRegular(path string) (*os.File, os.FileInfo, error) {
+// OpenRegularNoFollow opens the absolute path read-only and returns the open
+// descriptor with that descriptor's FileInfo, refusing anything not a
+// regular file with ErrNotRegular naming the mode, and a symlink at the final
+// component with ErrSymlinkTarget: the NoFollow suffix means the same as on
+// OpenRegularInRootNoFollow. Ancestor components are not pinned, and the open
+// is non-blocking so a FIFO cannot stall the caller. An empty, NUL-holding or
+// relative path is ErrEmptyPath or ErrUnsafePath; other errors are the
+// filesystem's own (a missing file matches fs.ErrNotExist). On Windows the
+// open handle does not block a filesafe write of the file.
+func OpenRegularNoFollow(path string) (*os.File, os.FileInfo, error) {
 	clean, err := validateAbsClean(path)
 	if err != nil {
 		return nil, nil, err
@@ -78,7 +81,7 @@ func statRegular(f *os.File, name string) (os.FileInfo, error) {
 // policy. Ancestor components are not pinned (see OpenParentInRoot).
 func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInfo, error) {
 	if root == nil {
-		return nil, nil, errors.New("filesafe: nil root")
+		return nil, nil, fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	clean, err := validateRootName(name)
 	if err != nil {

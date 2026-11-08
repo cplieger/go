@@ -2,7 +2,6 @@ package filesafe
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -21,13 +20,22 @@ func saturateAdd(a, b int64) int64 {
 // ReadBounded opens path and reads at most maxBytes from it, returning
 // ErrFileTooLarge if the file exceeds maxBytes, including if it grows past
 // the limit during the read. ctx is checked before the open and before the
-// read. It follows symlinks, unlike the write primitives: a caller reading
-// from a directory a less-trusted principal can write uses ReadBoundedInRoot.
-// On Windows its open handle does not block a filesafe write of the file.
+// read. Only regular files are read: a directory, named pipe, device node or
+// socket is refused with ErrNotRegular, and the open is non-blocking so a
+// FIFO with no writer cannot stall the caller. It follows symlinks, unlike
+// the write primitives: a caller reading from a directory a less-trusted
+// principal can write uses ReadBoundedInRoot. On Windows its open handle
+// does not block a filesafe write of the file.
+//
+// maxBytes 0 admits only an empty file, and a negative maxBytes returns
+// ErrInvalidArgument: a read bound is never "no cap", unlike WithMaxBytes.
 func ReadBounded(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
 	cleanPath, err := validateAbsClean(path)
 	if err != nil {
 		return nil, err
+	}
+	if capErr := checkReadCap(maxBytes); capErr != nil {
+		return nil, capErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, fmt.Errorf("filesafe: %w", ctxErr)
@@ -37,7 +45,18 @@ func ReadBounded(ctx context.Context, path string, maxBytes int64) ([]byte, erro
 		return nil, err
 	}
 	defer f.Close()
+	if _, statErr := statRegular(f, cleanPath); statErr != nil {
+		return nil, statErr
+	}
 	return ReadBoundedFile(ctx, f, maxBytes)
+}
+
+// checkReadCap refuses a negative read bound before anything is opened.
+func checkReadCap(maxBytes int64) error {
+	if maxBytes < 0 {
+		return fmt.Errorf("%w: maxBytes %d is negative", ErrInvalidArgument, maxBytes)
+	}
+	return nil
 }
 
 // ReadBoundedFile is ReadBounded for a file the caller opened itself, for
@@ -45,13 +64,16 @@ func ReadBounded(ctx context.Context, path string, maxBytes int64) ([]byte, erro
 // from f and returns ErrFileTooLarge if the file exceeds maxBytes, including
 // if it grows past the limit during the read. ctx is checked before the size
 // stat and before the read. The caller owns f; ReadBoundedFile does not close
-// it.
+// it. A nil f returns ErrUnsafePath, and maxBytes follows ReadBounded's rule.
 func ReadBoundedFile(ctx context.Context, f *os.File, maxBytes int64) ([]byte, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, fmt.Errorf("filesafe: %w", ctxErr)
 	}
 	if f == nil {
-		return nil, errors.New("filesafe: nil file")
+		return nil, fmt.Errorf("%w: nil file", ErrUnsafePath)
+	}
+	if capErr := checkReadCap(maxBytes); capErr != nil {
+		return nil, capErr
 	}
 	fi, err := f.Stat()
 	if err != nil {

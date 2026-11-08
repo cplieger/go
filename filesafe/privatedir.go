@@ -5,14 +5,14 @@ import (
 	"os"
 )
 
-// PrivateDir reports the outcome of one EnsurePrivateDir call.
+// PrivateDirResult reports the outcome of one EnsurePrivateDir call.
 //
 // Only meaningful alongside a nil error: a non-nil error means no verdict
 // was reached, which is NOT "nothing happened" — the mkdir may have
 // succeeded and a later step refused the result, so the directory can exist
 // while its custody is unestablished. Treat a failure as fatal; do not
 // retry into it.
-type PrivateDir struct {
+type PrivateDirResult struct {
 	// Mode is the mode the filesystem actually stored, read back from the
 	// open handle (permission bits plus setuid/setgid/sticky). Always 0700
 	// when the error is nil, except on the pre-existing-and-already-private
@@ -22,10 +22,11 @@ type PrivateDir struct {
 	// the repair decision turns on: a directory this process just made is
 	// one no other writer has ever held a name to.
 	Created bool
-	// Repaired reports whether the mode had to be corrected because the
-	// filesystem did not store what was asked (e.g. an inheritable ACL
-	// widening a fresh 0700 directory). Unconditional on a Created
-	// directory; on a pre-existing one, only under WithRepairOwnedDir.
+	// Repaired reports whether this call chmod'ed the directory to 0700: a
+	// Created directory whose stored mode was not what was asked (an
+	// inheritable ACL widening a fresh 0700 directory), which is always
+	// repaired, or, under WithRepairOwnedDir, a pre-existing owned directory
+	// that granted group or other access.
 	Repaired bool
 }
 
@@ -79,11 +80,11 @@ func chmodBits(m os.FileMode) os.FileMode {
 // WithRepairOwnedDir; other refusals are ErrEmptyPath, ErrUnsafePath,
 // ErrSymlinkTarget, ErrNotDirectory, ErrNotOwned and ErrModeNotStored (match
 // with errors.Is). On Windows a valid dir returns ErrModeUnsupported.
-func EnsurePrivateDir(dir string, opts ...Option) (PrivateDir, error) {
-	c := buildCfg(opts)
+func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, error) {
+	c := buildPrivateDirCfg(opts)
 	clean, err := validateAbsClean(dir)
 	if err != nil {
-		return PrivateDir{}, err
+		return PrivateDirResult{}, err
 	}
 	return ensurePrivateDir(clean, c)
 }

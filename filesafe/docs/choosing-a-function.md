@@ -12,7 +12,7 @@ This page maps each job to the filesafe call that does it and lists every option
 | Do any of the three inside one directory tree, so no name can leave it | `WriteFileInRoot`, `WriteReaderInRoot`, `NewPendingFileInRoot` |
 | Read a whole file under a size cap | `ReadBounded`, or `ReadBoundedInRoot` inside a tree |
 | Read a file you opened yourself, under a size cap | `ReadBoundedFile` |
-| Open a regular file and keep its descriptor and `FileInfo` | `OpenRegularInRoot`, `OpenRegularInRootNoFollow` to refuse a symlink, `OpenRegular` for a full path |
+| Open a regular file and keep its descriptor and `FileInfo` | `OpenRegularInRoot`, `OpenRegularInRootNoFollow` to refuse a symlink, `OpenRegularNoFollow` for a full path |
 | Walk a tree that other writers can modify | `WalkDirInRoot` |
 | Remove a file in such a tree | `RemoveFileInRoot` |
 | Act twice on one name and know it is the same file both times | `OpenParentInRoot` |
@@ -21,7 +21,7 @@ This page maps each job to the filesafe call that does it and lists every option
 | Check that a directory takes writes before relying on it | `ProbeWritable`, `ProbeWritableInRoot` |
 | Reclaim temp files left by a crash | `CleanupStaleTemps`, `CleanupStaleTempsInRoot` |
 | Name your own file so the sweeps reclaim it | `TempName`, `IsPackageTemp` |
-| Tell whether a cached file changed on disk | `Identify`, then `FileIdentity.Changed` |
+| Tell whether a cached file changed on disk | `Identify`, then `FileIdentity.Matches` |
 | Accept or refuse a configured path before writing to it | `ValidatePath` |
 
 Every write returns `(Result, error)`. [Durability and errors](durability.md) explains both values.
@@ -50,15 +50,15 @@ It returns nil for an acceptable path. Otherwise it returns the error the write 
 
 ## Options
 
-Every write, sweep and probe accepts options. Each call ignores the options that do not apply to it.
+Writes and probes take `WriteOption` values, sweeps take `SweepOption` values and `EnsurePrivateDir` takes `PrivateDirOption` values. `WithLogger` is an `Option`, which every one of them accepts. An option passed to a call it does not configure does not compile. A probe does what a write does, so give it the options of the write it stands in for.
 
 | Option | Applies to | Effect |
 | --- | --- | --- |
-| `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins. On Windows it fails with `ErrModeUnsupported` |
-| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it or `WithMkdirAll(true)` a missing parent is an error. On Windows a nonzero mode fails with `ErrModeUnsupported` |
+| `WithMode(mode)` | writes, probes | Stages the file proven owner-only and proves the final file holds `mode`, or fails with `ErrModeNotStored`. The last call wins. A zero `mode` fails with `ErrInvalidArgument`. On Windows it fails with `ErrModeUnsupported` |
+| `WithMkdirMode(mode)` | writes, probes | Creates missing parent directories at `mode`, proven on each, and syncs each one's parent. Without it or `WithMkdirAll(true)` a missing parent is an error. A zero `mode` fails with `ErrInvalidArgument`. On Windows it fails with `ErrModeUnsupported` |
 | `WithMkdirAll(create)` | writes, probes | `true` creates missing parent directories as `os.MkdirAll` does, at 0777 through the umask, and syncs each one's parent where the platform syncs directories. It sets and checks no mode, so it works on Windows too. `false` creates nothing. It and `WithMkdirMode` replace each other; the last call wins |
-| `WithMaxBytes(n)` | writes | Caps staged content at `n` bytes, checked while staging and before the rename. Over-cap writes match `ErrFileTooLarge`. `n <= 0` means no cap |
-| `WithLogger(l)` | every call that logs | The `*slog.Logger` for diagnostics. Default `slog.Default()` |
+| `WithMaxBytes(n)` | writes, probes | Caps staged content at `n` bytes, checked while staging and before the rename. Over-cap writes match `ErrFileTooLarge`. `n <= 0` means no cap. A probe stages one byte, so no cap refuses it |
+| `WithLogger(l)` | every call that takes options | The `*slog.Logger` for diagnostics. A nil logger, like none, uses `slog.Default()` |
 | `WithRecursive(recursive)` | stale-temp sweeps | `true` descends into subdirectories. The default sweeps one directory |
 | `WithRepairOwnedDir(repair)` | `EnsurePrivateDir` | `true` repairs a too-open pre-existing directory the effective user owns, instead of refusing it |
 

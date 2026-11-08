@@ -30,7 +30,7 @@ The sweep checks the temp file's modification time, not its creation time. A str
 
 The realistic case is a `PendingFile` that is staged, held across slow work, then committed. Measured with the temp file backdated past a one-hour `maxAge`, the sweep removed it and the following `Commit` failed with `*WriteError{PhaseRename}` wrapping `ENOENT`. Nothing was lost from the target, but that write was.
 
-A `maxAge` of zero or less skips the sweep with a `Warn` instead of removing everything, so a zero from an unset config value cannot empty a directory.
+A `maxAge` of zero or less returns `ErrInvalidArgument` and sweeps nothing, so a zero from an unset config value can neither empty a directory nor turn the sweep off unseen. An empty `dir` returns `ErrEmptyPath`.
 
 ## Naming your own temp files
 
@@ -38,24 +38,24 @@ A `maxAge` of zero or less skips the sweep with a `Warn` instead of removing eve
 
 ## Probing a directory
 
-`ProbeWritable(ctx, dir)` proves a directory takes writes by doing what a write does. It creates a temp file, writes and syncs one byte, closes the file and removes it, then reports which stage failed. `dir` may be relative, and `WithMkdirMode` or `WithMkdirAll(true)` creates it first. Under `WithMkdirMode` the probe proves the mode on each level it creates, as a write would, and reports `ProbeStageMkdir` with `ErrModeNotStored` when the filesystem stores another. Under `WithMode` the probe must also prove an owner-only staging file, as a write would. On Windows either mode option makes the probe return `ErrModeUnsupported` before it creates anything.
+`ProbeWritable(ctx, dir)` proves a directory takes writes by doing what a write does. It creates a temp file, writes and syncs one byte, closes the file and removes it, then reports which phase failed. `dir` may be relative, and `WithMkdirMode` or `WithMkdirAll(true)` creates it first. Under `WithMkdirMode` the probe proves the mode on each level it creates, as a write would, and reports `ProbePhaseMkdir` with `ErrModeNotStored` when the filesystem stores another. Under `WithMode` the probe must also prove an owner-only staging file, as a write would. On Windows either mode option makes the probe return `ErrModeUnsupported` before it creates anything.
 
 `ProbeWritableInRoot(ctx, root, name)` runs the same probe through an `*os.Root` you already hold, with `"."` for the root itself. A name that escapes the root is refused.
 
 ```go
 type ProbeResult struct {
-	Err    error      // the failure from Stage, unwrapped to the filesystem error
+	Err    error      // the failure from Phase, unwrapped to the filesystem error
 	Dir    string     // directory probed
 	Name   string     // probe file's base name; always satisfies IsPackageTemp
-	Stage  ProbeStage // first stage that failed, or ProbeStageNone
+	Phase  ProbePhase // first phase that failed, or ProbePhaseNone
 	Leaked bool       // probe file still on disk
 }
 ```
 
-Reading the mode bits does not answer the question. An NFS or FUSE mount, a read-only bind mount and a Docker volume owned by another UID all show a directory that looks writable and refuses the first write. The stages are `ProbeStageMkdir`, `ProbeStageCreate`, `ProbeStageWrite`, `ProbeStageSync`, `ProbeStageClose` and `ProbeStageRemove`, because a filesystem can fail at any one of them.
+Reading the mode bits does not answer the question. An NFS or FUSE mount, a read-only bind mount and a Docker volume owned by another UID all show a directory that looks writable and refuses the first write. The phases are `ProbePhaseMkdir`, `ProbePhaseCreate`, `ProbePhaseWrite`, `ProbePhaseSync`, `ProbePhaseClose` and `ProbePhaseRemove`, because a filesystem can fail at any one of them.
 
-The policy stays with you. A failed stage is reported in the `ProbeResult`, never as the error return. A non-nil error means only that the probe could not start, for an empty `dir`, a cancelled context or a refused mode option. `res.OK()` reports that every stage passed. `res.Writable()` is true when only teardown failed, at `ProbeStageClose` or later, because the directory still took the bytes. A caller can then warn and keep running.
+The policy stays with you. A failed phase is reported in the `ProbeResult`, never as the error return. A non-nil error means only that the probe could not start, for an empty `dir`, a cancelled context or a refused option, and the zero `ProbeResult` beside it is not a verdict. `res.OK()` reports that every phase passed. `res.Writable()` is true when only teardown failed, at `ProbePhaseClose` or `ProbePhaseRemove`, because the directory still took the bytes. A caller can then warn and keep running.
 
 The probe file is named with `TempName()`, so a probe file orphaned by a crash, or left by a directory that refuses the unlink, is reclaimed by `CleanupStaleTemps` like any other temp file.
 
-`ctx` is checked once, before anything is created. Each stage is a single filesystem call the OS does not make interruptible, and a probe that has begun always runs its own cleanup. To guard against a mount that hangs, wrap the call in your own timeout.
+`ctx` is checked once, before anything is created. Each phase is a single filesystem call the OS does not make interruptible, and a probe that has begun always runs its own cleanup. To guard against a mount that hangs, wrap the call in your own timeout.

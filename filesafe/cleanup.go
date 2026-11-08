@@ -142,14 +142,17 @@ func reapStaleTemp(dir string, e os.DirEntry, cutoff time.Time, logger *slog.Log
 // *WriteError{PhaseRename} wrapping ENOENT. No data is lost (the previous file at
 // the target is untouched) but that write is.
 //
-// A non-positive maxAge skips the sweep with a Warn rather than reaping
-// everything, so a zero value from an unset config cannot empty a directory.
-func CleanupStaleTemps(ctx context.Context, dir string, maxAge time.Duration, opts ...Option) (SweepResult, error) {
-	c := buildCfg(opts)
+// A non-positive maxAge returns ErrInvalidArgument and sweeps nothing, so a
+// zero value from an unset config can neither empty a directory nor turn the
+// sweep off unseen. An empty dir returns ErrEmptyPath. dir may be relative; a
+// dir that does not exist is a sweep with nothing to reclaim.
+func CleanupStaleTemps(ctx context.Context, dir string, maxAge time.Duration, opts ...SweepOption) (SweepResult, error) {
+	c := buildSweepCfg(opts)
+	if dir == "" {
+		return SweepResult{}, ErrEmptyPath
+	}
 	if maxAge <= 0 {
-		c.logger.Warn("filesafe.CleanupStaleTemps: non-positive maxAge; skipping cleanup",
-			"dir", dir, "max_age", maxAge)
-		return SweepResult{}, nil
+		return SweepResult{}, fmt.Errorf("%w: maxAge %s is not positive", ErrInvalidArgument, maxAge)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return SweepResult{}, fmt.Errorf("filesafe: %w", ctxErr)

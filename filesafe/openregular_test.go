@@ -263,9 +263,9 @@ func TestOpenRegular(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		f, fi, err := filesafe.OpenRegular(path)
+		f, fi, err := filesafe.OpenRegularNoFollow(path)
 		if err != nil {
-			t.Fatalf("OpenRegular = %v, want nil", err)
+			t.Fatalf("OpenRegularNoFollow = %v, want nil", err)
 		}
 		defer f.Close()
 
@@ -286,9 +286,9 @@ func TestOpenRegular(t *testing.T) {
 			t.Parallel()
 			path := writeTestFile(t, t.TempDir(), "feed.json", tc.size)
 
-			f, _, err := filesafe.OpenRegular(path)
+			f, _, err := filesafe.OpenRegularNoFollow(path)
 			if err != nil {
-				t.Fatalf("OpenRegular = %v, want nil", err)
+				t.Fatalf("OpenRegularNoFollow = %v, want nil", err)
 			}
 			defer f.Close()
 
@@ -309,9 +309,9 @@ func TestOpenRegular(t *testing.T) {
 	t.Run("missing_file_matches_fs_ErrNotExist", func(t *testing.T) {
 		t.Parallel()
 
-		f, fi, err := filesafe.OpenRegular(filepath.Join(t.TempDir(), "absent.json"))
+		f, fi, err := filesafe.OpenRegularNoFollow(filepath.Join(t.TempDir(), "absent.json"))
 		if !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("OpenRegular(missing) = %v, want fs.ErrNotExist", err)
+			t.Errorf("OpenRegularNoFollow(missing) = %v, want fs.ErrNotExist", err)
 		}
 		assertNoHandle(t, f, fi)
 	})
@@ -328,9 +328,9 @@ func TestOpenRegular(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		f, fi, err := filesafe.OpenRegular(link)
+		f, fi, err := filesafe.OpenRegularNoFollow(link)
 		if !errors.Is(err, filesafe.ErrSymlinkTarget) {
-			t.Errorf("OpenRegular(symlink) = %v, want ErrSymlinkTarget", err)
+			t.Errorf("OpenRegularNoFollow(symlink) = %v, want ErrSymlinkTarget", err)
 		}
 		assertNoHandle(t, f, fi)
 	})
@@ -347,9 +347,9 @@ func TestOpenRegular(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		f, fi, err := filesafe.OpenRegular(link)
+		f, fi, err := filesafe.OpenRegularNoFollow(link)
 		if !errors.Is(err, filesafe.ErrSymlinkTarget) {
-			t.Errorf("OpenRegular(escaping symlink) = %v, want ErrSymlinkTarget", err)
+			t.Errorf("OpenRegularNoFollow(escaping symlink) = %v, want ErrSymlinkTarget", err)
 		}
 		assertNoHandle(t, f, fi)
 	})
@@ -366,7 +366,7 @@ func TestOpenRegular(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// OpenRegular refusing a symlink must not have changed ReadBounded,
+		// OpenRegularNoFollow refusing a symlink must not have changed ReadBounded,
 		// whose documented contract is that os.Open resolves the link.
 		got, err := filesafe.ReadBounded(t.Context(), link, 1024)
 		if err != nil {
@@ -385,16 +385,16 @@ func TestOpenRegular(t *testing.T) {
 		}
 
 		assertRefusesFIFO(t, func() (*os.File, os.FileInfo, error) {
-			return filesafe.OpenRegular(fifo)
+			return filesafe.OpenRegularNoFollow(fifo)
 		})
 	})
 
 	t.Run("directory_is_refused", func(t *testing.T) {
 		t.Parallel()
 
-		f, fi, err := filesafe.OpenRegular(t.TempDir())
+		f, fi, err := filesafe.OpenRegularNoFollow(t.TempDir())
 		if !errors.Is(err, filesafe.ErrNotRegular) {
-			t.Errorf("OpenRegular(directory) = %v, want ErrNotRegular", err)
+			t.Errorf("OpenRegularNoFollow(directory) = %v, want ErrNotRegular", err)
 		}
 		assertNoHandle(t, f, fi)
 	})
@@ -413,9 +413,9 @@ func TestOpenRegular(t *testing.T) {
 		for name, tc := range tests {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
-				f, fi, err := filesafe.OpenRegular(tc.path)
+				f, fi, err := filesafe.OpenRegularNoFollow(tc.path)
 				if !errors.Is(err, tc.want) {
-					t.Errorf("OpenRegular(%q) = %v, want %v", tc.path, err, tc.want)
+					t.Errorf("OpenRegularNoFollow(%q) = %v, want %v", tc.path, err, tc.want)
 				}
 				assertNoHandle(t, f, fi)
 			})

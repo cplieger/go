@@ -16,54 +16,54 @@ const privateDirMode os.FileMode = 0o700
 
 // ensurePrivateDir is EnsurePrivateDir after path validation; the sequence
 // and every refusal are documented there.
-func ensurePrivateDir(clean string, c *cfg) (PrivateDir, error) {
+func ensurePrivateDir(clean string, c *cfg) (PrivateDirResult, error) {
 	created, err := mkdirPrivate(clean)
 	if err != nil {
-		return PrivateDir{}, err
+		return PrivateDirResult{}, err
 	}
 	f, err := openPrivateDir(clean)
 	if err != nil {
-		return PrivateDir{}, err
+		return PrivateDirResult{}, err
 	}
 	defer func() { _ = f.Close() }()
 
 	fi, err := statOwnedDir(f, clean)
 	if err != nil {
-		return PrivateDir{}, err
+		return PrivateDirResult{}, err
 	}
 	found := chmodBits(fi.Mode())
 	if !created {
 		if found&0o077 == 0 {
-			return PrivateDir{Mode: found}, nil
+			return PrivateDirResult{Mode: found}, nil
 		}
 		// The euid-ownership check above already proved this directory is
 		// ours, which is what makes narrowing it our call rather than an
 		// intrusion.
 		if !c.repairOwnedDir {
-			return PrivateDir{}, fmt.Errorf(
+			return PrivateDirResult{}, fmt.Errorf(
 				"%w: %s: mode %#o grants group or other access, and a pre-existing directory is never repaired without WithRepairOwnedDir(true)",
 				ErrModeTooOpen, clean, found,
 			)
 		}
 		stored, repairErr := EnforceMode(f, privateDirMode)
 		if repairErr != nil {
-			return PrivateDir{}, repairErr
+			return PrivateDirResult{}, repairErr
 		}
 		c.logger.Warn("filesafe: pre-existing directory was not private; repaired",
 			"dir", clean, "requested", privateDirMode.String(), "found", found.String())
-		return PrivateDir{Mode: stored, Repaired: true}, nil
+		return PrivateDirResult{Mode: stored, Repaired: true}, nil
 	}
 
 	stored, err := EnforceMode(f, privateDirMode)
 	if err != nil {
-		return PrivateDir{}, err
+		return PrivateDirResult{}, err
 	}
 	repaired := found != privateDirMode
 	if repaired {
 		c.logger.Warn("filesafe: created directory did not keep the requested mode; repaired",
 			"dir", clean, "requested", privateDirMode.String(), "stored", found.String())
 	}
-	return PrivateDir{Mode: stored, Created: true, Repaired: repaired}, nil
+	return PrivateDirResult{Mode: stored, Created: true, Repaired: repaired}, nil
 }
 
 // mkdirPrivate creates dir at 0700 and reports whether THIS call created

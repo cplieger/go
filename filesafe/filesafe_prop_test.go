@@ -24,7 +24,7 @@ func TestWriteFile_RapidRoundTrip(t *testing.T) {
 		counter++
 		path := filepath.Join(dir, fmt.Sprintf("testfile-%d", counter))
 
-		var opts []Option
+		var opts []WriteOption
 		if modeSet {
 			opts = append(opts, WithMode(mode))
 		}

@@ -11,7 +11,7 @@ It replaces the temp file, fsync and rename sequence you would otherwise write a
 filesafe is built for Go services that keep state, configuration or credentials on disk and must not lose them to a crash.
 
 - Every write syncs the file and makes its rename durable, and `Result.Durable` reports whether every sync succeeded.
-- A nil error means the new data is at the path. Any other error leaves the old file in place, and a failure inside the write is a `*WriteError` naming the step that failed.
+- A nil error means the new data is at the path. Any other error leaves the old file in place. A failure once the temp file is being created is a `*WriteError` naming the step that failed, and a refusal before it, such as a bad argument, a cancelled context or an over-cap size, is a plain error matching its sentinel.
 - `WithMode` proves the mode the filesystem stored, so a filesystem that widens a 0600 request fails the write instead of publishing a readable file. It is not available on Windows.
 - The `*InRoot` functions run through an `*os.Root`, so a symlink or `..` in a name cannot leave the directory tree.
 - Writes refuse a symlink, FIFO, socket or device node at the target path.
@@ -83,12 +83,12 @@ To stream content, use `WriteReader`. To write a file piece by piece, call `NewP
 ## API
 
 - Writes: `WriteFile`, `WriteReader`, `NewPendingFile` and their `*InRoot` forms.
-- Reads: `ReadBounded`, `ReadBoundedFile`, `ReadBoundedInRoot`, `OpenRegular`, `OpenRegularInRoot`, `OpenRegularInRootNoFollow`.
+- Reads: `ReadBounded`, `ReadBoundedFile`, `ReadBoundedInRoot`, `OpenRegularNoFollow`, `OpenRegularInRoot`, `OpenRegularInRootNoFollow`.
 - Shared directory trees: `WalkDirInRoot`, `OpenParentInRoot`, `RemoveFileInRoot`.
 - Modes: `EnforceMode`, `EnsurePrivateDir`.
-- Temp files and checks: `CleanupStaleTemps`, `CleanupStaleTempsInRoot`, `TempName`, `IsPackageTemp`, `ProbeWritable`, `ProbeWritableInRoot`, `ValidatePath`, `Identify`.
-- Options: `WithMode`, `WithMkdirMode`, `WithMkdirAll`, `WithMaxBytes`, `WithLogger`, `WithRecursive`, `WithRepairOwnedDir`.
-- Errors: sentinel values for `errors.Is`, `ErrFileBusy` and `ErrModeUnsupported` among them, and `*WriteError` and `*NotRegularError` for `errors.As`.
+- Temp files and checks: `CleanupStaleTemps`, `CleanupStaleTempsInRoot`, `TempName`, `IsPackageTemp`, `ProbeWritable`, `ProbeWritableInRoot`, `ValidatePath`, and `Identify` with `FileIdentity`.
+- Options: `WithMode`, `WithMkdirMode`, `WithMkdirAll` and `WithMaxBytes` for writes and probes (`WriteOption`), `WithRecursive` for sweeps (`SweepOption`), `WithRepairOwnedDir` for `EnsurePrivateDir` (`PrivateDirOption`), and `WithLogger`, which all of them take (`Option`).
+- Results and errors: `Result`, `SweepResult`, `ProbeResult` with its `ProbePhase`, `PrivateDirResult`, sentinel values for `errors.Is`, `ErrInvalidArgument`, `ErrFileBusy` and `ErrModeUnsupported` among them, and `*WriteError` with its `WritePhase` and `*NotRegularError` for `errors.As`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/filesafe). [Choosing a function](docs/choosing-a-function.md) says which call fits which job.
 
@@ -118,7 +118,7 @@ The writes, the reads, the sweeps and the probes work on Windows (amd64 and arm6
 
 These limits apply on Windows:
 
-- A target another process holds open without delete sharing cannot be replaced while that handle stays open. `os.Open` and `os.ReadFile` in any Go program open files that way, and so do many editors, backup tools and virus scanners. The write retries 7 times over about 0.6 seconds, then fails with a `*WriteError` in `PhaseRename` matching `ErrFileBusy`. A cancelled context ends the retry early. `ReadBounded`, `ReadBoundedInRoot` and the `OpenRegular` functions, like any open through an `*os.Root`, allow deletion and never block a write.
+- A target another process holds open without delete sharing cannot be replaced while that handle stays open. `os.Open` and `os.ReadFile` in any Go program open files that way, and so do many editors, backup tools and virus scanners. The write retries 7 times over about 0.6 seconds, then fails with a `*WriteError` in `PhaseRename` matching `ErrFileBusy`. A cancelled context ends the retry early. `ReadBounded`, `ReadBoundedInRoot` `OpenRegularNoFollow`, `OpenRegularInRoot` and `OpenRegularInRootNoFollow`, like any open through an `*os.Root`, allow deletion and never block a write.
 - `ErrFileBusy` also covers an access-denied refusal, because Windows reports a file held open and a refusing ACL with the same error. The wrapped `syscall.Errno` tells which.
 - Go renames without POSIX semantics when a filesystem refuses them. That rename is still atomic, but it is refused while any handle is open on the target, even one that allows deletion, so the write retries and fails with `ErrFileBusy` as above.
 - A target with the read-only attribute is refused before anything is written, with an error matching `fs.ErrPermission`.

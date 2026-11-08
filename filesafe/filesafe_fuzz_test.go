@@ -523,7 +523,7 @@ func FuzzProbeWritable(f *testing.F) {
 			t.Fatalf("ProbeWritable(%q) = err %v; a filesystem outcome must never surface as an error", dir, err)
 		}
 		if (res.Err != nil) != !res.OK() {
-			t.Fatalf("Stage = %v but Err = %v; the two must agree", res.Stage, res.Err)
+			t.Fatalf("Phase = %v but Err = %v; the two must agree", res.Phase, res.Err)
 		}
 		if res.Name != "" && !IsPackageTemp(res.Name) {
 			t.Fatalf("probe file %q is not reclaimable by the sweep", res.Name)
@@ -544,9 +544,9 @@ func FuzzProbeWritable(f *testing.F) {
 	})
 }
 
-func fuzzModeOpts(withMode bool) []Option {
+func fuzzModeOpts(withMode bool) []WriteOption {
 	if withMode {
-		return []Option{WithMode(0o600)}
+		return []WriteOption{WithMode(0o600)}
 	}
 	return nil
 }

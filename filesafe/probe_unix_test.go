@@ -20,8 +20,8 @@ func TestProbeData_UnflushableHandleFailsAtSync(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
 	stage, err := probeData(w)
-	if stage != ProbeStageSync {
-		t.Errorf("stage = %v, want %v (err %v)", stage, ProbeStageSync, err)
+	if stage != ProbePhaseSync {
+		t.Errorf("stage = %v, want %v (err %v)", stage, ProbePhaseSync, err)
 	}
 	if err == nil {
 		t.Error("err = nil, want the Sync error")

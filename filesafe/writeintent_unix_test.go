@@ -91,7 +91,7 @@ func TestWrite_WithoutWithMode_StagingFileIsCreatedLikeOSCreate(t *testing.T) {
 // writeEntryPoint runs one write entry point against dir/target.txt, writing
 // "new".
 type writeEntryPoint struct {
-	run  func(ctx context.Context, dir string, opts ...Option) error
+	run  func(ctx context.Context, dir string, opts ...WriteOption) error
 	name string
 }
 
@@ -117,31 +117,31 @@ func writeEntryPoints() []writeEntryPoint {
 		return err
 	}
 	return []writeEntryPoint{
-		{name: "WriteFile", run: func(ctx context.Context, dir string, opts ...Option) error {
+		{name: "WriteFile", run: func(ctx context.Context, dir string, opts ...WriteOption) error {
 			_, err := WriteFile(ctx, filepath.Join(dir, name), []byte("new"), opts...)
 			return err
 		}},
-		{name: "WriteReader", run: func(ctx context.Context, dir string, opts ...Option) error {
+		{name: "WriteReader", run: func(ctx context.Context, dir string, opts ...WriteOption) error {
 			_, err := WriteReader(ctx, filepath.Join(dir, name), strings.NewReader("new"), opts...)
 			return err
 		}},
-		{name: "NewPendingFile", run: func(ctx context.Context, dir string, opts ...Option) error {
+		{name: "NewPendingFile", run: func(ctx context.Context, dir string, opts ...WriteOption) error {
 			pf, err := NewPendingFile(ctx, filepath.Join(dir, name), opts...)
 			return commit(ctx, pf, err)
 		}},
-		{name: "WriteFileInRoot", run: func(ctx context.Context, dir string, opts ...Option) error {
+		{name: "WriteFileInRoot", run: func(ctx context.Context, dir string, opts ...WriteOption) error {
 			return inRoot(dir, func(root *os.Root) error {
 				_, err := WriteFileInRoot(ctx, root, name, []byte("new"), opts...)
 				return err
 			})
 		}},
-		{name: "WriteReaderInRoot", run: func(ctx context.Context, dir string, opts ...Option) error {
+		{name: "WriteReaderInRoot", run: func(ctx context.Context, dir string, opts ...WriteOption) error {
 			return inRoot(dir, func(root *os.Root) error {
 				_, err := WriteReaderInRoot(ctx, root, name, strings.NewReader("new"), opts...)
 				return err
 			})
 		}},
-		{name: "NewPendingFileInRoot", run: func(ctx context.Context, dir string, opts ...Option) error {
+		{name: "NewPendingFileInRoot", run: func(ctx context.Context, dir string, opts ...WriteOption) error {
 			return inRoot(dir, func(root *os.Root) error {
 				pf, err := NewPendingFileInRoot(ctx, root, name, opts...)
 				return commit(ctx, pf, err)
@@ -238,9 +238,9 @@ func TestProbeWritable_FollowsTheWriteModeRule(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ProbeWritable(WithMode(0o600)) error = %v, want the outcome in ProbeResult", err)
 		}
-		if res.Stage != ProbeStageCreate || !errors.Is(res.Err, ErrModeNotStored) {
-			t.Errorf("ProbeWritable(WithMode(0o600)) on a widening filesystem = Stage %v, Err %v; want ProbeStageCreate matching ErrModeNotStored",
-				res.Stage, res.Err)
+		if res.Phase != ProbePhaseCreate || !errors.Is(res.Err, ErrModeNotStored) {
+			t.Errorf("ProbeWritable(WithMode(0o600)) on a widening filesystem = Phase %v, Err %v; want ProbePhaseCreate matching ErrModeNotStored",
+				res.Phase, res.Err)
 		}
 		if res.Leaked {
 			t.Error("ProbeWritable(WithMode(0o600)) reports a leaked probe file, want the refused temp removed")
@@ -285,7 +285,7 @@ func TestWriteFile_WithoutWithMode_KeepsEveryOtherRefusal(t *testing.T) {
 		ctx     func(t *testing.T) context.Context
 		wantErr error
 		name    string
-		opts    []Option
+		opts    []WriteOption
 	}{
 		{
 			name:    "symlink_target",
@@ -322,7 +322,7 @@ func TestWriteFile_WithoutWithMode_KeepsEveryOtherRefusal(t *testing.T) {
 		{
 			name:    "over_WithMaxBytes",
 			wantErr: ErrFileTooLarge,
-			opts:    []Option{WithMaxBytes(2)},
+			opts:    []WriteOption{WithMaxBytes(2)},
 			setup: func(t *testing.T, dir string) (string, func() error) {
 				path := seedTarget(t, dir)
 				return path, func() error { return holds(path, "old") }

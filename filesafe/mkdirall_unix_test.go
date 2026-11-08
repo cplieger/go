@@ -23,14 +23,13 @@ func TestMkdirAll_TheLastParentOptionDecides(t *testing.T) {
 	withUmask(t, 0o002)
 	for _, tc := range []struct {
 		name string
-		opts []Option
+		opts []WriteOption
 		want os.FileMode // 0: no directory is created
 	}{
-		{"all", []Option{WithMkdirAll(true)}, 0o775},
-		{"mode then all", []Option{WithMkdirMode(0o700), WithMkdirAll(true)}, 0o775},
-		{"all then mode", []Option{WithMkdirAll(true), WithMkdirMode(0o700)}, 0o700},
-		{"mode then all false", []Option{WithMkdirMode(0o700), WithMkdirAll(false)}, 0},
-		{"all then mode zero", []Option{WithMkdirAll(true), WithMkdirMode(0)}, 0},
+		{"all", []WriteOption{WithMkdirAll(true)}, 0o775},
+		{"mode then all", []WriteOption{WithMkdirMode(0o700), WithMkdirAll(true)}, 0o775},
+		{"all then mode", []WriteOption{WithMkdirAll(true), WithMkdirMode(0o700)}, 0o700},
+		{"mode then all false", []WriteOption{WithMkdirMode(0o700), WithMkdirAll(false)}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -154,8 +153,8 @@ func TestMkdirMode_ARefusedLevelIsRemoved(t *testing.T) {
 		}
 	}
 	res, err := ProbeWritable(t.Context(), filepath.Join(dir, "a"), WithMkdirMode(0o750))
-	if err != nil || res.Stage != ProbeStageMkdir || !errors.Is(res.Err, ErrModeNotStored) {
-		t.Fatalf("ProbeWritable() = %+v, %v; want ProbeStageMkdir with ErrModeNotStored", res, err)
+	if err != nil || res.Phase != ProbePhaseMkdir || !errors.Is(res.Err, ErrModeNotStored) {
+		t.Fatalf("ProbeWritable() = %+v, %v; want ProbePhaseMkdir with ErrModeNotStored", res, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("after the refused probe the level is %v, want it gone", err)

@@ -159,14 +159,14 @@ func ExampleProbeWritable() {
 	if err != nil {
 		return // the probe could not be attempted (empty dir, cancelled ctx)
 	}
-	// The stage decides the policy, not the library: this caller refuses to
+	// The phase decides the policy, not the library: this caller refuses to
 	// start when the directory cannot take a write, and only warns when the
 	// write worked but the probe file could not be cleaned up.
 	switch {
 	case !res.Writable():
-		fmt.Println("not writable:", res.Stage, res.Err)
+		fmt.Println("not writable:", res.Phase, res.Err)
 	case !res.OK():
-		fmt.Println("writable, but cleanup failed:", res.Stage, "leaked:", res.Leaked)
+		fmt.Println("writable, but cleanup failed:", res.Phase, "leaked:", res.Leaked)
 	default:
 		fmt.Println("writable, nothing left behind")
 	}
@@ -189,9 +189,9 @@ func ExampleProbeWritableInRoot() {
 	res, _ := filesafe.ProbeWritableInRoot(context.Background(), root, ".")
 	fmt.Println(res.OK(), res.Leaked)
 
-	// An escaping name is refused by the root, reported as a stage failure.
+	// An escaping name is refused by the root, reported as a phase failure.
 	escaped, _ := filesafe.ProbeWritableInRoot(context.Background(), root, "../outside")
-	fmt.Println(escaped.Stage, escaped.Writable())
+	fmt.Println(escaped.Phase, escaped.Writable())
 	// Output:
 	// true false
 	// create probe file false
@@ -285,7 +285,7 @@ func ExampleOpenRegularInRoot() {
 	// Output: 12 true
 }
 
-func ExampleOpenRegular() {
+func ExampleOpenRegularNoFollow() {
 	dir, _ := os.MkdirTemp("", "example")
 	defer os.RemoveAll(dir)
 	target := filepath.Join(dir, "state.json")
@@ -293,7 +293,7 @@ func ExampleOpenRegular() {
 	link := filepath.Join(dir, "state-link.json")
 	_ = os.Symlink(target, link)
 
-	f, _, err := filesafe.OpenRegular(target)
+	f, _, err := filesafe.OpenRegularNoFollow(target)
 	if err == nil {
 		f.Close()
 	}
@@ -301,7 +301,7 @@ func ExampleOpenRegular() {
 
 	// The open itself refuses a symlink under the name, so there is no
 	// check-then-open window. ReadBounded still follows links by design.
-	_, _, err = filesafe.OpenRegular(link)
+	_, _, err = filesafe.OpenRegularNoFollow(link)
 	fmt.Println("symlink:", errors.Is(err, filesafe.ErrSymlinkTarget))
 	// Output:
 	// regular file: <nil>

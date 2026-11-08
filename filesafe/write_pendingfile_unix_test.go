@@ -27,7 +27,7 @@ func TestPendingFile_FailedCommit_ReplaysSameError(t *testing.T) {
 	if _, err := pf.Write([]byte("payload")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	if err := pf.Close(); err != nil {
+	if err := pf.File.Close(); err != nil {
 		t.Fatalf("File.Close: %v", err)
 	}
 
