@@ -1,4 +1,4 @@
-github.com/cplieger/go/textsafe v1.0.0-dev.1 h1:NqiLs9uk4eOoXXkTQo0O8lMtYddo3XZuCuyx/ruB66w=
-github.com/cplieger/go/textsafe v1.0.0-dev.1/go.mod h1:5IH0ZWTC+U864nzWGtcwGkp+PtA5hrlcfY2zLY/TexM=
+github.com/cplieger/go/textsafe v1.0.0-dev.2 h1:u+hOw/Mx9M7Jusl8s0W2+GEE+MfoeTJry47y5nkQAC8=
+github.com/cplieger/go/textsafe v1.0.0-dev.2/go.mod h1:5IH0ZWTC+U864nzWGtcwGkp+PtA5hrlcfY2zLY/TexM=
 pgregory.net/rapid v1.3.0 h1:vBvO0VSqti75J1jjYqpgPNBLKMd1+gxa9fYo7vk/Exc=
 pgregory.net/rapid v1.3.0/go.mod h1:dPlE4OBBxgXPqkP79flB6sJL1dx5azpI7HQ9MY9Z7uk=
