@@ -20,15 +20,15 @@ The request payload is a type parameter. A daemon whose runs take arguments decl
 // one result by construction: the callback just returns the outcome.
 queue := trigger.NewQueue[payload](16)
 go func() {
-	trigger.Execute(ctx, queue, func(ctx context.Context, trig string, p payload) trigger.Outcome {
+	trigger.Execute(ctx, queue, func(ctx context.Context, trig string, p payload) trigger.Result {
 		ok, elapsed := runPass(ctx, p) // the app's real work
-		return trigger.Outcome{OK: ok, Duration: elapsed}
+		return trigger.Result{OK: ok, Duration: elapsed}
 	})
 }()
 ln, err := trigger.Listen("/tmp/myapp.sock") // owner-only, stale file unlinked
 srv := &trigger.Server[payload]{Queue: queue}
-srv.Serve(ln)
-// shutdown: ln.Close(); queue.Close(); Execute drains and returns; srv.Wait()
+go srv.Serve(ctx, ln) // blocks until ctx ends, then closes ln and waits for the handlers
+// shutdown: when ctx ends, queue.Close(); Execute drains and returns; Serve returns
 
 // Trigger subcommand: submit one run, wait for its own result.
 // Pass signal.NotifyContext so Ctrl-C unwinds the wait instead of killing
@@ -59,6 +59,6 @@ A request line is capped at 8 MiB, and a client has 30 seconds after connecting 
 
 `Submit` blocks for the whole queue wait plus the run, and has no read deadline. Cancel its context to stop waiting. A non-nil error wraps one of these values, or is the context's own error:
 
-- `ErrUnreachable` means no daemon accepted within `DialTimeout`, 5 seconds. The container may be down, or the exec user may differ from the socket's owner.
+- `ErrUnreachable` means no daemon accepted within 5 seconds. The container may be down, or the exec user may differ from the socket's owner.
 - `ErrSend` means the request could not be written.
 - `ErrConnectionLost` means the event stream ended before the final `done` event, because the daemon died or was stopped mid-run.

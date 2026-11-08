@@ -5,7 +5,9 @@ import "time"
 // RecordHTTP records one HTTP request into the caller-supplied counter and
 // histogram. The caller owns the label set (arity, ordering, and any path
 // templating); labelVals must match c's label names. h receives d.Seconds().
-// Either metric may be nil to skip it.
+// Either metric may be nil to skip it. The latency histogram is unlabeled on
+// purpose, to keep its cardinality fixed: for a latency per route, observe a
+// LabeledHistogram beside RecordHTTP and pass nil here.
 //
 // Label values must come from a bounded set: each distinct combination
 // allocates a series retained until Delete/Reset, so raw paths or header

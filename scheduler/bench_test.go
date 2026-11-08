@@ -34,7 +34,7 @@ func BenchmarkTryLock(b *testing.B) {
 }
 
 func BenchmarkExclusiveRun(b *testing.B) {
-	e := NewExclusive(b.TempDir(), silentLogger())
+	e := NewExclusive(b.TempDir(), WithLogger(silentLogger()))
 	job := func() error { return nil }
 	b.ReportAllocs()
 	for b.Loop() {

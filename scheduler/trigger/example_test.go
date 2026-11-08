@@ -37,7 +37,7 @@ func Example() {
 		for job := range queue.Jobs() {
 			job.Start()
 			// The app's real work runs here, with the job's exact payload.
-			job.Finish(trigger.Outcome{OK: true, Duration: 42 * time.Millisecond})
+			job.Finish(trigger.Result{OK: true, Duration: 42 * time.Millisecond})
 		}
 	}()
 
@@ -46,8 +46,11 @@ func Example() {
 		fmt.Println("listen:", err)
 		return
 	}
+	ctx, stop := context.WithCancel(context.Background()) // in an app, the signal context
+	defer stop()
 	srv := &trigger.Server[payload]{Queue: queue}
-	srv.Serve(ln)
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ctx, ln) }()
 
 	// Client side (the `run` subcommand): submit one request, block until
 	// its own result, map it to an exit code.
@@ -58,11 +61,13 @@ func Example() {
 	}
 	fmt.Println("ok:", final.OK)
 
-	// Daemon shutdown: stop admission, drain, wait for the handlers.
-	_ = ln.Close()
+	// Daemon shutdown: ending ctx stops admission and closes the socket,
+	// closing the queue drains it, and Serve returns once every handler has
+	// written its final event.
+	stop()
 	queue.Close()
 	<-executorDone
-	srv.Wait()
+	<-served
 
 	// Output:
 	// ok: true

@@ -24,7 +24,7 @@ func statusServer(t *testing.T, status int) *httptest.Server {
 	return srv
 }
 
-func TestURL_statusTable(t *testing.T) {
+func TestGet_statusTable(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  int
@@ -41,9 +41,9 @@ func TestURL_statusTable(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := statusServer(t, tc.status)
-			err := URL(t.Context(), srv.URL)
+			err := get(t.Context(), srv.URL)
 			if (err != nil) != tc.wantErr {
-				t.Errorf("URL(status %d) error = %v, wantErr %v", tc.status, err, tc.wantErr)
+				t.Errorf("get(status %d) error = %v, wantErr %v", tc.status, err, tc.wantErr)
 			}
 		})
 	}
@@ -51,18 +51,18 @@ func TestURL_statusTable(t *testing.T) {
 
 // TestURL_statusErrorNamesCode pins that a non-2xx failure names the
 // received status.
-func TestURL_statusErrorNamesCode(t *testing.T) {
+func TestGet_statusErrorNamesCode(t *testing.T) {
 	srv := statusServer(t, http.StatusServiceUnavailable)
-	err := URL(t.Context(), srv.URL)
+	err := get(t.Context(), srv.URL)
 	if err == nil {
-		t.Fatal("URL(503) = nil, want error")
+		t.Fatal("get(503) = nil, want error")
 	}
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("error %q does not name the 503 status", err)
 	}
 }
 
-func TestURL_followsRedirect(t *testing.T) {
+func TestGet_followsRedirect(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/new", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -73,12 +73,12 @@ func TestURL_followsRedirect(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	if err := URL(t.Context(), srv.URL+"/old"); err != nil {
-		t.Errorf("URL(redirect to 200) = %v, want nil", err)
+	if err := get(t.Context(), srv.URL+"/old"); err != nil {
+		t.Errorf("get(redirect to 200) = %v, want nil", err)
 	}
 }
 
-func TestURL_contextDeadline(t *testing.T) {
+func TestGet_contextDeadline(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -90,34 +90,34 @@ func TestURL_contextDeadline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	err := URL(ctx, srv.URL)
+	err := get(ctx, srv.URL)
 	if err == nil {
-		t.Fatal("URL(hung endpoint) = nil, want deadline error")
+		t.Fatal("get(hung endpoint) = nil, want deadline error")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("error = %v, want errors.Is(..., context.DeadlineExceeded)", err)
 	}
 }
 
-func TestURL_connectionRefused(t *testing.T) {
+func TestGet_connectionRefused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	url := srv.URL
 	srv.Close() // now nothing listens there
 
-	if err := URL(t.Context(), url); err == nil {
-		t.Error("URL(closed server) = nil, want connection error")
+	if err := get(t.Context(), url); err == nil {
+		t.Error("get(closed server) = nil, want connection error")
 	}
 }
 
-func TestURL_invalidURL(t *testing.T) {
-	if err := URL(t.Context(), "://not-a-url"); err == nil {
-		t.Error("URL(invalid URL) = nil, want build-request error")
+func TestGet_invalidURL(t *testing.T) {
+	if err := get(t.Context(), "://not-a-url"); err == nil {
+		t.Error("get(invalid URL) = nil, want build-request error")
 	}
 }
 
 // TestURL_statusBoundary property-checks the 2xx decision: exactly
 // [200,299] is healthy, everything else is unhealthy.
-func TestURL_statusBoundary(t *testing.T) {
+func TestGet_statusBoundary(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
 		if err != nil {
@@ -129,7 +129,7 @@ func TestURL_statusBoundary(t *testing.T) {
 
 	rapid.Check(t, func(rt *rapid.T) {
 		code := rapid.IntRange(200, 599).Draw(rt, "status")
-		err := URL(t.Context(), fmt.Sprintf("%s/%d", srv.URL, code))
+		err := get(t.Context(), fmt.Sprintf("%s/%d", srv.URL, code))
 		healthy := code <= 299
 		if healthy != (err == nil) {
 			rt.Fatalf("status %d: err = %v, want healthy=%v", code, err, healthy)

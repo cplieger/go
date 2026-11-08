@@ -202,32 +202,32 @@ func TestWrite_ErroredMetricWritesNothing(t *testing.T) {
 		{"counter, invalid name", func(b *strings.Builder) {
 			c := NewCounter("bad-name", "x")
 			c.Inc()
-			WriteCounter(b, c)
+			writeCounter(b, c)
 		}},
 		{"gauge, invalid name", func(b *strings.Builder) {
 			g := NewGauge("bad-name", "x")
 			g.Set(4)
-			WriteGauge(b, g)
+			writeGauge(b, g)
 		}},
 		{"labeled counter, invalid label name", func(b *strings.Builder) {
 			lc := NewLabeledCounter("wn_ok_total", "x", []string{"bad-label"})
 			lc.Inc("v")
-			WriteLabeledCounter(b, lc)
+			writeLabeledCounter(b, lc)
 		}},
 		{"labeled gauge, reserved label prefix", func(b *strings.Builder) {
 			lg := NewLabeledGauge("wn_ok_gauge", "x", []string{"__rsv"})
 			lg.Set(1, "v")
-			WriteLabeledGauge(b, lg)
+			writeLabeledGauge(b, lg)
 		}},
 		{"histogram, unordered buckets", func(b *strings.Builder) {
 			h := NewHistogram("wn_ok_hist", "x", WithBuckets([]float64{2, 1}))
 			h.Observe(0.5)
-			WriteHistogram(b, h)
+			writeHistogram(b, h)
 		}},
 		{"labeled histogram, reserved le label", func(b *strings.Builder) {
 			lh := NewLabeledHistogram("wn_ok_seconds", "x", []string{"le"})
 			lh.Observe(0.5, "v")
-			WriteLabeledHistogram(b, lh)
+			writeLabeledHistogram(b, lh)
 		}},
 	}
 	for _, tc := range cases {
@@ -285,7 +285,7 @@ func TestHelpEscaping_Prometheus(t *testing.T) {
 	c.Inc()
 
 	var b strings.Builder
-	WriteCounter(&b, c)
+	writeCounter(&b, c)
 	if out := b.String(); !strings.Contains(out, `# HELP help_esc line1\\line2\nline3"quoted"`) {
 		t.Errorf("Prometheus HELP escaping wrong:\n%s", out)
 	}

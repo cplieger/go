@@ -24,7 +24,7 @@ func main() {
 
 `RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker fails for another reason, and it writes one line to stderr naming the cause. `ProbeCheck` returns the same 0 or 1 without exiting, for tests.
 
-`Set` is safe to call from any goroutine. Each call compares the value with the marker file as it stands, the state the probe reads without `WithMaxAge`: a file is healthy and no file is unhealthy. A change logs at Info level for healthy and at Warn level for unhealthy, and a call that changes nothing stays silent. So a first `Set(false)` at startup with no file logs nothing, and a `Set(false)` that removes a marker another process wrote logs Warn. It logs through `slog.Default()`, so call `slog.SetDefault` in `main` before `NewMarker`.
+`Set` is safe to call from any goroutine. Each call compares the value with the marker file as it stands, the state the probe reads without `WithMaxAge`: a file is healthy and no file is unhealthy. A change logs at Info level for healthy and at Warn level for unhealthy, and a call that changes nothing stays silent. So a first `Set(false)` at startup with no file logs nothing, and a `Set(false)` that removes a marker another process wrote logs Warn. It logs to the logger you pass with `NewMarker(path, health.WithLogger(l))`, or to `slog.Default()` at the time of each line.
 
 When the marker cannot be read, written or removed, `Set` logs the failure once for each distinct error and carries on. A marker it cannot read, such as a symlink loop, is left as it is. The first write that succeeds after a failure logs one Info line. `SetChecked` does the same write and returns the error, for a caller that must act on it.
 
@@ -35,8 +35,8 @@ When the marker cannot be read, written or removed, `Set` logs the failure once 
 In degraded mode:
 
 - `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts.
-- `RunProbe` and `ProbeCheck` report healthy. The service is alive, and only its way of reporting health is broken, which a restart cannot fix.
-- `CheckHealthy`, `Healthy`, `Within` and `Handler` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it.
+- `RunProbe` and `Inspect` report healthy. The service is alive, and only its way of reporting health is broken, which a restart cannot fix.
+- `Healthy`, `Within` and `Handler` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it.
 
 The usual cause is compose's `read_only: true` with no tmpfs at `/tmp`. Mount one to keep a working signal:
 

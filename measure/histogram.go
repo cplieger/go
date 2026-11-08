@@ -31,13 +31,13 @@ type histogramCfg struct {
 	bucketsSet bool
 }
 
-// Option configures optional histogram parameters.
-type Option func(*histogramCfg)
+// HistogramOption configures optional histogram parameters.
+type HistogramOption func(*histogramCfg)
 
-// WithBuckets returns an Option that sets custom bucket boundaries for a
-// histogram. An empty (or nil) slice yields a histogram with only the implicit
+// WithBuckets returns a HistogramOption that sets custom bucket boundaries
+// for a histogram. An empty (or nil) slice yields a histogram with only the implicit
 // +Inf bucket.
-func WithBuckets(buckets []float64) Option {
+func WithBuckets(buckets []float64) HistogramOption {
 	return func(cfg *histogramCfg) {
 		cfg.buckets = buckets
 		cfg.bucketsSet = true
@@ -74,7 +74,7 @@ func checkBuckets(metric string, bounds []float64) error {
 // NewLabeledHistogram so the default-seed and nil-option-skip invariant is
 // single-sourced. On a bucket-contract violation it returns nil bounds and
 // the error (naming metric) for the constructor to capture.
-func resolveBuckets(metric string, opts []Option) ([]float64, error) {
+func resolveBuckets(metric string, opts []HistogramOption) ([]float64, error) {
 	var cfg histogramCfg
 	for _, o := range opts {
 		if o != nil {
@@ -116,7 +116,7 @@ type Histogram struct {
 // invalid name or a bucket-contract violation (non-finite, duplicate, or
 // out-of-order bounds) is captured into the histogram rather than panicking:
 // the histogram records nothing and the error surfaces at registration.
-func NewHistogram(name, help string, opts ...Option) *Histogram {
+func NewHistogram(name, help string, opts ...HistogramOption) *Histogram {
 	help = sanitizeHelp(name, help)
 	err := checkMetricName(name)
 	bounds, berr := resolveBuckets(name, opts)
@@ -168,9 +168,9 @@ func (h *Histogram) snapshot() (sum float64, count int64, bucketVals []int64) {
 	return sum, count, bucketVals
 }
 
-// WriteHistogram writes a histogram in Prometheus text format (IR shim). A
+// writeHistogram writes a histogram in Prometheus text format (IR shim). A
 // histogram carrying a construction error writes nothing.
-func WriteHistogram(b *strings.Builder, h *Histogram) {
+func writeHistogram(b *strings.Builder, h *Histogram) {
 	if h.err != nil {
 		return
 	}
@@ -197,7 +197,7 @@ type LabeledHistogram struct {
 // "le" label, more than 8 labels, or a bucket-contract violation is captured
 // into the histogram rather than panicking: the histogram records nothing and
 // the error surfaces at registration.
-func NewLabeledHistogram(name, help string, labels []string, opts ...Option) *LabeledHistogram {
+func NewLabeledHistogram(name, help string, labels []string, opts ...HistogramOption) *LabeledHistogram {
 	help = sanitizeHelp(name, help)
 	owned, err := checkNameAndLabels("LabeledHistogram", name, labels)
 	if err == nil && slices.Contains(owned, "le") {
@@ -257,9 +257,9 @@ func (lh *LabeledHistogram) Delete(labelVals ...string) {
 	lh.deleteSeries(lh.vals, lh.labels, labelVals)
 }
 
-// WriteLabeledHistogram writes all child histograms in Prometheus text format
+// writeLabeledHistogram writes all child histograms in Prometheus text format
 // (IR shim). A histogram carrying a construction error writes nothing.
-func WriteLabeledHistogram(b *strings.Builder, lh *LabeledHistogram) {
+func writeLabeledHistogram(b *strings.Builder, lh *LabeledHistogram) {
 	if lh.err != nil {
 		return
 	}
@@ -268,13 +268,15 @@ func WriteLabeledHistogram(b *strings.Builder, lh *LabeledHistogram) {
 	}
 }
 
-// Timer measures elapsed time and reports to a Histogram.
+// Timer measures elapsed time and reports to a Histogram. Build one with
+// NewTimer or LabeledHistogram.NewTimer; the zero Timer is not usable.
 type Timer struct {
 	start   time.Time
 	observe func(float64)
 }
 
-// NewTimer starts a timer that will observe into the given histogram.
+// NewTimer starts a timer that will observe into the given histogram, which
+// must not be nil.
 func NewTimer(h *Histogram) *Timer {
 	return &Timer{start: time.Now(), observe: h.Observe}
 }

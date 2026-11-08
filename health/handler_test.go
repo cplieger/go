@@ -112,7 +112,7 @@ func TestMarkerWithinAgreesWithTheProbe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
 	for _, lease := range []time.Duration{time.Hour, 0, -time.Second} {
-		if got, probe := m.Within(lease).Healthy(), ProbeCheck(path, WithMaxAge(lease)) == 0; got || probe {
+		if got, probe := m.Within(lease).Healthy(), Inspect(path, WithMaxAge(lease)).Healthy(); got || probe {
 			t.Errorf("absent marker, lease %v: Within = %v, probe healthy = %v, want both unhealthy", lease, got, probe)
 		}
 	}
@@ -123,7 +123,7 @@ func TestMarkerWithinAgreesWithTheProbe(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, lease := range []time.Duration{time.Hour, 0, -time.Second} {
-			probe := ProbeCheck(path, WithMaxAge(lease)) == 0
+			probe := Inspect(path, WithMaxAge(lease)).Healthy()
 			if got := m.Within(lease).Healthy(); got != probe {
 				t.Errorf("marker %v old, lease %v: Within = %v, probe healthy = %v", age, lease, got, probe)
 			}
@@ -142,14 +142,14 @@ func TestMarkerWithinAtTheDeadline(t *testing.T) {
 		if err := os.Chtimes(path, at, at); err != nil {
 			t.Fatal(err)
 		}
-		if !m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) != 0 {
+		if !m.Within(time.Hour).Healthy() || !Inspect(path, WithMaxAge(time.Hour)).Healthy() {
 			t.Error("a marker exactly one lease old: want Within and the probe both healthy")
 		}
 		later := at.Add(-time.Nanosecond)
 		if err := os.Chtimes(path, later, later); err != nil {
 			t.Fatal(err)
 		}
-		if m.Within(time.Hour).Healthy() || ProbeCheck(path, WithMaxAge(time.Hour)) == 0 {
+		if m.Within(time.Hour).Healthy() || Inspect(path, WithMaxAge(time.Hour)).Healthy() {
 			t.Error("a marker one nanosecond past the lease: want Within and the probe both unhealthy")
 		}
 	})

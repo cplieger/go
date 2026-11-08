@@ -175,7 +175,7 @@ func TestLabeledCounter_Reset(t *testing.T) {
 	lc.Reset()
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	if b.Len() != 0 {
 		t.Errorf("expected empty output after Reset, got: %s", b.String())
 	}
@@ -188,7 +188,7 @@ func TestLabeledCounter_Delete(t *testing.T) {
 	lc.Delete("a")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 	if strings.Contains(out, `host="a"`) {
 		t.Errorf("deleted key still present: %s", out)
@@ -221,7 +221,7 @@ func TestLabeledCounter_emptyLabelSet(t *testing.T) {
 	lc.Inc()
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, "rt6_empty_labels") {
 		t.Errorf("empty label counter missing: %s", out)
@@ -235,7 +235,7 @@ func TestWriteCounterFormat(t *testing.T) {
 	c.Inc()
 
 	var b strings.Builder
-	WriteCounter(&b, c)
+	writeCounter(&b, c)
 	out := b.String()
 
 	if !strings.Contains(out, "# HELP http_requests_total Total HTTP requests") {
@@ -254,7 +254,7 @@ func TestWriteCounter_helpCarriageReturnRaw(t *testing.T) {
 	c.Inc()
 
 	var b strings.Builder
-	WriteCounter(&b, c)
+	writeCounter(&b, c)
 	out := b.String()
 
 	// Carriage return is not a defined escape in the Prometheus text format
@@ -274,7 +274,7 @@ func TestWriteLabeledCounterSorted(t *testing.T) {
 	lc.Inc("GET", "/a", "200")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, `method="GET",path="/a",status="200"`) {
 		t.Errorf("labels not sorted: %s", out)
@@ -286,7 +286,7 @@ func TestLabelValueEscaping(t *testing.T) {
 	lc.Inc("C:\\DIR\\FILE.TXT")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 
 	if !strings.Contains(out, `path="C:\\DIR\\FILE.TXT"`) {
@@ -299,7 +299,7 @@ func TestLabelValueEscapingNewlineAndQuote(t *testing.T) {
 	lc.Inc("hello\n\"world\"")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 
 	if !strings.Contains(out, `msg="hello\n\"world\""`) {
@@ -312,7 +312,7 @@ func TestLabelValueTabNotOverEscaped(t *testing.T) {
 	lc.Inc("a\tb") // tab should NOT be escaped
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 
 	if !strings.Contains(out, "msg=\"a\tb\"") {
@@ -325,7 +325,7 @@ func TestLabelValueCarriageReturnPassthrough(t *testing.T) {
 	lc.Inc("a\rb")
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	out := b.String()
 
 	// CR is not a Prometheus escape, so a raw CR passes through the label value
@@ -522,7 +522,7 @@ func TestLabeledCounterDelete_SanitizesLabelValues(t *testing.T) {
 	lc.Inc(bad)
 
 	var b strings.Builder
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	if out := b.String(); !strings.Contains(out, "\uFFFD") {
 		t.Fatalf("exposition missing sanitized series before Delete: %q", out)
 	}
@@ -530,7 +530,7 @@ func TestLabeledCounterDelete_SanitizesLabelValues(t *testing.T) {
 	lc.Delete(bad)
 
 	b.Reset()
-	WriteLabeledCounter(&b, lc)
+	writeLabeledCounter(&b, lc)
 	if out := b.String(); strings.Contains(out, "\uFFFD") {
 		t.Errorf("exposition still contains sanitized series after Delete with raw values: %q", out)
 	}

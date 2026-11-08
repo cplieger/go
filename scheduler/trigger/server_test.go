@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -28,13 +29,13 @@ func startTestServer(t *testing.T, run func(*Job[testPayload])) string {
 		t.Fatalf("Listen() = %v", err)
 	}
 	srv := &Server[testPayload]{Queue: q}
-	srv.Serve(ln)
+	serveDone := serveBackground(srv, ln)
 
 	t.Cleanup(func() {
 		_ = ln.Close()
 		q.Close()
 		<-execDone
-		srv.Wait()
+		<-serveDone
 	})
 	return sock
 }
@@ -42,7 +43,7 @@ func startTestServer(t *testing.T, run func(*Job[testPayload])) string {
 // runOK is the trivial executor: every job starts and finishes clean.
 func runOK(j *Job[testPayload]) {
 	j.Start()
-	j.Finish(Outcome{OK: true, Duration: time.Millisecond})
+	j.Finish(Result{OK: true, Duration: time.Millisecond})
 }
 
 // rawRequest dials the socket, sends one raw request line, and returns the
@@ -195,7 +196,7 @@ func TestServer_PayloadReplaysExactlyToTheExecutor(t *testing.T) {
 func TestServer_FailedRunReportsNotOK(t *testing.T) {
 	sock := startTestServer(t, func(j *Job[testPayload]) {
 		j.Start()
-		j.Finish(Outcome{OK: false, Reason: "job exploded", Duration: time.Millisecond})
+		j.Finish(Result{OK: false, Reason: "job exploded", Duration: time.Millisecond})
 	})
 	dec := rawRequest(t, sock, testPayload{})
 	for {
@@ -236,8 +237,8 @@ func TestServer_RejectsWhenQueueFull(t *testing.T) {
 		rejected = append(rejected, err)
 		mu.Unlock()
 	}}
-	srv.Serve(ln)
-	t.Cleanup(func() { _ = ln.Close(); srv.Wait() })
+	serveDone := serveBackground(srv, ln)
+	t.Cleanup(func() { _ = ln.Close(); <-serveDone })
 
 	dec := rawRequest(t, sock, testPayload{})
 	ev := nextEvent(t, dec)
@@ -285,8 +286,8 @@ func TestServer_HooksReceiveAcceptedPayload(t *testing.T) {
 		t.Fatalf("Listen() = %v", err)
 	}
 	srv := &Server[testPayload]{Queue: q, OnAccepted: func(p testPayload) { accepted <- p }}
-	srv.Serve(ln)
-	t.Cleanup(func() { _ = ln.Close(); q.Close(); <-execDone; srv.Wait() })
+	serveDone := serveBackground(srv, ln)
+	t.Cleanup(func() { _ = ln.Close(); q.Close(); <-execDone; <-serveDone })
 
 	dec := rawRequest(t, sock, testPayload{Repos: []string{"owner/hooked"}})
 	for {
@@ -321,12 +322,12 @@ func TestServer_ShutdownCancelsQueuedRequestWithExplicitResult(t *testing.T) {
 		case <-shutdown:
 			// Admission stopped: cancel instead of run (the app executor's
 			// shutdown policy, emulated).
-			j.Finish(Outcome{OK: false, Reason: "cancelled: scheduler shutting down"})
+			j.Finish(Result{OK: false, Reason: "cancelled: scheduler shutting down"})
 		default:
 			j.Start()
 			close(entered)
 			<-proceed
-			j.Finish(Outcome{OK: true, Duration: time.Millisecond})
+			j.Finish(Result{OK: true, Duration: time.Millisecond})
 		}
 	})
 
@@ -335,7 +336,7 @@ func TestServer_ShutdownCancelsQueuedRequestWithExplicitResult(t *testing.T) {
 		t.Fatalf("Listen() = %v", err)
 	}
 	srv := &Server[testPayload]{Queue: q}
-	srv.Serve(ln)
+	serveDone := serveBackground(srv, ln)
 
 	// Occupy the executor, then queue a second request over the wire.
 	decA := rawRequest(t, sock, testPayload{})
@@ -378,7 +379,7 @@ func TestServer_ShutdownCancelsQueuedRequestWithExplicitResult(t *testing.T) {
 	}
 
 	<-execDone
-	srv.Wait()
+	<-serveDone
 }
 
 // TestServer_DepartedClientDoesNotBlockRunOrShutdown pins writeEvent's
@@ -394,7 +395,7 @@ func TestServer_DepartedClientDoesNotBlockRunOrShutdown(t *testing.T) {
 		close(ran)
 		<-proceed // hold job completion until the client has definitely departed
 		j.Start()
-		j.Finish(Outcome{OK: true})
+		j.Finish(Result{OK: true})
 	})
 
 	conn, err := net.DialTimeout("unix", sock, time.Second)
@@ -414,7 +415,7 @@ func TestServer_DepartedClientDoesNotBlockRunOrShutdown(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the run did not execute after the client departed")
 	}
-	// startTestServer's cleanup does srv.Wait(); reaching the end of the
+	// startTestServer's cleanup does <-serveDone; reaching the end of the
 	// test without a hang is the shutdown half of the assertion.
 }
 
@@ -492,7 +493,7 @@ func TestServe_ContinuesAfterTransientAcceptError(t *testing.T) {
 	if warns != 1 {
 		t.Errorf("accept-failure warnings = %d, want 1 (the transient error must be logged)", warns)
 	}
-	srv.Wait()
+	<-serveDone
 }
 
 // TestRelayEvents_FastRunEmitsStartedBeforeDone pins the documented wire
@@ -505,14 +506,14 @@ func TestRelayEvents_FastRunEmitsStartedBeforeDone(t *testing.T) {
 	for i := range 20 {
 		j := NewJob(External, testPayload{})
 		j.Start()
-		j.Finish(Outcome{OK: true, Duration: 42 * time.Millisecond})
+		j.Finish(Result{OK: true, Duration: 42 * time.Millisecond})
 
 		server, client := net.Pipe()
 		relayDone := make(chan struct{})
 		go func() {
 			defer close(relayDone)
 			defer func() { _ = server.Close() }()
-			relayEvents(server, j)
+			relayEvents(slog.Default(), server, j)
 		}()
 
 		_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -546,11 +547,11 @@ func TestRelayEvents_DepartedClientLogsEachFailedWrite(t *testing.T) {
 
 	j := NewJob(External, testPayload{})
 	j.Start()
-	j.Finish(Outcome{OK: true, Duration: time.Millisecond})
+	j.Finish(Result{OK: true, Duration: time.Millisecond})
 
 	server, client := net.Pipe()
 	_ = client.Close() // depart before any event can be written
-	relayEvents(server, j)
+	relayEvents(slog.Default(), server, j)
 	_ = server.Close()
 
 	failed := 0
@@ -671,8 +672,8 @@ func TestServer_ConnectionThatSendsNoRequestIsNotWarnedAbout(t *testing.T) {
 		OnAccepted: func(testPayload) { mu.Lock(); accepted++; mu.Unlock() },
 		OnRejected: func(testPayload, error) { mu.Lock(); rejected++; mu.Unlock() },
 	}
-	srv.Serve(ln)
-	t.Cleanup(func() { _ = ln.Close(); q.Close(); <-execDone; srv.Wait() })
+	serveDone := serveBackground(srv, ln)
+	t.Cleanup(func() { _ = ln.Close(); q.Close(); <-execDone; <-serveDone })
 
 	// The real second-owner path: Listen probes the live socket and closes.
 	second, lerr := Listen(sock)
@@ -739,4 +740,88 @@ func TestServer_LostRequestBytesStayWarned(t *testing.T) {
 			}
 		})
 	}
+}
+
+// serveBackground runs srv.Serve until ln is closed and returns the channel
+// its result arrives on: receiving from it is the wait for every handler.
+func serveBackground[P any](srv *Server[P], ln net.Listener) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(context.Background(), ln) }()
+	return done
+}
+
+// TestServe_ReturnsAfterContextAndRoutesLogs pins Serve's two exits and the
+// Logger field: ending ctx closes the listener and Serve returns nil once the
+// handlers are done, a listener closed first returns net.ErrClosed, and the
+// server's own lines go to Logger.
+func TestServe_ReturnsAfterContextAndRoutesLogs(t *testing.T) {
+	var buf strings.Builder
+	var mu sync.Mutex
+	l := slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sock := testSocketPath(t)
+	ln, err := Listen(sock)
+	if err != nil {
+		t.Fatalf("Listen() = %v", err)
+	}
+	q := NewQueue[testPayload](4)
+	ctx, cancel := context.WithCancel(t.Context())
+	srv := &Server[testPayload]{Queue: q, Logger: l}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, ln) }()
+
+	conn, err := net.DialTimeout("unix", sock, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	_, _ = conn.Write([]byte("not json\n"))
+	_ = conn.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		got := buf.String()
+		mu.Unlock()
+		if strings.Contains(got, "trigger request rejected: undecodable") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Logger got %q, want the undecodable-request line", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	q.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve after ctx ended = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after ctx ended")
+	}
+
+	ln2, err := Listen(testSocketPath(t))
+	if err != nil {
+		t.Fatalf("Listen() = %v", err)
+	}
+	srv2 := &Server[testPayload]{Queue: NewQueue[testPayload](1)}
+	done2 := make(chan error, 1)
+	go func() { done2 <- srv2.Serve(t.Context(), ln2) }()
+	_ = ln2.Close()
+	if err := <-done2; !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Serve after the listener closed first = %v, want net.ErrClosed", err)
+	}
+}
+
+type lockedWriter struct {
+	w  *strings.Builder
+	mu *sync.Mutex
+}
+
+func (lw *lockedWriter) Write(p []byte) (int, error) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Write(p)
 }

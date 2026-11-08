@@ -16,8 +16,8 @@ import (
 // the process, so record a cycle's outcome before the work that can panic.
 type Job func(ctx context.Context)
 
-// LoopOptions configures RunLoop. Interval must be positive; Jitter and
-// FireOnStart are optional.
+// LoopOptions configures RunLoop. Interval must be positive; Jitter,
+// FirstDelay and FireOnStart are optional.
 type LoopOptions struct {
 	// Interval is the gap between ticks. It must be positive; RunLoop returns
 	// immediately otherwise (the built-in mode ParseInterval selects always
@@ -25,8 +25,9 @@ type LoopOptions struct {
 	Interval time.Duration
 	// Jitter spreads each tick uniformly across ±(Jitter × Interval) so
 	// restarts across many instances do not synchronize into a thundering herd on a
-	// shared upstream. It is a fraction in [0, 1); 0 disables jitter. The
-	// startup fire is never jittered.
+	// shared upstream. It is a fraction in [0, 1); 0 disables jitter, and 1
+	// or more uses the full ±Interval band. The startup fire is never
+	// jittered.
 	Jitter float64
 	// FirstDelay overrides the delay before the first tick, so a schedule's
 	// phase survives a restart: pass Stamp.Remaining and the next run lands
@@ -82,7 +83,8 @@ func RunLoop(ctx context.Context, job Job, opts LoopOptions) {
 // JitteredDelay returns a delay drawn uniformly from
 // [interval−fraction×interval, interval+fraction×interval). It is the pure core
 // of RunLoop's jitter, exported so the ±band can be tested directly and reused.
-// A non-positive fraction or interval returns interval unchanged.
+// A non-positive fraction or interval returns interval unchanged, and a
+// fraction of 1 or more uses the full band, [0, 2×interval).
 func JitteredDelay(interval time.Duration, fraction float64) time.Duration {
 	if fraction <= 0 || interval <= 0 {
 		return interval

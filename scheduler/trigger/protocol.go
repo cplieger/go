@@ -11,7 +11,7 @@ package trigger
 // exactly one EventDone as the final line.
 type Event struct {
 	// Kind is the event discriminator: EventQueued, EventStarted, EventDone.
-	Kind string `json:"event"`
+	Kind EventKind `json:"event"`
 	// Reason explains a not-OK outcome that isn't a plain job failure (queue
 	// full, cancelled by shutdown), or annotates an OK outcome that carries a
 	// caveat (an app-defined skip tolerance).
@@ -24,9 +24,12 @@ type Event struct {
 	OK bool `json:"ok"`
 }
 
+// EventKind names one event on the wire, one of the constants below.
+type EventKind string
+
 // Event kinds, in wire order.
 const (
-	EventQueued  = "queued"
-	EventStarted = "started"
-	EventDone    = "done"
+	EventQueued  EventKind = "queued"
+	EventStarted EventKind = "started"
+	EventDone    EventKind = "done"
 )

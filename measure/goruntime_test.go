@@ -373,12 +373,12 @@ func TestProcessFamiliesOfWireEachValue(t *testing.T) {
 }
 
 // TestHandlerAlreadyServesTheProcessFamilies backs the README's rule to serve
-// Registry.Handler alone: every family WriteProcess writes is already on
-// Handler's page, so WriteProcess on the same page would repeat each one.
+// Registry.Handler alone: every family writeProcess writes is already on
+// Handler's page, so writeProcess on the same page would repeat each one.
 func TestHandlerAlreadyServesTheProcessFamilies(t *testing.T) {
 	page := serve(t, NewRegistry("app").Handler())
 	var b strings.Builder
-	WriteProcess(&b)
+	writeProcess(&b)
 	n := 0
 	for line := range strings.SplitSeq(b.String(), "\n") {
 		rest, ok := strings.CutPrefix(line, "# TYPE ")
@@ -387,10 +387,10 @@ func TestHandlerAlreadyServesTheProcessFamilies(t *testing.T) {
 		}
 		n++
 		if !strings.Contains(page, "\n# TYPE "+rest+"\n") {
-			t.Errorf("WriteProcess writes %q, which Handler's page lacks", rest)
+			t.Errorf("writeProcess writes %q, which Handler's page lacks", rest)
 		}
 	}
 	if n == 0 {
-		t.Fatal("WriteProcess wrote no family")
+		t.Fatal("writeProcess wrote no family")
 	}
 }

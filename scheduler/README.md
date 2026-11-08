@@ -100,9 +100,9 @@ In `ModeExternal`, an external scheduler such as [Ofelia](https://github.com/mcu
 - Run loop: `RunLoop`, `LoopOptions`, `Job` and `JitteredDelay`.
 - Restart record: `Stamp`, `RunRecord` and `FailurePolicy`.
 - Overlap guard: `TryLock`, `Lock` and `ReadHolder`.
-- Run coalescing: `Exclusive` with `WithQueueCapacity` and `WithGate`, `Outcome`, and `SlotFile`.
+- Run coalescing: `Exclusive` with `WithLogger`, `WithQueueCapacity` and `WithGate`, `Outcome`, and `SlotFile`.
 - Subprocesses: `CommandRunner`, `NewCommandRunner` and `DefaultGrace`.
-- Package `trigger`: `Queue`, `Job`, `Execute`, `Listen`, `Server`, `Submit`, `Event` and their error values.
+- Package `trigger`: `Queue`, `Job` with its `Result`, `Execute`, `Listen`, `Server` and its blocking `Serve`, `Submit`, `Event` with its `EventKind`, and their error values.
 
 The full reference is on pkg.go.dev for [scheduler](https://pkg.go.dev/github.com/cplieger/go/scheduler) and [trigger](https://pkg.go.dev/github.com/cplieger/go/scheduler/trigger).
 

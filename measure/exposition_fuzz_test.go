@@ -23,7 +23,7 @@ func FuzzPrometheusHelpExposition(f *testing.F) {
 	f.Fuzz(func(t *testing.T, help string) {
 		c := &Counter{name: "test_counter", help: help}
 		var b strings.Builder
-		WriteCounter(&b, c)
+		writeCounter(&b, c)
 		out := b.String()
 		for line := range strings.SplitSeq(out, "\n") {
 			if !strings.HasPrefix(line, "# HELP ") {
@@ -143,11 +143,11 @@ func FuzzLabeledExposition_balanced(f *testing.F) {
 		lg.Set(gaugeVal, val)
 
 		var b strings.Builder
-		WriteLabeledCounter(&b, lc)
+		writeLabeledCounter(&b, lc)
 		assertExpositionLabelsBalanced(t, b.String())
 
 		b.Reset()
-		WriteLabeledGauge(&b, lg)
+		writeLabeledGauge(&b, lg)
 		assertExpositionLabelsBalanced(t, b.String())
 	})
 }

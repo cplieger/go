@@ -18,9 +18,9 @@ import (
 // own exit code and lifecycle log lines; the transport, the event ordering,
 // and the failure taxonomy live here.
 
-// DialTimeout bounds the connection attempt: the daemon is PID 1 in the same
+// dialTimeout bounds the connection attempt: the daemon is PID 1 in the same
 // container, so anything slower than instant means it is not accepting.
-const DialTimeout = 5 * time.Second
+const dialTimeout = 5 * time.Second
 
 // Submit failure classes, distinguishable with errors.Is so the app can log
 // each in its own vocabulary.
@@ -45,7 +45,7 @@ var (
 // queue-wait plus execution — triggered runs are synchronous by contract — so
 // there is deliberately no read deadline, and ctx is how a caller bounds it.
 func Submit[P any](ctx context.Context, socketPath string, payload P, onEvent func(Event)) (Event, error) {
-	dialer := net.Dialer{Timeout: DialTimeout}
+	dialer := net.Dialer{Timeout: dialTimeout}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return Event{}, classify(ctx, ErrUnreachable, err)
@@ -55,7 +55,7 @@ func Submit[P any](ctx context.Context, socketPath string, payload P, onEvent fu
 	// A context has no way to interrupt a blocking socket read, so closing the
 	// connection is what unblocks awaitDone. Without this, ctx would bound the
 	// dial only — and the dial is the one part of Submit that is already
-	// bounded, by DialTimeout.
+	// bounded, by dialTimeout.
 	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopOnCancel()
 

@@ -48,4 +48,4 @@ An `https://` URL works too. The probe verifies the server's certificate against
 
 ## Using the package directly
 
-The `probe` package exposes the same logic for a Go program that builds its own binary. `probe.URL` checks one URL and returns nil on a 2xx final response. `probe.Check` checks every URL within one budget, writes one line per failure to the writer you pass and returns 0 or 1. It returns 1 for zero URLs, so an empty healthcheck cannot report healthy. `probe.Run` calls `probe.Check` with stderr and exits with its result. `probe.DefaultTimeout` is the 5-second default budget.
+The `probe` package exposes the same logic for a Go program that builds its own binary. `probe.Check` checks every URL within one budget, writes one line per failure to the writer you pass and returns 0 or 1. It returns 1 for zero URLs, so an empty healthcheck cannot report healthy. `probe.Run` calls `probe.Check` with stderr and exits with its result. `probe.DefaultTimeout` is the 5-second default budget.

@@ -3,6 +3,7 @@ package measure_test
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"time"
@@ -36,9 +37,12 @@ func ExampleLabeledCounter_Add_seed() {
 		failures.Add(0, source)
 	}
 
-	var b strings.Builder
-	measure.WriteLabeledCounter(&b, failures)
-	fmt.Print(b.String())
+	r := measure.NewRegistry("")
+	r.MustRegister(failures)
+	rec := httptest.NewRecorder()
+	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
+	fmt.Print(page)
 	// Output:
 	// # HELP sync_failures_total Sync failures by source.
 	// # TYPE sync_failures_total counter
@@ -71,9 +75,12 @@ func ExampleLabeledGauge_Delete() {
 	refresh(map[string]float64{"plex": 1, "sonarr": 2})
 	refresh(map[string]float64{"plex": 1}) // sonarr's alerts are all resolved
 
-	var b strings.Builder
-	measure.WriteLabeledGauge(&b, active)
-	fmt.Print(b.String())
+	r := measure.NewRegistry("")
+	r.MustRegister(active)
+	rec := httptest.NewRecorder()
+	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
+	fmt.Print(page)
 	// Output:
 	// # HELP alerts_active Open alerts by source.
 	// # TYPE alerts_active gauge
@@ -95,10 +102,12 @@ func ExampleRecordHTTP_routeDuration() {
 	record("/api/items", 200, 40*time.Millisecond)
 	record("/api/items", 500, 2*time.Second)
 
-	var b strings.Builder
-	measure.WriteLabeledCounter(&b, reqs)
-	measure.WriteLabeledHistogram(&b, byRoute)
-	fmt.Print(b.String())
+	r := measure.NewRegistry("")
+	r.MustRegister(reqs, byRoute)
+	rec := httptest.NewRecorder()
+	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
+	fmt.Print(page)
 	// Output:
 	// # HELP http_requests_total HTTP requests by route and status.
 	// # TYPE http_requests_total counter
@@ -120,9 +129,12 @@ func Example_buildInfo() {
 	info := measure.NewLabeledGauge("build_info", "Build information, always 1.", []string{"version"})
 	info.Set(1, version)
 
-	var b strings.Builder
-	measure.WriteLabeledGauge(&b, info)
-	fmt.Print(b.String())
+	r := measure.NewRegistry("")
+	r.MustRegister(info)
+	rec := httptest.NewRecorder()
+	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
+	fmt.Print(page)
 	// Output:
 	// # HELP build_info Build information, always 1.
 	// # TYPE build_info gauge

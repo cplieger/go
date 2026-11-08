@@ -17,7 +17,7 @@ type Gauge struct {
 }
 
 // NewGauge creates a named gauge. An invalid name is captured into the gauge
-// rather than panicking: the gauge records nothing, WriteGauge emits nothing
+// rather than panicking: the gauge records nothing, writeGauge emits nothing
 // for it, and the error surfaces at registration.
 func NewGauge(name, help string) *Gauge {
 	help = sanitizeHelp(name, help)
@@ -65,12 +65,12 @@ func (g *Gauge) Inc() { g.Add(1) }
 // Dec decrements the gauge by 1.
 func (g *Gauge) Dec() { g.Add(-1) }
 
-// Get returns the current gauge value.
-func (g *Gauge) Get() float64 { return math.Float64frombits(g.bits.Load()) }
+// Value returns the current gauge value.
+func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
 
-// WriteGauge writes a gauge in Prometheus text format (IR shim). A gauge
+// writeGauge writes a gauge in Prometheus text format (IR shim). A gauge
 // carrying a construction error writes nothing.
-func WriteGauge(b *strings.Builder, g *Gauge) {
+func writeGauge(b *strings.Builder, g *Gauge) {
 	if g.err != nil {
 		return
 	}
@@ -141,9 +141,9 @@ func (lg *LabeledGauge) Delete(labelVals ...string) {
 	lg.deleteSeries(lg.vals, lg.labels, labelVals)
 }
 
-// WriteLabeledGauge writes a labeled gauge in Prometheus text format (IR
+// writeLabeledGauge writes a labeled gauge in Prometheus text format (IR
 // shim). A gauge carrying a construction error writes nothing.
-func WriteLabeledGauge(b *strings.Builder, lg *LabeledGauge) {
+func writeLabeledGauge(b *strings.Builder, lg *LabeledGauge) {
 	if lg.err != nil {
 		return
 	}

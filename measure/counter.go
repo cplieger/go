@@ -46,7 +46,7 @@ type Counter struct {
 // NewCounter creates a named counter. Per Prometheus convention the name
 // should end in `_total` (e.g. "http_requests_total"). An invalid name is
 // captured into the counter rather than panicking: the counter records
-// nothing, WriteCounter emits nothing for it, and the error surfaces at
+// nothing, writeCounter emits nothing for it, and the error surfaces at
 // registration.
 func NewCounter(name, help string) *Counter {
 	help = sanitizeHelp(name, help)
@@ -200,11 +200,11 @@ func (lc *LabeledCounter) Delete(labelVals ...string) {
 	lc.deleteSeries(lc.vals, lc.labels, labelVals)
 }
 
-// WriteCounter writes a counter in Prometheus text format. It is a thin shim
+// writeCounter writes a counter in Prometheus text format. It is a thin shim
 // over the neutral IR (Counter.family) and the Prometheus encoder, retained as
 // part of the package's exported surface. A counter carrying a construction
 // error writes nothing: an invalid metric must never reach the exposition.
-func WriteCounter(b *strings.Builder, c *Counter) {
+func writeCounter(b *strings.Builder, c *Counter) {
 	if c.err != nil {
 		return
 	}
@@ -343,9 +343,9 @@ func buildLabelString(labels []string, key *labelKey) string {
 	return renderLabels(labelsFor(labels, key))
 }
 
-// WriteLabeledCounter writes a labeled counter in Prometheus text format (IR
+// writeLabeledCounter writes a labeled counter in Prometheus text format (IR
 // shim). A counter carrying a construction error writes nothing.
-func WriteLabeledCounter(b *strings.Builder, lc *LabeledCounter) {
+func writeLabeledCounter(b *strings.Builder, lc *LabeledCounter) {
 	if lc.err != nil {
 		return
 	}

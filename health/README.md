@@ -69,12 +69,12 @@ Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write i
 
 ## API
 
-- Marker: `NewMarker`, `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `CheckHealthy`, `Healthy` and `Within` methods, with the `Signal` interface.
-- Probe side: `RunProbe`, `ProbeCheck` and the `WithMaxAge` option, with `Lease` to build its deadline.
+- Marker: `NewMarker` with its `WithLogger` option (`MarkerOption`), `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `Healthy` and `Within` methods, with the `Signal` interface.
+- Probe side: `RunProbe` and `Inspect` with the `WithMaxAge` option, with `Lease` to build its deadline, and the `Freshness` and `MarkerState` it reports.
 - Reading a marker in-process: `Inspect`, `Freshness` and the `MarkerState` values.
 - Shutdown: `Latch`, `NewLatch`, and the `Set` and `BeginDrain` methods.
 - HTTP endpoint: `CheckHandler` with `Check`, and `Handler` for one signal.
-- HTTP probe package: `probe.URL`, `probe.Check`, `probe.Run`, `probe.DefaultTimeout` and the `probe/cmd/probe` binary.
+- HTTP probe package: `probe.Check`, `probe.Run`, `probe.DefaultTimeout` and the `probe/cmd/probe` binary.
 
 The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/go/health) and [health/probe](https://pkg.go.dev/github.com/cplieger/go/health/probe). Its `Example` functions are runnable, and `go test` keeps them true.
 
@@ -82,7 +82,7 @@ The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/c
 
 `NewMarker` checks that the marker's folder is writable, and that anything already at the marker path is a regular file `Set` can refresh. When either fails, the marker enters degraded mode. The folder fails under compose's `read_only: true` with no tmpfs at `/tmp`; the marker fails when an earlier run as another user left one in a shared `/tmp` that this user cannot write, or when the path holds a directory or a FIFO. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the fix. A marker path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the `health` subcommand reports it unhealthy and names the error.
 
-In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler`, `CheckHealthy` and `Within` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
+In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler`, `Healthy` and `Within` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
 
 To run read-only with a working signal, mount a tmpfs at `/tmp`:
 
@@ -107,7 +107,7 @@ health leaves these out on purpose. The [non-goals](docs/non-goals.md) page give
 - A `context.Context` or a shutdown hook. `Cleanup` is the shutdown action.
 - Status-change callbacks. Wrap `Set` to add your own.
 - A staleness check by default. The deadline is opt-in for each service.
-- Prometheus metrics. A gauge over `CheckHealthy` adds one.
+- Prometheus metrics. A gauge over `Healthy` adds one.
 - Content inside the marker file. The check is one `os.Stat`.
 
 ## Documentation

@@ -93,7 +93,7 @@ func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 		fams = append(fams, lg.gather())
 	}
 	for _, g := range r.gauges {
-		fams = append(fams, scalarFamily(g.name, g.help, TypeGauge, g.Get()))
+		fams = append(fams, scalarFamily(g.name, g.help, TypeGauge, g.Value()))
 	}
 	for _, h := range r.histograms {
 		fams = append(fams, Family{

@@ -21,7 +21,7 @@ The queue holds 1 request by default, set with `WithQueueCapacity`. Requests bey
 `Run` is queue mode, for callers whose request must be met by a run that starts after it arrives. `RunOrSkip` is skip mode, for timer ticks. When a run is in flight, it logs a warning and skips the tick, because the next tick brings fresh results.
 
 ```go
-ex := scheduler.NewExclusive("/config", logger)
+ex := scheduler.NewExclusive("/config", scheduler.WithLogger(logger))
 
 // Daemon: RunLoop ticks use skip mode. A busy lock means the job is already
 // running, and the next tick provides freshness, so never queue a tick.

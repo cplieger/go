@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-// FuzzProbeCheck asserts bounded output (ProbeCheck never panics and
+// FuzzProbe asserts bounded output (the probe never panics and
 // returns only 0 or 1 for any raw input path) and state consistency (a
 // present marker yields 0, absent yields 1) in a controlled writable
 // dir. The marker name is a hash of the input so pathological inputs
 // ("..", ".", "/") can neither escape the temp dir nor collapse onto it.
-func FuzzProbeCheck(f *testing.F) {
+func FuzzProbe(f *testing.F) {
 	f.Add(".healthy")
 	f.Add("/tmp/.healthy")
 	f.Add("/nonexistent/path/.healthy")
@@ -27,10 +27,10 @@ func FuzzProbeCheck(f *testing.F) {
 	dir := f.TempDir()
 
 	f.Fuzz(func(t *testing.T, suffix string) {
-		// Bounded output: ProbeCheck must never panic and must return
+		// Bounded output: the probe must never panic and must return
 		// only 0 or 1 for any raw input path.
-		if got := ProbeCheck(suffix); got != 0 && got != 1 {
-			t.Fatalf("ProbeCheck(%q) = %d, want 0 or 1", suffix, got)
+		if got := probeCode(suffix); got != 0 && got != 1 {
+			t.Fatalf("probeCode(%q) = %d, want 0 or 1", suffix, got)
 		}
 
 		name := fmt.Sprintf("m-%x", sha256.Sum256([]byte(suffix)))
@@ -40,15 +40,15 @@ func FuzzProbeCheck(f *testing.F) {
 			if err := os.WriteFile(path, nil, 0o600); err != nil {
 				t.Skip()
 			}
-			if got := ProbeCheck(path); got != 0 {
-				t.Errorf("ProbeCheck(%q) with marker present = %d, want 0", path, got)
+			if got := probeCode(path); got != 0 {
+				t.Errorf("probeCode(%q) with marker present = %d, want 0", path, got)
 			}
 			_ = os.Remove(path) // keep the shared TempDir bounded across fuzz execs
 			return
 		}
 		_ = os.Remove(path)
-		if got := ProbeCheck(path); got != 1 {
-			t.Errorf("ProbeCheck(%q) with marker absent in writable dir = %d, want 1", path, got)
+		if got := probeCode(path); got != 1 {
+			t.Errorf("probeCode(%q) with marker absent in writable dir = %d, want 1", path, got)
 		}
 	})
 }
