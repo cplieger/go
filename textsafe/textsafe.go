@@ -103,8 +103,8 @@ func SanitizeSingleLine(s string) string {
 // gives. Two input classes differ. A value longer than n that holds
 // multi-byte unsafe runes, each becoming one space, can keep fewer bytes, and
 // is cut and marked even when its sanitized form would fit. An invalid-UTF-8
-// value can keep fewer bytes, because the raw cap backs off over stray
-// continuation bytes before the sanitizer turns them into U+FFFD. The mark is
+// value can keep fewer bytes, when the raw cap backs off over a stray
+// continuation byte before the sanitizer turns it into U+FFFD. The mark is
 // honest in both: bytes were dropped before sanitizing.
 //
 // cut reports whether bytes were DROPPED, by the raw cap or the re-cap, not

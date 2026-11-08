@@ -460,9 +460,9 @@ func legacyCapped(s string, n int, marker string, sanitize func(string) string) 
 // interesting cap and several marker widths. The corpus carries both classes
 // where cap-first differs from sanitizing first: a value over the cap holding
 // multi-byte unsafe runes, which collapse to single-byte spaces, so this pair
-// keeps fewer bytes and cuts and marks it even when its sanitized form fits;
-// and invalid UTF-8, where the raw cut backs off over stray bytes and keeps
-// fewer.
+// can keep fewer bytes and cuts and marks it even when its sanitized form
+// fits; and invalid UTF-8, where the raw cut can back off over a stray
+// continuation byte and keep fewer.
 func TestSanitizeCappedParity(t *testing.T) {
 	inputs := []string{
 		"", "a", "hello world", "already ends in...", "a\r\nb", "ab\ncd",
