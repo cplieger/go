@@ -8,6 +8,7 @@
 // the umask and any inherited ACL) and never chmods or verifies it. WithMode
 // stages the payload in an owner-only file and proves the mode the filesystem
 // stored on the staging and final file, failing with [ErrModeNotStored]
-// instead; on Windows the mode options return [ErrModeUnsupported].
+// instead; on Windows the mode options return [ErrModeUnsupported] for a
+// nonzero mode.
 // https://github.com/cplieger/go/tree/main/filesafe documents every guarantee.
 package filesafe

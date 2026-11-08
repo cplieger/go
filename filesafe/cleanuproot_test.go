@@ -143,8 +143,8 @@ func TestCleanupStaleTempsInRoot_non_positive_maxAge(t *testing.T) {
 	defer root.Close()
 
 	got, err := filesafe.CleanupStaleTempsInRoot(t.Context(), root, 0)
-	if err != nil {
-		t.Fatalf("CleanupStaleTempsInRoot = %v, want nil", err)
+	if !errors.Is(err, filesafe.ErrInvalidArgument) {
+		t.Fatalf("CleanupStaleTempsInRoot = %v, want ErrInvalidArgument", err)
 	}
 	if got.Removed != 0 {
 		t.Errorf("Removed = %d, want 0", got.Removed)

@@ -111,33 +111,33 @@ func readHandle(t *testing.T, f *os.File) string {
 // writeForm is one atomic-write entry point, writing data to name inside dir;
 // root is dir opened as an *os.Root.
 type writeForm struct {
-	write func(ctx context.Context, root *os.Root, dir, name string, data []byte, opts ...Option) (Result, error)
+	write func(ctx context.Context, root *os.Root, dir, name string, data []byte, opts ...WriteOption) (Result, error)
 	name  string
 }
 
 // writeForms returns the six atomic-write entry points.
 func writeForms() []writeForm {
 	return []writeForm{
-		{name: "WriteFile", write: func(ctx context.Context, _ *os.Root, dir, name string, data []byte, opts ...Option) (Result, error) {
+		{name: "WriteFile", write: func(ctx context.Context, _ *os.Root, dir, name string, data []byte, opts ...WriteOption) (Result, error) {
 			return WriteFile(ctx, filepath.Join(dir, name), data, opts...)
 		}},
-		{name: "WriteReader", write: func(ctx context.Context, _ *os.Root, dir, name string, data []byte, opts ...Option) (Result, error) {
+		{name: "WriteReader", write: func(ctx context.Context, _ *os.Root, dir, name string, data []byte, opts ...WriteOption) (Result, error) {
 			return WriteReader(ctx, filepath.Join(dir, name), bytes.NewReader(data), opts...)
 		}},
-		{name: "PendingFile", write: func(ctx context.Context, _ *os.Root, dir, name string, data []byte, opts ...Option) (Result, error) {
+		{name: "PendingFile", write: func(ctx context.Context, _ *os.Root, dir, name string, data []byte, opts ...WriteOption) (Result, error) {
 			pf, err := NewPendingFile(ctx, filepath.Join(dir, name), opts...)
 			if err != nil {
 				return Result{}, err
 			}
 			return commitPending(ctx, pf, data)
 		}},
-		{name: "WriteFileInRoot", write: func(ctx context.Context, root *os.Root, _, name string, data []byte, opts ...Option) (Result, error) {
+		{name: "WriteFileInRoot", write: func(ctx context.Context, root *os.Root, _, name string, data []byte, opts ...WriteOption) (Result, error) {
 			return WriteFileInRoot(ctx, root, name, data, opts...)
 		}},
-		{name: "WriteReaderInRoot", write: func(ctx context.Context, root *os.Root, _, name string, data []byte, opts ...Option) (Result, error) {
+		{name: "WriteReaderInRoot", write: func(ctx context.Context, root *os.Root, _, name string, data []byte, opts ...WriteOption) (Result, error) {
 			return WriteReaderInRoot(ctx, root, name, bytes.NewReader(data), opts...)
 		}},
-		{name: "PendingFileInRoot", write: func(ctx context.Context, root *os.Root, _, name string, data []byte, opts ...Option) (Result, error) {
+		{name: "PendingFileInRoot", write: func(ctx context.Context, root *os.Root, _, name string, data []byte, opts ...WriteOption) (Result, error) {
 			pf, err := NewPendingFileInRoot(ctx, root, name, opts...)
 			if err != nil {
 				return Result{}, err

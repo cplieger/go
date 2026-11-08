@@ -3,9 +3,11 @@ package filesafe
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // OpenParentInRoot opens the parent directory of name as its own *os.Root,
@@ -30,14 +32,16 @@ import (
 // for a name directly under root, so the close never risks closing the
 // caller's root. The caller owns root; OpenParentInRoot does not close it.
 //
-// A vanished component matches fs.ErrNotExist, a denied one matches
-// fs.ErrPermission, and a component that is not a real directory — or
-// changed identity mid-open — is refused naming the component. name must
-// be relative and name an entry: "." and ".." are refused with
+// A vanished component matches fs.ErrNotExist and a denied one
+// fs.ErrPermission. A component that is a symlink matches ErrSymlinkTarget,
+// one that is any other non-directory matches ErrNotDirectory, and one that
+// changed while it was being opened matches ErrRaced, the one refusal a
+// retry can cure; each names the component. An empty name is ErrEmptyPath;
+// an absolute or NUL-holding name, ".", ".." and a nil root are
 // ErrUnsafePath.
 func OpenParentInRoot(root *os.Root, name string) (*os.Root, string, error) {
 	if root == nil {
-		return nil, "", errors.New("filesafe: nil root")
+		return nil, "", fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	clean, err := validateRootEntry(name)
 	if err != nil {
@@ -57,12 +61,16 @@ func OpenParentInRoot(root *os.Root, name string) (*os.Root, string, error) {
 //
 // Only a regular file is removed. A directory, symlink, device node, socket
 // or named pipe wearing the name is refused with ErrNotRegular and left as
-// found — the same rule ReadBoundedInRoot applies to what it reads.
+// found — the same rule ReadBoundedInRoot applies to what it reads. The
+// refusal is a check before the unlink, and os.Root has no unlink that
+// refuses a directory, so an empty directory a racing writer swaps in after
+// the check can be removed.
 // Removing a symlink itself, or an empty directory, is not this function's
 // job; use the pinned root from OpenParentInRoot for that.
 //
 // A missing file is reported (matching fs.ErrNotExist) rather than
-// swallowed. The caller owns root; RemoveFileInRoot does not close it.
+// swallowed. The caller owns root; RemoveFileInRoot does not close it. The
+// parent's refusals are OpenParentInRoot's.
 func RemoveFileInRoot(root *os.Root, name string) error {
 	parent, base, err := OpenParentInRoot(root, name)
 	if err != nil {
@@ -79,6 +87,44 @@ func RemoveFileInRoot(root *os.Root, name string) error {
 		return notRegular(name, fi.Mode())
 	}
 	return parent.Remove(base)
+}
+
+// pinOpenHook, when set by a test, runs between an Lstat and the open it
+// guards, the window a racing writer swaps the name in.
+var pinOpenHook func(name string)
+
+// racedOpen classifies an open of name that failed after an Lstat of it
+// returned before. ENOTDIR, ELOOP and ENXIO can only mean the name changed:
+// each caller's Lstat proved a directory or a regular file and no symlink, a
+// directory is opened through name/. (so a non-directory there answers
+// ENOTDIR), and open(2) answers ENXIO only for a socket or a device with no
+// driver. An error os.Root makes itself ("not a directory", "path escapes
+// from parent") means the resolution met something the Lstat did not see;
+// a closed root is the caller's misuse. Any other failure is a race when
+// name, looked up again, is present but is not the file the Lstat saw, or is
+// present after an open that found nothing. Those are ErrRaced, the refusal
+// a retry can cure; a name that is gone stays fs.ErrNotExist and every other
+// failure is returned as it is.
+func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
+	var errno syscall.Errno
+	isErrno := errors.As(err, &errno)
+	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP || errno == syscall.ENXIO) ||
+		!isErrno && !errors.Is(err, os.ErrClosed)
+	if !changed {
+		now, lErr := root.Lstat(name)
+		switch {
+		case lErr != nil:
+			// Gone or unstatable now: the open's own error is the answer.
+		case errors.Is(err, fs.ErrNotExist):
+			changed = true // present before and after, absent at the open
+		default:
+			changed = !os.SameFile(before, now)
+		}
+	}
+	if changed {
+		return fmt.Errorf("%w: %w", ErrRaced, err)
+	}
+	return err
 }
 
 // pinDirInRoot descends dir component by component from root and returns
@@ -115,14 +161,21 @@ func pinChildInRoot(parent *os.Root, name string) (*os.Root, error) {
 	if err != nil {
 		return nil, fmt.Errorf("filesafe: inspect path component %q: %w", name, err)
 	}
-	if !fi.IsDir() {
-		// A symlink lands here too: os.Root would otherwise follow it.
-		return nil, fmt.Errorf("filesafe: path component %q is not a directory (mode %s)",
-			name, fi.Mode().String())
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// os.Root would otherwise follow it.
+		return nil, fmt.Errorf("%w: path component %q is a symlink (mode %s)",
+			ErrSymlinkTarget, name, fi.Mode().String())
 	}
-	next, err := parent.OpenRoot(name)
+	if !fi.IsDir() {
+		return nil, fmt.Errorf("%w: path component %q is not a directory (mode %s)",
+			ErrNotDirectory, name, fi.Mode().String())
+	}
+	if pinOpenHook != nil {
+		pinOpenHook(name)
+	}
+	next, err := parent.OpenRoot(childDirOpenName(name))
 	if err != nil {
-		return nil, fmt.Errorf("filesafe: open path component %q: %w", name, err)
+		return nil, fmt.Errorf("filesafe: open path component %q: %w", name, racedOpen(parent, name, fi, dirOpenErr(err, name)))
 	}
 	opened, err := next.Stat(".")
 	if err != nil {
@@ -131,7 +184,7 @@ func pinChildInRoot(parent *os.Root, name string) (*os.Root, error) {
 	}
 	if !os.SameFile(fi, opened) {
 		_ = next.Close()
-		return nil, fmt.Errorf("filesafe: path component %q changed while it was being opened", name)
+		return nil, fmt.Errorf("%w: path component %q changed while it was being opened", ErrRaced, name)
 	}
 	return next, nil
 }

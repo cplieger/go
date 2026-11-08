@@ -405,7 +405,7 @@ func TestPendingFile_Commit_RenameFailure_TaggedAndReplays(t *testing.T) {
 }
 
 // Cleanup must be best-effort on a close failure: a pre-closed fd makes the
-// internal p.Close() in Cleanup return os.ErrClosed, which Cleanup MUST
+// internal p.File.Close() in Cleanup return os.ErrClosed, which Cleanup MUST
 // swallow and still remove the temp and return nil.
 func TestPendingFile_Cleanup_CloseFailure_StillRemovesTemp(t *testing.T) {
 	t.Parallel()
@@ -421,9 +421,9 @@ func TestPendingFile_Cleanup_CloseFailure_StillRemovesTemp(t *testing.T) {
 	}
 	tmpName := pf.Name()
 
-	// First Close succeeds; the internal p.Close() call is then a second
+	// First Close succeeds; the internal p.File.Close() call is then a second
 	// close -> os.ErrClosed.
-	if err := pf.Close(); err != nil {
+	if err := pf.File.Close(); err != nil {
 		t.Fatalf("File.Close: %v", err)
 	}
 
@@ -539,5 +539,66 @@ func TestPendingFile_Cleanup_RetryKeepsRetryableStateAfterSecondRemoveFailure(t 
 	}
 	if _, statErr := os.Stat(tmpName); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("temp %q still present after third Cleanup, want removed (no leak)", tmpName)
+	}
+}
+
+// TestPendingFile_Close_IsCleanup pins that Close aborts an uncommitted write
+// as Cleanup does, removing the temp and making Commit return ErrAborted, and
+// that a Close after a successful Commit changes nothing.
+func TestPendingFile_Close_IsCleanup(t *testing.T) {
+	t.Parallel()
+	t.Run("before commit", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		pf, err := NewPendingFile(t.Context(), filepath.Join(dir, "f.txt"))
+		if err != nil {
+			t.Fatalf("NewPendingFile: %v", err)
+		}
+		if _, err := pf.Write([]byte("data")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if err := pf.Close(); err != nil {
+			t.Fatalf("Close = %v, want nil", err)
+		}
+		if _, err := pf.Commit(t.Context()); !errors.Is(err, ErrAborted) {
+			t.Errorf("Commit after Close = %v, want ErrAborted", err)
+		}
+		assertNoTempLeak(t, dir)
+	})
+	t.Run("after commit", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "f.txt")
+		pf, err := NewPendingFile(t.Context(), path)
+		if err != nil {
+			t.Fatalf("NewPendingFile: %v", err)
+		}
+		if _, err := pf.Write([]byte("data")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if _, err := pf.Commit(t.Context()); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		if err := pf.Close(); err != nil {
+			t.Errorf("Close after Commit = %v, want nil", err)
+		}
+		assertContent(t, path, "data")
+	})
+}
+
+// TestPendingFile_Close_ClosesTheOwnedRoot pins that Close, like Cleanup,
+// closes the parent root NewPendingFile opened, so a deferred Close leaks no
+// directory descriptor.
+func TestPendingFile_Close_ClosesTheOwnedRoot(t *testing.T) {
+	t.Parallel()
+	pf, err := NewPendingFile(t.Context(), filepath.Join(t.TempDir(), "f.txt"))
+	if err != nil {
+		t.Fatalf("NewPendingFile: %v", err)
+	}
+	if err := pf.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+	if _, err := pf.root.Stat("."); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("owned root after Close: Stat = %v, want os.ErrClosed", err)
 	}
 }

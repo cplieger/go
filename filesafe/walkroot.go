@@ -20,18 +20,21 @@ const walkReadDirBatch = 256
 
 // WalkDirInRoot hands every entry of root's tree to fn as fs.WalkDir does:
 // root-relative, slash-separated on every OS, the root first as ".", then
-// pre-order; an unreadable directory is reported for its own path; fs.SkipDir
-// and fs.SkipAll as usual. It never descends a symlinked directory, refuses a
+// pre-order; a directory that cannot be opened or read is reported in a
+// second call for its own path with its DirEntry and the error, and only a
+// failed stat of the root itself passes a nil DirEntry; fs.SkipDir and
+// fs.SkipAll as usual. It never descends a symlinked directory, refuses a
 // non-directory swapped in for one, and keeps one directory handle open.
 // Unlike fs.WalkDir, a directory's entries all arrive before its subdirectories
 // are walked, sorted only within a batch of 256, and the walk stops between
-// batches once ctx is done. The caller owns root (docs/confinement.md).
+// batches once ctx is done. The caller owns root (docs/confinement.md). A
+// nil root returns ErrUnsafePath and a nil fn ErrInvalidArgument.
 func WalkDirInRoot(ctx context.Context, root *os.Root, fn fs.WalkDirFunc) error {
 	if root == nil {
-		return errors.New("filesafe: nil root")
+		return fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	if fn == nil {
-		return errors.New("filesafe: nil walk function")
+		return fmt.Errorf("%w: nil walk function", ErrInvalidArgument)
 	}
 	w := &rootWalk{ctx: ctx, root: root, fn: fn}
 	err := w.run()
@@ -75,6 +78,13 @@ func classifyWalkAnswer(err error) (walkAction, error) {
 
 func cmpEntryName(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) }
 
+// walkDir is one pending directory: its root-relative name and the DirEntry
+// its parent's listing gave it, which a failure report hands back to fn.
+type walkDir struct {
+	d   fs.DirEntry
+	rel string
+}
+
 // run visits the root and then streams every directory reachable from it,
 // keeping the pending set as a stack of NAMES so no ancestor handle stays
 // open during the descent.
@@ -86,7 +96,8 @@ func (w *rootWalk) run() error {
 	if err != nil {
 		return w.fn(".", nil, err)
 	}
-	act, cbErr := classifyWalkAnswer(w.fn(".", fs.FileInfoToDirEntry(fi), nil))
+	rootEntry := fs.FileInfoToDirEntry(fi)
+	act, cbErr := classifyWalkAnswer(w.fn(".", rootEntry, nil))
 	if cbErr != nil {
 		return cbErr
 	}
@@ -94,7 +105,7 @@ func (w *rootWalk) run() error {
 		return nil
 	}
 
-	pending := []string{"."}
+	pending := []walkDir{{d: rootEntry, rel: "."}}
 	for len(pending) > 0 {
 		dir := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
@@ -115,21 +126,21 @@ func (w *rootWalk) run() error {
 // streamDir visits one directory's entries in fixed-size batches and reports
 // the subdirectories found under it. The handle is closed before any of
 // them is opened.
-func (w *rootWalk) streamDir(dir string) ([]string, error) {
-	handle, err := openDirInRoot(w.root, dir)
+func (w *rootWalk) streamDir(dir walkDir) ([]walkDir, error) {
+	handle, err := openDirInRoot(w.root, dir.rel)
 	if err != nil {
 		return nil, w.reportDirFailure(dir, err)
 	}
 	defer func() { _ = handle.Close() }()
 
-	var subdirs []string
+	var subdirs []walkDir
 	for {
 		if ctxErr := w.ctx.Err(); ctxErr != nil {
 			return subdirs, fmt.Errorf("filesafe: %w", ctxErr)
 		}
 		entries, readErr := handle.ReadDir(walkReadDirBatch)
 		slices.SortFunc(entries, cmpEntryName)
-		batch, endDir, visitErr := w.visitBatch(dir, entries)
+		batch, endDir, visitErr := w.visitBatch(dir.rel, entries)
 		subdirs = append(subdirs, batch...)
 		if visitErr != nil {
 			return nil, visitErr
@@ -150,7 +161,7 @@ func (w *rootWalk) streamDir(dir string) ([]string, error) {
 // root-relative, and reports the subdirectories among them. endDir is true
 // when nothing further in this directory is to be read: fs.SkipAll,
 // fs.SkipDir on a non-directory entry, or a callback error.
-func (w *rootWalk) visitBatch(dir string, entries []fs.DirEntry) (subdirs []string, endDir bool, err error) {
+func (w *rootWalk) visitBatch(dir string, entries []fs.DirEntry) (subdirs []walkDir, endDir bool, err error) {
 	for _, entry := range entries {
 		rel := entry.Name()
 		if dir != "." {
@@ -169,7 +180,7 @@ func (w *rootWalk) visitBatch(dir string, entries []fs.DirEntry) (subdirs []stri
 			continue
 		case entry.IsDir():
 			// Queued on the DIRENT type, so a symlinked directory is never descended.
-			subdirs = append(subdirs, rel)
+			subdirs = append(subdirs, walkDir{d: entry, rel: rel})
 		}
 	}
 	return subdirs, false, nil
@@ -178,8 +189,8 @@ func (w *rootWalk) visitBatch(dir string, entries []fs.DirEntry) (subdirs []stri
 // reportDirFailure hands a directory-level failure to the callback for the
 // path it belongs to and translates the answer: nil (or fs.SkipDir) leaves
 // the walk running, fs.SkipAll ends it, anything else aborts it.
-func (w *rootWalk) reportDirFailure(dir string, err error) error {
-	act, cbErr := classifyWalkAnswer(w.fn(dir, nil, err))
+func (w *rootWalk) reportDirFailure(dir walkDir, err error) error {
+	act, cbErr := classifyWalkAnswer(w.fn(dir.rel, dir.d, err))
 	if cbErr != nil {
 		return cbErr
 	}

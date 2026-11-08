@@ -9,30 +9,43 @@ import (
 var (
 	// ErrEmptyPath is returned when a path argument is empty.
 	ErrEmptyPath = errors.New("filesafe: empty path")
-	// ErrUnsafePath is returned when a path fails the local safety check.
+	// ErrUnsafePath is returned when a path fails the local safety check, and
+	// when a function is given a nil *os.Root or *os.File: every function
+	// taking one refuses nil with an error matching it.
 	ErrUnsafePath = errors.New("filesafe: unsafe path")
+	// ErrInvalidArgument is returned for an argument no call could mean: a
+	// non-positive sweep maxAge, a negative read maxBytes, WithMode(0) or
+	// WithMkdirMode(0), and a nil reader or walk function. Nothing is created
+	// or removed first. Match with errors.Is.
+	ErrInvalidArgument = errors.New("filesafe: invalid argument")
 	// ErrFileTooLarge is returned when a file exceeds the ReadBounded /
 	// ReadBoundedFile size limit, or content exceeds a WithMaxBytes write cap
 	// (there it may arrive wrapped, sometimes inside a *WriteError; match with
 	// errors.Is).
 	ErrFileTooLarge = errors.New("filesafe: file too large")
 	// ErrSymlinkTarget is returned when the target path is a symlink, which
-	// every write entry point, OpenRegular and OpenRegularInRootNoFollow refuse.
+	// every write entry point, OpenRegularNoFollow, OpenRegularInRootNoFollow
+	// and EnsurePrivateDir refuse, and by OpenParentInRoot (so
+	// RemoveFileInRoot) for a symlinked ancestor of the name.
 	ErrSymlinkTarget = errors.New("filesafe: target is a symlink")
-	// ErrRaced is returned by OpenRegularInRootNoFollow when the name changed
-	// identity between the check that refused a symlink and the open that
-	// followed it, so the refusal could not be shown to cover the descriptor
-	// handed back. A retry is the sane response, unlike ErrSymlinkTarget, which
+	// ErrRaced is returned when a name changed between a check and the open
+	// that followed it, so the check could not be shown to cover what was
+	// opened: by OpenRegularInRootNoFollow for the name it refused a symlink
+	// at, and by OpenParentInRoot (so RemoveFileInRoot) for an ancestor
+	// directory. A retry is the sane response, unlike ErrSymlinkTarget, which
 	// is a permanent verdict about what is at the name. Match with errors.Is.
 	ErrRaced = errors.New("filesafe: path changed between the check and the open")
 	// ErrNotRegular is returned when a name resolves to something other than a
-	// regular file. ReadBoundedInRoot refuses to read it, RemoveFileInRoot
-	// refuses to unlink it, and every write entry point refuses to publish over
-	// it. Match with errors.Is; for the mode itself, errors.As a
-	// *NotRegularError rather than parsing the message.
+	// regular file. ReadBounded, ReadBoundedInRoot, OpenRegularNoFollow,
+	// OpenRegularInRoot and OpenRegularInRootNoFollow refuse to read it,
+	// RemoveFileInRoot refuses to unlink it, and every write entry point
+	// refuses to publish over it. Match with errors.Is; for the mode itself,
+	// errors.As a *NotRegularError rather than parsing the message.
 	ErrNotRegular = errors.New("filesafe: not a regular file")
 	// ErrNotDirectory is returned by EnsurePrivateDir when the name is occupied
-	// by something other than a directory. Match with errors.Is.
+	// by something other than a directory, and by OpenParentInRoot for an
+	// ancestor of the name that is neither a directory nor a symlink. Match
+	// with errors.Is.
 	ErrNotDirectory = errors.New("filesafe: not a directory")
 	// ErrNotOwned is returned by EnsurePrivateDir when the directory's owner is
 	// not the effective uid, or ownership could not be determined. Match with
@@ -42,12 +55,13 @@ var (
 	// directory grants group or other access; it is deliberately not repaired
 	// unless WithRepairOwnedDir is set. Match with errors.Is.
 	ErrModeTooOpen = errors.New("filesafe: directory mode grants group or other access")
-	// ErrModeNotStored is returned by EnforceMode when the mode read back from
-	// the handle after chmod does not match what was requested — a mount
-	// property, not a permission error. Match with errors.Is.
+	// ErrModeNotStored is returned when the mode read back after a chmod does
+	// not match what was requested, a mount property rather than a permission
+	// error: by EnforceMode, by a write or probe under WithMode or
+	// WithMkdirMode, and by EnsurePrivateDir. Match with errors.Is.
 	ErrModeNotStored = errors.New("filesafe: filesystem did not store the requested mode")
 	// ErrAborted is returned by PendingFile.Commit when the pending file was
-	// already aborted by a prior Cleanup.
+	// already aborted by a prior Cleanup or Close.
 	ErrAborted = errors.New("filesafe: pending file aborted")
 	// ErrFileBusy is returned on Windows when the replace was refused through
 	// every retry, or the context ended while waiting to retry. It arrives
@@ -58,9 +72,10 @@ var (
 	// Windows reports the same way. Match with errors.Is.
 	ErrFileBusy = errors.New("filesafe: target in use or access denied")
 	// ErrModeUnsupported is returned on Windows by EnforceMode,
-	// EnsurePrivateDir and any write or probe given WithMode or WithMkdirMode,
-	// before anything is created: Go's chmod there only sets the read-only
-	// attribute. Match with errors.Is.
+	// EnsurePrivateDir and any write or probe given a nonzero WithMode or
+	// WithMkdirMode, before anything is created: Go's chmod there only sets the
+	// read-only attribute. A zero mode is ErrInvalidArgument on every platform.
+	// Match with errors.Is.
 	ErrModeUnsupported = errors.New("filesafe: file modes are not supported on this platform")
 )
 
@@ -72,12 +87,13 @@ type WritePhase int
 const (
 	// PhaseTempCreate indicates failure opening the destination for writing:
 	// opening the target's parent directory (the absolute-path entry points
-	// open it as an *os.Root) or creating the temp file inside it.
+	// open it as an *os.Root), creating the temp file inside it, or, under
+	// WithMode, proving the new temp owner-only before any data is written.
 	PhaseTempCreate WritePhase = iota + 1
 	// PhaseTempWrite indicates failure writing to the temp file.
 	PhaseTempWrite
-	// PhaseTempChmod indicates failure enforcing WithMode's mode on the temp
-	// file; it occurs only under WithMode.
+	// PhaseTempChmod indicates failure enforcing WithMode's final mode on the
+	// written temp file; it occurs only under WithMode.
 	PhaseTempChmod
 	// PhaseTempSync indicates failure syncing the temp file.
 	PhaseTempSync
@@ -87,6 +103,7 @@ const (
 	PhaseRename
 )
 
+// String names the phase in the words a WriteError's message uses.
 func (p WritePhase) String() string {
 	switch p {
 	case PhaseTempCreate:
@@ -106,14 +123,29 @@ func (p WritePhase) String() string {
 	}
 }
 
-// WriteError wraps a hard atomic-write failure with the phase that failed.
-// A WriteError always means the data did NOT reach its final path.
+// WriteError wraps a failure inside an atomic write, once its temp file is
+// being created, with the phase that failed. A WriteError always means the
+// data did NOT reach its final path. A refusal before that point (an invalid
+// argument or option, a done context, an over-cap size, a target that is a
+// symlink or not a regular file, a parent directory that could not be
+// created) is a plain error matching its sentinel instead.
 type WriteError struct {
-	Err   error
+	// Err is the failure, matched through Unwrap.
+	Err error
+	// Phase is the step of the write that failed.
 	Phase WritePhase
 }
 
-func (e *WriteError) Error() string { return "filesafe: " + e.Phase.String() + ": " + e.Err.Error() }
+// Error renders "filesafe: <phase>: <cause>". A nil Err renders as "no
+// cause", so a WriteError built by hand never panics.
+func (e *WriteError) Error() string {
+	if e.Err == nil {
+		return "filesafe: " + e.Phase.String() + ": no cause"
+	}
+	return "filesafe: " + e.Phase.String() + ": " + e.Err.Error()
+}
+
+// Unwrap returns Err.
 func (e *WriteError) Unwrap() error { return e.Err }
 
 // NotRegularError reports that a name resolved to something other than a
@@ -133,13 +165,15 @@ type NotRegularError struct {
 	Mode os.FileMode
 }
 
+// Error renders the verdict, the name and the kind of file found.
 func (e *NotRegularError) Error() string {
 	return fmt.Sprintf("%s: %s (type %s)", ErrNotRegular.Error(), e.Name, e.Mode.Type())
 }
 
+// Unwrap returns ErrNotRegular, so errors.Is matches the verdict.
 func (*NotRegularError) Unwrap() error { return ErrNotRegular }
 
-// notRegular is the one producer, so the three refusal sites cannot drift in
+// notRegular is the one producer, so the refusal sites cannot drift in
 // what they report.
 func notRegular(name string, mode os.FileMode) error {
 	return &NotRegularError{Name: name, Mode: mode}

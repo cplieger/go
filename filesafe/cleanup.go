@@ -142,35 +142,48 @@ func reapStaleTemp(dir string, e os.DirEntry, cutoff time.Time, logger *slog.Log
 // *WriteError{PhaseRename} wrapping ENOENT. No data is lost (the previous file at
 // the target is untouched) but that write is.
 //
-// A non-positive maxAge skips the sweep with a Warn rather than reaping
-// everything, so a zero value from an unset config cannot empty a directory.
-func CleanupStaleTemps(ctx context.Context, dir string, maxAge time.Duration, opts ...Option) (SweepResult, error) {
-	c := buildCfg(opts)
+// A non-positive maxAge returns ErrInvalidArgument and sweeps nothing, so a
+// zero value from an unset config can neither empty a directory nor turn the
+// sweep off unseen. An empty dir returns ErrEmptyPath. dir may be relative; a
+// dir that does not exist is a sweep with nothing to reclaim.
+func CleanupStaleTemps(ctx context.Context, dir string, maxAge time.Duration, opts ...SweepOption) (SweepResult, error) {
+	c := buildSweepCfg(opts)
+	if dir == "" {
+		return SweepResult{}, ErrEmptyPath
+	}
 	if maxAge <= 0 {
-		c.logger.Warn("filesafe.CleanupStaleTemps: non-positive maxAge; skipping cleanup",
-			"dir", dir, "max_age", maxAge)
-		return SweepResult{}, nil
+		return SweepResult{}, fmt.Errorf("%w: maxAge %s is not positive", ErrInvalidArgument, maxAge)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return SweepResult{}, fmt.Errorf("filesafe: %w", ctxErr)
 	}
-	d, rdErr := os.Open(dir)
-	if rdErr != nil {
-		if errors.Is(rdErr, fs.ErrNotExist) {
-			return SweepResult{}, nil
+	s := &ambientSweep{ctx: ctx, cutoff: time.Now().Add(-maxAge), logger: c.logger}
+	if c.recursive {
+		root, err := os.OpenRoot(dirOpenName(dir))
+		if err != nil {
+			return sweepOpenFailed(dirOpenErr(err, dir))
 		}
-		return SweepResult{}, rdErr
+		defer func() { _ = root.Close() }()
+		err = s.reapTree(root, dir)
+		return s.result, err
+	}
+	d, err := os.Open(dirOpenName(dir))
+	if err != nil {
+		return sweepOpenFailed(dirOpenErr(err, dir))
 	}
 	defer d.Close()
-
-	s := &ambientSweep{ctx: ctx, cutoff: time.Now().Add(-maxAge), logger: c.logger}
-	var err error
-	if c.recursive {
-		err = s.reapTree(dir)
-	} else {
-		err = s.reapDir(d, dir)
-	}
+	err = s.reapDir(d, dir)
 	return s.result, err
+}
+
+// sweepOpenFailed is CleanupStaleTemps' answer when dir cannot be opened: a
+// dir that does not exist has nothing to reclaim, and any other failure is
+// returned.
+func sweepOpenFailed(err error) (SweepResult, error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		return SweepResult{}, nil
+	}
+	return SweepResult{}, err
 }
 
 // ambientSweep carries the mutable accounting of one CleanupStaleTemps walk, the
@@ -199,7 +212,7 @@ func (s *ambientSweep) reapDir(d *os.File, dir string) error {
 			return nil
 		}
 		if readErr != nil {
-			return readErr
+			return dirOpenErr(readErr, dir)
 		}
 	}
 }
@@ -216,14 +229,20 @@ func (s *ambientSweep) reapDir(d *os.File, dir string) error {
 // caller. Every path stays ambient here, matching this function's siblings — a caller
 // that needs the removals confined against a co-mounting writer wants
 // CleanupStaleTempsInRoot instead.
-func (s *ambientSweep) reapTree(dir string) error {
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+//
+// The walk is WalkDirInRoot over root, opened by the caller through dirOpenName, the walker
+// CleanupStaleTempsInRoot uses. So a symlink to a directory is swept as the flat
+// sweep sweeps it, where filepath.WalkDir would Lstat it and stop, and a dir that
+// is not a directory is refused with ENOTDIR rather than reaped as its own entry.
+func (s *ambientSweep) reapTree(root *os.Root, dir string) error {
+	return WalkDirInRoot(s.ctx, root, func(rel string, d fs.DirEntry, walkErr error) error {
 		if ctxErr := s.ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		path := filepath.Join(dir, filepath.FromSlash(rel))
 		if walkErr != nil {
-			if path == dir {
-				return walkErr
+			if rel == "." {
+				return dirOpenErr(walkErr, dir)
 			}
 			s.logger.Debug("filesafe.CleanupStaleTemps: skipping unreadable path", "path", path, "error", walkErr)
 			s.result.Unreadable++

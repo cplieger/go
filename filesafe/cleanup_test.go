@@ -113,8 +113,9 @@ func TestCleanupStaleTemps(t *testing.T) {
 		if _, err := WriteFile(t.Context(), path, []byte("data")); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
-		// A successful write leaves no temp, so nothing to reclaim.
-		removed, err := CleanupStaleTemps(t.Context(), dir, 0)
+		// A successful write leaves no temp, so even a sweep that reclaims
+		// every temp older than a nanosecond finds nothing.
+		removed, err := CleanupStaleTemps(t.Context(), dir, time.Nanosecond)
 		if err != nil {
 			t.Fatalf("CleanupStaleTemps: %v", err)
 		}
@@ -173,8 +174,8 @@ func TestCleanupStaleTemps_NonPositiveMaxAge_SparesOldTemp(t *testing.T) {
 			t.Fatalf("Chtimes: %v", err)
 		}
 		removed, err := CleanupStaleTemps(t.Context(), dir, maxAge)
-		if err != nil {
-			t.Fatalf("CleanupStaleTemps(%v) = %v", maxAge, err)
+		if !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("CleanupStaleTemps(%v) = %v, want ErrInvalidArgument", maxAge, err)
 		}
 		if removed.Removed != 0 {
 			t.Errorf("CleanupStaleTemps(maxAge=%v) removed = %d, want 0", maxAge, removed)

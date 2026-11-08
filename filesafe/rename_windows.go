@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -70,7 +71,7 @@ func commitTempInRoot(ctx context.Context, root *os.Root, tmp *os.File, tmpName,
 	durable = publishDurable(root, tmp, name, c)
 	if clErr := tmp.Close(); clErr != nil {
 		c.logger.Debug("filesafe: published file close failed",
-			"root", root.Name(), "path", name, "error", clErr)
+			"root", filepath.Clean(root.Name()), "path", name, "error", clErr)
 	}
 	return durable, nil
 }
@@ -119,19 +120,19 @@ func replaceBusy(err error) bool {
 func publishDurable(root *os.Root, f *os.File, name string, c *cfg) bool {
 	if err := f.Sync(); err != nil {
 		c.logger.Warn("filesafe: flush after the rename failed; write is not durable",
-			"root", root.Name(), "path", name, "error", err)
+			"root", filepath.Clean(root.Name()), "path", name, "error", err)
 		return false
 	}
 	fsName, serial, err := volumeFilesystem(f)
 	if err != nil {
 		c.logger.Warn("filesafe: filesystem query failed; write is not durable",
-			"root", root.Name(), "path", name, "error", err)
+			"root", filepath.Clean(root.Name()), "path", name, "error", err)
 		return false
 	}
 	remote, err := volumeRemote(f)
 	if err != nil {
 		c.logger.Warn("filesafe: device query failed; write is not durable",
-			"root", root.Name(), "path", name, "error", err)
+			"root", filepath.Clean(root.Name()), "path", name, "error", err)
 		return false
 	}
 	if durableOn(fsName, remote) {
@@ -139,7 +140,7 @@ func publishDurable(root *os.Root, f *os.File, name string, c *cfg) bool {
 	}
 	if _, logged := nonDurableVolumes.LoadOrStore(serial, struct{}{}); !logged {
 		c.logger.Info("filesafe: writes on this volume report Durable=false",
-			"root", root.Name(), "filesystem", fsName, "remote", remote)
+			"root", filepath.Clean(root.Name()), "filesystem", fsName, "remote", remote)
 	}
 	return false
 }

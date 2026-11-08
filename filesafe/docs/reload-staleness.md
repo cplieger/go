@@ -13,7 +13,7 @@ id := filesafe.Identify(info)
 // on every poll
 info, err := os.Stat(path)
 if err != nil { /* caller's policy */ }
-if id.Changed(info) {
+if !id.Matches(info) {
 	// reload, then call Identify again
 }
 ```
@@ -39,10 +39,10 @@ Two different ways of writing a file change its content, and each one defeats ha
 | in-place, same tick, length changed | same | differs | same | catches | misses |
 | any write crossing a tick | differs | any | any | catches | catches |
 
-So time, `SameFile` and size together cover every row either pair covers. A reader of a file only this package publishes needs `Changed` alone. A reader whose file may also be rewritten in place keeps its own `info.Size() != cached` check beside `Changed`. That is one comparison at the call site, which is why the package exports no size check. No check based on a stat can catch the third row.
+So time, `SameFile` and size together cover every row either pair covers. A reader of a file only this package publishes needs `Matches` alone. A reader whose file may also be rewritten in place keeps its own `info.Size() != cached` check beside `Matches`. That is one comparison at the call site, which is why the package exports no size check. No check based on a stat can catch the third row.
 
 ## The zero value
 
-A zero `FileIdentity` records nothing and reports `Changed`. That is the safe direction for a cache, because a needless reload costs one read while a missed reload serves stale data indefinitely. `Recorded()` reports whether an identity was captured, and `ModTime()` returns the captured time for diagnostics.
+A zero `FileIdentity` records nothing and matches nothing, so a cache holding one reloads. That is the safe direction, because a needless reload costs one read while a missed reload serves stale data indefinitely. `Recorded()` reports whether an identity was captured; use it rather than comparing with `FileIdentity{}`.
 
 `FileIdentity` compares, and decides nothing else. What to do when a stat fails, how to degrade and how often to stat again stay with the caller.

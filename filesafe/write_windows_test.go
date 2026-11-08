@@ -183,10 +183,10 @@ func TestReadOnlyTarget(t *testing.T) {
 func TestFilesafeReaderDoesNotBlockWrite(t *testing.T) {
 	t.Parallel()
 	readers := map[string]func(t *testing.T, root *os.Root, path string) *os.File{
-		"OpenRegular": func(t *testing.T, _ *os.Root, path string) *os.File {
-			f, _, err := OpenRegular(path)
+		"OpenRegularNoFollow": func(t *testing.T, _ *os.Root, path string) *os.File {
+			f, _, err := OpenRegularNoFollow(path)
 			if err != nil {
-				t.Fatalf("OpenRegular: %v", err)
+				t.Fatalf("OpenRegularNoFollow: %v", err)
 			}
 			return f
 		},

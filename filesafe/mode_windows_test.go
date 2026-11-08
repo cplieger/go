@@ -14,7 +14,7 @@ import (
 // its content.
 func TestModeOptionsRefuse(t *testing.T) {
 	t.Parallel()
-	opts := map[string]Option{"WithMode": WithMode(0o600), "WithMkdirMode": WithMkdirMode(0o700)}
+	opts := map[string]WriteOption{"WithMode": WithMode(0o600), "WithMkdirMode": WithMkdirMode(0o700)}
 
 	for _, form := range writeForms() {
 		for optName, opt := range opts {

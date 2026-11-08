@@ -1,16 +1,18 @@
 package filesafe
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 )
 
 // ValidatePath checks path against the rule this package's absolute-path
 // entry points apply (WriteFile, WriteReader, NewPendingFile, ReadBounded),
-// returning nil when acceptable and otherwise ErrEmptyPath or ErrUnsafePath —
-// the exported face of validateAbsClean, so acceptance here and a later
-// write's rejection cannot drift apart.
+// returning nil when acceptable and otherwise ErrEmptyPath or ErrUnsafePath.
+// It runs the same check those entry points run, so acceptance here and a
+// later write's rejection cannot drift apart.
 //
 // Unlike filepath.IsAbs, this also rejects an embedded NUL byte, matching
 // what every write here refuses. Nothing on the filesystem is consulted: nil
@@ -43,4 +45,15 @@ func validateAbsClean(path string) (string, error) {
 		return "", fmt.Errorf("%w: not absolute: %q", ErrUnsafePath, path)
 	}
 	return clean, nil
+}
+
+// dirOpenErr names name, not dirOpenName(name) or childDirOpenName(name), in
+// err when err is the *fs.PathError an open or read of either returned, so a
+// failure reads as the caller's own directory rather than with the separator
+// or "/." they added.
+func dirOpenErr(err error, name string) error {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		pe.Path = name
+	}
+	return err
 }

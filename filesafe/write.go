@@ -38,7 +38,7 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 	if err != nil {
 		return nil, "", false, err
 	}
-	if modeErr := c.modeOptionsErr(); modeErr != nil {
+	if modeErr := c.writeOptionsErr(); modeErr != nil {
 		return nil, "", false, modeErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -52,9 +52,9 @@ func openParentRoot(ctx context.Context, path string, c *cfg) (root *os.Root, ba
 		}
 		dirSyncFailed = failed
 	}
-	root, err = os.OpenRoot(dir)
+	root, err = os.OpenRoot(dirOpenName(dir))
 	if err != nil {
-		return nil, "", false, &WriteError{Phase: PhaseTempCreate, Err: err}
+		return nil, "", false, &WriteError{Phase: PhaseTempCreate, Err: dirOpenErr(err, dir)}
 	}
 	return root, filepath.Base(cleanPath), dirSyncFailed, nil
 }
@@ -81,9 +81,9 @@ func mkdirBelowExisting(base, rel string, mode os.FileMode, enforce bool, logger
 	if rel == "." {
 		return false, nil
 	}
-	root, err := os.OpenRoot(base)
+	root, err := os.OpenRoot(dirOpenName(base))
 	if err != nil {
-		return false, err
+		return false, dirOpenErr(err, base)
 	}
 	defer root.Close()
 	durable, err := mkdirAllInRoot(root, rel, mode, enforce, true, logger)
@@ -179,8 +179,8 @@ func writeAtomic(ctx context.Context, path string, c *cfg, writeData func(*os.Fi
 // WriteFile atomically writes data to path. File mode: see WithMode. A nil
 // error means the data is at path; check Result.Durable for crash
 // durability.
-func WriteFile(ctx context.Context, path string, data []byte, opts ...Option) (Result, error) {
-	c := buildCfg(opts)
+func WriteFile(ctx context.Context, path string, data []byte, opts ...WriteOption) (Result, error) {
+	c := buildWriteCfg(opts)
 	if err := checkWriteCap(int64(len(data)), c.maxBytes); err != nil {
 		return Result{}, err
 	}
@@ -256,11 +256,12 @@ func (wc writerCtx) Write(p []byte) (int, error) {
 // WithMode. An io.WriterTo r is used for efficient copying, so cancellation
 // is coarse on that path (per chunk, or after a single-shot copy); ctx is
 // still honored at the barrier, so a cancelled write leaves no partial target.
-func WriteReader(ctx context.Context, path string, r io.Reader, opts ...Option) (Result, error) {
+// A nil r returns ErrInvalidArgument.
+func WriteReader(ctx context.Context, path string, r io.Reader, opts ...WriteOption) (Result, error) {
 	if r == nil {
-		return Result{}, errors.New("filesafe: nil reader")
+		return Result{}, fmt.Errorf("%w: nil reader", ErrInvalidArgument)
 	}
-	c := buildCfg(opts)
+	c := buildWriteCfg(opts)
 	return writeAtomic(ctx, path, c, copyReader(ctx, r, c.maxBytes))
 }
 
@@ -301,7 +302,10 @@ const (
 // and ReadFrom enforce WithMaxBytes and count BytesWritten; other writes
 // through the embedded file escape the count but not the cap, which Commit
 // re-checks. NewPendingFile owns the root it opens and closes it at Commit or
-// a successful Cleanup. A PendingFile is not safe for concurrent use.
+// a successful Cleanup. Close is Cleanup, so a deferred Close aborts an
+// uncommitted write instead of leaking its temp. A PendingFile is not safe for
+// concurrent use. Create one with NewPendingFile or NewPendingFileInRoot; the
+// zero value is not usable.
 type PendingFile struct {
 	*os.File
 	cfg     *cfg
@@ -347,8 +351,8 @@ func newPendingFromRoot(ctx context.Context, root *os.Root, name string, ownRoot
 // NewPendingFile creates a temp file destined to atomically replace path.
 // Write to it, then call Commit to finalize or Cleanup to abort. File mode:
 // see WithMode. ctx is checked before the temp is created.
-func NewPendingFile(ctx context.Context, path string, opts ...Option) (*PendingFile, error) {
-	c := buildCfg(opts)
+func NewPendingFile(ctx context.Context, path string, opts ...WriteOption) (*PendingFile, error) {
+	c := buildWriteCfg(opts)
 	root, base, dirSyncFailed, err := openParentRoot(ctx, path, c)
 	if err != nil {
 		return nil, err
@@ -433,6 +437,13 @@ func (p *PendingFile) Truncate(size int64) error {
 // Commit, which verifies the staged file's actual size.
 func (p *PendingFile) BytesWritten() int64 { return p.written }
 
+// Name reports the temp file's path, cleaned, so a root opened through
+// OpenParentInRoot, whose own Name keeps a "/." the open added, does not
+// carry it into the temp's path. The path is cleaned lexically
+// (filepath.Clean), as Result.Path is joined, so a root opened through a
+// symlink followed by ".." is named as written, not as resolved.
+func (p *PendingFile) Name() string { return filepath.Clean(p.File.Name()) }
+
 // closeOwnedRoot closes the parent-directory root when this PendingFile
 // opened it (NewPendingFile). Idempotent. A caller-provided root
 // (NewPendingFileInRoot) is never closed.
@@ -483,6 +494,13 @@ func (p *PendingFile) commit(ctx context.Context) (Result, error) {
 	return Result{Path: p.path, Durable: durable && !p.dirSyncFailed}, nil
 }
 
+// Close aborts the pending write exactly as Cleanup does and returns
+// Cleanup's error, so a habitual defer p.Close() never leaks the temp or the
+// root NewPendingFile opened; after Commit it does nothing. It replaces the
+// embedded file's Close: p.File.Close drops only the descriptor, and a Commit
+// after it fails.
+func (p *PendingFile) Close() error { return p.Cleanup() }
+
 // Cleanup closes and removes the temp file, aborting the pending write. It
 // is a no-op once Commit has been called. After a successful Cleanup, a
 // subsequent Commit returns ErrAborted.
@@ -503,7 +521,7 @@ func (p *PendingFile) Cleanup() error {
 		p.closeOwnedRoot()
 		return nil
 	}
-	if clErr := p.Close(); clErr != nil {
+	if clErr := p.File.Close(); clErr != nil {
 		p.cfg.logger.Debug("filesafe: pending file close during cleanup failed",
 			"path", p.Name(), "error", clErr)
 	}

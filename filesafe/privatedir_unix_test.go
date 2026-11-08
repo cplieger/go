@@ -243,8 +243,8 @@ func TestEnsurePrivateDirRefusesPlantedOccupant(t *testing.T) {
 			if !errors.Is(err, tt.want) {
 				t.Errorf("EnsurePrivateDir(%s planted) = %v, want %v", tt.name, err, tt.want)
 			}
-			if pd != (PrivateDir{}) {
-				t.Errorf("PrivateDir = %+v, want the zero value: a refusal reaches no verdict", pd)
+			if pd != (PrivateDirResult{}) {
+				t.Errorf("PrivateDirResult = %+v, want the zero value: a refusal reaches no verdict", pd)
 			}
 		})
 	}

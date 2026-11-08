@@ -3,6 +3,7 @@ package filesafe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -59,8 +60,8 @@ type SweepResult struct {
 // which errno) still go to the configured logger at Debug, since those are details
 // the counts cannot carry.
 //
-// maxAge must be positive; a non-positive value skips the sweep with a warning
-// rather than reaping everything. It must also exceed the longest time any
+// maxAge must be positive; a non-positive value returns ErrInvalidArgument and
+// sweeps nothing. It must also exceed the longest time any
 // CONCURRENT writer may hold a temp — a sweep cannot tell an orphan from a write
 // in progress, and the age gate is the temp's mtime, so what is at risk is a temp
 // nothing has written to for maxAge (a PendingFile staged and committed slowly is
@@ -68,16 +69,15 @@ type SweepResult struct {
 // matching this package's own temp shape are candidates, so a caller-owned file is
 // never removed.
 //
-// The caller owns root; CleanupStaleTempsInRoot does not close it.
-func CleanupStaleTempsInRoot(ctx context.Context, root *os.Root, maxAge time.Duration, opts ...Option) (SweepResult, error) {
-	c := buildCfg(opts)
+// The caller owns root; CleanupStaleTempsInRoot does not close it. A nil root
+// returns ErrUnsafePath.
+func CleanupStaleTempsInRoot(ctx context.Context, root *os.Root, maxAge time.Duration, opts ...SweepOption) (SweepResult, error) {
+	c := buildSweepCfg(opts)
 	if root == nil {
-		return SweepResult{}, errors.New("filesafe: nil root")
+		return SweepResult{}, fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	if maxAge <= 0 {
-		c.logger.Warn("filesafe.CleanupStaleTempsInRoot: non-positive maxAge; skipping cleanup",
-			"max_age", maxAge)
-		return SweepResult{}, nil
+		return SweepResult{}, fmt.Errorf("%w: maxAge %s is not positive", ErrInvalidArgument, maxAge)
 	}
 
 	s := &rootSweep{

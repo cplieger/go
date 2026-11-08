@@ -9,12 +9,13 @@ import (
 
 // OpenRegularInRoot opens name inside root read-only and returns the open
 // descriptor with that descriptor's FileInfo, refusing anything not a regular
-// file with ErrNotRegular naming the mode. An in-root symlink resolves. The
-// caller owns the file and root. A relative, NUL-free name is required
-// (ErrEmptyPath, ErrUnsafePath); other errors are the root's own.
+// file with ErrNotRegular naming the mode. An in-root symlink resolves;
+// OpenRegularInRootNoFollow refuses one. The caller owns the file and root. A
+// relative, NUL-free name is required (ErrEmptyPath, ErrUnsafePath), a nil
+// root returns ErrUnsafePath, and other errors are the root's own.
 func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error) {
 	if root == nil {
-		return nil, nil, errors.New("filesafe: nil root")
+		return nil, nil, fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	clean, err := validateRootName(name)
 	if err != nil {
@@ -24,7 +25,7 @@ func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error
 	// O_NONBLOCK makes an open on a planted FIFO a rejection rather than a hang.
 	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, socketRefusal(err, clean, func() (os.FileInfo, error) { return root.Stat(clean) })
 	}
 	fi, err := statRegular(f, clean)
 	if err != nil {
@@ -34,13 +35,16 @@ func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error
 	return f, fi, nil
 }
 
-// OpenRegular is OpenRegularInRoot for an absolute path, except that the open
-// itself refuses a symlink at the final component with ErrSymlinkTarget.
-// Ancestor components are not pinned. An empty, NUL-holding or relative path
-// is ErrEmptyPath or ErrUnsafePath; other errors are the filesystem's own (a
-// missing file matches fs.ErrNotExist). On Windows the open handle does not
-// block a filesafe write of the file.
-func OpenRegular(path string) (*os.File, os.FileInfo, error) {
+// OpenRegularNoFollow opens the absolute path read-only and returns the open
+// descriptor with that descriptor's FileInfo, refusing anything not a
+// regular file with ErrNotRegular naming the mode, and a symlink at the final
+// component with ErrSymlinkTarget: the NoFollow suffix means the same as on
+// OpenRegularInRootNoFollow. Ancestor components are not pinned, and the open
+// is non-blocking so a FIFO cannot stall the caller. An empty, NUL-holding or
+// relative path is ErrEmptyPath or ErrUnsafePath; other errors are the
+// filesystem's own (a missing file matches fs.ErrNotExist). On Windows the
+// open handle does not block a filesafe write of the file.
+func OpenRegularNoFollow(path string) (*os.File, os.FileInfo, error) {
 	clean, err := validateAbsClean(path)
 	if err != nil {
 		return nil, nil, err
@@ -56,6 +60,22 @@ func OpenRegular(path string) (*os.File, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	return f, fi, nil
+}
+
+// socketRefusal turns open(2)'s ENXIO, which a Unix socket (or a device with
+// no driver) answers before any descriptor exists, into the *NotRegularError
+// the descriptor check would have given, reading what is at name with stat.
+// Any other error, or a name stat finds regular or cannot read, is returned
+// as it is.
+func socketRefusal(err error, name string, stat func() (os.FileInfo, error)) error {
+	if !errors.Is(err, syscall.ENXIO) {
+		return err
+	}
+	fi, statErr := stat()
+	if statErr != nil || fi.Mode().IsRegular() {
+		return err
+	}
+	return notRegular(name, fi.Mode())
 }
 
 // statRegular stats the open descriptor, never the path, so the verdict is
@@ -78,7 +98,7 @@ func statRegular(f *os.File, name string) (os.FileInfo, error) {
 // policy. Ancestor components are not pinned (see OpenParentInRoot).
 func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInfo, error) {
 	if root == nil {
-		return nil, nil, errors.New("filesafe: nil root")
+		return nil, nil, fmt.Errorf("%w: nil root", ErrUnsafePath)
 	}
 	clean, err := validateRootName(name)
 	if err != nil {
@@ -95,28 +115,29 @@ func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInf
 	if before.Mode()&os.ModeSymlink != 0 {
 		return nil, nil, fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
 	}
+	if !before.Mode().IsRegular() {
+		return nil, nil, notRegular(clean, before.Mode())
+	}
 
+	if pinOpenHook != nil {
+		pinOpenHook(clean)
+	}
 	// O_NONBLOCK for the same reason as the sibling: a FIFO that slipped in
 	// between the Lstat and here is a rejection rather than a hang.
 	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, racedOpen(root, clean, before, err)
 	}
 	fi, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
 		return nil, nil, err
 	}
-	// Identity BEFORE kind: a name swapped for a directory is more honestly
-	// reported as a race than as "not a regular file", because the caller's
-	// question was about the object it checked.
+	// The Lstat proved a regular file, so the same inode is one; any other
+	// object at the name now is a swap.
 	if !os.SameFile(before, fi) {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("%w: %s", ErrRaced, clean)
-	}
-	if !fi.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, nil, notRegular(clean, fi.Mode())
 	}
 	return f, fi, nil
 }

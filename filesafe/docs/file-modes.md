@@ -2,7 +2,7 @@
 
 This page explains how filesafe sets file and directory modes, and how `EnsurePrivateDir` sets up a directory only one user may enter, for a developer writing credentials, configuration or backups.
 
-None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll(true)` creates missing parent directories the same way.
+None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given a nonzero `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A zero mode is `ErrInvalidArgument` on every platform. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll(true)` creates missing parent directories the same way.
 
 ## Ordinary and enforced modes
 
@@ -31,7 +31,7 @@ A mode passed to `mkdir(2)` or `open(2)` is a request, not a result. The umask n
 `WithRepairOwnedDir(true)` repairs a pre-existing directory instead of refusing it, because the ownership check has already proved it belongs to the caller. It is not the default, because a wide mode on a directory you own can be deliberate.
 
 ```go
-type PrivateDir struct {
+type PrivateDirResult struct {
 	Mode     os.FileMode // the mode the filesystem stored, read back from the handle
 	Created  bool        // this call created the directory
 	Repaired bool        // the directory's mode had to be corrected
@@ -40,7 +40,7 @@ type PrivateDir struct {
 
 The result is meaningful only beside a nil error. A non-nil error can follow a successful `mkdir`, so the directory may exist while its ownership is unproven. Treat that as fatal rather than retrying into it.
 
-`WithLogger` sets the logger for the one `Warn` a repair emits, since a filesystem that ignores mode requests affects every other `mkdir` in the program too. Every other option is ignored, and the mode is not a parameter.
+`WithLogger` sets the logger for the one `Warn` a repair emits, since a filesystem that ignores mode requests affects every other `mkdir` in the program too. `EnsurePrivateDir` takes only these two options, so a write option passed to it does not compile, and the mode is not a parameter.
 
 ## One level per call
 

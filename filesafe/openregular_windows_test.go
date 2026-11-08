@@ -45,24 +45,24 @@ func TestReparsePointRefusal(t *testing.T) {
 	t.Run("OpenRegular_symlink", func(t *testing.T) {
 		t.Parallel()
 		_, dir := withSymlink(t)
-		f, _, err := OpenRegular(filepath.Join(dir, "link"))
+		f, _, err := OpenRegularNoFollow(filepath.Join(dir, "link"))
 		if !errors.Is(err, ErrSymlinkTarget) {
-			t.Fatalf("OpenRegular(symlink) = %v, want ErrSymlinkTarget", err)
+			t.Fatalf("OpenRegularNoFollow(symlink) = %v, want ErrSymlinkTarget", err)
 		}
 		if f != nil {
-			t.Errorf("OpenRegular(symlink) returned a file, want nil")
+			t.Errorf("OpenRegularNoFollow(symlink) returned a file, want nil")
 		}
 	})
 
 	t.Run("OpenRegular_junction", func(t *testing.T) {
 		t.Parallel()
 		_, dir := withJunction(t)
-		f, _, err := OpenRegular(filepath.Join(dir, "junction"))
+		f, _, err := OpenRegularNoFollow(filepath.Join(dir, "junction"))
 		if !errors.Is(err, ErrNotRegular) {
-			t.Fatalf("OpenRegular(junction) = %v, want ErrNotRegular", err)
+			t.Fatalf("OpenRegularNoFollow(junction) = %v, want ErrNotRegular", err)
 		}
 		if f != nil {
-			t.Errorf("OpenRegular(junction) returned a file, want nil")
+			t.Errorf("OpenRegularNoFollow(junction) returned a file, want nil")
 		}
 	})
 

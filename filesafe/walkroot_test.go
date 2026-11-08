@@ -132,7 +132,7 @@ func TestWalkDirInRoot_refuses_a_fifo_in_a_directory_position(t *testing.T) {
 	go func() {
 		var got collectWalk
 		w := &rootWalk{ctx: t.Context(), root: root, fn: got.visit}
-		_, streamErr := w.streamDir("pipe")
+		_, streamErr := w.streamDir(walkDir{rel: "pipe"})
 		done <- outcome{&got, streamErr}
 	}()
 	select {
