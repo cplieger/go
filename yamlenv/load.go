@@ -15,7 +15,8 @@ import (
 // app's own error type, not this one. Each predicate call gets one holding a
 // single problem; a passed-through error joins every claimed one
 // (errors.Join) in document order. Error returns Err's text unchanged. Only
-// Load constructs it, always with a non-nil Err.
+// Load constructs it, always with a non-nil Err; a hand-built one with a nil
+// Err renders a fixed message rather than panicking.
 type UnmarshalerError struct {
 	// Err is the config type's own error for one problem, or errors.Join of
 	// several in document order.
@@ -24,7 +25,12 @@ type UnmarshalerError struct {
 
 // Error returns the unmarshaler's message byte for byte: the caller chose that
 // vocabulary for its operator surfaces.
-func (e *UnmarshalerError) Error() string { return e.Err.Error() }
+func (e *UnmarshalerError) Error() string {
+	if e.Err == nil {
+		return "yamlenv: unmarshaler error"
+	}
+	return e.Err.Error()
+}
 
 // Unwrap exposes the unmarshaler's error so errors.Is and errors.As reach
 // whatever typed errors the caller's own UnmarshalYAML constructed.
@@ -192,14 +198,14 @@ func unmarshalerCause(e *yaml.LoadError) error {
 	return cause
 }
 
-// checkUnknownKeysFiltered runs the CheckUnknownKeys probe against a fresh
+// checkUnknownKeysFiltered runs the checkUnknownKeys probe against a fresh
 // value of the config type and keeps ONLY unknown-key findings. The rest are
 // pre-expansion artifacts the post-expansion decode owns: a wrong-type entry,
 // or a custom UnmarshalYAML rejecting a still-literal ${VAR}. A probe go-yaml
 // stopped early (a single *LoadError) reports nothing; the decode re-raises it.
 // doc must be unexpanded, so an echoed key is the one the operator wrote.
 func checkUnknownKeysFiltered(data []byte, doc *yaml.Node, cfgType reflect.Type, o loadOptions) error {
-	errs, ok := errors.AsType[*yaml.LoadErrors](CheckUnknownKeys(data, reflect.New(cfgType).Interface()))
+	errs, ok := errors.AsType[*yaml.LoadErrors](checkUnknownKeys(data, reflect.New(cfgType).Interface()))
 	if !ok {
 		return nil
 	}

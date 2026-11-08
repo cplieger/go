@@ -4,7 +4,7 @@
 
 envx configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it.
 
-It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. The optional yamlenv module adds [go-yaml](https://github.com/yaml/go-yaml) v4 for YAML config files. Both need Go 1.27.3 or later and are licensed under Apache-2.0.
+It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -14,7 +14,6 @@ envx is built for Go services in containers, configured by compose or Kubernetes
 - A key name no variable can have, such as `APP LISTEN`, panics on first read. Otherwise the getter would return its default forever.
 - `Require` returns a typed error, so startup can report every missing variable at once.
 - `Secret` reads `KEY_FILE` before `KEY`, caps the file at 1 MB and keeps the secret out of every error and log line.
-- yamlenv fills `${VAR}` in a YAML config file after parsing it, so a value cannot change its structure. `Load` errors never carry an expanded value by default.
 
 Consider [caarlos0/env](https://github.com/caarlos0/env) if you want your whole config parsed into a tagged struct, with float, slice, map and custom-type parsers.
 
@@ -22,12 +21,6 @@ Consider [caarlos0/env](https://github.com/caarlos0/env) if you want your whole 
 
 ```sh
 go get github.com/cplieger/go/envx@latest
-```
-
-yamlenv is a separate module with its own version tags:
-
-```sh
-go get github.com/cplieger/go/yamlenv@latest
 ```
 
 ## Usage
@@ -73,22 +66,7 @@ func run(args []string, getenv func(string) string) int {
 }
 ```
 
-Load a YAML config file whose values refer to environment variables as `${VAR}`. `Load` checks, parses, expands and decodes in one call. With its default options, every error it returns is safe to log:
-
-```go
-cfg := defaultConfig() // the decode overlays the file onto your defaults
-allow := func(name string) bool { return strings.HasPrefix(name, "APP_") }
-unresolved, err := yamlenv.Load(data, &cfg, allow)
-if len(unresolved) > 0 {
-	slog.Warn("config references unset environment variables",
-		"vars", strings.Join(unresolved, ","))
-}
-if err != nil {
-	return err // a misspelled key, a second document or a decode failure, with no secret in the text
-}
-```
-
-[YAML config files with yamlenv](https://github.com/cplieger/go/tree/main/yamlenv) covers the expansion rules, the steps `Load` runs and `WithErrorPassthrough`, which returns the decode errors you select unchanged. The runnable examples on pkg.go.dev show more cases, and `go test` keeps them true.
+The runnable examples on pkg.go.dev show more cases, and `go test` keeps them true.
 
 ## API
 
@@ -96,9 +74,8 @@ if err != nil {
 - Strict getters that return a malformed value as an error and never log: `BoolStrict`, `IntStrict`, `DurationStrict` and `ParseError`.
 - Required values and secrets: `Require`, `Secret`, `SecretWithSource`, `IsBlankSecretFilePath`, `MissingError` and one error value for each way a secret file can fail.
 - An injected environment: `Source`, which carries the getters, the strict getters and `Require` as methods.
-- yamlenv: `Load` with its options, and the steps it runs, `ExpandWith`, `Expand`, `SanitizeDecodeError`, `CheckUnknownKeys` and `CheckSingleDocument`.
 
-The full reference is on pkg.go.dev for [envx](https://pkg.go.dev/github.com/cplieger/go/envx) and [yamlenv](https://pkg.go.dev/github.com/cplieger/go/yamlenv).
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/envx).
 
 ## Behavior contract
 
@@ -127,7 +104,7 @@ These are deliberate non-goals:
 ## Documentation
 
 - [Behavior contract](docs/behavior.md) explains how each getter treats unset, empty and malformed values, and how secrets are read.
-- [YAML config files with yamlenv](https://github.com/cplieger/go/tree/main/yamlenv) covers `${VAR}` expansion, the `Load` pipeline and its options.
+- For a YAML config file whose values refer to environment variables, see the separate [yamlenv](https://github.com/cplieger/go/tree/main/yamlenv) module.
 - [Non-goals](docs/non-goals.md) gives the reason each unsupported feature is left out.
 
 ## Contributing

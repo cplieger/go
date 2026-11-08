@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -120,13 +121,13 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("unresolved names identical to Expand", func(t *testing.T) {
+	t.Run("unresolved names identical to ExpandWith", func(t *testing.T) {
 		src := []byte("api_key: ${APP_UNSET_ONE}\nnested:\n  level: 1\nother: ${APP_UNSET_TWO}\n")
 		var direct yaml.Node
 		if err := yaml.Unmarshal(src, &direct); err != nil {
 			t.Fatalf("Unmarshal: %v", err)
 		}
-		want := yamlenv.Expand(&direct, allowAppPrefix)
+		want := yamlenv.ExpandWith(&direct, allowAppPrefix, os.LookupEnv)
 
 		var cfg struct {
 			APIKey string `yaml:"api_key"`
@@ -140,7 +141,7 @@ func TestLoad(t *testing.T) {
 			t.Fatalf("Load = %v, want nil", err)
 		}
 		if !slices.Equal(got, want) {
-			t.Errorf("Load unresolved = %v, want Expand's %v", got, want)
+			t.Errorf("Load unresolved = %v, want ExpandWith's %v", got, want)
 		}
 	})
 
@@ -1160,5 +1161,14 @@ func TestLoadResourceLimits(t *testing.T) {
 				t.Errorf("err = %q, want the fixed withheld message", err)
 			}
 		})
+	}
+}
+
+// TestUnmarshalerError_nil_Err_does_not_panic pins that a hand-built
+// UnmarshalerError without a cause renders a fixed message.
+func TestUnmarshalerError_nil_Err_does_not_panic(t *testing.T) {
+	t.Parallel()
+	if got, want := (&yamlenv.UnmarshalerError{}).Error(), "yamlenv: unmarshaler error"; got != want {
+		t.Errorf("UnmarshalerError{}.Error() = %q, want %q", got, want)
 	}
 }

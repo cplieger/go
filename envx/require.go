@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -33,7 +34,8 @@ func Require(key Key) (string, error) {
 
 // maxSecretFileSize bounds a KEY_FILE secret read. Real secrets are tens of
 // bytes; the 1 MB ceiling only guards against pointing the variable at a
-// device file or a runaway log.
+// runaway log. A device or FIFO is refused before any read, as not a regular
+// file.
 const maxSecretFileSize = 1 << 20
 
 // The failure classes of a KEY_FILE secret read. Every error Secret and
@@ -66,9 +68,12 @@ var (
 	// silently truncated.
 	ErrSecretFileGrew = errors.New("envx: secret file grew past the size limit during read")
 	// ErrSecretFileUnreadable means the operating system refused the open, stat
-	// or read. The underlying *os.PathError stays reachable with errors.As, so
-	// a caller can still report the syscall and its reason (without the path,
-	// which the PathError also carries).
+	// or read, or the path named something other than a regular file (a FIFO,
+	// a directory or a device), which is refused before any read. The
+	// underlying *os.PathError stays reachable with errors.As, so a caller can
+	// still report the operation and its reason (without the path, which the
+	// PathError also carries); for a non-regular file its Err reads "not a
+	// regular file (mode ...)".
 	ErrSecretFileUnreadable = errors.New("envx: secret file could not be read")
 )
 
@@ -103,9 +108,9 @@ func (e *classifiedError) Unwrap() []error {
 	return []error{e.class, e.cause}
 }
 
-// unreadableSecretFile classifies an OS-level open, stat or read failure. The
-// message is the operating system's own, unchanged: it is already a
-// *os.PathError naming the syscall and the reason.
+// unreadableSecretFile classifies a refused open, stat or read, and the
+// non-regular-file refusal. The message is the *os.PathError's own text,
+// unchanged: it names the operation and the reason.
 func unreadableSecretFile(cause error) error {
 	return &classifiedError{msg: cause.Error(), class: ErrSecretFileUnreadable, cause: cause}
 }
@@ -126,12 +131,15 @@ func unreadableSecretFile(cause error) error {
 //
 // The KEY_FILE indirection keeps the secret value out of `docker inspect`
 // output and compose files; the file path must be clean (no ".." traversal),
-// and the read uses a single handle so the size check and the read cannot
-// race. The secret value itself never appears in an error or a log line;
-// errors carry the key name and file path only. Each failure class is named by
-// a sentinel (ErrSecretFilePathRejected, ErrSecretFileTooLarge,
-// ErrSecretFileGrew, ErrSecretFileUnreadable, ErrBlankSecretFile) so a caller
-// can report WHY the file was unusable without echoing the path.
+// and the read uses a single handle, so the path cannot be swapped between
+// the check and the read, and a file that grows during the read is refused
+// (ErrSecretFileGrew). The secret value itself never appears in an error or a
+// log line; errors carry the key name, and the file path for a rejected path,
+// an unreadable file and a blank one, never for a size failure. Each failure
+// class is named by a sentinel (ErrSecretFilePathRejected,
+// ErrSecretFileTooLarge, ErrSecretFileGrew, ErrSecretFileUnreadable,
+// ErrBlankSecretFile) so a caller can report WHY the file was unusable without
+// echoing the path.
 //
 // Use SecretWithSource when the caller needs to know WHICH channel supplied the
 // value — for example to warn that a KEY it also set was ignored in favour of
@@ -142,6 +150,10 @@ func Secret(key Key) (string, error) {
 	v, _, err := SecretWithSource(key)
 	return v, err
 }
+
+// secretStatHook, when set by a test, runs after the Stat and before the size
+// gate and the read: the window in which a writer can grow the file.
+var secretStatHook func()
 
 // readSecretFile reads a secret file through one handle (no stat-then-open
 // TOCTOU window) and rejects a path containing traversal or a file over the
@@ -177,7 +189,9 @@ func readSecretFile(path string) ([]byte, error) {
 	if !pathinside.IsCanonical(path) || pathinside.HasDotDot(path) {
 		return nil, fmt.Errorf("%w (must be clean and contain no \"..\" path component): %s", ErrSecretFilePathRejected, path)
 	}
-	f, err := os.Open(filepath.Clean(path)) // #nosec G703 -- the guard above refuses a non-canonical path or a ".." component, so no traversal is reachable
+	// Non-blocking, so a FIFO with no writer cannot hang the open; symlinks are
+	// followed, so a Kubernetes secret's ..data link still reaches its file.
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|openFlagNonblock, 0) // #nosec G703 -- the guard above refuses a non-canonical path or a ".." component, so no traversal is reachable
 	if err != nil {
 		return nil, unreadableSecretFile(err)
 	}
@@ -185,6 +199,16 @@ func readSecretFile(path string) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return nil, unreadableSecretFile(err)
+	}
+	if secretStatHook != nil {
+		secretStatHook()
+	}
+	if !info.Mode().IsRegular() {
+		// Classified like an OS refusal, so the message names the path as
+		// "open <path>: not a regular file (mode ...)" does.
+		return nil, unreadableSecretFile(&fs.PathError{
+			Op: "open", Path: path, Err: fmt.Errorf("not a regular file (mode %s)", info.Mode()),
+		})
 	}
 	if info.Size() > maxSecretFileSize {
 		return nil, &classifiedError{

@@ -87,8 +87,8 @@ func (*Recorder) Enabled(context.Context, slog.Level) bool { return true }
 
 // Handle records r as a stdlib handler would emit it: attribute values are
 // resolved and degenerate attrs are dropped or inlined per the slog.Handler
-// contract (see normalizeAttrs). Time, Level, Message, and PC are stored
-// unchanged. It satisfies slog.Handler.
+// contract (the attribute rules in the package doc). Time, Level, Message,
+// and PC are stored unchanged. It satisfies slog.Handler.
 //
 //nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
 func (rec *Recorder) Handle(_ context.Context, r slog.Record) error {
@@ -107,9 +107,9 @@ func (rec *Recorder) append(r *slog.Record) {
 
 // WithAttrs returns a handler that records through this Recorder with attrs
 // prepended to every captured record, exactly as a real handler would include
-// them. Like the stdlib handlers, it normalizes attrs at derivation time (see
-// normalizeAttrs); a slice that is empty or normalizes to empty returns the
-// receiver.
+// them. Like the stdlib handlers, it normalizes attrs at derivation time (the
+// attribute rules in the package doc); a slice that is empty or normalizes to
+// empty returns the receiver.
 func (rec *Recorder) WithAttrs(attrs []slog.Attr) slog.Handler {
 	attrs = normalizeAttrs(attrs)
 	if len(attrs) == 0 {
@@ -264,10 +264,10 @@ func materialize(r *slog.Record) slog.Record {
 }
 
 // Records returns a snapshot copy of the captured records, in order. Each
-// record is rebuilt through materialize so its group values get fresh backing
-// storage (slog.Record.Clone does not recursively copy KindGroup values,
-// whose Group() result aliases the stored record's mutable slice); mutating
-// or extending the result does not affect later captures.
+// record is rebuilt so its group values get fresh backing storage
+// (slog.Record.Clone does not recursively copy KindGroup values, whose
+// Group() result aliases the stored record's mutable slice); mutating or
+// extending the result does not affect later captures.
 func (rec *Recorder) Records() []slog.Record {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -354,6 +354,17 @@ func (rec *Recorder) CountExact(msg string) int {
 // shape (its level, its complete key set, several values at once) still wants a
 // Records() walk.
 
+// Message is the message argument of the attribute helpers: a substring of a
+// record's Message (msgSub, where "" matches every record) or, for the Exact
+// helpers, the whole Message. It and AttrName are two types so a call that
+// swaps the message and the key does not compile when either is a typed
+// value; an untyped constant such as "starting" converts to either.
+type Message string
+
+// AttrName is the attribute key argument of the attribute helpers; ""
+// matches every attribute.
+type AttrName string
+
 // Attr returns the typed value of the first top-level attribute named key on
 // a captured record whose Message contains msgSub, in capture order, and
 // whether one was found. It is the primitive behind AttrValue, which renders
@@ -374,9 +385,9 @@ func (rec *Recorder) CountExact(msg string) int {
 // payload is the caller's own object and is returned as-is, exactly as
 // Records() leaves it, so mutating that object still changes what a later
 // read observes.
-func (rec *Recorder) Attr(msgSub, key string) (slog.Value, bool) {
+func (rec *Recorder) Attr(msgSub Message, key AttrName) (slog.Value, bool) {
 	var value slog.Value
-	found := rec.scanAttrValues(msgSub, key, func(v slog.Value) bool {
+	found := rec.scanAttrValues(string(msgSub), string(key), func(v slog.Value) bool {
 		value = detachValue(v)
 		return true
 	})
@@ -386,7 +397,7 @@ func (rec *Recorder) Attr(msgSub, key string) (slog.Value, bool) {
 // AttrValue returns the rendered value of the first top-level attribute
 // named key on a captured record whose Message contains msgSub, in capture
 // order, and whether one was found.
-func (rec *Recorder) AttrValue(msgSub, key string) (string, bool) {
+func (rec *Recorder) AttrValue(msgSub Message, key AttrName) (string, bool) {
 	v, ok := rec.Attr(msgSub, key)
 	if !ok {
 		return "", false
@@ -407,9 +418,9 @@ func (rec *Recorder) AttrValue(msgSub, key string) (string, bool) {
 // msg is a whole message, so "" is not the wildcard it is for msgSub: it
 // matches a record whose Message is empty and nothing else, exactly as
 // CountExact("") does. key "" still matches every attribute.
-func (rec *Recorder) AttrValueExact(msg, key string) (string, bool) {
+func (rec *Recorder) AttrValueExact(msg Message, key AttrName) (string, bool) {
 	var value string
-	found := rec.scanAttrValuesBy(exactMessage(msg), key, func(v slog.Value) bool {
+	found := rec.scanAttrValuesBy(exactMessage(string(msg)), string(key), func(v slog.Value) bool {
 		value = v.String()
 		return true
 	})
@@ -432,9 +443,9 @@ func (rec *Recorder) AttrValueExact(msg, key string) (string, bool) {
 // Message scoping is equality, as in AttrValueExact: msg "" matches only an
 // empty Message. key "" matches every attribute, so AttrValuesExact(msg, "")
 // renders every top-level value of every record with that message.
-func (rec *Recorder) AttrValuesExact(msg, key string) []string {
+func (rec *Recorder) AttrValuesExact(msg Message, key AttrName) []string {
 	var values []string
-	rec.scanAttrValuesBy(exactMessage(msg), key, func(v slog.Value) bool {
+	rec.scanAttrValuesBy(exactMessage(string(msg)), string(key), func(v slog.Value) bool {
 		values = append(values, v.String())
 		return false // never accept: the walk runs to the end, collecting every match
 	})
@@ -444,15 +455,15 @@ func (rec *Recorder) AttrValuesExact(msg, key string) []string {
 // HasAttr reports whether any captured record whose Message contains msgSub
 // carries a top-level attribute named key whose rendered value equals
 // rendered.
-func (rec *Recorder) HasAttr(msgSub, key, rendered string) bool {
-	return rec.scanAttrs(msgSub, key, func(v string) bool { return v == rendered })
+func (rec *Recorder) HasAttr(msgSub Message, key AttrName, rendered string) bool {
+	return rec.scanAttrs(string(msgSub), string(key), func(v string) bool { return v == rendered })
 }
 
 // AttrContains reports whether any captured record whose Message contains
 // msgSub carries a top-level attribute named key whose rendered value
 // contains sub.
-func (rec *Recorder) AttrContains(msgSub, key, sub string) bool {
-	return rec.scanAttrs(msgSub, key, func(v string) bool { return strings.Contains(v, sub) })
+func (rec *Recorder) AttrContains(msgSub Message, key AttrName, sub string) bool {
+	return rec.scanAttrs(string(msgSub), string(key), func(v string) bool { return strings.Contains(v, sub) })
 }
 
 // CountLevel returns how many captured records at exactly level have a

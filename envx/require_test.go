@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRequire(t *testing.T) {
@@ -122,7 +123,8 @@ func TestSecret(t *testing.T) {
 }
 
 // TestSecret_file_exactly_at_the_size_limit_is_read_whole pins the size gate at
-// its boundary. The ceiling exists to refuse a device file or a runaway log, so
+// its boundary. The ceiling exists to refuse a runaway regular file such as a
+// log (a device is refused before any read, as not a regular file), so
 // a real secret whose length lands exactly on it is content rather than an
 // overrun, and a gate that refused it would reject the largest file the limit
 // was written to allow. Both gates see that same length — the pre-read stat and
@@ -349,18 +351,25 @@ func TestSecret_OS_failure_keeps_the_PathError(t *testing.T) {
 	}
 }
 
-// TestSecret_stream_longer_than_its_stat_size is the grew-during-read class. A character
-// device is the reachable shape of it: Stat reports 0 bytes so the size gate passes, and
-// the bounded read then returns more than the limit — exactly the silent-truncation case
-// the post-read length check exists to refuse, and the reason the size ceiling mentions
-// device files at all.
+// TestSecret_stream_longer_than_its_stat_size is the grew-during-read class: a regular
+// file under the limit at Stat that a writer grows past it before the read. The size
+// gate passes, and the bounded read then returns more than the limit, exactly the
+// silent-truncation case the post-read length check exists to refuse. The hook stands in
+// for the concurrent writer, so the window is hit every run. Not parallel: it sets the
+// package hook.
 func TestSecret_stream_longer_than_its_stat_size(t *testing.T) {
-	const dev = "/dev/zero"
-	if _, err := os.Stat(dev); err != nil {
-		t.Skipf("no %s on this platform: %v", dev, err)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("small"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	secretStatHook = func() {
+		if err := os.WriteFile(path, make([]byte, maxSecretFileSize+1), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { secretStatHook = nil })
 	t.Setenv("ENVX_TEST_SEC", "from-env")
-	t.Setenv("ENVX_TEST_SEC_FILE", dev)
+	t.Setenv("ENVX_TEST_SEC_FILE", path)
 
 	v, err := Secret("ENVX_TEST_SEC")
 	if err == nil {
@@ -374,5 +383,45 @@ func TestSecret_stream_longer_than_its_stat_size(t *testing.T) {
 	}
 	if want := fmt.Sprintf("secret file grew past the %d byte limit during read", maxSecretFileSize); !strings.Contains(err.Error(), want) {
 		t.Errorf("Secret() = %q, want it to still contain %q verbatim", err, want)
+	}
+}
+
+// TestSecret_non_regular_file_is_refused_at_once pins that KEY_FILE naming a
+// FIFO, a directory or a device is refused as unreadable without blocking: a
+// FIFO with no writer would otherwise hang the open forever.
+func TestSecret_non_regular_file_is_refused_at_once(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "pipe")
+	paths := map[string]string{"directory": dir}
+	if err := mkfifoForTest(fifo); err == nil {
+		paths["FIFO with no writer"] = fifo
+	}
+	if _, err := os.Stat("/dev/null"); err == nil {
+		paths["device"] = "/dev/null"
+	}
+	for name, path := range paths {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ENVX_TEST_SEC", "from-env")
+			t.Setenv("ENVX_TEST_SEC_FILE", path)
+			done := make(chan error, 1)
+			go func() { _, err := Secret("ENVX_TEST_SEC"); done <- err }()
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrSecretFileUnreadable) {
+					t.Errorf("Secret(%s) = %v, want ErrSecretFileUnreadable", name, err)
+				}
+				if err != nil && !strings.Contains(err.Error(), "not a regular file") {
+					t.Errorf("Secret(%s) = %v, want the not-a-regular-file reason", name, err)
+				}
+				if err != nil && !strings.Contains(err.Error(), path) {
+					t.Errorf("Secret(%s) = %v, want the message to name %s, as an OS refusal's does", name, err, path)
+				}
+				if pe, ok := errors.AsType[*fs.PathError](err); !ok || pe.Path != path {
+					t.Errorf("Secret(%s) = %v, want a *fs.PathError naming %s, as every unreadable-file failure carries", name, err, path)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("Secret(%s) blocked", name)
+			}
+		})
 	}
 }

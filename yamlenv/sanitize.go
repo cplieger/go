@@ -98,7 +98,7 @@ func WithUnknownKeyEcho(echo bool) SanitizeOption {
 }
 
 // SanitizeDecodeError rewrites a go-yaml v4 load error so no fragment of a
-// document value survives, because Expand can put a secret where go-yaml's
+// document value survives, because ExpandWith can put a secret where go-yaml's
 // errors quote one. A *yaml.LoadErrors keeps each entry's position and, for a
 // wrong-type, duplicate-key or unknown-key entry, its value-free structure
 // (the key only under WithUnknownKeyEcho(true)); anything else keeps at most

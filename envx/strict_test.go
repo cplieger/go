@@ -351,3 +351,12 @@ func TestBoolStrictReturnsNoParseError(t *testing.T) {
 		t.Errorf("BoolStrict error repeats the value: %v", err)
 	}
 }
+
+// TestParseError_nil_Err_does_not_panic pins that a ParseError built without
+// a cause, as a test might, renders instead of panicking.
+func TestParseError_nil_Err_does_not_panic(t *testing.T) {
+	t.Parallel()
+	if got, want := (&ParseError{Key: "APP_PORT"}).Error(), "environment variable APP_PORT: malformed value"; got != want {
+		t.Errorf("ParseError{Key: APP_PORT}.Error() = %q, want %q", got, want)
+	}
+}

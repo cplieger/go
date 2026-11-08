@@ -1,6 +1,7 @@
 package yamlenv_test
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func decodeMap(t *testing.T, root *yaml.Node) map[string]any {
 	t.Helper()
 	var out map[string]any
 	if err := root.Decode(&out); err != nil {
-		t.Fatalf("Decode after Expand failed: %v", err)
+		t.Fatalf("Decode after ExpandWith failed: %v", err)
 	}
 	return out
 }
@@ -101,9 +102,9 @@ func TestExpand(t *testing.T) {
 				t.Setenv(k, v)
 			}
 			root := parse(t, tc.src)
-			unresolved := yamlenv.Expand(root, allowAppPrefix)
+			unresolved := yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 			if !slices.Equal(unresolved, tc.wantUnresolved) {
-				t.Errorf("Expand unresolved = %v, want %v", unresolved, tc.wantUnresolved)
+				t.Errorf("ExpandWith unresolved = %v, want %v", unresolved, tc.wantUnresolved)
 			}
 			got := decodeMap(t, root)
 			for k, want := range tc.wantValues {
@@ -149,7 +150,7 @@ func equalValue(got, want any) bool {
 func TestExpandLeavesMappingKeysLiteral(t *testing.T) {
 	t.Setenv("APP_KEY", "expanded")
 	root := parse(t, "${APP_KEY}: value\n")
-	yamlenv.Expand(root, allowAppPrefix)
+	yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 	var out map[string]string
 	if err := root.Decode(&out); err != nil {
 		t.Fatalf("Decode failed: %v", err)
@@ -163,7 +164,7 @@ func TestExpandLeavesNonStringScalarsUntouched(t *testing.T) {
 	t.Setenv("APP_KEY", "zzz")
 	src := "count: 5\nflag: true\nratio: 1.5\nnothing: null\n"
 	root := parse(t, src)
-	yamlenv.Expand(root, allowAppPrefix)
+	yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 	out := decodeMap(t, root)
 	if out["count"] != 5 || out["flag"] != true || out["ratio"] != 1.5 || out["nothing"] != nil {
 		t.Errorf("non-string scalars changed: %#v", out)
@@ -178,7 +179,7 @@ func TestExpandCannotChangeDocumentStructure(t *testing.T) {
 	evil := "x\"\ninjected_key: pwned\n# comment"
 	t.Setenv("APP_EVIL", evil)
 	root := parse(t, "api_key: ${APP_EVIL}\nother: keep\n")
-	yamlenv.Expand(root, allowAppPrefix)
+	yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 	out := decodeMap(t, root)
 	if len(out) != 2 {
 		t.Fatalf("document grew to %d keys: %#v (structure injection)", len(out), out)
@@ -199,7 +200,7 @@ func TestExpandIsSinglePass(t *testing.T) {
 		t.Setenv("APP_OUTER", "${APP_INNER}")
 		t.Setenv("APP_INNER", "never-substituted")
 		root := parse(t, "v: ${APP_OUTER}\n")
-		unresolved := yamlenv.Expand(root, allowAppPrefix)
+		unresolved := yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 		out := decodeMap(t, root)
 		if out["v"] != "${APP_INNER}" {
 			t.Errorf("v = %q, want the literal ${APP_INNER} (single-pass, no recursion)", out["v"])
@@ -211,7 +212,7 @@ func TestExpandIsSinglePass(t *testing.T) {
 	t.Run("introduced ref naming an unset variable is kept literal, not reported", func(t *testing.T) {
 		t.Setenv("APP_OUTER", "${APP_INNER}")
 		root := parse(t, "v: ${APP_OUTER}\n")
-		unresolved := yamlenv.Expand(root, allowAppPrefix)
+		unresolved := yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 		out := decodeMap(t, root)
 		if out["v"] != "${APP_INNER}" {
 			t.Errorf("v = %q, want the literal ${APP_INNER} (single-pass, no recursion)", out["v"])
@@ -324,7 +325,7 @@ func TestExpandedNodeKeepsStringTag(t *testing.T) {
 func TestExpandAnchorsExpandOnce(t *testing.T) {
 	t.Setenv("APP_KEY", "shared")
 	root := parse(t, "a: &k ${APP_KEY}\nb: *k\n")
-	yamlenv.Expand(root, allowAppPrefix)
+	yamlenv.ExpandWith(root, allowAppPrefix, os.LookupEnv)
 	out := decodeMap(t, root)
 	if out["a"] != "shared" || out["b"] != "shared" {
 		t.Errorf("anchor/alias expansion = %#v, want both fields shared", out)
@@ -333,12 +334,12 @@ func TestExpandAnchorsExpandOnce(t *testing.T) {
 
 func TestExpandNilInputs(t *testing.T) {
 	t.Parallel()
-	if got := yamlenv.Expand(nil, allowAppPrefix); got != nil {
-		t.Errorf("Expand(nil root) = %v, want nil", got)
+	if got := yamlenv.ExpandWith(nil, allowAppPrefix, os.LookupEnv); got != nil {
+		t.Errorf("ExpandWith(nil root) = %v, want nil", got)
 	}
 	root := parse(t, "v: ${APP_X}\n")
-	if got := yamlenv.Expand(root, nil); got != nil {
-		t.Errorf("Expand(nil allow) = %v, want nil", got)
+	if got := yamlenv.ExpandWith(root, nil, os.LookupEnv); got != nil {
+		t.Errorf("ExpandWith(nil allow) = %v, want nil", got)
 	}
 	out := decodeMap(t, root)
 	if out["v"] != "${APP_X}" {

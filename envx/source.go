@@ -19,11 +19,14 @@ import (
 //	}
 //
 // The zero Source reads the process environment: a nil Get means os.Getenv,
-// and the package-level getters are exactly the zero Source's methods, so the
-// two forms cannot drift apart. Every other rule is shared too — keys are
-// validated Keys, empty equals unset, the parsing methods trim, tolerant and
-// strict variants share one parser, the tolerant methods Warn through
-// slog.Default() on a malformed value, and the strict methods never log.
+// and the package-level getters, strict getters and Require are exactly the
+// zero Source's methods, so the two forms cannot drift apart. The secret
+// family (Secret, SecretWithSource, IsBlankSecretFilePath) is package-level
+// only and reads the process environment. Every other rule is shared too —
+// keys are validated Keys, empty equals unset, the parsing methods trim,
+// tolerant and strict variants share one parser, the tolerant methods Warn
+// through slog.Default() on a malformed value, and the strict methods never
+// log.
 type Source struct {
 	// Get returns the value of the named environment variable, empty when it
 	// is unset (os.Getenv's contract, which os.Getenv itself satisfies). nil

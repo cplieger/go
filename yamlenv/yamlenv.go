@@ -6,10 +6,11 @@
 // value cannot change the document's structure. Only the braced form is
 // recognized; an unbraced $VAR, a rejected name and an unset variable stay
 // literal, and expansion is a single pass. ExpandWith reads variables through
-// a caller-supplied lookup; Expand and Load read the process environment
-// unless WithLookupEnv says otherwise. SanitizeDecodeError strips value
-// excerpts (possibly expanded secrets) from go-yaml v4 load errors.
-// CheckUnknownKeys and CheckSingleDocument are the strict-load checks.
+// a caller-supplied lookup (os.LookupEnv for the process environment); Load
+// reads the process environment unless WithLookupEnv says otherwise.
+// SanitizeDecodeError strips value excerpts (possibly expanded secrets) from
+// go-yaml v4 load errors. CheckSingleDocument is the multi-document check a
+// hand-built pipeline runs; Load also checks for unknown keys.
 //
 // A reference expands only into a string-typed (!!str) node, and the node
 // keeps that tag after expansion: `port: ${APP_PORT}` decoded into an int
@@ -22,7 +23,6 @@
 package yamlenv
 
 import (
-	"os"
 	"regexp"
 
 	"go.yaml.in/yaml/v4"
@@ -30,11 +30,6 @@ import (
 
 // refRe matches a ${VAR} reference, the only supported expansion form.
 var refRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-
-// Expand is ExpandWith reading the process environment through os.LookupEnv.
-func Expand(root *yaml.Node, allow func(name string) bool) (unresolved []string) {
-	return ExpandWith(root, allow, os.LookupEnv)
-}
 
 // ExpandWith expands each ${VAR} in the string scalar values under root, in
 // place, with lookup's value when allow(name) is true and lookup finds it; a
