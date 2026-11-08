@@ -93,8 +93,8 @@ func NewFixture(opts ...sse.Option) *Fixture {
 	return f
 }
 
-// Hub returns the current hub; /control/restart replaces it.
-func (f *Fixture) Hub() *sse.Hub {
+// currentHub returns the current hub; /control/restart replaces it.
+func (f *Fixture) currentHub() *sse.Hub {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.hub
@@ -102,7 +102,7 @@ func (f *Fixture) Hub() *sse.Hub {
 
 // Shutdown shuts the current hub down, ending every stream with sse:reset.
 func (f *Fixture) Shutdown(ctx context.Context) error {
-	return f.Hub().Shutdown(ctx)
+	return f.currentHub().Shutdown(ctx)
 }
 
 // Handler mounts the fixture's routes on a fresh ServeMux.
@@ -400,7 +400,7 @@ func (f *Fixture) handlePublish(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", "publish count or size over the fixture's bound")
 		return
 	}
-	hub := f.Hub()
+	hub := f.currentHub()
 	count := max(req.Count, 1)
 	offsets := make([]string, 0, count)
 	for range count {

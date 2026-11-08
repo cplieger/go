@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,13 +23,14 @@ const pollTimeout = 5 * time.Second
 // the test.
 func fixtureServer(t *testing.T, opts ...sse.Option) (*Fixture, string) {
 	t.Helper()
-	logger, _ := captureLog()
-	f := NewFixture(append([]sse.Option{sse.WithLogger(logger)}, opts...)...)
+	f := NewFixture(append([]sse.Option{sse.WithLogger(slog.New(slog.DiscardHandler))}, opts...)...)
 	srv := httptest.NewServer(f.Handler())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = f.Shutdown(ctx)
+		if err := f.Shutdown(ctx); err != nil {
+			t.Logf("fixture shutdown: %v", err)
+		}
 		srv.CloseClientConnections()
 		srv.Close()
 	})
@@ -185,7 +187,7 @@ func TestFixture_controlRoutes(t *testing.T) {
 		if len(resp.Offsets) != 2 || resp.Offsets[0] != "1" || resp.Offsets[1] != "2" || resp.Head != "2" {
 			t.Errorf("publish response = %+v, want offsets [1 2] head 2", resp)
 		}
-		if got := f.Hub().Snapshot(); len(got) != 2 || got[1].Event.Topic != "tp" || got[1].Event.Name != "n" || string(got[1].Event.Data) != "hi" {
+		if got := f.currentHub().Snapshot(); len(got) != 2 || got[1].Event.Topic != "tp" || got[1].Event.Name != "n" || string(got[1].Event.Data) != "hi" {
 			t.Errorf("ring = %+v, want two frames on topic tp named n carrying hi", got)
 		}
 		if status := post(t, base+"/control/publish", `{"size":1048576}`, nil, &resp); status != http.StatusOK {
@@ -195,7 +197,7 @@ func TestFixture_controlRoutes(t *testing.T) {
 		if status := post(t, base+"/control/publish", `{"size":1048577}`, nil, &refused); status != http.StatusUnprocessableEntity || refused["code"] != "publish_refused" {
 			t.Errorf("publish of MaxFrameBytes+1 = %d %v, want 422 publish_refused", status, refused)
 		}
-		if got := f.Hub().Position().Head; got != 3 {
+		if got := f.currentHub().Position().Head; got != 3 {
 			t.Errorf("head after the refused publish = %d, want 3", got)
 		}
 	})
@@ -369,7 +371,7 @@ func TestFixture_controlRoutes(t *testing.T) {
 		if len(frames) != 2 || frames[0].Data != `{"type":"connected"}` || frames[1].Data != "third" {
 			t.Errorf("frames after the hello = %+v, want connected, third and nothing after", frames)
 		}
-		pollUntil(t, "the closed stream to unregister", func() bool { return f.Hub().ClientCount() == 0 })
+		pollUntil(t, "the closed stream to unregister", func() bool { return f.currentHub().ClientCount() == 0 })
 		pollUntil(t, "the departure to reach the presence table", func() bool { return len(state(t, base).Events) == 2 })
 		st := state(t, base)
 		if len(st.Events) != 2 || st.Events[1].Cause != sse.PresenceDead || st.Events[1].Write != "frame" {
@@ -488,8 +490,8 @@ func TestFixture_restartMintsNewEpoch(t *testing.T) {
 		st := state(t, base)
 		return len(st.Events) == 2 && st.Events[1].Cause == sse.PresenceShutdown
 	})
-	if f.Hub().Position().Epoch != restarted.Epoch {
-		t.Errorf("Hub() epoch = %q, want the restarted %q", f.Hub().Position().Epoch, restarted.Epoch)
+	if f.currentHub().Position().Epoch != restarted.Epoch {
+		t.Errorf("currentHub() epoch = %q, want the restarted %q", f.currentHub().Position().Epoch, restarted.Epoch)
 	}
 	reconnected, _, again := openEvents(t, base, http.Header{"Last-Event-ID": {first.Epoch + ":1"}})
 	defer reconnected.Body.Close()
@@ -511,7 +513,7 @@ func TestFixture_presenceRowDropsOnDisconnect(t *testing.T) {
 		t.Fatalf("presence after connect = %+v, want tab-1 connected once", st.Presence)
 	}
 	resp.Body.Close()
-	pollUntil(t, "the closed stream to unregister", func() bool { return f.Hub().ClientCount() == 0 })
+	pollUntil(t, "the closed stream to unregister", func() bool { return f.currentHub().ClientCount() == 0 })
 	pollUntil(t, "the departure to reach the presence table", func() bool { return len(state(t, base).Events) == 2 })
 	st := state(t, base)
 	if len(st.Presence) != 1 || st.Presence[0].Connected != 0 || !st.Presence[0].Gone || st.Transitions.Expired != 1 {
@@ -545,7 +547,7 @@ func TestFixture_publishSizeIsExactAtTheFirstOffset(t *testing.T) {
 	if status := post(t, base+"/control/publish", `{"size":1048576}`, nil, &resp); status != http.StatusOK || resp.Head != "1" {
 		t.Errorf("publish of an exactly MaxFrameBytes frame on a fresh hub = %d %+v, want 200 at offset 1", status, resp)
 	}
-	if got := f.Hub().Position().Head; got != 1 {
+	if got := f.currentHub().Position().Head; got != 1 {
 		t.Errorf("head = %d, want 1 (only the frame at the cap was accepted)", got)
 	}
 }
@@ -578,7 +580,7 @@ func TestPublishRefusesUnboundedControl(t *testing.T) {
 			t.Errorf("POST /control/publish %s = %d, want %d", body, got, http.StatusBadRequest)
 		}
 	}
-	if head := f.Hub().Position().Head; head != 0 {
+	if head := f.currentHub().Position().Head; head != 0 {
 		t.Errorf("hub head after refused publishes = %d, want 0", head)
 	}
 }

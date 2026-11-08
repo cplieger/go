@@ -44,8 +44,12 @@ func run() error {
 	srv := httpserver.New(fx.Handler())
 
 	fmt.Fprintf(os.Stdout, "LISTEN http://%s\n", ln.Addr())
-	return httpserver.Run(ctx, srv, ln, nil,
+	return httpserver.Run(ctx, srv, ln,
 		httpserver.WithShutdownGrace(shutdownGrace),
-		httpserver.WithPreDrain(func(ctx context.Context) { _ = fx.Shutdown(ctx) }),
+		httpserver.WithPreDrain(func(ctx context.Context) {
+			if err := fx.Shutdown(ctx); err != nil {
+				logger.Warn("ssetest: fixture shutdown did not finish", "error", err)
+			}
+		}),
 	)
 }
