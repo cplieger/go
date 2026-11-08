@@ -27,7 +27,7 @@ Two cases do not follow the plain escaped join:
 
 ## Reading a key back
 
-For a field list under the size limit, `Split(Join(fields...))` returns `fields`, except for the single empty field above. For a key under the limit that `Split` accepts, `Join(Split(key)...)` returns `key`. `Split` does not repair a key it cannot read:
+For a key `Join` returned that is not a hashed identity, `Split(key)` returns the fields it was built from. Two in-bound field lists are hashed and so cannot be read back: the single empty field above, and a list whose escaped join would begin with `sha256:`. For a key under the limit that `Split` accepts, `Join(Split(key)...)` returns `key`. `Split` does not repair a key it cannot read:
 
 - It returns `ErrMalformed` when an escape comes before a character other than `:` or `\`, or when the key ends in a lone `\`. `Join` never writes either.
 - It returns `ErrHashed` for a digest, `sha256:` followed by 64 lowercase hex characters, because a digest holds no fields. Any other key that starts with `sha256:` returns `ErrMalformed`, because `Join` never writes one.
