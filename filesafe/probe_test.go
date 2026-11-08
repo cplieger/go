@@ -44,7 +44,7 @@ func assertEmptyDir(t *testing.T, dir string) {
 func TestProbeWritable(t *testing.T) {
 	t.Parallel()
 
-	t.Run("success_reports_every_stage_passed_and_leaves_nothing", func(t *testing.T) {
+	t.Run("success_reports_every_phase_passed_and_leaves_nothing", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 
@@ -117,7 +117,7 @@ func TestProbeWritable(t *testing.T) {
 		assertEmptyDir(t, created)
 	})
 
-	t.Run("mkdir_failure_reports_the_mkdir_stage", func(t *testing.T) {
+	t.Run("mkdir_failure_reports_the_mkdir_phase", func(t *testing.T) {
 		t.Parallel()
 		skipModeOptions(t)
 		// A regular file in the parent chain makes MkdirAll fail without
@@ -297,8 +297,8 @@ func TestProbeWritableInRoot(t *testing.T) {
 			opts      []WriteOption
 			wantPhase ProbePhase
 		}{
-			"create_stage_without_mkdir": {wantPhase: ProbePhaseCreate},
-			"mkdir_stage_with_mkdir":     {opts: []WriteOption{WithMkdirMode(0o755)}, wantPhase: ProbePhaseMkdir},
+			"create_phase_without_mkdir": {wantPhase: ProbePhaseCreate},
+			"mkdir_phase_with_mkdir":     {opts: []WriteOption{WithMkdirMode(0o755)}, wantPhase: ProbePhaseMkdir},
 		}
 		for name, tc := range cases {
 			t.Run(name, func(t *testing.T) {
@@ -456,7 +456,7 @@ func TestProbeTearDown(t *testing.T) {
 			wantLeaked: true,
 			wantDebug:  1,
 		},
-		"an_earlier_stage_failure_is_never_overwritten": {
+		"an_earlier_phase_failure_is_never_overwritten": {
 			prepare: func(t *testing.T, path string, _ *os.File) {
 				replaceWithNonEmptyDir(t, path)
 			},

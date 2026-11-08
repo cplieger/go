@@ -110,8 +110,8 @@ func WithMode(mode os.FileMode) WriteOption {
 // fsync failed. A zero mode returns ErrInvalidArgument before creating
 // anything, on every platform; WithMkdirAll(false) is the way to create no
 // directories. On Windows a write or probe given a nonzero mode returns
-// ErrModeUnsupported before creating anything; use WithMkdirAll there. It and WithMkdirAll replace
-// each other; the last call wins.
+// ErrModeUnsupported before creating anything; use WithMkdirAll there. It
+// and WithMkdirAll replace each other; the last call wins.
 func WithMkdirMode(mode os.FileMode) WriteOption {
 	return writeOption(func(c *cfg) { c.mkdirMode, c.mkdirModeSet, c.mkdirAll = mode, true, false })
 }

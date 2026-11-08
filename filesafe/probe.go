@@ -123,8 +123,8 @@ func (r ProbeResult) Writable() bool {
 // relative; a missing dir fails at ProbePhaseCreate unless WithMkdirMode or
 // WithMkdirAll creates it, through the same chain a write uses. WithMode
 // makes it prove an owner-only staging file; on Windows either mode option
-// with a nonzero mode returns ErrModeUnsupported. ctx is checked once, a started probe always
-// cleans up, and CleanupStaleTemps reclaims a leftover.
+// with a nonzero mode returns ErrModeUnsupported. ctx is checked once, a
+// started probe always cleans up, and CleanupStaleTemps reclaims a leftover.
 func ProbeWritable(ctx context.Context, dir string, opts ...WriteOption) (ProbeResult, error) {
 	c := buildWriteCfg(opts)
 	if dir == "" {

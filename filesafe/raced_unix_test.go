@@ -92,12 +92,14 @@ func TestRacedOpen_Classification(t *testing.T) {
 		err  error
 		want bool
 	}{
-		"ENOTDIR":            {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENOTDIR}, true},
-		"ELOOP":              {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ELOOP}, true},
-		"unchanged EACCES":   {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EACCES}, false},
-		"vanished (ENOENT)":  {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENOENT}, false},
-		"unchanged EMFILE":   {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EMFILE}, false},
-		"unchanged io error": {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EIO}, false},
+		"ENOTDIR":                  {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENOTDIR}, true},
+		"ELOOP":                    {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ELOOP}, true},
+		"unchanged EACCES":         {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EACCES}, false},
+		"ENOENT, name still there": {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENOENT}, true},
+		"os.Root not a directory":  {&fs.PathError{Op: "open", Path: "f", Err: errors.New("not a directory")}, true},
+		"closed root":              {&fs.PathError{Op: "openat", Path: "f", Err: os.ErrClosed}, false},
+		"unchanged EMFILE":         {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EMFILE}, false},
+		"unchanged io error":       {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EIO}, false},
 	} {
 		got := racedOpen(root, "f", before, tc.err)
 		if errors.Is(got, ErrRaced) != tc.want {
@@ -106,6 +108,10 @@ func TestRacedOpen_Classification(t *testing.T) {
 		if !errors.Is(got, tc.err) {
 			t.Errorf("%s: racedOpen = %v, lost the cause", name, got)
 		}
+	}
+
+	if got := racedOpen(root, "nothere", before, &fs.PathError{Op: "openat", Path: "nothere", Err: syscall.ENOENT}); errors.Is(got, ErrRaced) || !errors.Is(got, fs.ErrNotExist) {
+		t.Errorf("racedOpen(vanished) = %v, want fs.ErrNotExist and not ErrRaced", got)
 	}
 
 	// The name now a symlink out of the root: the open fails as an escape,
@@ -202,5 +208,57 @@ func TestWalkDirInRoot_SkipAllAtAFailureStopsTheWalk(t *testing.T) {
 		if rel == "zzz/file" {
 			t.Errorf("visited %v, want the walk stopped before zzz's entries", visited)
 		}
+	}
+}
+
+// TestOpenRegularInRootNoFollow_SwappedNameIsErrRaced pins both ErrRaced arms
+// of OpenRegularInRootNoFollow: a name swapped between its Lstat and its open
+// for another file or a directory (the identity check), or for a symlink out
+// of the root or a dangling one (racedOpen), matches ErrRaced.
+func TestOpenRegularInRootNoFollow_SwappedNameIsErrRaced(t *testing.T) {
+	for name, swap := range map[string]func(t *testing.T, dir string){
+		"another regular file": func(t *testing.T, dir string) {
+			mustRename(t, filepath.Join(dir, "f"), filepath.Join(dir, "f.old"))
+			if err := os.WriteFile(filepath.Join(dir, "f"), []byte("other"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a directory": func(t *testing.T, dir string) {
+			mustRename(t, filepath.Join(dir, "f"), filepath.Join(dir, "f.old"))
+			if err := os.Mkdir(filepath.Join(dir, "f"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a symlink out of the root": func(t *testing.T, dir string) {
+			mustRename(t, filepath.Join(dir, "f"), filepath.Join(dir, "f.old"))
+			if err := os.Symlink(t.TempDir(), filepath.Join(dir, "f")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a dangling symlink": func(t *testing.T, dir string) {
+			mustRename(t, filepath.Join(dir, "f"), filepath.Join(dir, "f.old"))
+			if err := os.Symlink("missing", filepath.Join(dir, "f")); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, dir := openTestRoot(t)
+			if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			withPinOpenHook(t, func(n string) {
+				if n == "f" {
+					swap(t, dir)
+				}
+			})
+			f, _, err := OpenRegularInRootNoFollow(root, "f")
+			if err == nil {
+				_ = f.Close()
+			}
+			if !errors.Is(err, ErrRaced) {
+				t.Errorf("OpenRegularInRootNoFollow after the swap = %v, want ErrRaced", err)
+			}
+		})
 	}
 }

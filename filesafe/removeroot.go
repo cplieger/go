@@ -89,22 +89,35 @@ func RemoveFileInRoot(root *os.Root, name string) error {
 	return parent.Remove(base)
 }
 
-// pinOpenHook, when set by a test, runs between a component's Lstat and its
-// open, the window a racing writer swaps the component in.
+// pinOpenHook, when set by a test, runs between an Lstat and the open it
+// guards, the window a racing writer swaps the name in.
 var pinOpenHook func(name string)
 
 // racedOpen classifies an open of name that failed after an Lstat of it
-// returned before. ENOTDIR and ELOOP can only mean the name changed, since the
-// Lstat saw neither a non-directory where a directory is opened nor a symlink,
-// and so can any other failure after which name is no longer the object the
-// Lstat saw (an in-root symlink that now escapes the root). Those are
-// ErrRaced, the refusal a retry can cure; a vanished name stays
-// fs.ErrNotExist and every other failure is returned as it is.
+// returned before. ENOTDIR and ELOOP can only mean the name changed, since
+// the Lstat saw neither a non-directory where a directory is opened nor a
+// symlink, and so can an error os.Root makes itself ("not a directory",
+// "path escapes from parent"), which means the resolution met something the
+// Lstat did not see; a closed or invalid root is the caller's misuse. Any
+// other failure is a race when name, looked up again, is present but is not
+// the object the Lstat saw, or is present after an open that found nothing.
+// Those are ErrRaced, the refusal a retry can cure; a name that is gone
+// stays fs.ErrNotExist and every other failure is returned as it is.
 func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
-	changed := errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP)
-	if !changed && !errors.Is(err, fs.ErrNotExist) {
+	var errno syscall.Errno
+	isErrno := errors.As(err, &errno)
+	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP) ||
+		!isErrno && !errors.Is(err, os.ErrClosed) && !errors.Is(err, os.ErrInvalid)
+	if !changed {
 		now, lErr := root.Lstat(name)
-		changed = lErr == nil && (now.Mode().Type() != before.Mode().Type() || !os.SameFile(before, now))
+		switch {
+		case lErr != nil:
+			// Gone or unstatable now: the open's own error is the answer.
+		case errors.Is(err, fs.ErrNotExist):
+			changed = true // present before and after, absent at the open
+		default:
+			changed = now.Mode().Type() != before.Mode().Type() || !os.SameFile(before, now)
+		}
 	}
 	if changed {
 		return fmt.Errorf("%w: %w", ErrRaced, err)

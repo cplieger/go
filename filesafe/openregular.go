@@ -1,6 +1,7 @@
 package filesafe
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -24,7 +25,7 @@ func OpenRegularInRoot(root *os.Root, name string) (*os.File, os.FileInfo, error
 	// O_NONBLOCK makes an open on a planted FIFO a rejection rather than a hang.
 	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, socketRefusal(err, clean, func() (os.FileInfo, error) { return root.Stat(clean) })
 	}
 	fi, err := statRegular(f, clean)
 	if err != nil {
@@ -59,6 +60,22 @@ func OpenRegularNoFollow(path string) (*os.File, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	return f, fi, nil
+}
+
+// socketRefusal turns open(2)'s ENXIO, which a Unix socket (or a device with
+// no driver) answers before any descriptor exists, into the *NotRegularError
+// the descriptor check would have given, reading what is at name with stat.
+// Any other error, or a name stat finds regular or cannot read, is returned
+// as it is.
+func socketRefusal(err error, name string, stat func() (os.FileInfo, error)) error {
+	if !errors.Is(err, syscall.ENXIO) {
+		return err
+	}
+	fi, statErr := stat()
+	if statErr != nil || fi.Mode().IsRegular() {
+		return err
+	}
+	return notRegular(name, fi.Mode())
 }
 
 // statRegular stats the open descriptor, never the path, so the verdict is
@@ -99,10 +116,16 @@ func OpenRegularInRootNoFollow(root *os.Root, name string) (*os.File, os.FileInf
 		return nil, nil, fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
 	}
 
+	if pinOpenHook != nil {
+		pinOpenHook(clean)
+	}
 	// O_NONBLOCK for the same reason as the sibling: a FIFO that slipped in
 	// between the Lstat and here is a rejection rather than a hang.
 	f, err := root.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
+		if errors.Is(err, syscall.ENXIO) {
+			return nil, nil, socketRefusal(err, clean, func() (os.FileInfo, error) { return root.Lstat(clean) })
+		}
 		return nil, nil, racedOpen(root, clean, before, err)
 	}
 	fi, err := f.Stat()

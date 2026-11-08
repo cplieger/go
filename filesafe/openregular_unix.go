@@ -18,7 +18,7 @@ func openNoFollow(clean string) (*os.File, error) {
 		if errors.Is(err, syscall.ELOOP) {
 			return nil, fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, clean, err)
 		}
-		return nil, err
+		return nil, socketRefusal(err, clean, func() (os.FileInfo, error) { return os.Lstat(clean) })
 	}
 	return f, nil
 }

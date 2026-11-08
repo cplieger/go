@@ -12,5 +12,9 @@ import (
 // check refuses it rather than the open hanging; it changes nothing for a
 // regular file's reads.
 func openRead(clean string) (*os.File, error) {
-	return os.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, socketRefusal(err, clean, func() (os.FileInfo, error) { return os.Stat(clean) })
+	}
+	return f, nil
 }
