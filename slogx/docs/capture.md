@@ -29,6 +29,8 @@ The attribute checks read a record's top-level attributes, with attributes from 
 - `HasAttr(msgSub, key, rendered)` reports whether a matching record has exactly that rendered value.
 - `AttrContains(msgSub, key, sub)` reports whether a matching record has a value that contains `sub`.
 
+The message argument is a `capture.Message` and the key a `capture.AttrName`, so a call that swaps two typed values does not compile. A string literal converts to either, and a string variable needs `capture.Message(v)` or `capture.AttrName(v)`.
+
 A record matches when its message contains `msgSub`. Values compare by their rendered form, `slog.Value.String()`, so an `Int64` 7 and a string `"7"` both match `"7"`. The comparison ignores the kind of the value on purpose.
 
 An empty string matches everything for both parameters. A `msgSub` of `""` matches every record, and a `key` of `""` matches every attribute. Values nested inside groups are out of scope, so walk `Records()` for those.

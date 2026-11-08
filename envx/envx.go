@@ -44,7 +44,7 @@ func String(key Key) string {
 // returns fallback, so a typo ("ture") is visible in the logs instead of
 // silently flipping a flag.
 //
-// The Warn line carries the raw value. Use BoolStrict for a key whose value
+// The Warn line carries the trimmed value. Use BoolStrict for a key whose value
 // may be sensitive, or when the caller owns its own diagnostics.
 func Bool(key Key, fallback bool) bool {
 	return Source{}.Bool(key, fallback)

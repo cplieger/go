@@ -923,7 +923,7 @@ func TestAttrValueRendersAttr(t *testing.T) {
 	log.Info("m", "count", 42, "when", time.Date(2026, 7, 29, 14, 7, 0, 0, time.UTC))
 	log.Info("m", slog.Group("g", slog.String("k", "v")))
 
-	for _, key := range []string{"count", "when", "g", "absent"} {
+	for _, key := range []AttrName{"count", "when", "g", "absent"} {
 		typed, tok := rec.Attr("m", key)
 		rendered, rok := rec.AttrValue("m", key)
 		if tok != rok {
@@ -972,8 +972,8 @@ func TestAttrValueExact(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		msg    string
-		key    string
+		msg    Message
+		key    AttrName
 		want   string
 		wantOK bool
 	}{
@@ -1008,8 +1008,8 @@ func TestAttrValuesExact(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		msg  string
-		key  string
+		msg  Message
+		key  AttrName
 		want []string
 	}{
 		{

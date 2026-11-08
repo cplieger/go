@@ -4,7 +4,7 @@
 
 yamlenv loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. It is for an app that reads a YAML config file and keeps its secrets in the environment.
 
-Its one dependency is [go-yaml](https://github.com/yaml/go-yaml) v4. It is a module of its own, so a program that only needs envx links no YAML library. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
+Its one dependency is [go-yaml](https://github.com/yaml/go-yaml) v4, and its API takes go-yaml v4 nodes and errors, so a new go-yaml major means a new yamlenv major. It is a module of its own, so a program that only needs envx links no YAML library. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
 
 ```sh
 go get github.com/cplieger/go/yamlenv@latest
@@ -59,12 +59,10 @@ A config type's `UnmarshalYAML(*yaml.Node) error` must take go-yaml v4's `Node`.
 
 ## The steps on their own
 
-The steps `Load` runs stay exported for a pipeline with a different policy, such as a probe that reads one setting and ignores the rest.
+Three of the steps `Load` runs stay exported for a pipeline with a different policy, such as a probe that reads one setting and ignores the rest.
 
 - `ExpandWith(root, allow, lookup)` expands references in place in a parsed go-yaml v4 `*yaml.Node`, reading each variable through `lookup`, and returns the allowed names `lookup` did not find. It changes values only, never their quoting style, so decode the result rather than writing it back out.
-- `Expand(root, allow)` is `ExpandWith` reading the process environment.
 - `SanitizeDecodeError(err, opts...)` rebuilds a go-yaml v4 `*yaml.LoadErrors` or `*yaml.LoadError` from parts that hold no value, such as positions, core YAML tags and type names. An error it does not recognize becomes a fixed message that withholds the details. The result never wraps the original. The unknown key's name is redacted unless you pass `WithUnknownKeyEcho(true)`, and when the option repeats, the last one wins. Called on its own it has no config type or file to check against, so it trusts go-yaml's wording: an error from your code worded like go-yaml's keeps its text after the last word `into`, and under the echo its key. Pass it go-yaml's errors only, or use `Load`.
-- `CheckUnknownKeys(data, probe)` decodes the raw file into `probe`, a pointer to a fresh value of your config type, with go-yaml's `WithKnownFields` turned on. Its error is a `*yaml.LoadErrors`, or a single `*yaml.LoadError` when parsing fails or the load stops early. Either can contain text from the file, so pass it through `SanitizeDecodeError` before you log it.
 - `CheckSingleDocument(data)` rejects input with more than one YAML document. Its only error is the fixed `ErrMultipleDocuments`, which is safe to log as it is.
 
-Run both checks on the raw bytes before expansion. Expansion changes string values only, so it cannot change which keys exist or how many documents there are, and the positions then match the file the operator wrote. An alias used as a key also names the `${VAR}` as written, never its expanded value.
+Run the check on the raw bytes before expansion. Expansion changes string values only, so it cannot change how many documents there are, and the positions then match the file the operator wrote. The unknown-key check runs inside `Load` only, where its error is sanitized before you see it.

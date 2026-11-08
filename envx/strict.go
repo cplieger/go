@@ -38,8 +38,12 @@ type ParseError struct {
 }
 
 // Error implements the error interface. The text is the key followed by the
-// underlying parse error.
+// underlying parse error, or "malformed value" for a ParseError built with a
+// nil Err, so a hand-built value in a test cannot panic.
 func (e *ParseError) Error() string {
+	if e.Err == nil {
+		return "environment variable " + string(e.Key) + ": malformed value"
+	}
 	return "environment variable " + string(e.Key) + ": " + e.Err.Error()
 }
 

@@ -49,13 +49,13 @@ Read `ok`, not the value, to tell a variable set to `false` from one that is not
 
 `Secret` follows the Docker secrets convention. When `KEY_FILE` is set and not empty, it reads the file that variable names. Otherwise it returns `KEY`, or a `*MissingError` when `KEY` is unset or empty too.
 
-- The file is opened once, then checked and read through that handle, so replacing the path cannot redirect the read. The read is capped at 1 MB. A file that grows past the cap during the read is refused rather than cut short.
+- The file is opened once, without waiting, then checked and read through that handle, so replacing the path cannot redirect the read. Only a regular file is read: a FIFO, a directory or a device is refused at once as unreadable, so a FIFO with no writer cannot hang startup. Symlinks are followed, so a Kubernetes secret's link reaches its file. The read is capped at 1 MB. A file that grows past the cap during the read is refused rather than cut short.
 - The path must already be clean and must have no `..` component, a rule from [pathinside](https://github.com/cplieger/go/tree/main/pathinside). Two dots inside a name, as in `/run/secrets/key..v2`, are allowed.
 - `KEY` comes back exactly as set. The file's content comes back with at most one trailing line ending, `\n` or `\r\n`, removed, because an editor or `kubectl create secret --from-file` adds one. Edge spaces, tabs, non-breaking spaces and a second trailing newline are part of the secret and stay. A caller that checks a credential as written gets the same answer from either channel.
 - A file whose content is empty or only whitespace returns `ErrBlankSecretFile`, because that is a broken mount rather than a secret. A caller's allow-empty policy can then treat a blank file and a blank `KEY` alike.
 - The secret value never appears in an error or a log line. Errors carry the key and the file path.
 
-Each way a file can be unusable has its own error value, matched with `errors.Is`: `ErrSecretFilePathRejected`, `ErrSecretFileTooLarge`, `ErrSecretFileGrew`, `ErrSecretFileUnreadable` and `ErrBlankSecretFile`. A caller can report why the file failed without matching error text and without echoing the path. That matters when `KEY_FILE` was set to the secret itself by mistake. `ErrSecretFileUnreadable` keeps the operating system's `*os.PathError` reachable with `errors.As`.
+Each way a file can be unusable has its own error value, matched with `errors.Is`: `ErrSecretFilePathRejected`, `ErrSecretFileTooLarge`, `ErrSecretFileGrew`, `ErrSecretFileUnreadable` and `ErrBlankSecretFile`. A caller can report why the file failed without matching error text and without echoing the path. That matters when `KEY_FILE` was set to the secret itself by mistake. `ErrSecretFileUnreadable` keeps the operating system's `*os.PathError` reachable with `errors.As` when the operating system refused the open, stat or read.
 
 `SecretWithSource` also returns the channel that answered: `SecretSourceFile`, `SecretSourceEnv` or `SecretSourceNone`. It reports the channel on the error paths too, so a caller can warn that a `KEY` it also set was ignored in favor of `KEY_FILE`.
 

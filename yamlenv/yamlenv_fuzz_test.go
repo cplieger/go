@@ -2,6 +2,7 @@ package yamlenv_test
 
 import (
 	"errors"
+	"os"
 	"regexp"
 	"testing"
 
@@ -9,11 +10,11 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-// validName mirrors the ${VAR} name grammar: what Expand may ever report.
+// validName mirrors the ${VAR} name grammar: what ExpandWith may ever report.
 var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // FuzzExpand asserts the invariants every config loader relies on against
-// arbitrary YAML documents: Expand never panics, an allow-nothing expansion is
+// arbitrary YAML documents: ExpandWith never panics, an allow-nothing expansion is
 // a byte-for-byte no-op on the re-encoded document, and every reported
 // unresolved name is a syntactically valid environment-variable name.
 func FuzzExpand(f *testing.F) {
@@ -38,19 +39,19 @@ func FuzzExpand(f *testing.F) {
 		baseline, baseErr := yaml.Marshal(&root)
 
 		// Allow-nothing must be a pure no-op: nothing reported, nothing changed.
-		if got := yamlenv.Expand(&root, func(string) bool { return false }); len(got) != 0 {
-			t.Fatalf("allow-nothing Expand reported %v, want none", got)
+		if got := yamlenv.ExpandWith(&root, func(string) bool { return false }, os.LookupEnv); len(got) != 0 {
+			t.Fatalf("allow-nothing ExpandWith reported %v, want none", got)
 		}
 		if baseErr == nil {
 			after, err := yaml.Marshal(&root)
 			if err != nil || string(after) != string(baseline) {
-				t.Fatalf("allow-nothing Expand changed the document:\nbefore: %q\nafter: %q (err %v)", baseline, after, err)
+				t.Fatalf("allow-nothing ExpandWith changed the document:\nbefore: %q\nafter: %q (err %v)", baseline, after, err)
 			}
 		}
 
 		// Allow-everything must never panic, and every unresolved name it
 		// reports must be a valid env-var name (the ref grammar).
-		for _, name := range yamlenv.Expand(&root, func(string) bool { return true }) {
+		for _, name := range yamlenv.ExpandWith(&root, func(string) bool { return true }, os.LookupEnv) {
 			if !validName.MatchString(name) {
 				t.Fatalf("unresolved name %q does not match the ${VAR} grammar", name)
 			}

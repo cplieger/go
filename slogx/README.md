@@ -75,7 +75,7 @@ The examples for `ParseLevel`, `ParseFormat` and `capture.New` on pkg.go.dev run
 - `Options{Output, Format, Level, AddSource}` has a usable zero value, text at Info. One `Output` takes every level, and a nil `Output` means stderr for both formats.
 - `Format` is `Text`, the logfmt default, or `JSON`. Any other value makes `NewHandler` and `Setup` panic, and `ParseFormat` returns only those two.
 - `ParseLevel(raw, def)` and `ParseFormat(raw, def)` trim the input and ignore case. An empty string returns `(def, true)` and an unrecognized value `(def, false)`. `ParseLevel` maps `warning` to `warn`, so `warning+1` parses like `warn+1`.
-- `UTCTime(groups, attr)` is the `ReplaceAttr` that renders a record's time in UTC. A `time` attribute inside a group keeps its own time zone.
+- `UTCTime(groups, attr)` is the `ReplaceAttr` that renders a record's time in UTC. It rewrites every top-level `time` attribute holding a `time.Time`, yours included, and a `time` attribute inside a group keeps its own time zone.
 - The `capture` types are covered below.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/slogx). Releases follow semantic versioning.

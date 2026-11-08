@@ -14,15 +14,16 @@ import (
 // SanitizeDecodeError.
 var ErrMultipleDocuments = errors.New("yamlenv: more than one YAML document; remove the '---' separator")
 
-// CheckUnknownKeys loads data into probe, a pointer to a fresh throwaway value
+// checkUnknownKeys loads data into probe, a pointer to a fresh throwaway value
 // of the caller's config type, with go-yaml's WithKnownFields, so a misspelled
 // or misplaced key fails instead of being ignored. Run it on the RAW
 // pre-expansion bytes: expansion cannot change which keys exist, positions
 // then match the file, and an alias used as a key names the literal ${VAR}. An
 // empty document passes. The error is a *yaml.LoadErrors, or a *yaml.LoadError
 // for a parse error or an aborted load; either may embed document content, so
-// pass it through SanitizeDecodeError before logging it.
-func CheckUnknownKeys(data []byte, probe any) error {
+// pass it through SanitizeDecodeError before logging it. Load runs it and
+// sanitizes the result, so it is not exported.
+func checkUnknownKeys(data []byte, probe any) error {
 	l, err := yaml.NewLoader(bytes.NewReader(data), yaml.WithKnownFields())
 	if err != nil {
 		return err
