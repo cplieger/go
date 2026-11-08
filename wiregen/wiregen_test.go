@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -237,11 +238,14 @@ func TestGenerate_RelativeOpenAPIPathsAreTheWorkingDirectorys(t *testing.T) {
 }
 
 // A relative OpenAPI path from a working directory reached through a symlink
-// is the directory the operating system resolves, not the one $PWD names, so
-// the collision checks see the same file the write lands in.
+// resolves as the operating system resolves it, so the collision checks see
+// the same file the write lands in. Unix resolves ".." physically, from the
+// directory the link points to, not the one $PWD names. Windows keeps the
+// working directory as named and resolves ".." lexically, so there ..\ts is
+// the TS directory itself and Generate refuses the collision.
 //
 // Serial (no t.Parallel): t.Chdir and t.Setenv change process state.
-func TestGenerate_RelativeOpenAPIPathsResolvePhysically(t *testing.T) {
+func TestGenerate_RelativeOpenAPIPathsResolveAsTheOSDoes(t *testing.T) {
 	r := fullReg()
 	base := moduleTempDir(t)
 	real := filepath.Join(base, "real", "sub")
@@ -258,6 +262,12 @@ func TestGenerate_RelativeOpenAPIPathsResolvePhysically(t *testing.T) {
 	err := r.Generate(t.Context(), append(r.opts,
 		wiregen.WithTSDir(tsDir),
 		wiregen.WithOpenAPIFiles(filepath.Join("..", "ts", "types.gen.ts")))...)
+	if runtime.GOOS == "windows" {
+		if err == nil || !strings.Contains(err.Error(), "the types and openapi files") {
+			t.Fatalf("Generate = %v, want a refusal naming the types and openapi files", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("Generate = %v", err)
 	}

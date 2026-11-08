@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,6 +44,9 @@ func TestGenerate_RefusesOutputCollisions(t *testing.T) {
 			return []wiregen.Option{wiregen.WithOpenAPIFiles(filepath.Join(dir, "alias", "types.gen.ts"))}
 		}, "the types and openapi files"},
 		{"an OpenAPI path climbing out of a symlink", func(t *testing.T, dir string) []wiregen.Option {
+			if runtime.GOOS == "windows" {
+				t.Skip(`Windows resolves ".." lexically, so a\link\..\types.gen.ts is a\types.gen.ts and nothing collides (TestGenerate_ClimbingOutOfASymlinkIsLexicalOnWindows)`)
+			}
 			for _, d := range []string{"a", "sub"} {
 				if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
 					t.Fatal(err)
