@@ -94,7 +94,7 @@ The wait before the next attempt is a random time between half and all of the cu
 
 `GetBytes` and the transport replace that wait with the response's `Retry-After` header when it has one, capped at 60 seconds. The transport honors it on any response it retries.
 
-In `Do`, an error that implements `RetryAfterHint` with a positive duration replaces the wait instead. httpclient does not cap that value, so the type that returns it must. The doubling delay keeps advancing underneath either override.
+In `Do`, a transient error that implements `RetryAfterHint` with a positive duration replaces the wait instead; a 429 under a rate-limit option waits as [Rate limits](#rate-limits) describes. httpclient does not cap that value, so the type that returns it must. The doubling delay keeps advancing underneath either override.
 
 `ParseRetryAfter` reads a header value in seconds or as an HTTP date and caps it at `RetryAfterCap`, 60 seconds. `ParseRetryAfterResponse` reads it from a response and does not cap it. A missing, malformed or past value is zero.
 
@@ -132,7 +132,7 @@ body, err := httpclient.Do(ctx, func(ctx context.Context) ([]byte, error) {
 }, httpclient.WithRateLimitRetry(30*time.Second))
 ```
 
-`Do` retries a 408, a retryable 5xx or a transient network error by itself, because `IsTransient` reads the `*StatusError` or the network error inside the exhaustion error. A 429 is retried only because of `WithRateLimitRetry`, which waits the response's `Retry-After` but never longer than `maxWait`. Without that option a 429 ends the loop, like a 401, a 403 or any settled status. For the other retried failures, the exhaustion error keeps the `Retry-After` hint, so `Do` waits what the server asked for, capped at 60 seconds, instead of its own backoff.
+`Do` retries a 408, a retryable 5xx or a transient network error by itself, because `IsTransient` reads the `*StatusError` or the network error inside the exhaustion error. A 429 is retried only because of `WithRateLimitRetry`, which waits the response's `Retry-After` but never longer than `maxWait`. Without that option a 429 ends the loop, like a 401, a 403 or any settled status. For the other retried failures, when the last attempt carried a `Retry-After`, the exhaustion error keeps it as a hint, so `Do` waits what the server asked for, capped at 60 seconds, instead of its own backoff. With no hint, `Do` keeps its backoff.
 
 ## Logging
 

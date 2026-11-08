@@ -184,7 +184,8 @@ func (o rateLimitOption) applyDo(c *loopConfig) {
 // min(RetryAfter, maxWait) when it carries a positive RetryAfter, else maxWait.
 // A non-positive maxWait means RetryAfterCap, so the wait is always positive
 // and a canceled context is observed before every retry. Transient errors keep
-// their backoff waits and the exponential base advances on every retry.
+// their usual waits (the backoff, or a positive RetryAfterHint), and the
+// exponential base advances on every retry.
 // WithRateLimitRetry and WithRateLimitOnly set one mode: the later of the two
 // wins, with its maxWait.
 func WithRateLimitRetry(maxWait time.Duration) DoOption {
