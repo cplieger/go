@@ -16,8 +16,8 @@ type Gauge struct {
 }
 
 // NewGauge creates a named gauge. An invalid name is captured into the gauge
-// rather than panicking: the gauge records nothing, writeGauge emits nothing
-// for it, and the error surfaces at registration.
+// rather than panicking: the gauge records nothing, Handler never emits it,
+// and the error surfaces at registration.
 func NewGauge(name, help string) *Gauge {
 	help = sanitizeHelp(name, help)
 	return &Gauge{name: name, help: help, err: checkMetricName(name)}

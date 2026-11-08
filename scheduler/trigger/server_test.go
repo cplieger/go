@@ -887,3 +887,45 @@ func TestServe_WaitsForAnInFlightRunsFinalEvent(t *testing.T) {
 	}
 	<-execDone
 }
+
+// TestServe_ListenerClosedFirstStaysAnErrorDuringTheDrain pins that Serve reads
+// the context before it waits for its handlers: when the listener closes first
+// and ctx ends only while a run is still draining, Serve still reports the
+// listener closing, not a clean shutdown.
+func TestServe_ListenerClosedFirstStaysAnErrorDuringTheDrain(t *testing.T) {
+	sock := testSocketPath(t)
+	ln, err := Listen(sock)
+	if err != nil {
+		t.Fatalf("Listen() = %v", err)
+	}
+	q := NewQueue[testPayload](4)
+	release := make(chan struct{})
+	execDone := startExecutor(q, func(j *Job[testPayload]) {
+		j.Start()
+		<-release
+		j.Finish(Result{OK: true})
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	srv := &Server[testPayload]{Queue: q}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ctx, ln) }()
+
+	dec := rawRequest(t, sock, testPayload{})
+	nextEvent(t, dec) // queued
+	nextEvent(t, dec) // started
+	_ = ln.Close()
+	time.Sleep(100 * time.Millisecond) // the accept loop sees the close first
+	cancel()
+	q.Close()
+	close(release)
+	select {
+	case err := <-served:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("Serve with the listener closed before ctx ended = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+	<-execDone
+}

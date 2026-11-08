@@ -45,8 +45,7 @@ type Counter struct {
 // NewCounter creates a named counter. Per Prometheus convention the name
 // should end in `_total` (e.g. "http_requests_total"). An invalid name is
 // captured into the counter rather than panicking: the counter records
-// nothing, writeCounter emits nothing for it, and the error surfaces at
-// registration.
+// nothing, Handler never emits it, and the error surfaces at registration.
 func NewCounter(name, help string) *Counter {
 	help = sanitizeHelp(name, help)
 	return &Counter{name: name, help: help, err: checkMetricName(name)}

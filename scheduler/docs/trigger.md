@@ -19,7 +19,9 @@ The request payload is a type parameter. A daemon whose runs take arguments decl
 // trigger.Execute owns the Start/Finish lifecycle, so every job gets exactly
 // one result by construction: the callback just returns the outcome.
 queue := trigger.NewQueue[payload](16)
+executed := make(chan struct{})
 go func() {
+	defer close(executed)
 	trigger.Execute(ctx, queue, func(ctx context.Context, trig string, p payload) trigger.Result {
 		ok, elapsed := runPass(ctx, p) // the app's real work
 		return trigger.Result{OK: ok, Duration: elapsed}
@@ -29,7 +31,7 @@ ln, err := trigger.Listen("/tmp/myapp.sock") // owner-only, stale file unlinked
 srv := &trigger.Server[payload]{Queue: queue}
 served := make(chan error, 1)
 go func() { served <- srv.Serve(ctx, ln) }() // blocks until ctx ends, then closes ln and waits for the handlers
-// shutdown: when ctx ends, queue.Close(); wait for Execute to return; then err := <-served (nil after ctx ended)
+// shutdown: when ctx ends, queue.Close(); <-executed; then err := <-served (nil after ctx ended)
 
 // Trigger subcommand: submit one run, wait for its own result.
 // Pass signal.NotifyContext so Ctrl-C unwinds the wait instead of killing
