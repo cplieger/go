@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -68,10 +69,11 @@ var (
 	ErrSecretFileGrew = errors.New("envx: secret file grew past the size limit during read")
 	// ErrSecretFileUnreadable means the operating system refused the open, stat
 	// or read, or the path named something other than a regular file (a FIFO,
-	// a directory or a device), which is refused before any read. For a refusal
-	// by the operating system, the underlying *os.PathError stays reachable with
-	// errors.As, so a caller can still report the syscall and its reason
-	// (without the path, which the PathError also carries).
+	// a directory or a device), which is refused before any read. The
+	// underlying *os.PathError stays reachable with errors.As, so a caller can
+	// still report the operation and its reason (without the path, which the
+	// PathError also carries); for a non-regular file its Err is "not a
+	// regular file".
 	ErrSecretFileUnreadable = errors.New("envx: secret file could not be read")
 )
 
@@ -129,9 +131,11 @@ func unreadableSecretFile(cause error) error {
 //
 // The KEY_FILE indirection keeps the secret value out of `docker inspect`
 // output and compose files; the file path must be clean (no ".." traversal),
-// and the read uses a single handle so the size check and the read cannot
-// race. The secret value itself never appears in an error or a log line;
-// errors carry the key name and file path only. Each failure class is named by
+// and the read uses a single handle, so the path cannot be swapped between
+// the check and the read, and a file that grows during the read is refused
+// (ErrSecretFileGrew). The secret value itself never appears in an error or a
+// log line; errors carry the key name, and the file path where the path or
+// the operating system's answer is the failure. Each failure class is named by
 // a sentinel (ErrSecretFilePathRejected, ErrSecretFileTooLarge,
 // ErrSecretFileGrew, ErrSecretFileUnreadable, ErrBlankSecretFile) so a caller
 // can report WHY the file was unusable without echoing the path.
@@ -145,6 +149,15 @@ func Secret(key Key) (string, error) {
 	v, _, err := SecretWithSource(key)
 	return v, err
 }
+
+// secretStatHook, when set by a test, runs after the Stat and before the size
+// gate and the read: the window in which a writer can grow the file.
+var secretStatHook func()
+
+// errNotRegularFile is the cause of a refusal of a path that names a FIFO, a
+// directory or a device, so the refusal carries an *fs.PathError like every
+// other unreadable-file failure.
+var errNotRegularFile = errors.New("not a regular file")
 
 // readSecretFile reads a secret file through one handle (no stat-then-open
 // TOCTOU window) and rejects a path containing traversal or a file over the
@@ -176,10 +189,6 @@ func Secret(key Key) (string, error) {
 // names os.Root or a prefix check as the only real confinement). Only
 // filepath.Base, filepath.Rel and path.Base clear that analyzer, and none of the
 // three can be used here without discarding the directory the operator named.
-// secretStatHook, when set by a test, runs between the size gate's Stat and
-// the read, the window a writer grows the file in.
-var secretStatHook func(path string)
-
 func readSecretFile(path string) ([]byte, error) {
 	if !pathinside.IsCanonical(path) || pathinside.HasDotDot(path) {
 		return nil, fmt.Errorf("%w (must be clean and contain no \"..\" path component): %s", ErrSecretFilePathRejected, path)
@@ -195,14 +204,15 @@ func readSecretFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, unreadableSecretFile(err)
 	}
+	if secretStatHook != nil {
+		secretStatHook()
+	}
 	if !info.Mode().IsRegular() {
 		return nil, &classifiedError{
 			msg:   fmt.Sprintf("secret file is not a regular file (mode %s)", info.Mode()),
 			class: ErrSecretFileUnreadable,
+			cause: &fs.PathError{Op: "open", Path: path, Err: errNotRegularFile},
 		}
-	}
-	if secretStatHook != nil {
-		secretStatHook(path)
 	}
 	if info.Size() > maxSecretFileSize {
 		return nil, &classifiedError{

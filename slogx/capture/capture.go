@@ -264,9 +264,10 @@ func materialize(r *slog.Record) slog.Record {
 }
 
 // Records returns a snapshot copy of the captured records, in order. Each
-// record is rebuilt so its group values get fresh backing storage (slog.Record.Clone does not recursively copy KindGroup values,
-// whose Group() result aliases the stored record's mutable slice); mutating
-// or extending the result does not affect later captures.
+// record is rebuilt so its group values get fresh backing storage
+// (slog.Record.Clone does not recursively copy KindGroup values, whose
+// Group() result aliases the stored record's mutable slice); mutating or
+// extending the result does not affect later captures.
 func (rec *Recorder) Records() []slog.Record {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()

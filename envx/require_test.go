@@ -123,7 +123,8 @@ func TestSecret(t *testing.T) {
 }
 
 // TestSecret_file_exactly_at_the_size_limit_is_read_whole pins the size gate at
-// its boundary. The ceiling exists to refuse a device file or a runaway log, so
+// its boundary. The ceiling exists to refuse a runaway regular file such as a
+// log (a device is refused before any read, as not a regular file), so
 // a real secret whose length lands exactly on it is content rather than an
 // overrun, and a gate that refused it would reject the largest file the limit
 // was written to allow. Both gates see that same length — the pre-read stat and
@@ -361,7 +362,7 @@ func TestSecret_stream_longer_than_its_stat_size(t *testing.T) {
 	if err := os.WriteFile(path, []byte("small"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	secretStatHook = func(string) {
+	secretStatHook = func() {
 		if err := os.WriteFile(path, make([]byte, maxSecretFileSize+1), 0o600); err != nil {
 			t.Error(err)
 		}
@@ -411,6 +412,9 @@ func TestSecret_non_regular_file_is_refused_at_once(t *testing.T) {
 				}
 				if err != nil && !strings.Contains(err.Error(), "not a regular file") {
 					t.Errorf("Secret(%s) = %v, want the not-a-regular-file reason", name, err)
+				}
+				if pe, ok := errors.AsType[*fs.PathError](err); !ok || pe.Path != path {
+					t.Errorf("Secret(%s) = %v, want a *fs.PathError naming %s, as every unreadable-file failure carries", name, err, path)
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatalf("Secret(%s) blocked", name)
