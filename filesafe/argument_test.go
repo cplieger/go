@@ -48,6 +48,29 @@ func TestNilHandles_MatchErrUnsafePath(t *testing.T) {
 	}
 }
 
+// TestNilHandles_RefusedBeforeOtherChecks pins that a nil handle wins over a
+// done context and an over-cap size, so the ErrUnsafePath rule holds for any
+// other argument.
+func TestNilHandles_RefusedBeforeOtherChecks(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for name, call := range map[string]func() error{
+		"ReadBoundedFile, done ctx":   func() error { _, err := ReadBoundedFile(ctx, nil, 1); return err },
+		"ReadBoundedInRoot, -1":       func() error { _, err := ReadBoundedInRoot(t.Context(), nil, "f", -1); return err },
+		"ReadBoundedInRoot, done ctx": func() error { _, err := ReadBoundedInRoot(ctx, nil, "f", 1); return err },
+		"WriteFileInRoot, over cap": func() error {
+			_, err := WriteFileInRoot(t.Context(), nil, "f", []byte("xyz"), WithMaxBytes(1))
+			return err
+		},
+		"ProbeWritableInRoot, done ctx": func() error { _, err := ProbeWritableInRoot(ctx, nil, "."); return err },
+	} {
+		if err := call(); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("%s = %v, want ErrUnsafePath", name, err)
+		}
+	}
+}
+
 // TestInvalidArguments_MatchErrInvalidArgument pins the arguments no call
 // could mean: each is refused with ErrInvalidArgument (or ErrEmptyPath for an
 // empty sweep dir) before anything is read, created or removed.
