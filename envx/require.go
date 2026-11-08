@@ -72,8 +72,8 @@ var (
 	// a directory or a device), which is refused before any read. The
 	// underlying *os.PathError stays reachable with errors.As, so a caller can
 	// still report the operation and its reason (without the path, which the
-	// PathError also carries); for a non-regular file its Err is "not a
-	// regular file".
+	// PathError also carries); for a non-regular file its Err reads "not a
+	// regular file (mode ...)".
 	ErrSecretFileUnreadable = errors.New("envx: secret file could not be read")
 )
 
@@ -108,9 +108,9 @@ func (e *classifiedError) Unwrap() []error {
 	return []error{e.class, e.cause}
 }
 
-// unreadableSecretFile classifies an OS-level open, stat or read failure. The
-// message is the operating system's own, unchanged: it is already a
-// *os.PathError naming the syscall and the reason.
+// unreadableSecretFile classifies a refused open, stat or read, and the
+// non-regular-file refusal. The message is the *os.PathError's own text,
+// unchanged: it names the operation and the reason.
 func unreadableSecretFile(cause error) error {
 	return &classifiedError{msg: cause.Error(), class: ErrSecretFileUnreadable, cause: cause}
 }
@@ -154,11 +154,6 @@ func Secret(key Key) (string, error) {
 // secretStatHook, when set by a test, runs after the Stat and before the size
 // gate and the read: the window in which a writer can grow the file.
 var secretStatHook func()
-
-// errNotRegularFile is the cause of a refusal of a path that names a FIFO, a
-// directory or a device, so the refusal carries an *fs.PathError like every
-// other unreadable-file failure.
-var errNotRegularFile = errors.New("not a regular file")
 
 // readSecretFile reads a secret file through one handle (no stat-then-open
 // TOCTOU window) and rejects a path containing traversal or a file over the
@@ -212,7 +207,7 @@ func readSecretFile(path string) ([]byte, error) {
 		// Classified like an OS refusal, so the message names the path as
 		// "open <path>: not a regular file (mode ...)" does.
 		return nil, unreadableSecretFile(&fs.PathError{
-			Op: "open", Path: path, Err: fmt.Errorf("%w (mode %s)", errNotRegularFile, info.Mode()),
+			Op: "open", Path: path, Err: fmt.Errorf("not a regular file (mode %s)", info.Mode()),
 		})
 	}
 	if info.Size() > maxSecretFileSize {
