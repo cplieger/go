@@ -772,3 +772,34 @@ func TestPreflightUnterminatedTagAtTheTokenBoundIsLeftToTheDecoder(t *testing.T)
 		t.Errorf("Limit = %d, want the configured %d", le.Limit, bound)
 	}
 }
+
+// TestLimitsResolve_EachZeroFieldTakesItsOwnDefault pins resolve field by
+// field: with every other field at a distinct non-default value, the one zero
+// field takes exactly its DefaultLimits value and nothing else moves.
+func TestLimitsResolve_EachZeroFieldTakesItsOwnDefault(t *testing.T) {
+	t.Parallel()
+	if got, err := xmlx.Resolve(xmlx.Limits{}); err != nil || got != xmlx.DefaultLimits() {
+		t.Fatalf("Resolve(Limits{}) = (%+v, %v), want (%+v, nil)", got, err, xmlx.DefaultLimits())
+	}
+	def := xmlx.DefaultLimits()
+	set := xmlx.Limits{MaxTextRunBytes: 11, MaxTokenBytes: 22, MaxTagAttrs: 3, MaxDepth: 4, MaxElements: 55}
+	for name, zero := range map[string]func(*xmlx.Limits, xmlx.Limits){
+		"MaxTextRunBytes": func(l *xmlx.Limits, d xmlx.Limits) { l.MaxTextRunBytes = d.MaxTextRunBytes },
+		"MaxTokenBytes":   func(l *xmlx.Limits, d xmlx.Limits) { l.MaxTokenBytes = d.MaxTokenBytes },
+		"MaxTagAttrs":     func(l *xmlx.Limits, d xmlx.Limits) { l.MaxTagAttrs = d.MaxTagAttrs },
+		"MaxDepth":        func(l *xmlx.Limits, d xmlx.Limits) { l.MaxDepth = d.MaxDepth },
+		"MaxElements":     func(l *xmlx.Limits, d xmlx.Limits) { l.MaxElements = d.MaxElements },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := set
+			zero(&in, xmlx.Limits{})
+			want := set
+			zero(&want, def)
+			got, err := xmlx.Resolve(in)
+			if err != nil || got != want {
+				t.Errorf("Resolve(%+v) = (%+v, %v), want (%+v, nil)", in, got, err, want)
+			}
+		})
+	}
+}

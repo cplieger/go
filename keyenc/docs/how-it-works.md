@@ -62,6 +62,7 @@ The two halves give identical keys for identical valid UTF-8 input. `conformance
 
 - The size limit counts UTF-8 bytes, not UTF-16 code units. JavaScript's `String.length` crosses the limit at a different point for multibyte text. The fixture has a case that is under the limit in code units and over it in bytes.
 - The digest uses the 8-byte big-endian length prefix per field described above. The fixture has a hashed case with two fields.
+- The TypeScript half counts a lone surrogate as 3 bytes and hashes it as its WTF-8 bytes, which are the bytes Go hashes for a string holding that sequence, so it never shares a digest with U+FFFD. Known-answer tests in `web/src/index.test.ts` pin those digests against the Go half; the fixture holds valid UTF-8 only.
 
 The TypeScript half computes SHA-256 itself, because `crypto.subtle.digest` is asynchronous and `join` returns its key synchronously.
 

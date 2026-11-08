@@ -138,7 +138,7 @@ func tokenKind(t json.Token) string {
 		return fmt.Sprintf("%q", rune(v))
 	case string:
 		return "a string"
-	case json.Number, float64:
+	case json.Number:
 		return "a number"
 	case bool:
 		return "a boolean"
@@ -249,8 +249,10 @@ func (d *Decoder) End() error {
 //
 // On error the returned slice holds the elements decoded so far, as Map's
 // map does: prior unchanged when the value is not an array at all, otherwise
-// the first elements up to the one that failed. The error, not the slice, is
-// the result.
+// the first elements up to the one that failed. Elements decode in place into
+// prior's backing array, as json.Unmarshal regrows a slice, so prior itself
+// also shows the decoded head and the failing element, partly decoded. The
+// error, not the slice, is the result.
 func (d *Decoder) Array[T any](prior []T, maxElems int, what string, decodeElem func(*T) error) ([]T, error) {
 	ok, err := d.Open('[')
 	if err != nil {

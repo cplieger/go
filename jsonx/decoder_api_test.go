@@ -126,6 +126,13 @@ func TestDecoderShapeErrors_QuoteNoDocumentBytes(t *testing.T) {
 			_, err := d.Key()
 			return err
 		}, `jsonx: expected an object key, got a number`},
+		{"Key on null in an array", `[null]`, func(d *jsonx.Decoder) error {
+			if _, err := d.Open('['); err != nil {
+				return err
+			}
+			_, err := d.Key()
+			return err
+		}, `jsonx: expected an object key, got null`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -39,7 +39,9 @@ const (
 // the outcome every 1.0 policy already gives that input, so a Policy written
 // as a literal today decodes the same values tomorrow. A fact that 1.0
 // accepts everywhere, where a zero Disposition (Reject) would start refusing
-// it, gets a field type whose zero value accepts. Deriving a variant from a
+// it, gets a field type whose zero value accepts. A fact whose 1.0 outcome
+// differs by policy gets a field type whose zero value defers to the gate that
+// decides that input today. Deriving a variant from a
 // ready-made policy, as the examples do, is still the clearer way to say
 // which stance a field departs from.
 type Policy struct {
