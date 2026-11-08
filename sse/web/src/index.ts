@@ -40,7 +40,14 @@ export type {
 export { createDOMOnlineSource, createOnlineManager } from "./online.js";
 export type { OnlineManager, OnlineSource } from "./online.js";
 export { bindListener, createVersionMap, staleListener } from "./versions.js";
-export type { Held, Subject, VersionMap, VersionMapOptions } from "./versions.js";
+export type {
+  BindListener,
+  Held,
+  StaleListener,
+  Subject,
+  VersionMap,
+  VersionMapOptions,
+} from "./versions.js";
 export { DigestStatusError, createDigestClient } from "./digest.js";
 export type {
   Changed,
@@ -52,7 +59,12 @@ export type {
 } from "./digest.js";
 export { createStream } from "./stream.js";
 export type { Frame, RevalidateContext, Stream, StreamOptions } from "./stream.js";
-export type { TabToWorker, WorkerToTab } from "./port-protocol.js";
+export type {
+  DetachCause,
+  PortRevalidateContext,
+  TabToWorker,
+  WorkerToTab,
+} from "./port-protocol.js";
 export { createWorkerHost } from "./worker.js";
 export type { DigestVerdict, TabSet, WorkerHost, WorkerHostOptions } from "./worker.js";
 export { attachToWorker } from "./tab.js";

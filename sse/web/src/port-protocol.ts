@@ -12,7 +12,7 @@ import type { Cursor } from "./wire.js";
  * stopped answering. Only `logout` stops the profile's stream — the other three leave it running for
  * whatever tabs remain.
  */
-type DetachCause = "unload" | "respawn" | "fallback" | "logout";
+export type DetachCause = "unload" | "respawn" | "fallback" | "logout";
 
 /** RevalidateContext without its signal, which cannot cross a port; the tab supplies its own. */
 export interface PortRevalidateContext {

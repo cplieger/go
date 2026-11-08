@@ -94,13 +94,8 @@ func isOffset(s string) bool {
 	return true
 }
 
-// newEpoch mints a random epoch. crypto/rand.Read documents that it never
-// returns an error, but a zero epoch would match every other hub that got
-// one, so an error is a panic rather than a silent all-zero epoch.
 func newEpoch() string {
 	var b [epochLen / 2]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(fmt.Errorf("sse: minting an epoch: %w", err))
-	}
+	_, _ = rand.Read(b[:]) // never returns an error; a failed read crashes the program
 	return hex.EncodeToString(b[:])
 }

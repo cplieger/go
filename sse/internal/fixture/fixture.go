@@ -282,8 +282,7 @@ func (f *Fixture) handleDigest(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(delay)
 	handler, err := hub.DigestHandler(f.resolve)
 	if err != nil {
-		httpserver.WriteError(w, r, http.StatusInternalServerError, "digest_config", err.Error())
-		return
+		panic(err) // f.resolve is never nil and no option is passed: a harness bug
 	}
 	handler.ServeHTTP(w, r)
 }

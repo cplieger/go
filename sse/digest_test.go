@@ -273,6 +273,9 @@ func TestDigest_keyMismatchClasses(t *testing.T) {
 				t.Errorf("status %d response %v, want 200 must_refetch", rec.Code, got)
 			}
 			log := logged.String()
+			if tc.name == "status" && (strings.Contains(log, "archived") || strings.Contains(rec.Body.String(), "archived")) {
+				t.Errorf("the out-of-set status was echoed: log %q, body %q", log, rec.Body.String())
+			}
 			for _, want := range []string{"level=ERROR", "class=" + tc.wantClass, "request_subjects=2", fmt.Sprintf("resolver_states=%d", tc.wantCount), "kind=chat", "ref=" + tc.wantRef} {
 				if !strings.Contains(log, want) {
 					t.Errorf("log = %q, want %q", log, want)

@@ -130,7 +130,7 @@ func pollUntil(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// readArrival reads the fixture's connected frame, which its OnConnect writes
+// readArrival reads the fixture's connected frame, which its WithOnConnect hook writes
 // after the hub ran the presence hook, so the stream's arrival is in the state.
 func readArrival(t *testing.T, stream *ssetest.FrameReader) {
 	t.Helper()
@@ -244,7 +244,7 @@ func TestFixture_controlRoutes(t *testing.T) {
 		_, base := fixtureServer(t)
 		resp, stream, hello := openEvents(t, base, nil)
 		defer resp.Body.Close()
-		// A restart before OnConnect ran resets the stream with no connected frame.
+		// A restart before the connect hook ran resets the stream with no connected frame.
 		readArrival(t, stream)
 		var restarted restartResponse
 		post(t, base+"/control/restart", ``, nil, &restarted)
