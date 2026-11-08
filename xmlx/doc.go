@@ -25,9 +25,9 @@
 //		return err
 //	}
 //
-// A non-positive limit is reported as [ErrInvalidLimits], never read as
-// unbounded. Start from [DefaultLimits] and [DefaultBudget] and size them to
-// the document contract.
+// A zero bound takes its default and a negative one is reported as
+// [ErrInvalidLimits]; no bound is ever read as unbounded. Start from
+// [DefaultLimits] and [DefaultBudget] and size them to the document contract.
 //
 // Preflight refuses every XML directive other than a comment or CDATA section,
 // such as <!DOCTYPE. The bounds model the default decoder settings.

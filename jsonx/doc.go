@@ -4,20 +4,18 @@
 //
 // Upstream APIs are inconsistent about numeric fields: the same field
 // arrives as 14 on one endpoint and "14" on another, and odd rows carry
-// null, "", "unknown", floats, negatives, or absurdly large values. Three
-// apps had hand-rolled this decode with three deliberate - and drifting -
-// policies (seadex-scout's tolerant-zero Fribb decoder was the only copy
-// with NaN/fractional/range integrity guards; subflux's strict provider
-// core and plex-language-sync's strict decoder each lacked them). This
-// package is the shared, hardened replacement.
+// null, "", "unknown", floats, negatives, or absurdly large values. This
+// package decodes such a field under one policy the caller chooses, with
+// the fractional, range and overflow guards a hand-rolled decoder tends to
+// miss.
 //
 // Classify extracts one value's syntactic facts (shape, was-string, float
 // form, fractional, negative, overflow, padding) without judging them. A
 // Policy then decides per fact whether to accept the parsed value,
 // tolerate the oddity as zero, or reject it with a typed *ParseError.
-// Three ready-made policies reproduce the origin decoders: TolerantZero,
+// Three ready-made policies cover the common stances: TolerantZero,
 // Strict, and StrictAbsentZero. Ready-made json.Unmarshaler field types
-// (TolerantInt, StrictInt, StrictAbsentZeroInt) apply them directly in
+// (TolerantZeroInt, StrictInt, StrictAbsentZeroInt) apply them directly in
 // struct definitions.
 //
 // # Capped decoding
@@ -34,7 +32,8 @@
 //
 // The building blocks reproduce encoding/json's observable behavior, so a
 // schema decoder built from them is a drop-in for json.Unmarshal on
-// well-formed input:
+// well-formed input, except that a number decoded into an untyped any is a
+// json.Number:
 //
 //   - [Decoder.Object] decodes a struct-shaped object and leaves the target untouched
 //     on a JSON null.
@@ -44,7 +43,8 @@
 //   - [Decoder.Decode] decodes a scalar value.
 //
 // Key dispatch stays with the caller. Match keys with strings.EqualFold to
-// reproduce json.Unmarshal's case-insensitive field matching.
+// reproduce json.Unmarshal's case-insensitive field matching. A caller
+// paginating across several bodies carries one budget with [Decoder.Next].
 //
 // [Preflight] is a separate pass that rejects a body with a repeated object
 // key before any decode runs, for a caller that cannot accept the ambiguity

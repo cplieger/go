@@ -13,9 +13,10 @@ var (
 	// classify "the document was too big to be worth decoding" with one
 	// errors.Is and read *LimitError only when it wants the specific bound.
 	ErrLimit = errors.New("xmlx: limit exceeded")
-	// ErrInvalidLimits reports a non-positive bound: a configuration mistake in
-	// the CALLER, not a property of the document. It is deliberately not
-	// treated as an unbounded setting, see the package doc.
+	// ErrInvalidLimits reports a negative bound: a configuration mistake in
+	// the CALLER, not a property of the document. A zero bound takes its
+	// default instead, and no bound is ever read as unbounded; see the package
+	// doc.
 	ErrInvalidLimits = errors.New("xmlx: invalid limits")
 )
 
@@ -113,7 +114,10 @@ type LimitError struct {
 	// Offset is the byte offset in the document where the rejection was
 	// detected. Preflight sets it; Budget leaves it 0, because a decoded value
 	// has no single offset and the caller's decoder knows which field it was
-	// reading (wrap the error with that name).
+	// reading (wrap the error with that name). So 0 is either the first byte
+	// of the document or no offset at all, and Kind tells the two apart:
+	// KindField and KindTotalText come from a Budget, every other Kind from
+	// Preflight. Error omits a zero offset from the message.
 	Offset int
 }
 
@@ -160,10 +164,11 @@ func at(err error, offset int) error {
 	return err
 }
 
-// ConfigError reports a non-positive bound, naming the field that is wrong. It
+// ConfigError reports a negative bound, naming the field that is wrong. It
 // wraps ErrInvalidLimits.
 type ConfigError struct {
-	// Field is the struct field name of the offending bound.
+	// Field is the offending bound, as its type and field name, such as
+	// "Limits.MaxDepth" or "BudgetLimits.MaxFieldBytes".
 	Field string
 	// Value is what the caller set it to.
 	Value int
@@ -171,16 +176,21 @@ type ConfigError struct {
 
 // Error implements error.
 func (e *ConfigError) Error() string {
-	return "xmlx: " + e.Field + " must be positive, got " + strconv.Itoa(e.Value)
+	return "xmlx: " + e.Field + " must not be negative, got " + strconv.Itoa(e.Value)
 }
 
 // Unwrap returns ErrInvalidLimits.
 func (*ConfigError) Unwrap() error { return ErrInvalidLimits }
 
-// requirePositive returns a ConfigError unless n is positive.
-func requirePositive(field string, n int) error {
-	if n > 0 {
-		return nil
+// orDefault returns n, def when n is zero, or a ConfigError when n is
+// negative.
+func orDefault(field string, n, def int) (int, error) {
+	switch {
+	case n < 0:
+		return 0, &ConfigError{Field: field, Value: n}
+	case n == 0:
+		return def, nil
+	default:
+		return n, nil
 	}
-	return &ConfigError{Field: field, Value: n}
 }

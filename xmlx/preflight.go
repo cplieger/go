@@ -18,14 +18,16 @@ var (
 
 // Preflight scans body once, allocation-free, and rejects a document outside
 // lim, or carrying an XML directive, before any decoder allocates a token from
-// it. Each rejection is a *LimitError naming the bound and byte offset, and
-// wraps ErrLimit. It is a bounds check, not a validator; the bounds assume the
+// it. A zero field of lim takes its DefaultLimits value, and a negative one is
+// a ConfigError. Each rejection is a *LimitError naming the bound and byte
+// offset, and wraps ErrLimit. It is a bounds check, not a validator; the bounds assume the
 // default decoder (docs/non-goals.md "Decoder settings other than the
 // defaults"). It takes body as []byte, not an io.Reader like jsonx.Preflight,
 // because encoding/xml's tokenizer is the cost being bounded. body is not
 // modified or retained.
 func Preflight(body []byte, lim Limits) error {
-	if err := lim.validate(); err != nil {
+	lim, err := lim.resolve()
+	if err != nil {
 		return err
 	}
 	scan := docScan{lim: lim}

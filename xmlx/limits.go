@@ -1,8 +1,10 @@
 package xmlx
 
-// Limits are Preflight's lexical bounds over the raw document bytes. Every field
-// must be positive; a non-positive value is a configuration mistake
-// (ErrInvalidLimits), never an unbounded setting.
+// Limits are Preflight's lexical bounds over the raw document bytes. A zero
+// field takes its DefaultLimits value, so a caller sets only the bounds its
+// document contract tightens, and a bound added in a later release is bounded
+// in every existing literal. A negative field is a configuration mistake
+// (ErrInvalidLimits). No field is ever read as unbounded.
 //
 // Size these from the document CONTRACT, not from the transport cap. The question
 // each bound answers is "what would a legitimate document from this endpoint
@@ -118,21 +120,27 @@ func DefaultLimits() Limits {
 	}
 }
 
-// validate reports the first non-positive bound.
-func (l Limits) validate() error {
-	for _, f := range []struct {
-		name string
-		n    int
-	}{
-		{"Limits.MaxTextRunBytes", l.MaxTextRunBytes},
-		{"Limits.MaxTokenBytes", l.MaxTokenBytes},
-		{"Limits.MaxTagAttrs", l.MaxTagAttrs},
-		{"Limits.MaxDepth", l.MaxDepth},
-		{"Limits.MaxElements", l.MaxElements},
-	} {
-		if err := requirePositive(f.name, f.n); err != nil {
-			return err
-		}
+// resolve returns l with every zero bound replaced by its DefaultLimits value,
+// or the first negative bound as a ConfigError. It assigns field by field,
+// with no pointer into l, so l stays on the stack and Preflight allocates
+// nothing on the accepting path.
+func (l Limits) resolve() (Limits, error) {
+	def := DefaultLimits()
+	var err error
+	if l.MaxTextRunBytes, err = orDefault("Limits.MaxTextRunBytes", l.MaxTextRunBytes, def.MaxTextRunBytes); err != nil {
+		return Limits{}, err
 	}
-	return nil
+	if l.MaxTokenBytes, err = orDefault("Limits.MaxTokenBytes", l.MaxTokenBytes, def.MaxTokenBytes); err != nil {
+		return Limits{}, err
+	}
+	if l.MaxTagAttrs, err = orDefault("Limits.MaxTagAttrs", l.MaxTagAttrs, def.MaxTagAttrs); err != nil {
+		return Limits{}, err
+	}
+	if l.MaxDepth, err = orDefault("Limits.MaxDepth", l.MaxDepth, def.MaxDepth); err != nil {
+		return Limits{}, err
+	}
+	if l.MaxElements, err = orDefault("Limits.MaxElements", l.MaxElements, def.MaxElements); err != nil {
+		return Limits{}, err
+	}
+	return l, nil
 }

@@ -325,18 +325,19 @@ func TestPreflightNeverValidates(t *testing.T) {
 	}
 }
 
-// TestPreflightRefusesNonPositiveLimits pins the fail-closed configuration
-// contract: a zero bound is a caller mistake, never "unbounded". The field name
-// is in the error because a caller staring at one is looking for which of four
-// numbers they left unset.
-func TestPreflightRefusesNonPositiveLimits(t *testing.T) {
+// TestPreflightRefusesNegativeLimits pins the fail-closed configuration
+// contract: a negative bound is a caller mistake, never "unbounded". The field
+// name is in the error because a caller staring at one is looking for which of
+// five numbers they got wrong.
+func TestPreflightRefusesNegativeLimits(t *testing.T) {
 	t.Parallel()
 	base := xmlx.DefaultLimits()
 	tests := map[string]func(*xmlx.Limits){
-		"Limits.MaxTextRunBytes": func(l *xmlx.Limits) { l.MaxTextRunBytes = 0 },
-		"Limits.MaxTokenBytes":   func(l *xmlx.Limits) { l.MaxTokenBytes = 0 },
+		"Limits.MaxTextRunBytes": func(l *xmlx.Limits) { l.MaxTextRunBytes = -1 },
+		"Limits.MaxTokenBytes":   func(l *xmlx.Limits) { l.MaxTokenBytes = -1 },
 		"Limits.MaxTagAttrs":     func(l *xmlx.Limits) { l.MaxTagAttrs = -1 },
-		"Limits.MaxDepth":        func(l *xmlx.Limits) { l.MaxDepth = 0 },
+		"Limits.MaxDepth":        func(l *xmlx.Limits) { l.MaxDepth = -1 },
+		"Limits.MaxElements":     func(l *xmlx.Limits) { l.MaxElements = -1 },
 	}
 	for field, mutate := range tests {
 		t.Run(field, func(t *testing.T) {
@@ -345,7 +346,7 @@ func TestPreflightRefusesNonPositiveLimits(t *testing.T) {
 			mutate(&lim)
 			err := xmlx.Preflight([]byte(`<a/>`), lim)
 			if !errors.Is(err, xmlx.ErrInvalidLimits) {
-				t.Fatalf("Preflight with %s unset = %v, want ErrInvalidLimits", field, err)
+				t.Fatalf("Preflight with %s negative = %v, want ErrInvalidLimits", field, err)
 			}
 			if errors.Is(err, xmlx.ErrLimit) {
 				t.Error("a configuration mistake reported as ErrLimit: the caller would blame the document")
@@ -355,9 +356,29 @@ func TestPreflightRefusesNonPositiveLimits(t *testing.T) {
 			}
 		})
 	}
-	// A zero-value Limits is the whole point of the rule: it must not pass.
-	if err := xmlx.Preflight([]byte(`<a/>`), xmlx.Limits{}); !errors.Is(err, xmlx.ErrInvalidLimits) {
-		t.Errorf("zero-value Limits = %v, want ErrInvalidLimits", err)
+}
+
+// TestPreflightZeroLimitTakesItsDefault pins that a zero field is bounded by
+// its DefaultLimits value, never unbounded: the zero Limits rejects what
+// DefaultLimits rejects, and a literal that sets one field keeps the others at
+// their defaults.
+func TestPreflightZeroLimitTakesItsDefault(t *testing.T) {
+	t.Parallel()
+	def := xmlx.DefaultLimits()
+	deep := []byte(strings.Repeat("<a>", def.MaxDepth+1) + strings.Repeat("</a>", def.MaxDepth+1))
+	for name, lim := range map[string]xmlx.Limits{
+		"zero Limits":          {},
+		"one field set":        {MaxTextRunBytes: 8},
+		"DefaultLimits itself": def,
+	} {
+		err := xmlx.Preflight(deep, lim)
+		if le, ok := errors.AsType[*xmlx.LimitError](err); !ok || le.Kind != xmlx.KindDepth || le.Limit != def.MaxDepth {
+			t.Errorf("%s: Preflight(%d deep) = %v, want KindDepth at the default %d", name, def.MaxDepth+1, err, def.MaxDepth)
+		}
+	}
+	long := []byte("<a>" + strings.Repeat("x", 9) + "</a>")
+	if le, ok := errors.AsType[*xmlx.LimitError](xmlx.Preflight(long, xmlx.Limits{MaxTextRunBytes: 8})); !ok || le.Kind != xmlx.KindTextRun || le.Limit != 8 {
+		t.Errorf("a set field must still apply: got %v", xmlx.Preflight(long, xmlx.Limits{MaxTextRunBytes: 8}))
 	}
 }
 

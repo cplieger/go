@@ -6,7 +6,9 @@
  * byte-identical keys to the Go half for every valid-UTF-8 input, pinned by the
  * shared conformance fixture in `conformance/keys.json`. That parity is
  * load-bearing wherever a key built in one language is looked up against keys
- * built in the other.
+ * built in the other. A string carrying a lone surrogate, which no valid UTF-8
+ * holds, is hashed through its generalized UTF-8 (WTF-8) bytes, so it never
+ * collides with the replacement character it would otherwise be encoded as.
  *
  * See the Go package documentation for the grammar, the nesting rule and the
  * reasoning behind the size bound. The short version: `:` separates components
@@ -59,18 +61,15 @@ const encoder = new TextEncoder();
 /**
  * UTF-8 byte length, counted without allocating an encoded copy.
  *
- * Matches `TextEncoder` exactly, including its treatment of a lone surrogate as
- * the 3-byte replacement character — the hashing path encodes through
- * `TextEncoder`, so a counter that disagreed would put the size decision and
- * the digest on different views of the same string.
+ * Matches {@link encodeLossless} exactly: a lone surrogate counts three bytes,
+ * its WTF-8 width, so the size decision and the digest see the same bytes.
  */
 function utf8Length(s: string): number {
   let n = 0;
   for (const ch of s) {
     // Iteration yields code points, so a well-formed surrogate pair arrives as
     // one two-unit string: 4 UTF-8 bytes. A lone surrogate arrives as one unit
-    // and falls through to the 3-byte case, which is what TextEncoder charges
-    // for the replacement character it substitutes.
+    // and falls through to the 3-byte case, its WTF-8 width.
     if (ch.length === 2) {
       n += 4;
       continue;
@@ -102,12 +101,47 @@ function escapePart(part: string): string {
   return out;
 }
 
+/**
+ * The bytes a component is hashed as: its UTF-8 for a well-formed string, and
+ * its WTF-8 otherwise, where each lone surrogate is written as the three bytes
+ * UTF-8 would give its code point. `TextEncoder` would replace it with U+FFFD,
+ * so a component carrying "\uD800" and one carrying "\uFFFD" would hash alike
+ * and forge each other's key. For a well-formed string the two encodings are
+ * the same bytes, so Go parity on valid UTF-8 holds.
+ */
+function encodeLossless(s: string): Uint8Array {
+  if (s.isWellFormed()) {
+    return encoder.encode(s);
+  }
+  const out = new Uint8Array(utf8Length(s));
+  let i = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 0x7f) {
+      out[i++] = cp;
+    } else if (cp <= 0x7ff) {
+      out[i++] = 0xc0 | (cp >> 6);
+      out[i++] = 0x80 | (cp & 0x3f);
+    } else if (cp <= 0xffff) {
+      out[i++] = 0xe0 | (cp >> 12);
+      out[i++] = 0x80 | ((cp >> 6) & 0x3f);
+      out[i++] = 0x80 | (cp & 0x3f);
+    } else {
+      out[i++] = 0xf0 | (cp >> 18);
+      out[i++] = 0x80 | ((cp >> 12) & 0x3f);
+      out[i++] = 0x80 | ((cp >> 6) & 0x3f);
+      out[i++] = 0x80 | (cp & 0x3f);
+    }
+  }
+  return out;
+}
+
 function hashParts(parts: readonly string[]): string {
   const h = new Sha256();
   const lenBuf = new Uint8Array(8);
   const view = new DataView(lenBuf.buffer);
   for (const part of parts) {
-    const bytes = encoder.encode(part);
+    const bytes = encodeLossless(part);
     // 8-byte big-endian length prefix, matching Go's binary.BigEndian.PutUint64.
     // A component longer than 2^32 bytes cannot exist in a JS string, so the
     // high word is always zero.
@@ -153,11 +187,11 @@ export function join(...parts: string[]): string {
 }
 
 /**
- * Recover the exact components {@link join} encoded. Its accepted language is
- * exactly `join`'s image: an escape before anything other than a reserved
+ * Recover the exact components {@link join} encoded. It accepts exactly the
+ * escape grammar `join` emits and checks no length, so it also splits a key
+ * `join` would have hashed: an escape before anything other than a reserved
  * character, or a trailing dangling escape, throws {@link MalformedKeyError}
- * rather than being normalized, so "split accepted it" is a statement about the
- * key's provenance. A hashed identity throws {@link HashedKeyError}; any other
+ * rather than being normalized. A hashed identity throws {@link HashedKeyError}; any other
  * `sha256:`-prefixed key throws {@link MalformedKeyError}, since join emits no
  * raw key with that prefix.
  *

@@ -34,7 +34,7 @@ The per-container and budget checks run in a fixed order, before the next entry 
 
 A cap of zero or less on `Array` or `Map` turns that container's cap off, and the budget still applies. A budget of zero or less on `NewDecoder` turns the budget off, and the per-container caps still apply. Pass a real budget for untrusted input.
 
-`Elements` reports how many elements and entries have been charged so far. A caller reading several paginated bodies can use it to carry one budget across several `Decoder` values.
+`Elements` reports how many elements and entries have been charged so far. A caller reading several paginated bodies carries one budget with `Next(r)`, which returns a `Decoder` over the next body with the charge so far already spent. Do not pass a computed remainder to `NewDecoder`: a remainder of 0 would turn the budget off.
 
 ## Parity with json.Unmarshal
 
@@ -50,6 +50,7 @@ The fuzz target `FuzzParityWithUnmarshal` decodes arbitrary bytes through a sche
 
 - A JSON null gives a nil slice. An empty array `[]` gives an empty slice that is not nil.
 - Pass the value already decoded for an earlier occurrence of the same key as `prior` to get the repeated-key behavior of `json.Unmarshal`. Within the retained capacity, `Array` reuses the earlier elements, so a struct element merges field by field. The result is cut to the length of the new array, and an empty re-occurrence replaces the slice with a fresh one.
+- On an error, the returned slice holds what was decoded so far: `prior` as it was when the value is not an array, otherwise the elements before the one that failed. The error is the result.
 
 ### Maps
 
@@ -91,7 +92,7 @@ Cap and budget errors carry the bound and never document bytes. `ErrArrayCap` an
 
 An `ErrDuplicateKey` error quotes the repeated key, cut to at most 64 bytes on a rune boundary and rendered with `%q`. Control characters and newlines are escaped, so the message stays on one line and is safe to log.
 
-When `Open` or `Key` meets a token of the wrong kind, its error prints that token, which is text from the document. Errors from `encoding/json` itself, such as a syntax error, are returned as they are, or wrapped by `End` when they follow the top-level value.
+When `Open` or `Key` meets a token of the wrong kind, its error names the token's kind, such as `a string` or `'['`, and never its text. Errors from `encoding/json` itself, such as a syntax error, are returned as they are, or wrapped by `End` when they follow the top-level value.
 
 Match each class with `errors.Is` through the wrapping error.
 
@@ -101,7 +102,7 @@ Match each class with `errors.Is` through the wrapping error.
 
 ## Nesting depth
 
-`encoding/json` bounds nesting for every walk in this package, `Preflight` included. Its decoder refuses to read the token that would open container `MaxDepth+1`, and the error reaches you as a `*json.SyntaxError`, which jsonx does not translate. `MaxDepth` is 10000 and exists because the standard library does not export its threshold.
+`encoding/json` bounds nesting for every walk in this package, `Preflight` included. Its decoder refuses to read the token that would open container 10001, and the error reaches you as a `*json.SyntaxError`, which jsonx does not translate. jsonx promises to accept exactly the depth `json.Unmarshal` accepts, not the number 10000, which belongs to the standard library.
 
 `TestPreflightDepthMatchesUnmarshal` asserts that `Preflight` accepts exactly the depths `json.Unmarshal` accepts. `TestPreflightAllocationBoundedByDepthCeiling` asserts that 4 MiB of open brackets costs `Preflight` less than 1.5 times the allocations of 64 KiB of them.
 

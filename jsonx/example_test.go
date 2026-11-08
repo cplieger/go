@@ -21,12 +21,12 @@ func ExampleParseInt64() {
 	// jsonx: float form: "\"9.0\""
 }
 
-// ExampleTolerantInt decodes a shape-variant upstream record: the odd
+// ExampleTolerantZeroInt decodes a shape-variant upstream record: the odd
 // values become 0 instead of failing the record.
-func ExampleTolerantInt() {
+func ExampleTolerantZeroInt() {
 	type record struct {
-		AniListID jsonx.TolerantInt `json:"anilist_id"`
-		TvdbID    jsonx.TolerantInt `json:"tvdb_id"`
+		AniListID jsonx.TolerantZeroInt `json:"anilist_id"`
+		TvdbID    jsonx.TolerantZeroInt `json:"tvdb_id"`
 	}
 	var r record
 	_ = json.Unmarshal([]byte(`{"anilist_id":"1e3","tvdb_id":"unknown"}`), &r)

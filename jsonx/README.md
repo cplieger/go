@@ -30,8 +30,8 @@ go get github.com/cplieger/go/jsonx@latest
 
 ```go
 type record struct {
-    AniListID jsonx.TolerantInt `json:"anilist_id"` // odd values become 0, a malformed string is an error
-    TvdbID    jsonx.TolerantInt `json:"tvdb_id"`
+    AniListID jsonx.TolerantZeroInt `json:"anilist_id"` // odd values become 0, a malformed string is an error
+    TvdbID    jsonx.TolerantZeroInt `json:"tvdb_id"`
 }
 
 type item struct {
@@ -77,9 +77,11 @@ The runnable examples on pkg.go.dev show each case, and `go test` keeps them tru
 ## API
 
 - Parsing: `ParseInt64(data, policy)` returns an `int64` or an error. `Classify(data)` returns the `Facts` of one value.
-- Policies: `Policy`, `Disposition` with `Reject`, `Zero` and `Accept`, and the ready-made `TolerantZero()`, `Strict()` and `StrictAbsentZero()`.
-- Field types: `TolerantInt`, `StrictInt` and `StrictAbsentZeroInt`, each a `json.Unmarshaler` for one ready-made policy.
+- Policies: `Policy`, `Disposition` with `Reject`, `Zero` and `Accept`, and the ready-made `TolerantZero()`, `Strict()` and `StrictAbsentZero()`. A fact field added later keeps, at its zero value, what every policy does today.
+- Field types: `TolerantZeroInt`, `StrictInt` and `StrictAbsentZeroInt`, each a `json.Unmarshaler` for one ready-made policy.
+- Facts: `Facts` with its `Shape` and the `Shape*` constants, and `WasString` for a value that arrived quoted.
 - Errors: `*ParseError`, with one `Reason` constant per rule.
+- Capped decoding: `Decoder` from `NewDecoder` with `Next` for a paginated budget, its helpers `Array`, `Map`, `Object` and `Skip`, the token walk `Open`, `More`, `Key`, `Decode`, `Close`, `End` and `Elements`, and `Preflight`.
 
 Every result is an `int64`. For an `int32` or a non-negative id, set the policy's `MinValue` and `MaxValue`, then convert. The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/jsonx).
 
@@ -126,8 +128,8 @@ What each policy returns:
 A byte cap on the body does not bound the decode: with `json.Unmarshal`, a 300 KB body of empty objects decodes into about 13 MB before your code can count anything. A `Decoder` walks the token stream instead and refuses the element that would cross your cap before it is allocated, while matching `json.Unmarshal` on well-formed input.
 
 - `NewDecoder(r, elementBudget)` starts a walk over one JSON value. `Array`, `Map` and `Object` decode a slice, a Go map and a struct-shaped object with `json.Unmarshal`'s null, empty and repeated-key handling, and `Skip` discards an unknown field without building it.
-- `Preflight` rejects a body that repeats an object key, before `json.Unmarshal` can replace or merge the values.
-- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`. Cap and budget errors never quote document bytes, and an `ErrDuplicateKey` error quotes at most 64 bytes of the repeated key.
+- `Preflight` rejects a body that repeats an object key, before `json.Unmarshal` can replace or merge the values. It bounds no size or count.
+- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`. Cap, budget and wrong-shape errors never quote document bytes, and an `ErrDuplicateKey` error quotes at most 64 bytes of the repeated key.
 
 [Capped decoding](docs/capped-decoding.md) shows a schema decoder, every call and the rules it shares with `json.Unmarshal`.
 
