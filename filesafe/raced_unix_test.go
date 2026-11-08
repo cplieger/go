@@ -342,7 +342,8 @@ func TestOpenParentInRoot_FIFOSwappedForAComponentIsRefused(t *testing.T) {
 
 // TestDirectoryEntryPoints_RefuseAFIFOWithoutBlocking pins that a FIFO where a
 // directory belongs is refused at once by the ambient entry points that open
-// a directory by path.
+// a directory by path, with ENOTDIR naming the caller's path: a plain refusal,
+// not a lost race. ProbeWritable reports it in its result.
 func TestDirectoryEntryPoints_RefuseAFIFOWithoutBlocking(t *testing.T) {
 	t.Parallel()
 	fifo := filepath.Join(t.TempDir(), "pipe")
@@ -354,7 +355,13 @@ func TestDirectoryEntryPoints_RefuseAFIFOWithoutBlocking(t *testing.T) {
 			_, err := WriteFile(t.Context(), filepath.Join(fifo, "f.txt"), []byte("x"))
 			return err
 		},
-		"ProbeWritable":     func() error { _, err := ProbeWritable(t.Context(), fifo); return err },
+		"ProbeWritable": func() error {
+			res, err := ProbeWritable(t.Context(), fifo)
+			if err != nil {
+				return err
+			}
+			return res.Err
+		},
 		"CleanupStaleTemps": func() error { _, err := CleanupStaleTemps(t.Context(), fifo, time.Hour); return err },
 		"CleanupStaleTemps, deep": func() error {
 			_, err := CleanupStaleTemps(t.Context(), fifo, time.Hour, WithRecursive(true))
@@ -366,7 +373,13 @@ func TestDirectoryEntryPoints_RefuseAFIFOWithoutBlocking(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- call() }()
 			select {
-			case <-done:
+			case err := <-done:
+				if !errors.Is(err, syscall.ENOTDIR) || errors.Is(err, ErrRaced) {
+					t.Errorf("%s on a FIFO = %v, want ENOTDIR and not ErrRaced", name, err)
+				}
+				if pe, ok := errors.AsType[*fs.PathError](err); !ok || pe.Path != fifo {
+					t.Errorf("%s on a FIFO = %v, want a *fs.PathError naming %s", name, err, fifo)
+				}
 			case <-time.After(10 * time.Second):
 				t.Fatalf("%s blocked on a FIFO where a directory belongs", name)
 			}
