@@ -134,11 +134,12 @@ func unreadableSecretFile(cause error) error {
 // and the read uses a single handle, so the path cannot be swapped between
 // the check and the read, and a file that grows during the read is refused
 // (ErrSecretFileGrew). The secret value itself never appears in an error or a
-// log line; errors carry the key name, and the file path where the path or
-// the operating system's answer is the failure. Each failure class is named by
-// a sentinel (ErrSecretFilePathRejected, ErrSecretFileTooLarge,
-// ErrSecretFileGrew, ErrSecretFileUnreadable, ErrBlankSecretFile) so a caller
-// can report WHY the file was unusable without echoing the path.
+// log line; errors carry the key name, and the file path for a rejected path,
+// an unreadable file and a blank one, never for a size failure. Each failure
+// class is named by a sentinel (ErrSecretFilePathRejected,
+// ErrSecretFileTooLarge, ErrSecretFileGrew, ErrSecretFileUnreadable,
+// ErrBlankSecretFile) so a caller can report WHY the file was unusable without
+// echoing the path.
 //
 // Use SecretWithSource when the caller needs to know WHICH channel supplied the
 // value — for example to warn that a KEY it also set was ignored in favour of
