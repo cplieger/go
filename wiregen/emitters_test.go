@@ -14,8 +14,8 @@ import (
 func TestGenerateTypes_enumSortOrder(t *testing.T) {
 	r := &Registry{}
 	r.Enums = []EnumRef{
-		{Type: WireType{PkgPath: basicPkg, Name: "Status"}},
-		{Type: WireType{PkgPath: basicPkg, Name: "Priority"}},
+		{Type: Type{PkgPath: basicPkg, Name: "Status"}},
+		{Type: Type{PkgPath: basicPkg, Name: "Priority"}},
 	}
 	out := mustGen(t, r.typesFile)
 
@@ -49,7 +49,7 @@ func TestGenerateDecoders_emptyRegistryImports(t *testing.T) {
 // only optional fields emits the populated `= {\n  };` block.
 func TestEmitDecoder_structLiteralShape(t *testing.T) {
 	r := &Registry{}
-	r.Types = []WireType{
+	r.Types = []Type{
 		{PkgPath: edgesPkg, Name: "EmptyStruct"},
 		{PkgPath: edgesPkg, Name: "AllOptional"},
 	}

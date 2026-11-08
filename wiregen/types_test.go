@@ -19,7 +19,7 @@ const edgesPkg = "github.com/cplieger/go/wiregen/testdata/edges"
 // edgesReg builds a registry over the edges fixture package for the given
 // registered types. Shared by the type-mapping, embedding, tag, and decoder
 // test files.
-func edgesReg(types ...wiregen.WireType) *testRegistry {
+func edgesReg(types ...wiregen.Type) *testRegistry {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./v.js"),
 	)
@@ -160,7 +160,7 @@ func TestTimeToString(t *testing.T) {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./v.js"),
 	)
-	r.Types = []wiregen.WireType{wiregen.TypeRef[basic.HasTime]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasTime]()}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "created: string;") {
 		t.Errorf("time.Time should map to string, got:\n%s", out)
@@ -347,7 +347,7 @@ func TestRawMessageSlice(t *testing.T) {
 func TestMappings_AliasSpellings(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		typ   wiregen.WireType
+		typ   wiregen.Type
 		key   string
 		field string
 	}{
@@ -419,7 +419,7 @@ func TestTSNameOverride(t *testing.T) {
 
 func TestTSNameOverride_sanitizesNonIdentifier(t *testing.T) {
 	// A non-identifier override must be sanitized to a valid TS identifier
-	// rather than emitted verbatim (mirrors EnumTSName via tsEnumName); a valid
+	// rather than emitted verbatim (mirrors EnumTSNameOverride via tsEnumName); a valid
 	// identifier override is unchanged (TestTSNameOverride). An override that
 	// sanitizes to empty falls back to the Go name.
 	r := edgesReg(wiregen.TypeRef[edges.Inner]())
@@ -453,7 +453,7 @@ func TestTSNameOverride_reservedNameEscaped(t *testing.T) {
 func TestEnumTSNameOverride(t *testing.T) {
 	r := edgesReg(wiregen.TypeRef[edges.HasOptEnum]())
 	r.Enums = []wiregen.EnumRef{wiregen.StringEnum[edges.MyEnum]()}
-	r.EnumTSName = map[string]string{"MyEnum": "StatusEnum"}
+	r.EnumTSNameOverride = map[string]string{"MyEnum": "StatusEnum"}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "export type StatusEnum") {
 		t.Errorf("expected StatusEnum, got:\n%s", out)

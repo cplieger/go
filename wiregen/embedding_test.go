@@ -33,7 +33,7 @@ func TestEmbeddedStructFlatten(t *testing.T) {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./v.js"),
 	)
-	r.Types = []wiregen.WireType{wiregen.TypeRef[basic.WithEmbedding]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.WithEmbedding]()}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "id: number;") {
 		t.Errorf("embedded Base.ID should be flattened, got:\n%s", out)
@@ -176,7 +176,7 @@ func TestEmbeddedFieldWithDashTag(t *testing.T) {
 // NOT dropped as ambiguous), regardless of embed declaration order.
 func TestPromotion_TaggedDominatesUntaggedAtEqualDepth(t *testing.T) {
 	for _, name := range []string{"TaggedDominatesA", "TaggedDominatesB"} {
-		r := edgesReg(wiregen.WireType{PkgPath: "github.com/cplieger/go/wiregen/testdata/edges", Name: name})
+		r := edgesReg(wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/testdata/edges", Name: name})
 		body := ifaceBody(mustGen(t, r.typesFile), name)
 		if got := strings.Count(body, "Name:"); got != 1 {
 			t.Errorf("%s: tagged field should win at equal depth (exactly 1 Name), got %d:\n%s", name, got, body)

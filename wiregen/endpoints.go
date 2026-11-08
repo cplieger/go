@@ -30,6 +30,8 @@ const (
 	KindRedirect
 )
 
+// String returns json, raw, event-stream or redirect, or Kind(n) for a value
+// outside the constants.
 func (k Kind) String() string {
 	switch k {
 	case KindJSON:
@@ -70,15 +72,15 @@ type Header struct {
 //
 // Params names the path placeholders' struct, its fields' wire names exactly
 // the Path's {name} segments; Query is the query string's struct. Both hold
-// only string, number, boolean or enum fields. Every non-zero WireType here
+// only string, number, boolean or enum fields. Every non-zero Type here
 // joins the registry's types.
 type Endpoint struct {
 	Extensions  map[string]any // OpenAPI x- members of the operation
-	Params      WireType
-	Query       WireType
-	Request     WireType
-	Response    WireType // zero: no body
-	Name        string   // a TS identifier: the function's name
+	Params      Type
+	Query       Type
+	Request     Type
+	Response    Type   // zero: no body
+	Name        string // a TS identifier: the function's name
 	Method      string
 	Path        string
 	ContentType string // the 2xx body's media type; KindRaw only, and required there
@@ -101,7 +103,7 @@ func (e *Endpoint) successStatus() int {
 		return e.Status
 	case e.Kind == KindRedirect:
 		return http.StatusFound
-	case e.Kind == KindJSON && e.Response == (WireType{}):
+	case e.Kind == KindJSON && e.Response == (Type{}):
 		return http.StatusNoContent
 	}
 	return http.StatusOK
@@ -110,7 +112,7 @@ func (e *Endpoint) successStatus() int {
 // Event is one named frame of an event-stream endpoint, whose data is a JSON
 // Data.
 type Event struct {
-	Data WireType
+	Data Type
 	Name string
 }
 
@@ -240,10 +242,10 @@ func validateEndpoint(e *Endpoint) error {
 	if err := validateKind(e); err != nil {
 		return err
 	}
-	if e.Request != (WireType{}) && e.Method == http.MethodGet {
+	if e.Request != (Type{}) && e.Method == http.MethodGet {
 		return fmt.Errorf("wiregen: endpoint %s is a GET and cannot take a Request body", e.Name)
 	}
-	if (len(pathParams(e.Path)) > 0) != (e.Params != (WireType{})) {
+	if (len(pathParams(e.Path)) > 0) != (e.Params != (Type{})) {
 		return fmt.Errorf("wiregen: endpoint %s must set Params exactly when its path has placeholders", e.Name)
 	}
 	if err := validateExtensions("endpoint "+e.Name, e.Extensions); err != nil {
@@ -256,11 +258,11 @@ func validateEndpoint(e *Endpoint) error {
 func validateKind(e *Endpoint) error {
 	switch e.Kind {
 	case KindJSON:
-		if e.Array && e.Response == (WireType{}) {
+		if e.Array && e.Response == (Type{}) {
 			return fmt.Errorf("wiregen: endpoint %s sets Array without a Response", e.Name)
 		}
 	case KindRaw, KindEventStream, KindRedirect:
-		if e.Response != (WireType{}) || e.Array {
+		if e.Response != (Type{}) || e.Array {
 			return fmt.Errorf("wiregen: endpoint %s is kind %s and cannot set Response or Array", e.Name, e.Kind)
 		}
 	case 0:
@@ -297,7 +299,7 @@ func validateStatus(e *Endpoint) error {
 	if st < 200 || st > 299 || st == http.StatusResetContent {
 		return fmt.Errorf("wiregen: endpoint %s has success status %d, outside 2xx", e.Name, st)
 	}
-	noBody := e.Kind == KindJSON && e.Response == (WireType{})
+	noBody := e.Kind == KindJSON && e.Response == (Type{})
 	if noBody != (st == http.StatusNoContent) {
 		return fmt.Errorf("wiregen: endpoint %s has status %d; 204 is exactly the status of a JSON endpoint with no Response", e.Name, st)
 	}
@@ -549,12 +551,12 @@ func (g *generator) validateEndpointTypes(engine *astEngine) (map[string]*endpoi
 func (g *generator) resolveArgs(e *Endpoint, engine *astEngine) (*endpointArgs, error) {
 	args := &endpointArgs{headers: e.Headers}
 	var err error
-	if e.Params != (WireType{}) {
+	if e.Params != (Type{}) {
 		if args.params, err = paramsFields(e, engine); err != nil {
 			return nil, err
 		}
 	}
-	if e.Query != (WireType{}) {
+	if e.Query != (Type{}) {
 		if args.query, err = scalarFields(e, "Query", e.Query, engine); err != nil {
 			return nil, err
 		}
@@ -567,7 +569,7 @@ func (g *generator) resolveArgs(e *Endpoint, engine *astEngine) (*endpointArgs, 
 	for _, f := range args.query {
 		members = append(members, member{f.name, "Query"})
 	}
-	if e.Request != (WireType{}) {
+	if e.Request != (Type{}) {
 		args.body = g.tsName(e.Request.Name)
 		members = append(members, member{"body", "Request"})
 	}
@@ -607,7 +609,7 @@ func paramsFields(e *Endpoint, engine *astEngine) ([]argField, error) {
 
 // scalarFields returns wt's fields as arguments, refusing any that is not a
 // string, number, boolean or enum.
-func scalarFields(e *Endpoint, role string, wt WireType, engine *astEngine) ([]argField, error) {
+func scalarFields(e *Endpoint, role string, wt Type, engine *astEngine) ([]argField, error) {
 	ti := engine.byName[wt.Name]
 	if ti.Union != nil {
 		return nil, fmt.Errorf("wiregen: endpoint %s %s type %s is a union; URL arguments are a plain struct's fields", e.Name, role, wt.Name)
@@ -841,7 +843,7 @@ func (g *generator) endpointResult(e *Endpoint, st *clientState) (tsType, decode
 		st.blob = true
 		return "globalThis.Blob", "decodeBlob"
 	}
-	if e.Response == (WireType{}) {
+	if e.Response == (Type{}) {
 		return "void", "(): void => undefined"
 	}
 	tn := g.tsName(e.Response.Name)

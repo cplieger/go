@@ -87,7 +87,7 @@ func FuzzSSERegEventType(f *testing.F) {
 	f.Add("back\\slash")
 
 	f.Fuzz(func(t *testing.T, input string) {
-		reg := &Registry{Events: []Event{{Name: input, Data: WireType{PkgPath: "example.com/p", Name: "Dummy"}}}}
+		reg := &Registry{Events: []Event{{Name: input, Data: Type{PkgPath: "example.com/p", Name: "Dummy"}}}}
 		r, err := newGenerator(reg, []Option{WithTSDir(".")})
 		carriable := input != "" && !strings.ContainsAny(input, "\r\n") && utf8.ValidString(input)
 		if err != nil {
@@ -125,7 +125,7 @@ func unescapedQuotes(line string) int {
 	return n
 }
 
-func FuzzWireConstTSName(f *testing.F) {
+func FuzzConstTSName(f *testing.F) {
 	f.Add("MaxRetries")
 	f.Add("export const evil = 0;\n//")
 	f.Add("123bad")
@@ -136,7 +136,7 @@ func FuzzWireConstTSName(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input string) {
 		// validateConstants rejects exactly the TSNames that sanitize to an
 		// empty identifier; everything it accepts must emit a valid one below.
-		r, err := newGenerator(&Registry{Constants: []WireConst{{TSName: input, Value: 42}}}, []Option{WithTSDir(".")})
+		r, err := newGenerator(&Registry{Constants: []Const{{TSName: input, Value: 42}}}, []Option{WithTSDir(".")})
 		if err != nil {
 			if sanitizeTSIdent(input) != "" {
 				t.Errorf("newGenerator rejected sanitizable TSName %q: %v", input, err)
@@ -174,7 +174,7 @@ func FuzzImportPathInjection(f *testing.F) {
 	f.Add("quote\"break")
 
 	f.Fuzz(func(t *testing.T, input string) {
-		r := mustGenerator(t, &Registry{Events: []Event{{Name: "test", Data: WireType{PkgPath: "example.com/p", Name: "Dummy"}}}},
+		r := mustGenerator(t, &Registry{Events: []Event{{Name: "test", Data: Type{PkgPath: "example.com/p", Name: "Dummy"}}}},
 			WithValidatorsImport(input))
 		var w strings.Builder
 		r.generateEvents(&w)
@@ -194,8 +194,11 @@ func FuzzPathNameOverride(f *testing.F) {
 	f.Add("quote\"break")
 
 	f.Fuzz(func(t *testing.T, input string) {
-		r := mustGenerator(t, &Registry{PathNameOverride: map[string]string{"Test": input}})
-		result := r.pathName("Test")
+		r := mustGenerator(t, &Registry{
+			Types:            []Type{{PkgPath: "example.com/p", Name: "Test"}},
+			PathNameOverride: map[string]string{"Test": input},
+		})
+		result := r.pathName("Test", "Test")
 		// Must not contain raw newlines or unescaped quotes
 		if strings.ContainsAny(result, "\n\r") {
 			t.Errorf("pathName override contains raw newline for %q: %q", input, result)
@@ -228,8 +231,8 @@ func FuzzEnumConstName(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, input string) {
 		r := mustGenerator(t, &Registry{
-			Enums:      []EnumRef{{Type: WireType{PkgPath: "example.com/p", Name: "TestEnum"}}},
-			EnumTSName: map[string]string{"TestEnum": input},
+			Enums:              []EnumRef{{Type: Type{PkgPath: "example.com/p", Name: "TestEnum"}}},
+			EnumTSNameOverride: map[string]string{"TestEnum": input},
 		})
 		result := r.tsEnumName("TestEnum")
 		if !validTSIdent.MatchString(result) {

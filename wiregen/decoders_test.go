@@ -59,7 +59,7 @@ func TestNoEmptyTypeImport(t *testing.T) {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./v.js"),
 	)
-	r.Types = []wiregen.WireType{wiregen.TypeRef[basic.HasBytes]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasBytes]()}
 	dec := mustGen(t, r.decodersFile)
 	// HasBytes references no other registered type, so type imports are empty —
 	// the import block must be omitted, not emitted as `import type {}`.
@@ -104,12 +104,12 @@ func TestDecoders_OptionalByteSliceIsGuardedString(t *testing.T) {
 func TestDecoders_UncoveredEmitBranches(t *testing.T) {
 	cases := []struct {
 		name  string
-		types []wiregen.WireType
+		types []wiregen.Type
 		wants []string
 	}{
 		{
 			name:  "optional json-string field decodes as the text of a JSON string under the guard",
-			types: []wiregen.WireType{wiregen.TypeRef[edges.ManyOptions]()},
+			types: []wiregen.Type{wiregen.TypeRef[edges.ManyOptions]()},
 			wants: []string{
 				`const $v = own(o, "a");`,
 				`if ($v !== undefined && $v !== null) out.a = checkPattern(reqStr(o, "a", "$.many_options"), "^\"(?:`,
@@ -118,17 +118,17 @@ func TestDecoders_UncoveredEmitBranches(t *testing.T) {
 		},
 		{
 			name:  "pointer collection element keeps null and typeof-guards the rest",
-			types: []wiregen.WireType{wiregen.TypeRef[edges.MapOfPtrs]()},
+			types: []wiregen.Type{wiregen.TypeRef[edges.MapOfPtrs]()},
 			wants: []string{`decodeRecord(own(o, "scores"), (v) => v === null ? null : ((v) => { if (typeof v !== "number") throw new globalThis.TypeError("expected number"); return v as number; })(v), "$.map_of_ptrs.scores")`},
 		},
 		{
 			name:  "nested collection element recurses with per-level validation",
-			types: []wiregen.WireType{wiregen.TypeRef[edges.SliceOfSlice]()},
+			types: []wiregen.Type{wiregen.TypeRef[edges.SliceOfSlice]()},
 			wants: []string{`decodeArray(own(o, "matrix"), (v) => v === null ? [] : decodeArray(v, (v) => { if (typeof v !== "string") throw new globalThis.TypeError("expected string"); return v as string; }, "$.slice_of_slice.matrix"), "$.slice_of_slice.matrix")`},
 		},
 		{
 			name:  "map element inside a slice accepts null as the empty record",
-			types: []wiregen.WireType{wiregen.TypeRef[edges.SliceOfMap]()},
+			types: []wiregen.Type{wiregen.TypeRef[edges.SliceOfMap]()},
 			wants: []string{`decodeArray(own(o, "items"), (v) => v === null ? {} : decodeRecord(v, (v) => { if (typeof v !== "string") throw new globalThis.TypeError("expected string"); return v as string; }, "$.slice_of_map.items"), "$.slice_of_map.items")`},
 		},
 	}
@@ -186,7 +186,7 @@ func TestDecoders_OptionalPassthroughKeepsNull(t *testing.T) {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./v.js"),
 	)
-	r.Types = []wiregen.WireType{wiregen.TypeRef[basic.HasOptionalPassthrough]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasOptionalPassthrough]()}
 	dec := mustGen(t, r.decodersFile)
 	for _, want := range []string{
 		`if ($v !== undefined) out.raw = own(o, "raw") as unknown;`,
@@ -229,7 +229,7 @@ func TestDecoders_OptionalMappedField(t *testing.T) {
 			r := newTestRegistry(
 				wiregen.WithValidatorsImport("./v.js"),
 			)
-			r.Types = []wiregen.WireType{wiregen.TypeRef[basic.HasOptionalMapped]()}
+			r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasOptionalMapped]()}
 			r.Mappings = map[string]wiregen.Mapping{customID: {TS: "CustomRef", Decoder: tc.decoder}}
 			dec := mustGen(t, r.decodersFile)
 			for _, want := range tc.wants {
@@ -238,5 +238,24 @@ func TestDecoders_OptionalMappedField(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPathNameOverride_KeyedByGoName pins the key the map takes: a type renamed
+// in TS by TSNameOverride still takes its path override under its Go name, and
+// a key spelt as the TS name names no registered type and is refused.
+func TestPathNameOverride_KeyedByGoName(t *testing.T) {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.Address]()}
+	r.TSNameOverride = map[string]string{"Address": "Addr"}
+	r.PathNameOverride = map[string]string{"Address": "the_addr"}
+	dec := mustGen(t, r.decodersFile)
+	if !strings.Contains(dec, `asObject(v, "$.the_addr")`) || strings.Contains(dec, `"$.addr"`) {
+		t.Errorf("decoder does not use the override keyed by the Go name:\n%s", dec)
+	}
+
+	r.PathNameOverride = map[string]string{"Addr": "the_addr"}
+	if _, err := r.decodersFile(t.Context()); err == nil || !strings.Contains(err.Error(), `PathNameOverride["Addr"]`) {
+		t.Errorf("a PathNameOverride keyed by the TS name = %v, want it refused", err)
 	}
 }

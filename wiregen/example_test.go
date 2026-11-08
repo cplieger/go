@@ -12,7 +12,7 @@ func Example() {
 	r := newTestRegistry(
 		wiregen.WithValidatorsImport("./validators.js"),
 	)
-	r.Types = []wiregen.WireType{wiregen.TypeRef[basic.Address]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[basic.Address]()}
 	r.Events = []wiregen.Event{
 		r.event("addr", "Address"),
 	}

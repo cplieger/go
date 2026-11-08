@@ -401,7 +401,7 @@ func (b *docBuilder) componentSchemas() (map[string]any, error) {
 	owner := map[string]string{}
 	add := func(name, who string, schema any) error {
 		if prev, dup := owner[name]; dup {
-			return fmt.Errorf("wiregen: OpenAPI component %s is named by both %s and %s; rename one through TSNameOverride or EnumTSName", name, prev, who)
+			return fmt.Errorf("wiregen: OpenAPI component %s is named by both %s and %s; rename one through TSNameOverride or EnumTSNameOverride", name, prev, who)
 		}
 		owner[name] = who
 		out[name] = schema
@@ -588,7 +588,7 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 	if params := b.parameters(e); len(params) > 0 {
 		op["parameters"] = params
 	}
-	if e.Request != (WireType{}) {
+	if e.Request != (Type{}) {
 		op["requestBody"] = map[string]any{
 			kwRequired: true,
 			kwContent:  map[string]any{mediaJSON: map[string]any{kwSchema: b.ref(e.Request.Name, dirRequest)}},
@@ -609,13 +609,13 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 // parameters renders e's path, query and header parameters in that order.
 func (b *docBuilder) parameters(e *Endpoint) []any {
 	var out []any
-	if e.Params != (WireType{}) {
+	if e.Params != (Type{}) {
 		ti := b.engine.byName[e.Params.Name]
 		for _, name := range pathParams(e.Path) {
 			out = append(out, map[string]any{kwName: name, "in": "path", kwRequired: true, kwSchema: b.valueSchema(ti.field(name), dirRequest)})
 		}
 	}
-	if e.Query != (WireType{}) {
+	if e.Query != (Type{}) {
 		ti := b.engine.byName[e.Query.Name]
 		for i := range ti.Fields {
 			f := &ti.Fields[i]
@@ -640,7 +640,7 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 	resp := map[string]any{kwDescription: http.StatusText(e.successStatus())}
 	switch e.Kind {
 	case KindJSON:
-		if e.Response == (WireType{}) {
+		if e.Response == (Type{}) {
 			return resp
 		}
 		schema := b.ref(e.Response.Name, dirResponse)
@@ -687,7 +687,7 @@ func (b *docBuilder) errorResponses(e *Endpoint) map[string]any {
 			kwDescription:   http.StatusText(status) + ": " + strings.Join(names, ", "),
 			"x-error-codes": codes,
 		}
-		if b.g.ErrorEnvelope != (WireType{}) {
+		if b.g.ErrorEnvelope != (Type{}) {
 			resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: b.ref(b.g.ErrorEnvelope.Name, dirResponse)}}
 		}
 		out[strconv.Itoa(status)] = resp

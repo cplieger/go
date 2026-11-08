@@ -10,7 +10,7 @@ import (
 
 func crossrefRegistry() *testRegistry {
 	r := newTestRegistry(wiregen.WithValidatorsImport("./validators.js"))
-	r.Types = []wiregen.WireType{
+	r.Types = []wiregen.Type{
 		wiregen.TypeRef[crossref.Container](),
 		wiregen.TypeRef[crossref.Item](),
 		wiregen.TypeRef[crossref.Alpha](),

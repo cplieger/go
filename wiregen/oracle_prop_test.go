@@ -36,7 +36,7 @@ type oracleCase struct {
 	request  []reflect.Type
 }
 
-func newOracleCase(response, request []reflect.Type, more ...wiregen.WireType) oracleCase {
+func newOracleCase(response, request []reflect.Type, more ...wiregen.Type) oracleCase {
 	r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
 	r.Types = more
 	r.Enums = []wiregen.EnumRef{wiregen.StringEnum[oracle.Color](), wiregen.TextEnum[oracle.Level]()}

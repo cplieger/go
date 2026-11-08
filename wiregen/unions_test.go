@@ -36,7 +36,7 @@ func shapeUnion() wiregen.Union {
 // unionReg registers Holder, whose fields reach both unions.
 func unionReg() *testRegistry {
 	r := newTestRegistry()
-	r.Types = []wiregen.WireType{wiregen.TypeRef[unions.Holder]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[unions.Holder]()}
 	r.Enums = []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}
 	r.Unions = []wiregen.Union{timingUnion(), shapeUnion()}
 	return r
@@ -159,5 +159,59 @@ func TestUnion_RecursiveArbitraryCapped(t *testing.T) {
 	}
 	if !strings.Contains(out, `type: fc.constant("node" as const),`) {
 		t.Errorf("tag not fixed per case:\n%s", out)
+	}
+}
+
+// TestOverrideKeys_UnknownKeyIsRefused pins that a misspelt override key is a
+// generation error naming every bad key, so a rename cannot be silently off.
+func TestOverrideKeys_UnknownKeyIsRefused(t *testing.T) {
+	r := unionReg()
+	r.TSNameOverride = map[string]string{"Holdr": "Box"}
+	r.PathNameOverride = map[string]string{"Shap": "shape"}
+	r.EnumTSNameOverride = map[string]string{"Knd": "K"}
+	_, err := r.typesFile(t.Context())
+	if err == nil {
+		t.Fatal("Generate accepted override keys that name nothing")
+	}
+	for _, want := range []string{`TSNameOverride["Holdr"]`, `PathNameOverride["Shap"]`, `EnumTSNameOverride["Knd"]`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+}
+
+// TestOverrideKeys_KnownKeysAreAccepted pins the other side: keys naming a
+// registered type, a referenced union type and a registered enum pass.
+func TestOverrideKeys_KnownKeysAreAccepted(t *testing.T) {
+	r := unionReg()
+	r.TSNameOverride = map[string]string{"Holder": "Box"}
+	r.PathNameOverride = map[string]string{"Shape": "shape_v2"}
+	r.EnumTSNameOverride = map[string]string{"Kind": "ShapeKind"}
+	if _, err := r.typesFile(t.Context()); err != nil {
+		t.Fatalf("Generate refused override keys that name registered types: %v", err)
+	}
+}
+
+// TestMappings_UnreachedKeyIsRefused pins that a Mappings key no registered
+// type's field reaches is a generation error naming it.
+func TestMappings_UnreachedKeyIsRefused(t *testing.T) {
+	r := unionReg()
+	r.Mappings = map[string]wiregen.Mapping{"example.com/nowhere.Thing": {TS: "string"}}
+	_, err := r.typesFile(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "no registered type's field reaches") || !strings.Contains(err.Error(), `"example.com/nowhere.Thing"`) {
+		t.Fatalf("Generate = %v, want an error naming the unreached Mappings key", err)
+	}
+}
+
+// TestGenerate_NilRegistryOrContext pins the documented error in place of a
+// panic.
+func TestGenerate_NilRegistryOrContext(t *testing.T) {
+	var nilReg *wiregen.Registry
+	if err := nilReg.Generate(t.Context(), wiregen.WithTSDir(t.TempDir())); err == nil {
+		t.Error("Generate on a nil Registry returned nil")
+	}
+	//lint:ignore SA1012 the nil context is the case under test
+	if err := (&wiregen.Registry{}).Generate(nil, wiregen.WithTSDir(t.TempDir())); err == nil { //nolint:staticcheck // the nil context is the case under test
+		t.Error("Generate with a nil context returned nil")
 	}
 }

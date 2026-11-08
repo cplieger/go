@@ -13,7 +13,7 @@ import (
 // Enum members are discovered from the type's const block in source order.
 func TestEnumValues_AutoDiscovered(t *testing.T) {
 	r := newTestRegistry(wiregen.WithValidatorsImport("./validators.js"))
-	r.Types = []wiregen.WireType{wiregen.TypeRef[crossref.Palette]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[crossref.Palette]()}
 	r.Enums = []wiregen.EnumRef{wiregen.StringEnum[crossref.Color]()}
 
 	out := mustGen(t, r.typesFile)
@@ -26,7 +26,7 @@ func TestEnumValues_AutoDiscovered(t *testing.T) {
 // dependency (dep.Color) must not pollute crossref.Color's values.
 func TestEnumValues_IgnoresDepCollision(t *testing.T) {
 	r := newTestRegistry(wiregen.WithValidatorsImport("./validators.js"))
-	r.Types = []wiregen.WireType{wiregen.TypeRef[crossref.Palette]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[crossref.Palette]()}
 	r.Enums = []wiregen.EnumRef{wiregen.StringEnum[crossref.Color]()}
 
 	out := mustGen(t, r.typesFile)
@@ -43,7 +43,7 @@ func TestEnumValues_IgnoresDepCollision(t *testing.T) {
 func TestGenerate_SkipsEmptyFiles(t *testing.T) {
 	dir := t.TempDir()
 	r := newTestRegistry(wiregen.WithValidatorsImport("./validators.js"))
-	r.Types = []wiregen.WireType{wiregen.TypeRef[crossref.Item]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[crossref.Item]()}
 	// No Events, no Constants.
 
 	if err := r.generate(t.Context(), dir); err != nil {

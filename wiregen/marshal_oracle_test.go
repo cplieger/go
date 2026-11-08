@@ -19,7 +19,7 @@ import (
 
 // oracleSpecimens are the fixture types the oracle registers and checks. Each
 // entry is a pointer to a zero value; the reflect side derives both the
-// WireType registration and the populated instance from it.
+// Type registration and the populated instance from it.
 var oracleSpecimens = []any{
 	// basic
 	&basic.Address{},
@@ -70,7 +70,7 @@ func TestMarshalOracle(t *testing.T) {
 	reg := &Registry{}
 	for _, s := range oracleSpecimens {
 		st := reflect.TypeOf(s).Elem()
-		reg.Types = append(reg.Types, WireType{PkgPath: st.PkgPath(), Name: st.Name()})
+		reg.Types = append(reg.Types, Type{PkgPath: st.PkgPath(), Name: st.Name()})
 	}
 	engine, err := newASTEngine(t.Context(), mustGenerator(t, reg))
 	if err != nil {

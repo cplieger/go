@@ -16,7 +16,7 @@ import (
 // the client fixtures' Item registered.
 func newEndpointRegistry(eps ...wiregen.Endpoint) *testRegistry {
 	r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
-	r.Types = []wiregen.WireType{wiregen.TypeRef[client.Item]()}
+	r.Types = []wiregen.Type{wiregen.TypeRef[client.Item]()}
 	r.Endpoints = eps
 	return r
 }
@@ -100,7 +100,7 @@ func TestEndpoints_Validation(t *testing.T) {
 		{"name takes a client binding", []wiregen.Endpoint{get("qs", "/api/x")}, "qs, which the client module already uses"},
 		{"two names collide on their types", []wiregen.Endpoint{get("x", "/api/x"), get("xEndpoint", "/api/y")}, "already uses"},
 		{"unregistered response", []wiregen.Endpoint{with(get("x", "/api/x"), func(e *wiregen.Endpoint) {
-			e.Response = wiregen.WireType{PkgPath: "github.com/cplieger/go/wiregen/testdata/client", Name: "Nope"}
+			e.Response = wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/testdata/client", Name: "Nope"}
 		})}, "Nope not found"},
 	}
 	for _, tc := range cases {
@@ -380,7 +380,7 @@ func TestEndpointTypesJoinRegistry(t *testing.T) {
 		}
 	}
 	t.Run("named in two places once", func(t *testing.T) {
-		r.Types = []wiregen.WireType{wiregen.TypeRef[client.Job]()}
+		r.Types = []wiregen.Type{wiregen.TypeRef[client.Job]()}
 		r.Events = append(r.Events, wiregen.Event{Name: "job", Data: wiregen.TypeRef[client.Job]()})
 		types := mustGen(t, r.typesFile)
 		if n := strings.Count(types, "export interface Job {"); n != 1 {
@@ -397,7 +397,7 @@ func TestEndpointTypesJoinRegistry(t *testing.T) {
 	t.Run("same name from another package refused", func(t *testing.T) {
 		r := newEndpointRegistry(wiregen.Endpoint{
 			Name: "x", Method: "GET", Path: "/api/x", Kind: wiregen.KindJSON,
-			Response: wiregen.WireType{PkgPath: "github.com/cplieger/go/wiregen/testdata/crossref", Name: "Item"},
+			Response: wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/testdata/crossref", Name: "Item"},
 		})
 		requireGenerateError(t, r, "registered from two packages")
 	})
@@ -461,7 +461,7 @@ func TestGenerateWritesUnderTSDir(t *testing.T) {
 	tsDir := filepath.Join(root, "web", "wire")
 	r := newEndpointRegistry(get("getItem", "/api/item"))
 	r.Events = []wiregen.Event{{Name: "tick", Data: wiregen.TypeRef[client.Tick]()}}
-	r.Constants = []wiregen.WireConst{{TSName: "X", Value: 1}}
+	r.Constants = []wiregen.Const{{TSName: "X", Value: 1}}
 	r.opts = append(r.opts, wiregen.WithArbitrariesFile("arbitraries.gen.ts"))
 	if err := r.Generate(t.Context(), append(r.opts, wiregen.WithTSDir(tsDir))...); err != nil {
 		t.Fatalf("Generate: %v", err)

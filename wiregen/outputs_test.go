@@ -22,13 +22,13 @@ func TestGenerate_RefusesOutputCollisions(t *testing.T) {
 		want string
 	}{
 		{"types and decoders", func(*testing.T, string) []wiregen.Option {
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Types: "same.ts", Decoders: "same.ts"})}
+			return []wiregen.Option{wiregen.WithTypesFile("same.ts"), wiregen.WithDecodersFile("same.ts")}
 		}, "the types and decoders files"},
 		{"validators onto types", func(*testing.T, string) []wiregen.Option {
 			return []wiregen.Option{wiregen.WithValidatorsFile("types.gen.ts")}
 		}, "the types and validators files"},
 		{"a lexical alias", func(*testing.T, string) []wiregen.Option {
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Decoders: "a/../types.gen.ts"})}
+			return []wiregen.Option{wiregen.WithDecodersFile("a/../types.gen.ts")}
 		}, "the types and decoders files"},
 		{"an OpenAPI path onto a TS file", func(t *testing.T, dir string) []wiregen.Option {
 			return []wiregen.Option{wiregen.WithOpenAPIFiles(filepath.Join(dir, "types.gen.ts"))}
@@ -57,27 +57,27 @@ func TestGenerate_RefusesOutputCollisions(t *testing.T) {
 			if err := os.Symlink(".", filepath.Join(dir, "alias")); err != nil {
 				t.Fatal(err)
 			}
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Decoders: "alias/types.gen.ts"})}
+			return []wiregen.Option{wiregen.WithDecodersFile("alias/types.gen.ts")}
 		}, "the types and decoders files"},
 		{"two names differing only in case", func(*testing.T, string) []wiregen.Option {
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Decoders: "Types.gen.ts"})}
+			return []wiregen.Option{wiregen.WithDecodersFile("Types.gen.ts")}
 		}, "the types and decoders files"},
 		{"a case variant of an existing file", func(t *testing.T, dir string) []wiregen.Option {
 			writeFile(t, filepath.Join(dir, "types.gen.ts"), "old")
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Decoders: "Types.gen.ts"})}
+			return []wiregen.Option{wiregen.WithDecodersFile("Types.gen.ts")}
 		}, "the types and decoders files"},
 		{"a case variant of an existing directory", func(t *testing.T, dir string) []wiregen.Option {
 			if err := os.Mkdir(filepath.Join(dir, "gen"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Types: "gen/types.gen.ts", Decoders: "Gen/types.gen.ts"})}
+			return []wiregen.Option{wiregen.WithTypesFile("gen/types.gen.ts"), wiregen.WithDecodersFile("Gen/types.gen.ts")}
 		}, "the types and decoders files"},
 		{"a hard link to an existing file", func(t *testing.T, dir string) []wiregen.Option {
 			writeFile(t, filepath.Join(dir, "types.gen.ts"), "old")
 			if err := os.Link(filepath.Join(dir, "types.gen.ts"), filepath.Join(dir, "link.ts")); err != nil {
 				t.Fatal(err)
 			}
-			return []wiregen.Option{wiregen.WithFilenames(wiregen.Filenames{Decoders: "link.ts"})}
+			return []wiregen.Option{wiregen.WithDecodersFile("link.ts")}
 		}, "the types and decoders files"},
 	}
 	for _, c := range cases {
@@ -85,7 +85,7 @@ func TestGenerate_RefusesOutputCollisions(t *testing.T) {
 			dir := t.TempDir()
 			r := newTestRegistry(c.opts(t, dir)...)
 			before := tree(t, dir)
-			r.Types = []wiregen.WireType{wiregen.TypeRef[basic.Address]()}
+			r.Types = []wiregen.Type{wiregen.TypeRef[basic.Address]()}
 			r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
 			err := r.Generate(t.Context(), append(r.opts, wiregen.WithTSDir(dir))...)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
@@ -149,7 +149,7 @@ func TestGenerate_RefusesIdentifierCollisions(t *testing.T) {
 		}, "type Address and type User both emit the TS identifier Address"},
 		{"an enum renamed onto a type", func(r *testRegistry) {
 			r.Enums = []wiregen.EnumRef{wiregen.TextEnum[enums.Level]()}
-			r.EnumTSName = map[string]string{"Level": "Address"}
+			r.EnumTSNameOverride = map[string]string{"Level": "Address"}
 		}, "both emit the TS identifier Address"},
 		{"a type renamed onto a decoder", func(r *testRegistry) {
 			r.Types = append(r.Types, wiregen.TypeRef[basic.User]())
@@ -162,7 +162,7 @@ func TestGenerate_RefusesIdentifierCollisions(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newTestRegistry()
-			r.Types = []wiregen.WireType{wiregen.TypeRef[basic.Address]()}
+			r.Types = []wiregen.Type{wiregen.TypeRef[basic.Address]()}
 			c.setup(r)
 			err := generateErr(t, r)
 			if err == nil || !strings.Contains(err.Error(), c.want) {

@@ -12,7 +12,7 @@ import (
 
 const strictPkg = "github.com/cplieger/go/wiregen/testdata/strict"
 
-func strictReg(opts []wiregen.Option, types ...wiregen.WireType) *testRegistry {
+func strictReg(opts []wiregen.Option, types ...wiregen.Type) *testRegistry {
 	r := newTestRegistry(opts...)
 	r.Types = types
 	return r
@@ -87,13 +87,19 @@ func TestUntaggedFieldByOption(t *testing.T) {
 		}
 	})
 	t.Run("the option refuses an untagged field", func(t *testing.T) {
-		r := strictReg([]wiregen.Option{wiregen.WithRequireJSONTags()}, wiregen.TypeRef[strict.T]())
+		r := strictReg([]wiregen.Option{wiregen.WithRequireJSONTags(true)}, wiregen.TypeRef[strict.T]())
 		wantRefusals(t, generateErr(t, r), "T.Value")
 	})
 	t.Run("the option passes a tagged field", func(t *testing.T) {
-		r := strictReg([]wiregen.Option{wiregen.WithRequireJSONTags()}, wiregen.TypeRef[strict.Tagged]())
+		r := strictReg([]wiregen.Option{wiregen.WithRequireJSONTags(true)}, wiregen.TypeRef[strict.Tagged]())
 		if err := generateErr(t, r); err != nil {
 			t.Errorf("Generate: %v", err)
+		}
+	})
+	t.Run("a later false turns the option off", func(t *testing.T) {
+		r := strictReg([]wiregen.Option{wiregen.WithRequireJSONTags(true), wiregen.WithRequireJSONTags(false)}, wiregen.TypeRef[strict.T]())
+		if err := generateErr(t, r); err != nil {
+			t.Errorf("Generate with the option turned off: %v", err)
 		}
 	})
 }

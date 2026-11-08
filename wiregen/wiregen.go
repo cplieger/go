@@ -18,36 +18,36 @@ import (
 	"unicode/utf8"
 )
 
-// WireType names a registered Go type by package path and name.
-type WireType struct {
+// Type names a registered Go type by package path and name.
+type Type struct {
 	PkgPath string
 	Name    string
 }
 
 // TypeRef names T, dereferencing one pointer level. A missing type is a
 // compile error at the call site.
-func TypeRef[T any]() WireType {
+func TypeRef[T any]() Type {
 	return TypeOf(reflect.TypeFor[T]())
 }
 
 // TypeOf names t, dereferencing one pointer level. A nil, unnamed or
-// predeclared type yields a WireType with no package, which
+// predeclared type yields a Type with no package, which
 // [Registry.Generate] refuses.
-func TypeOf(t reflect.Type) WireType {
+func TypeOf(t reflect.Type) Type {
 	if t == nil {
-		return WireType{}
+		return Type{}
 	}
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Name() == "" {
-		return WireType{Name: t.String()}
+		return Type{Name: t.String()}
 	}
-	return WireType{PkgPath: t.PkgPath(), Name: t.Name()}
+	return Type{PkgPath: t.PkgPath(), Name: t.Name()}
 }
 
-// WireConst is a named integer constant emitted into the constants file.
-type WireConst struct {
+// Const is a named integer constant emitted into the constants file.
+type Const struct {
 	TSName string
 	Value  int
 }
@@ -58,26 +58,31 @@ type WireConst struct {
 // if listed in Types.
 type Registry struct {
 	// ErrorEnvelope is every non-2xx JSON body; zero when none is declared.
-	ErrorEnvelope WireType
+	ErrorEnvelope Type
 	// OpenAPI is the document's info and security schemes, read when
 	// [WithOpenAPIFiles] names an output.
 	OpenAPI OpenAPIInfo
 	// TSNameOverride renames a registered type's TS identifier, keyed by its
 	// bare Go name.
 	TSNameOverride map[string]string
-	// EnumTSName renames a registered enum's TS identifier, keyed by its bare
-	// Go name.
-	EnumTSName map[string]string
+	// EnumTSNameOverride renames a registered enum's TS identifier, keyed by
+	// its bare Go name.
+	EnumTSNameOverride map[string]string
 	// PathNameOverride replaces the snake_case name a decoder's error paths
-	// use for a type, keyed by its TS name.
+	// use for a registered type, keyed by its bare Go name.
 	PathNameOverride map[string]string
 	// Mappings replaces wiregen's reading of a Go type, keyed by its
 	// importpath.Name, with the consumer's own TS type, decoder and schema.
+	//
+	// A key in any of the three override maps that names no registered type
+	// or enum, and a Mappings key no registered type's field reaches, is a
+	// generation error listing every such key, so a misspelt key cannot
+	// leave a rename or a mapping silently off.
 	Mappings  map[string]Mapping
 	Enums     []EnumRef
-	Types     []WireType
+	Types     []Type
 	Unions    []Union
-	Constants []WireConst
+	Constants []Const
 	Endpoints []Endpoint
 	// Events are the frames of the event-stream endpoints, by name.
 	Events []Event
@@ -104,7 +109,7 @@ type Mapping struct {
 type EnumRef struct {
 	// Wire names an integer enum's value on the wire; nil for a string enum.
 	Wire func(value uint64) (string, error)
-	Type WireType
+	Type Type
 }
 
 // StringEnum registers T, whose constants' values are its wire names.
@@ -133,7 +138,7 @@ type options struct {
 	tsDir               string
 	validatorsImport    string
 	transportImport     string
-	typesImportPath     string
+	typesImport         string
 	headerComment       string
 	typesFilename       string
 	decodersFilename    string
@@ -184,19 +189,35 @@ func WithArbitrariesImport(module string) Option {
 
 // WithTransportImport sets the specifier of the transport module the
 // generated client calls into; required when endpoints are registered. The
-// module's contract is docs/http-client.md "Client-transport module".
+// module's contract is docs/http-client.md "Transport module".
 func WithTransportImport(module string) Option {
 	return func(o *options) { o.transportImport = module }
 }
 
-// WithClientFilename names the generated client file (default
-// "client.gen.ts").
-func WithClientFilename(name string) Option { return func(o *options) { o.clientFilename = name } }
+// WithClientFile names the generated client file, inside the TS directory
+// (default "client.gen.ts"), written when endpoints are registered.
+func WithClientFile(name string) Option { return func(o *options) { o.clientFilename = name } }
 
-// WithTypesImportPath sets the specifier every generated module imports the
+// WithTypesFile names the generated types file, inside the TS directory
+// (default "types.gen.ts").
+func WithTypesFile(name string) Option { return func(o *options) { o.typesFilename = name } }
+
+// WithDecodersFile names the generated decoders file, inside the TS directory
+// (default "decoders.gen.ts").
+func WithDecodersFile(name string) Option { return func(o *options) { o.decodersFilename = name } }
+
+// WithEventsFile names the generated events file, inside the TS directory
+// (default "events.gen.ts"), written when Events are registered.
+func WithEventsFile(name string) Option { return func(o *options) { o.eventsFilename = name } }
+
+// WithConstantsFile names the generated constants file, inside the TS
+// directory (default "constants.gen.ts").
+func WithConstantsFile(name string) Option { return func(o *options) { o.constantsFilename = name } }
+
+// WithTypesImport sets the specifier every generated module imports the
 // types file by (default: the relative specifier from each importing file).
-func WithTypesImportPath(module string) Option {
-	return func(o *options) { o.typesImportPath = module }
+func WithTypesImport(module string) Option {
+	return func(o *options) { o.typesImport = module }
 }
 
 // WithHeaderComment sets the comment heading every generated file (default
@@ -206,9 +227,12 @@ func WithHeaderComment(comment string) Option {
 }
 
 // WithRequireJSONTags makes an exported field without a json tag name a
-// generation error naming its path. Without it such a field takes the name
-// encoding/json gives it, its Go name.
-func WithRequireJSONTags() Option { return func(o *options) { o.requireJSONTags = true } }
+// generation error naming its path when require is true. Without it, or with
+// require false, such a field takes the name encoding/json gives it, its Go
+// name.
+func WithRequireJSONTags(require bool) Option {
+	return func(o *options) { o.requireJSONTags = require }
+}
 
 // WithOpenAPIFiles makes Generate write the OpenAPI 3.1 document of the
 // registry to each path, relative to the working directory and outside the
@@ -216,27 +240,6 @@ func WithRequireJSONTags() Option { return func(o *options) { o.requireJSONTags 
 // Registry.OpenAPI must name a title and a version.
 func WithOpenAPIFiles(paths ...string) Option {
 	return func(o *options) { o.openAPIFiles = slices.Clone(paths) }
-}
-
-// Filenames names four generated files whose names are same-typed and
-// adjacent, so a struct labels each at the call site. An empty field keeps
-// that file's default name.
-type Filenames struct {
-	Types     string // default "types.gen.ts"
-	Decoders  string // default "decoders.gen.ts"
-	Events    string // default "events.gen.ts", written when Events are registered
-	Constants string // default "constants.gen.ts"
-}
-
-// WithFilenames overrides the names of the types, decoders, events and
-// constants files, inside the TS directory.
-func WithFilenames(names Filenames) Option {
-	return func(o *options) {
-		o.typesFilename = names.Types
-		o.decodersFilename = names.Decoders
-		o.eventsFilename = names.Events
-		o.constantsFilename = names.Constants
-	}
 }
 
 // defaultHeaderComment heads every generated file when no WithHeaderComment
@@ -316,7 +319,7 @@ func newGenerator(r *Registry, opts []Option) (*generator, error) {
 	}
 	g.o.resolve()
 	g.TSNameOverride = maps.Clone(r.TSNameOverride)
-	g.EnumTSName = maps.Clone(r.EnumTSName)
+	g.EnumTSNameOverride = maps.Clone(r.EnumTSNameOverride)
 	g.PathNameOverride = maps.Clone(r.PathNameOverride)
 	g.Mappings = maps.Clone(r.Mappings)
 	g.Unions = slices.Clone(r.Unions)
@@ -354,7 +357,7 @@ func (g *generator) validate() error {
 		return err
 	}
 	for _, u := range g.Unions {
-		if u.Type == (WireType{}) {
+		if u.Type == (Type{}) {
 			return fmt.Errorf("wiregen: union with tag %q names no Type", u.Tag)
 		}
 	}
@@ -373,7 +376,52 @@ func (g *generator) validate() error {
 	return g.validateOpenAPI()
 }
 
-// typeNames and enums share one bare-name space.
+// validateOverrideKeys refuses a TSNameOverride, PathNameOverride or
+// EnumTSNameOverride key that names no registered type or enum, listing every
+// one in a single error.
+func (g *generator) validateOverrideKeys() error {
+	var bad []string
+	for _, m := range []struct {
+		keys  map[string]string
+		known func(string) bool
+		field string
+	}{
+		{g.TSNameOverride, g.isTypeName, "TSNameOverride"},
+		{g.PathNameOverride, g.isTypeName, "PathNameOverride"},
+		{g.EnumTSNameOverride, g.isEnumName, "EnumTSNameOverride"},
+	} {
+		for _, k := range slices.Sorted(maps.Keys(m.keys)) {
+			if !m.known(k) {
+				bad = append(bad, fmt.Sprintf("%s[%q]", m.field, k))
+			}
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("wiregen: override keys name no registered type or enum: %s", strings.Join(bad, ", "))
+	}
+	return nil
+}
+
+func (g *generator) isTypeName(name string) bool { _, ok := g.typeNames[name]; return ok }
+func (g *generator) isEnumName(name string) bool { _, ok := g.enums[name]; return ok }
+
+// validateMappingsUsed refuses a Mappings key no field the engine resolved
+// reached, listing every one in a single error.
+func (g *generator) validateMappingsUsed(e *astEngine) error {
+	var unused []string
+	for _, k := range slices.Sorted(maps.Keys(g.Mappings)) {
+		if !e.usedMappings[k] {
+			unused = append(unused, fmt.Sprintf("%q", k))
+		}
+	}
+	if len(unused) > 0 {
+		return fmt.Errorf("wiregen: Mappings keys no registered type's field reaches: %s", strings.Join(unused, ", "))
+	}
+	return nil
+}
+
+// typeNames and enums share one bare-name space, which the override maps'
+// keys must name.
 func (g *generator) registerNames() error {
 	seen, err := g.registerTypes()
 	if err != nil {
@@ -386,7 +434,7 @@ func (g *generator) registerNames() error {
 		}
 		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath}
 	}
-	return nil
+	return g.validateOverrideKeys()
 }
 
 // registerTypes fills typeNames from Types, then appends each type the
@@ -402,7 +450,7 @@ func (g *generator) registerTypes() (map[string]string, error) {
 		g.typeNames[wt.Name] = wt.PkgPath
 	}
 	for _, ref := range g.referencedTypes() {
-		if pkg, ok := g.typeNames[ref.wt.Name]; ref.wt == (WireType{}) || (ok && pkg == ref.wt.PkgPath) {
+		if pkg, ok := g.typeNames[ref.wt.Name]; ref.wt == (Type{}) || (ok && pkg == ref.wt.PkgPath) {
 			continue
 		}
 		if err := registerName(seen, ref.role, ref.wt); err != nil {
@@ -418,7 +466,7 @@ func (g *generator) registerTypes() (map[string]string, error) {
 // an error about it names.
 type typeReference struct {
 	role string
-	wt   WireType
+	wt   Type
 }
 
 // referencedTypes lists the types the endpoints, events, unions and
@@ -429,7 +477,7 @@ func (g *generator) referencedTypes() []typeReference {
 		e := &g.Endpoints[i]
 		for _, f := range []struct {
 			role string
-			wt   WireType
+			wt   Type
 		}{{"Params", e.Params}, {"Query", e.Query}, {"Request", e.Request}, {"Response", e.Response}} {
 			refs = append(refs, typeReference{role: "endpoint " + e.Name + " " + f.role + " type", wt: f.wt})
 		}
@@ -461,7 +509,7 @@ func (g *generator) validateEvents() error {
 			return fmt.Errorf("wiregen: event %q is registered twice", ev.Name)
 		}
 		seen[ev.Name] = true
-		if ev.Data == (WireType{}) {
+		if ev.Data == (Type{}) {
 			return fmt.Errorf("wiregen: event %q has no Data type", ev.Name)
 		}
 	}
@@ -471,7 +519,7 @@ func (g *generator) validateEvents() error {
 // registerName records wt's bare name in seen, keyed to its package, and
 // rejects a type with no package or name, or a bare name registered twice:
 // wiregen keys types and enums by bare name.
-func registerName(seen map[string]string, role string, wt WireType) error {
+func registerName(seen map[string]string, role string, wt Type) error {
 	if wt.PkgPath == "" || wt.Name == "" {
 		return fmt.Errorf("wiregen: a registered %s %+v names no package-level type; register a named type", role, wt)
 	}
@@ -492,7 +540,11 @@ func registerName(seen map[string]string, role string, wt WireType) error {
 // field with no checked wire shape (docs/type-mapping.md). Every file is
 // staged before any replaces its target; each replacement is atomic, a
 // failure among them can leave a prefix replaced, and no temp outlives it.
+// A nil r or ctx returns an error.
 func (r *Registry) Generate(ctx context.Context, opts ...Option) error {
+	if r == nil || ctx == nil {
+		return errors.New("wiregen: Generate needs a non-nil Registry and context")
+	}
 	g, files, err := r.render(ctx, opts)
 	if err != nil {
 		return err
@@ -512,6 +564,9 @@ func (r *Registry) render(ctx context.Context, opts []Option) (*generator, []gen
 	args, err := g.validateEndpointTypes(engine)
 	if err != nil {
 		return nil, nil, err
+	}
+	if mapErr := g.validateMappingsUsed(engine); mapErr != nil {
+		return nil, nil, mapErr
 	}
 	files, err := g.buildGenFiles(engine, args)
 	return g, files, err
