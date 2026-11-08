@@ -50,7 +50,7 @@ The fuzz target `FuzzParityWithUnmarshal` decodes arbitrary bytes through a sche
 
 - A JSON null gives a nil slice. An empty array `[]` gives an empty slice that is not nil.
 - Pass the value already decoded for an earlier occurrence of the same key as `prior` to get the repeated-key behavior of `json.Unmarshal`. Within the retained capacity, `Array` reuses the earlier elements, so a struct element merges field by field. The result is cut to the length of the new array, and an empty re-occurrence replaces the slice with a fresh one.
-- On an error, the returned slice holds what was decoded so far: `prior` as it was when the value is not an array, otherwise the elements before the one that failed. Elements decode in place into `prior`'s backing array while it has capacity, so `prior`'s own elements show what was decoded into them. An element that fails to decode is left partly decoded when it falls within `prior`'s length; a cap or budget error returns before the element is touched. The error is the result.
+- On an error, the returned slice holds what was decoded so far: `prior` as it was when the value is not an array, otherwise the elements before the one that failed. Elements decode in place into `prior`'s backing array while it has capacity, so `prior`'s own elements show what was decoded into them. When the element function fails at an index within `prior`'s length, that element holds whatever the function wrote before failing: the previous value if it wrote nothing, a partial one if it wrote some. `Array`'s own cap and budget checks run before the element function, so they leave that element as it was. The error is the result.
 
 ### Maps
 
