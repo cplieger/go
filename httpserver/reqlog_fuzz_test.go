@@ -46,12 +46,12 @@ func FuzzValidRequestID(f *testing.F) {
 	})
 }
 
-// FuzzRequestLogger_echoedIDIsAlwaysValid drives the middleware end-to-end and
+// FuzzLogging_echoedIDIsAlwaysValid drives the middleware end-to-end and
 // asserts the security invariant that the echoed X-Request-ID is a valid id for
 // ANY inbound header bytes: a header-splitting / log-forging value never
 // round-trips onto the response. When the inbound id fails ValidRequestID,
-// RequestLogger must mint a fresh valid id rather than echo the untrusted input.
-func FuzzRequestLogger_echoedIDIsAlwaysValid(f *testing.F) {
+// Logging must mint a fresh valid id rather than echo the untrusted input.
+func FuzzLogging_echoedIDIsAlwaysValid(f *testing.F) {
 	for _, s := range []string{
 		"", "inbound-123", "bad id!!", "abc\r\nX-Evil: 1",
 		strings.Repeat("a", 65), "\x00\x01", "café",
@@ -60,7 +60,7 @@ func FuzzRequestLogger_echoedIDIsAlwaysValid(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, inbound string) {
 		next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-		h := httpserver.RequestLogger(next, httpserver.WithLogger(discardLogger()))
+		h := httpserver.Logging(httpserver.WithLogger(discardLogger()))(next)
 		hdr := http.Header{}
 		hdr.Set(httpserver.HeaderRequestID, inbound)
 		rr := serve(h, http.MethodGet, "/x", hdr)
@@ -131,9 +131,7 @@ func FuzzWithTemplatePathsUnder_neverLogsAPathUnderADeclaredPrefix(f *testing.F)
 			t.Skip("not a request path")
 		}
 		logCap := &captureHandler{}
-		h := httpserver.RequestLogger(nestedSessionMux(),
-			httpserver.WithLogger(slog.New(logCap)),
-			httpserver.WithTemplatePathsUnder(prefix))
+		h := httpserver.Logging(httpserver.WithLogger(slog.New(logCap)), httpserver.WithTemplatePathsUnder(prefix))(nestedSessionMux())
 
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x", nil)
 		req.URL.Path = path
@@ -167,7 +165,7 @@ func FuzzWithTemplatePathsUnder_neverLogsAPathUnderADeclaredPrefix(f *testing.F)
 	})
 }
 
-// FuzzRequestLogger_loggedPathIsBounded pins the access log's path bound at the
+// FuzzLogging_loggedPathIsBounded pins the access log's path bound at the
 // boundary that actually matters: r.URL.Path is entirely client-controlled, it
 // lands in an aggregated log store, and net/http will carry a megabyte of it.
 //
@@ -184,7 +182,7 @@ func FuzzWithTemplatePathsUnder_neverLogsAPathUnderADeclaredPrefix(f *testing.F)
 //     honest form of "never emit a split rune");
 //   - a within-cap input is returned byte-identical, so the bound is invisible
 //     to every real path.
-func FuzzRequestLogger_loggedPathIsBounded(f *testing.F) {
+func FuzzLogging_loggedPathIsBounded(f *testing.F) {
 	const (
 		pathCap = 512
 		marker  = "...(truncated)"
@@ -221,7 +219,7 @@ func FuzzRequestLogger_loggedPathIsBounded(f *testing.F) {
 			opts := append([]httpserver.LogOption{httpserver.WithLogger(slog.New(logCap))}, tc.opts...)
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x", nil)
 			req.URL.Path = path
-			httpserver.RequestLogger(okHandler(), opts...).ServeHTTP(httptest.NewRecorder(), req)
+			httpserver.Logging(opts...)(okHandler()).ServeHTTP(httptest.NewRecorder(), req)
 
 			recs := logCap.snapshot()
 			if len(recs) != 1 {
@@ -289,7 +287,7 @@ func FuzzRouteMetricLabels_methodIsAlwaysAPermittedLabel(f *testing.F) {
 			"", "/", "/api/sessions/", "GET /beat/{id}", "GET example.com/beat/{id}",
 		} {
 			r := &http.Request{Method: m, Pattern: pattern, URL: &url.URL{Path: "/x"}}
-			method, path := httpserver.RouteMetricLabels(r)
+			method, path := httpserver.RouteMetricLabelsForTest(r)
 			if !permitted[method] {
 				t.Fatalf("method %q with pattern %q produced label %q, which is outside the ten permitted values",
 					m, pattern, method)

@@ -56,7 +56,7 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `WithLoopbackExempt(true)` admits a request when both the socket peer and the `Host` are loopback, described below.
 - `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.
 
-The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the 403's message) and `request_id` when `RequestLogger` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
+The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the 403's message) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
 
 Place the middleware before any cross-origin or CSRF check. A rebinding request makes `Origin` and `Host` agree, so a same-origin check alone admits it.
 
@@ -78,7 +78,7 @@ A rebinding attack cannot reach it, because the attack's `Host` is not loopback.
 
 ## Loopback-only endpoints
 
-`LoopbackOnly(refuse)` admits a request only when `LoopbackRequest` passes and `ProxiedRequest` finds no forwarding header. Every other request goes to `refuse`. A nil `refuse` answers 403 with the standard error envelope and the code `loopback_only`. Pass your own handler to keep an envelope your clients already depend on.
+`LoopbackOnly(opts...)` admits a request only when `LoopbackRequest` passes and `ProxiedRequest` finds no forwarding header. Every other request is answered 403 with the standard error envelope and the code `loopback_only`. `WithLoopbackError(code, msg)` sets your own code and message, and `WithLoopbackResponder(fn)` renders the refusal yourself, for an envelope your clients already depend on or a refusal you want to log, as the matching options do for `RateLimiter`.
 
 `LoopbackRequest(r)` reports whether a request is local. The socket peer must be loopback and the `Host` must name the local host, and either check failing refuses. It reads `r.RemoteAddr` and `r.Host` and nothing else, so forwarded headers never admit or refuse a request. The `Host` check accepts every spelling `CanonicalHost` collapses: `localhost` in any case, `127.0.0.0/8` and `::1`, with an optional port or trailing dot.
 

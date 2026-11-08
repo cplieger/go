@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-// HeaderRequestID is the canonical request-id header. RequestLogger reads it
+// HeaderRequestID is the canonical request-id header. Logging reads it
 // from the inbound request and echoes it on the response.
 const HeaderRequestID = "X-Request-ID"
 
@@ -70,14 +70,12 @@ func RequestIDFromContext(ctx context.Context) string {
 	return id
 }
 
-// logConfig holds resolved RequestLogger configuration.
+// logConfig holds resolved Logging configuration.
 type logConfig struct {
 	logger          *slog.Logger
 	skipPaths       map[string]struct{}
 	skipFunc        func(*http.Request) bool
 	pathFunc        func(*http.Request) string
-	recordMetric    func(RequestMetric)
-	recordMetricReq func(r *http.Request, status int, d time.Duration)
 	recordRoute     func(RequestMetric)
 	logLevel        func(r *http.Request, status int) slog.Level
 	clientIPFunc    func(*http.Request) string
@@ -87,7 +85,7 @@ type logConfig struct {
 	skipUpgrades    bool
 }
 
-// LogOption configures RequestLogger.
+// LogOption configures Logging.
 type LogOption func(*logConfig)
 
 // WithLogger sets the slog.Logger used for access-log lines. Defaults to
@@ -186,7 +184,7 @@ func WithSkipFunc(fn func(*http.Request) bool) LogOption {
 // exchange ended rather than completed, so a general skip-these-statuses option
 // would add exactly one capability: silencing refusals. A 404 flood is a broken
 // route and a 401 flood is an attack, and deleting their records is CWE-778
-// rather than noise control — which WithLogLevel (or the ProbeLogLevel preset)
+// rather than noise control — which WithLogLevel (or the WithProbeLogLevel preset)
 // already does properly, by lowering a line's level instead of removing it.
 //
 // HTTP/2's extended-CONNECT upgrade (RFC 8441) answers 2xx rather than 101 and
@@ -218,11 +216,9 @@ const redactedPathFallback = "(path-redaction-failed)"
 // WithSkipFunc.
 //
 // The returned value is "the path as recorded": it feeds the access line's
-// "path" attribute, the legacy WithRecordMetric hook's path argument, and the
-// "path" attribute of the package's hook-failure diagnostics. It feeds NEITHER
-// request-derived metric hook: WithRecordMetricRequest receives the request
-// itself and owns its own representation, and WithRecordRouteMetric's path label
-// is the matched route, which is a bound of its own and not a redaction policy.
+// "path" attribute and the "path" attribute of the package's hook-failure
+// diagnostics. It does not feed WithRecordRouteMetric, whose path label is the
+// matched route, a bound of its own and not a redaction policy.
 // fn's return is still length-bounded before it is recorded (512 bytes by
 // default, WithMaxLoggedPath to change it): a transform is a REDACTION policy,
 // and nothing about redacting a token also bounds the path it was in.
@@ -230,9 +226,9 @@ const redactedPathFallback = "(path-redaction-failed)"
 // fn runs inside the deferred emit, after routing, so http.ServeMux has
 // already populated r.Pattern (empty when nothing matched) and a transform
 // may return the matched template with its own fail-closed fallback for
-// unmatched requests. The WithRecordMetricRequest caveat applies equally:
-// middleware between RequestLogger and the mux that replaces the request
-// (r.WithContext and friends return a clone) hides the populated fields.
+// unmatched requests. Middleware between Logging and the mux that replaces the
+// request (r.WithContext and friends return a clone) hides the populated
+// fields.
 //
 // Skip predicates (WithSkipPaths, WithSkipFunc) always test the raw
 // r.URL.Path, and a skipped request never calls fn.
@@ -334,7 +330,7 @@ func templatePath(r *http.Request, prefixes []string) string {
 // while cutting the hostile case by roughly 2000x.
 //
 // It bounds the LOG, nothing else. The request is read, routed, and served
-// exactly as before: request SIZE stays WithMaxHeaderBytes' job, so RFC 9112
+// exactly as before: request SIZE stays http.Server.MaxHeaderBytes' job, so RFC 9112
 // §3's recommendation that a recipient support request-lines of at least 8000
 // octets is untouched.
 const defaultMaxLoggedPath = 512
@@ -422,12 +418,11 @@ const maxLoggedMethod = 24
 const overlongMethodMarker = "(overlong)"
 
 // boundLoggedMethod applies the method cap. It runs at every place this package
-// records a method VERBATIM — the access line, the three hook-failure
-// diagnostics, and the legacy WithRecordMetric hook's method argument, so an
-// over-long token cannot reach a metric label either. It is a LENGTH bound, so it
-// is not the metric-label bound: RouteMetricLabels maps the method onto a closed
-// ten-value set instead. Routing, the status, and any Allow header are untouched:
-// this changes what is RECORDED, never what is served.
+// records a method VERBATIM — the access line and the hook-failure
+// diagnostics. It is a LENGTH bound, so it is not the metric-label bound:
+// routeMetricLabels maps the method onto a closed ten-value set instead.
+// Routing, the status, and any Allow header are untouched: this changes what
+// is RECORDED, never what is served.
 func boundLoggedMethod(m string) string {
 	if len(m) <= maxLoggedMethod {
 		return m
@@ -447,11 +442,10 @@ func boundLoggedMethod(m string) string {
 // same way: net/http/httptrace's GotConn and DNSDone take GotConnInfo and
 // DNSDoneInfo rather than positional arguments.
 type RequestMetric struct {
-	// Method is the request method, bounded by the hook that produced it.
+	// Method is one of the nine standard methods, or "other" for any other.
 	Method string
-	// Path is the label the hook chose: a bounded request path for
-	// [WithRecordMetric], or the matched route template for
-	// [WithRecordRouteMetric] (MetricLabelUnmatched when nothing matched).
+	// Path is the matched route template, or the fixed "unmatched" marker
+	// when nothing matched.
 	Path string
 	// Status is the response status actually written.
 	Status int
@@ -459,116 +453,59 @@ type RequestMetric struct {
 	Latency time.Duration
 }
 
-// WithRecordMetric registers a hook invoked once per logged request with the
-// RequestMetric the access line RECORDED, so its two text fields carry exactly
-// the log line's bounds: Method is capped at 24 bytes, which keeps an over-long
-// token out of a metric label as well as out of the log, and Path is whatever
-// the path policy produced, capped by WithMaxLoggedPath. With NO path policy
-// configured — the default — Path is therefore the raw r.URL.Path truncated to
-// 512 bytes. It fires from a deferred call, so a panicking handler is still
-// recorded. Requests skipped via WithSkipPaths or WithSkipFunc are excluded
-// from the hook as well as from access logging: a
-// stream's open-to-close duration paired with a synthetic status is misleading,
-// which is the whole reason the path is skipped.
+// WithRecordRouteMetric registers the per-request metric hook: fn is invoked
+// once per logged request with a RequestMetric whose method and path labels
+// THIS PACKAGE derives, plus the final status and the latency. The app never
+// receives the raw request through this option, so it has no derivation to get
+// wrong; safety is a property of the wiring, not of every consumer remembering
+// to bound its labels.
 //
-// Its bounds are LENGTH bounds, not cardinality bounds: a raw r.URL.Path under
-// the cap is still one label value per URL a scanner invents, and a method under
-// 24 bytes is still one per token. For a metric this hook is the wrong shape
-// unless a path policy already collapses the path onto route templates — reach
-// for WithRecordRouteMetric, whose labels are bounded by construction. The three
-// metric options are mutually exclusive; whichever is applied last wins.
-func WithRecordMetric(fn func(RequestMetric)) LogOption {
-	return func(c *logConfig) {
-		c.recordMetric = fn
-		c.recordMetricReq = nil
-		c.recordRoute = nil
-	}
-}
-
-// WithRecordMetricRequest is the request-aware variant of WithRecordMetric:
-// fn is invoked once per logged request with the *http.Request itself, the
-// final status, and the latency. Because http.ServeMux assigns the matched
-// pattern to the request in place, fn observes a populated r.Pattern after
-// routing (empty when nothing matched, e.g. a 404), so a caller can key a
-// metric on the route TEMPLATE rather than on the raw URL path.
-// Caveat: middleware between RequestLogger and the mux that replaces the
-// request (r.WithContext and friends return a clone) hides those fields — the
-// mux populates the clone, not the request this hook received.
+// The labels are bounded BY CONSTRUCTION, so cardinality is a function of the
+// route table, not of the traffic. That matters because the hook fires from
+// the access-log defer, outside every app auth gate, and a series once minted
+// is permanent for the process lifetime here AND in every observer scraping
+// it.
 //
-// Prefer WithRecordRouteMetric. This hook hands fn the raw request, which makes
-// the APP responsible for a bound it can get wrong, and one consumer did: it
-// derived its labels from r.Method, wrote a comment asserting they were bounded,
-// and shipped an attacker-controllable method label anyway, because it also
-// registers a "/" catch-all — so its r.Pattern is never empty, the unmatched
-// collapse it relied on can never fire, and every SPA fallthrough minted a
-// series named by the caller. Nothing in the hook's signature could have caught
-// that. WithRecordRouteMetric computes the bounded pair here and passes it in,
-// so there is no derivation left for a consumer to get wrong; reach for this
-// hook only when the metric genuinely needs something else from the request
-// (say a per-tenant series keyed on an id the app validated itself), and use
-// RouteMetricLabels when what it needs is the standard pair.
+//   - Method is r.Method when it is one of the nine standard methods (GET,
+//     HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE from RFC 9110 §9.3, and
+//     PATCH from RFC 5789) and the fixed "other" bucket for everything else:
+//     ten values whatever arrives on the request line. Methods are
+//     case-sensitive, so "get" is "other".
+//   - Path is the route http.ServeMux matched: r.Pattern with its method
+//     prefix stripped ("GET /beat/{id}" records "/beat/{id}", so every id
+//     records as one series), the pattern itself when it names no method, and
+//     the fixed "unmatched" marker when nothing matched (r.Pattern == "", as
+//     for net/http's own 404 and 405). A host-qualified pattern keeps its host.
 //
-// Like WithRecordMetric it fires from a deferred call (a panicking handler is
-// still recorded) and is excluded on paths skipped via WithSkipPaths or
-// WithSkipFunc. The three metric options are mutually exclusive; whichever is
-// applied last wins. A nil fn is ignored (the package's skip-nil option
-// convention), so a trailing WithRecordMetricRequest(nil) neither enables the
-// hook nor clears a prior hook.
-func WithRecordMetricRequest(fn func(r *http.Request, status int, d time.Duration)) LogOption {
-	return func(c *logConfig) {
-		if fn == nil {
-			return
-		}
-		c.recordMetricReq = fn
-		c.recordMetric = nil
-		c.recordRoute = nil
-	}
-}
-
-// WithRecordRouteMetric registers the metric hook whose labels THIS PACKAGE
-// derives, and is the recommended one: fn is invoked once per logged request
-// with the bounded (method, path) label pair RouteMetricLabels computes for the
-// request, plus the final status and the latency. The app never receives the
-// raw request through this option, so it has no derivation to get wrong — that
-// is the whole reason the option exists rather than only the function. Safety
-// here is a property of the wiring, not of every consumer remembering to reach
-// for the right helper: WithRecordMetricRequest's godoc records the consumer
-// that reached for the wrong one, believed otherwise, and shipped an
-// attacker-controllable method label.
+// Every value is therefore a pattern the SERVER registered or one of the ten
+// method labels or the "unmatched" path marker, so the series ceiling is ten
+// times one more than the route table. The method comes from the request,
+// bounded by the closed set, rather than from the matched pattern, so a HEAD
+// probe against a GET-only pattern records HEAD as its access line does. The
+// one deliberate divergence from the access line: a non-standard method is
+// recorded verbatim there (bounded to 24 bytes) and as "other" here; the
+// access line for the same request_id says what it was.
 //
-// The labels are bounded BY CONSTRUCTION: the method is one of ten fixed values
-// and the path is either a pattern the SERVER registered or the fixed
-// "unmatched" marker. Cardinality is therefore a function of the route table,
-// not of the traffic, which matters because the hook fires from the access-log
-// defer — outside every app auth gate — and a series once minted is permanent
-// for the process lifetime here AND in every observer scraping it. See
-// RouteMetricLabels for each label's derivation and for the one deliberate
-// divergence from the access line.
-//
-// fn takes the same RequestMetric as WithRecordMetric, so switching a consumer
-// from the unbounded hook to this one changes the option name and nothing else,
-// and one recording function can be passed to either.
-//
-// Like the other metric hooks it fires from a deferred call (a panicking
-// handler is still recorded), is excluded on paths skipped via WithSkipPaths or
-// WithSkipFunc, and is isolated by a recover guard (a panicking hook skips this
-// request's metric rather than killing the connection). The three metric
-// options are mutually exclusive; whichever is applied last wins. A nil fn is
-// ignored (the package's skip-nil option convention), so a trailing
-// WithRecordRouteMetric(nil) neither enables the hook nor clears a prior hook.
+// It fires from a deferred call (a panicking handler is still recorded), is
+// excluded on paths skipped via WithSkipPaths or WithSkipFunc, and is isolated
+// by a recover guard (a panicking hook skips this request's metric rather than
+// killing the connection). A nil fn is ignored (the package's skip-nil option
+// convention), so a trailing WithRecordRouteMetric(nil) neither enables the
+// hook nor clears a prior one.
 //
 // The path policy options (WithPathFunc, WithTemplatePathsUnder,
 // WithMaxLoggedPath) do NOT reach these labels: they govern the recorded path
-// of the LOG LINE, while this hook's path is the matched route. A path policy
-// and this hook are complementary, not alternatives.
+// of the LOG LINE, while this hook's path is the matched route. Middleware
+// between Logging and the mux that replaces the request (r.WithContext and
+// friends return a clone) leaves r.Pattern empty here, because the mux
+// populated the clone, so every request reads as "unmatched": check that
+// before believing a flat metric.
 func WithRecordRouteMetric(fn func(RequestMetric)) LogOption {
 	return func(c *logConfig) {
 		if fn == nil {
 			return
 		}
 		c.recordRoute = fn
-		c.recordMetric = nil
-		c.recordMetricReq = nil
 	}
 }
 
@@ -624,54 +561,9 @@ func routeMetricPath(r *http.Request) string {
 	return r.Pattern
 }
 
-// RouteMetricLabels derives the bounded (method, path) label pair for a
-// per-request HTTP metric. It is the pure primitive behind
-// WithRecordRouteMetric, exported for any hook that already holds the request
-// and wants the standard pair inside it — but the OPTION is the recommended
-// path, because a helper only protects the consumers that remember to call it.
-//
-// The method label is r.Method when it is one of the nine standard methods —
-// GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE (RFC 9110 §9.3) and
-// PATCH (RFC 5789) — and the fixed "other" bucket for everything else. Ten
-// values, by construction, whatever arrives on the request line.
-//
-// The path label is the route http.ServeMux matched: r.Pattern with the method
-// prefix stripped ("GET /beat/{id}" records "/beat/{id}", so every beat id
-// records as one series and an unknown id mints nothing), the pattern itself
-// when it names no method ("/beat/{id}", a "/" catch-all), and the fixed
-// "unmatched" marker when nothing matched (r.Pattern == "", e.g. net/http's own
-// 404, or its 405 for a method that missed a method-bearing route). A
-// host-qualified pattern ("GET example.com/beat/{id}") keeps its host — still a
-// string the server registered, still bounded.
-//
-// Every value on both labels is therefore either a pattern the SERVER
-// registered or one of eleven fixed strings this package can return (the nine
-// standard method names, the "other" bucket, the "unmatched" marker), so the
-// series ceiling is ten times one more than the route table and no property of
-// the traffic can widen it. That matters because the hook fires from the
-// access-log defer, outside every app auth gate, and a series once minted is
-// permanent for the process lifetime here AND in every observer scraping it.
-//
-// The method comes from the REQUEST, bounded by the closed set, rather than from
-// the matched pattern. Deriving it from the pattern is also bounded, but it
-// makes http.ServeMux's HEAD-to-GET routing invisible: a HEAD probe against a
-// GET-only pattern would record method="GET" while the access line for the same
-// request records HEAD, so the log and the metric disagree about the commonest
-// non-GET probe there is. Reading the closed set instead keeps them in agreement
-// for all nine standard methods and still owes nothing to the route table.
-//
-// ONE divergence from the access line remains, deliberately: for a NON-standard
-// method the line records the token verbatim (bounded to 24 bytes, see
-// boundLoggedMethod's marker) while this records "other". A log line is read to
-// diagnose one request and needs the real value; a metric series is read in
-// aggregate and needs a bounded name. When a metric shows "other" traffic, the
-// access line for the same request_id says what the method was.
-//
-// Caveat, inherited from the hooks: middleware between RequestLogger and the mux
-// that replaces the request (r.WithContext and friends return a clone) leaves
-// r.Pattern empty here, because the mux populated the clone. That reads as
-// "unmatched" for every request — check it before believing a flat metric.
-func RouteMetricLabels(r *http.Request) (method, path string) {
+// routeMetricLabels derives the bounded (method, path) label pair
+// WithRecordRouteMetric documents.
+func routeMetricLabels(r *http.Request) (method, path string) {
 	return routeMetricMethod(r.Method), routeMetricPath(r)
 }
 
@@ -680,7 +572,7 @@ func RouteMetricLabels(r *http.Request) (method, path string) {
 // is emitted at the returned level. The default without this option is
 // slog.LevelInfo, unchanged. The hook chooses the level only — the line's
 // attributes and emission rules (deferred emit, skip paths) are the logger's
-// fixed mechanism. ProbeLogLevel is the named preset over this hook for the
+// fixed mechanism. WithProbeLogLevel is the named preset over this hook for the
 // routine-machine-probe case; reach for the raw hook only when a custom
 // policy is genuinely needed.
 //
@@ -703,7 +595,7 @@ func WithLogLevel(fn func(r *http.Request, status int) slog.Level) LogOption {
 	}
 }
 
-// ProbeLogLevel is the shared access-log level policy for machine-probe
+// WithProbeLogLevel is the shared access-log level policy for machine-probe
 // endpoints (health checks, readiness probes, metrics scrapes). A request whose
 // r.URL.Path exactly matches one of paths logs at Debug on success (status <
 // 400), Warn on a 4xx and Error on a 5xx, so a healthy probe stays quiet and a
@@ -711,7 +603,7 @@ func WithLogLevel(fn func(r *http.Request, status int) slog.Level) LogOption {
 // policy, so the two are mutually exclusive (last applied wins); a skipped path
 // never consults it, and a panicking policy falls back to Info. With no paths
 // every request logs at Info.
-func ProbeLogLevel(paths ...string) LogOption {
+func WithProbeLogLevel(paths ...string) LogOption {
 	probe := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		probe[p] = struct{}{}
@@ -749,7 +641,7 @@ func WithClientIP(trusted ...netip.Prefix) LogOption {
 // config at runtime behind a hot-reloadable resolver — or when client-IP
 // resolution is otherwise app-specific: fn is called once per logged request
 // (never on a skipped path), and its result is logged verbatim as "client_ip".
-// It composes with WithRecordMetric. WithClientIP and WithClientIPFunc both
+// It composes with WithRecordRouteMetric. WithClientIP and WithClientIPFunc both
 // enable the attribute and are mutually exclusive; whichever is applied last
 // wins. A nil fn is ignored (matching the package's skip-nil option
 // convention), so a trailing WithClientIPFunc(nil) neither enables the
@@ -776,12 +668,12 @@ func (c *logConfig) resolveClientIP(r *http.Request) string {
 }
 
 // emitAccessLog writes the single access-log line and fires the optional metric
-// hook. RequestLogger defers it, so a panicking handler is still logged with its
+// hook. Logging defers it, so a panicking handler is still logged with its
 // recorded status (rec is read when the deferred call runs).
 //
-// Both caller-supplied observability callbacks — the WithPathFunc transform,
+// Each caller-supplied observability callback — the WithPathFunc transform,
 // the WithClientIPFunc resolver, the WithLogLevel policy, and the
-// WithRecordMetric hook — run through recover guards. This defer sits in
+// WithRecordRouteMetric hook — runs through a recover guard. This defer sits in
 // the outer Logging layer, OUTSIDE Recoverer (Logging is outermost so it can log
 // the recovered 500), so a panic raised here happens after Recoverer has already
 // returned and would escape to net/http and close the connection. Isolating each
@@ -824,7 +716,7 @@ func (c *logConfig) emitAccessLog(rec *StatusRecorder, r *http.Request, path, id
 		lvl = c.safeLogLevel(r, status, id, path)
 	}
 	c.logger.Log(context.Background(), lvl, "http", args...)
-	if c.recordMetric != nil || c.recordMetricReq != nil || c.recordRoute != nil {
+	if c.recordRoute != nil {
 		c.safeRecordMetric(r, path, status, d, id)
 	}
 }
@@ -905,9 +797,8 @@ func (c *logConfig) safeLogLevel(r *http.Request, status int, id, path string) (
 	return c.logLevel(r, status)
 }
 
-// safeRecordMetric fires the caller-supplied metric hook (WithRecordRouteMetric,
-// WithRecordMetricRequest or WithRecordMetric — mutual exclusion means at most
-// one is set) in isolation. A panic in the hook is logged as a hook failure and
+// safeRecordMetric fires the caller-supplied WithRecordRouteMetric hook in
+// isolation. A panic in the hook is logged as a hook failure and
 // swallowed — the metric for this request is skipped — so it cannot escape the
 // outer Logging defer (which runs outside Recoverer) and turn a completed
 // request into a net/http connection-closing panic.
@@ -925,60 +816,14 @@ func (c *logConfig) safeRecordMetric(r *http.Request, path string, status int, d
 			)
 		}
 	}()
-	switch {
-	case c.recordRoute != nil:
-		// The labels are derived HERE rather than by the app, which is the
-		// point of the option: the bound is a property of the wiring.
-		method, route := RouteMetricLabels(r)
-		c.recordRoute(RequestMetric{Method: method, Path: route, Status: status, Latency: d})
-	case c.recordMetricReq != nil:
-		c.recordMetricReq(r, status, d)
-	default:
-		c.recordMetric(RequestMetric{Method: boundLoggedMethod(r.Method), Path: path, Status: status, Latency: d})
-	}
+	// The labels are derived HERE rather than by the app, which is the point
+	// of the option: the bound is a property of the wiring.
+	method, route := routeMetricLabels(r)
+	c.recordRoute(RequestMetric{Method: method, Path: route, Status: status, Latency: d})
 }
 
-// RequestLogger returns middleware that gives each request a request id, echoes
-// it on the response HeaderRequestID header, threads it through the request
-// context (see RequestIDFromContext), and emits one access-log line at Info
-// after next returns:
-//
-//	logger.Info("http", "method", …, "path", …, "status", …,
-//		"duration_ms", …, "request_id", …)
-//
-// With WithClientIP the line additionally carries a "client_ip" attribute
-// resolved by ClientIP (spoof-proof, honoring only the trusted proxy ranges
-// passed to the option); WithClientIPFunc is the variant that resolves it with
-// a caller-supplied function, for a dynamic (e.g. config-reloaded) trusted set.
-// With WithPathFunc the recorded path is fn's return instead of r.URL.Path —
-// the token-redaction middle ground between logging a credential-bearing path
-// raw and skipping its access record entirely (fail-closed placeholder when
-// the transform fails; see the option).
-//
-// The two attacker-controlled attributes are bounded by default, whichever
-// policy produced them: the path to 512 bytes cut on a rune boundary plus a
-// truncation marker (WithMaxLoggedPath re-sets the cap), and the method to 24
-// bytes, over which it records a fixed "(overlong)" placeholder rather than a
-// misleading prefix. Both bounds apply to the LOG only — routing, the status,
-// and the response are unchanged.
-//
-// It records the status via a StatusRecorder that stays transparent to
-// http.ResponseController, so wrapped handlers can still Flush and Hijack. An
-// inbound HeaderRequestID is reused when it satisfies ValidRequestID; otherwise
-// a new id is minted with NewRequestID.
-//
-// A request matched by WithSkipPaths or WithSkipFunc still gets an id minted,
-// echoed, and threaded, but is served through the raw writer with no recorder,
-// no access-log line, and no metric hook. WithSkipUpgrades removes the record of
-// a request that actually SWITCHED PROTOCOLS (a completed WebSocket handshake),
-// decided from the response instead of predicted from the request, so every
-// refusal on the same route keeps its line; it can only remove a record, never
-// restore one a skip rule dropped.
-//
-// The access-log line and metric hook are emitted from a deferred call, so a
-// handler that panics is still logged (the status shows the recorded value)
-// before the panic continues up the stack to net/http.
-func RequestLogger(next http.Handler, opts ...LogOption) http.Handler {
+// requestLogger is Logging's handler; Logging documents its behavior.
+func requestLogger(next http.Handler, opts ...LogOption) http.Handler {
 	c := &logConfig{}
 	for _, o := range opts {
 		if o != nil {

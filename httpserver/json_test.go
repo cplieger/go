@@ -89,8 +89,8 @@ func TestWriteJSONStatus_encodeFailureCommitsStatusAndWarns(t *testing.T) {
 		t.Errorf("log message = %q", recs[0].Message)
 	}
 	m := attrsOf(recs[0])
-	if m["code"] != int64(http.StatusBadGateway) {
-		t.Errorf("code attr = %v, want %d", m["code"], http.StatusBadGateway)
+	if m["status"] != int64(http.StatusBadGateway) {
+		t.Errorf("status attr = %v, want %d", m["status"], http.StatusBadGateway)
 	}
 	if m["error"] == nil {
 		t.Error("missing error attr on encode-failure warn")
@@ -99,7 +99,7 @@ func TestWriteJSONStatus_encodeFailureCommitsStatusAndWarns(t *testing.T) {
 
 func TestOk(t *testing.T) {
 	rr := httptest.NewRecorder()
-	httpserver.Ok(rr)
+	httpserver.OK(rr)
 	if rr.Code != http.StatusOK {
 		t.Errorf("code = %d, want 200", rr.Code)
 	}

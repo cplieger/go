@@ -223,11 +223,12 @@ const (
 )
 
 const (
-	// failedAuthCode is the 429 envelope code every failed-auth throttle
-	// answers with. It is fixed rather than a parameter: the code is what an
-	// operator's log queries and alert rules key on across services, and the
-	// three consumers that hand-wrote this preset had already converged on this
-	// exact string while their messages deliberately differ.
+	// failedAuthCode is the preset's 429 envelope code. It is not a
+	// parameter of the preset because the code is what an operator's log
+	// queries and alert rules key on across services, and the three consumers
+	// that hand-wrote this preset had already converged on this exact string
+	// while their messages deliberately differ; a WithRateLimitError in the
+	// preset's opts replaces it.
 	failedAuthCode ErrorCode = "too_many_auth_failures"
 	// failedAuthDefaultMsg is what an empty msg falls back to: true of any
 	// credential, and deliberately silent about which one was presented.
@@ -241,7 +242,11 @@ const (
 // when limits every request, for a caller that filters failed attempts first.
 // when runs on every request, and the access-line flood is bounded only with
 // the limiter outside Logging. Use RateLimiter directly for other numbers.
-func FailedAuthRateLimit(when func(*http.Request) bool, msg string) Middleware {
+//
+// opts apply after the preset's own, so WithRateLimitResponder renders the
+// 429 on another content type; a non-nil WithRateLimitWhen or a
+// WithRateLimitError in opts replaces the preset's predicate or envelope.
+func FailedAuthRateLimit(when func(*http.Request) bool, msg string, opts ...RateLimitOption) Middleware {
 	if msg == "" {
 		msg = failedAuthDefaultMsg
 	}
@@ -249,8 +254,7 @@ func FailedAuthRateLimit(when func(*http.Request) bool, msg string) Middleware {
 	// nil here leaves RateLimiter's default (draw a token from every request)
 	// in place, which is exactly the documented meaning. Re-checking it would
 	// be a second reading of the same rule, free to disagree with the first.
-	return RateLimiter(failedAuthBurst, failedAuthInterval,
-		WithRateLimitWhen(when),
-		WithRateLimitError(failedAuthCode, msg),
-	)
+	all := make([]RateLimitOption, 0, 2+len(opts))
+	all = append(all, WithRateLimitWhen(when), WithRateLimitError(failedAuthCode, msg))
+	return RateLimiter(failedAuthBurst, failedAuthInterval, append(all, opts...)...)
 }

@@ -38,3 +38,7 @@ func ParseForwarding(h http.Header) ForwardingFields {
 	}
 	return out
 }
+
+// RouteMetricLabelsForTest exposes the label derivation WithRecordRouteMetric
+// documents, so the external tests can pin it directly.
+var RouteMetricLabelsForTest = routeMetricLabels

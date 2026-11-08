@@ -83,7 +83,7 @@ The max-age rule also catches a common unit mistake. A bare `31536000` assigned 
 
 ## Logging
 
-`Logging(opts...)` is `RequestLogger` in a form `Chain` can compose, and it takes the same options. [Access logging and metrics](access-logging.md) covers them.
+`Logging(opts...)` gives each request an id and writes one access line for it. [Access logging and metrics](access-logging.md) covers it and its options.
 
 ## RouteTimeout
 
@@ -123,7 +123,7 @@ A non-positive `burst` or `interval` returns the handler unwrapped, so a configu
 
 ### Presets
 
-`FailedAuthRateLimit(when, msg)` is for a route guarded by one static credential. It throttles the requests `when` reports as presenting a failed credential, at a burst of 10 and one token every 6 seconds. It answers 429 with the fixed code `too_many_auth_failures` and `msg`.
+`FailedAuthRateLimit(when, msg, opts...)` is for a route guarded by one static credential. It throttles the requests `when` reports as presenting a failed credential, at a burst of 10 and one token every 6 seconds. It answers 429 with the code `too_many_auth_failures` and `msg`. `opts` apply after the preset's own, so `WithRateLimitResponder` renders the 429 on another content type.
 
 A valid credential never takes a token, so the tuning does not need to leave room for your own senders. `msg` is yours because the credential differs per service. An empty `msg` becomes `too many failed authentication attempts`. A nil `when` throttles every request the middleware sees, for a caller that has already filtered the failed requests itself.
 

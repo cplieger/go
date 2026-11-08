@@ -32,17 +32,17 @@ func WriteJSON(w http.ResponseWriter, v any) {
 // as the response body. The status is committed before encoding begins, so an
 // encode failure cannot change it; such a failure is logged at Warn rather than
 // returned, because the response line is already on the wire.
-func WriteJSONStatus(w http.ResponseWriter, code int, v any) {
+func WriteJSONStatus(w http.ResponseWriter, status int, v any) {
 	JSONHeaders(w)
-	w.WriteHeader(code)
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Warn("httpserver: json encode failed after status committed", "code", code, "error", err)
+		slog.Warn("httpserver: json encode failed after status committed", "status", status, "error", err)
 	}
 }
 
-// Ok writes a 200 response with the JSON body {"ok":true}. It is the canonical
+// OK writes a 200 response with the JSON body {"ok":true}. It is the canonical
 // success acknowledgement for an endpoint that has no other payload.
-func Ok(w http.ResponseWriter) {
+func OK(w http.ResponseWriter) {
 	WriteJSON(w, struct {
 		OK bool `json:"ok"`
 	}{OK: true})

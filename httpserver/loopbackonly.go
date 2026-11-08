@@ -33,21 +33,27 @@ import (
 // is indistinguishable from an in-container caller and is admitted. Closing that
 // needs authentication, not a header rule.
 //
-// refuse writes the rejection. Pass nil for the package default (403 with the
-// standard error envelope); pass your own to keep an envelope or wording your
-// consumers already depend on — the refusal is the whole of what a rejected
-// caller is told, so it belongs to the app, not here.
-func LoopbackOnly(refuse http.Handler) Middleware {
-	if refuse == nil {
-		refuse = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			WriteError(w, r, http.StatusForbidden, loopbackRefusalCode,
-				"this endpoint is loopback-only; call it from inside the container")
-		})
+// A refused request is answered 403 through WriteError with the code
+// "loopback_only" and a message telling the caller to call from inside the
+// container. WithLoopbackError replaces the code and message and
+// WithLoopbackResponder the renderer, as WithRateLimitError and
+// WithRateLimitResponder do for RateLimiter: the refusal is the whole of what a
+// rejected caller is told, so its wording belongs to the app.
+func LoopbackOnly(opts ...LoopbackOption) Middleware {
+	c := &loopbackConfig{
+		code:      loopbackRefusalCode,
+		msg:       loopbackRefusalMsg,
+		responder: WriteError,
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(c)
+		}
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !LoopbackRequest(r) || ProxiedRequest(r.Header) {
-				refuse.ServeHTTP(w, r)
+				c.responder(w, r, http.StatusForbidden, c.code, c.msg)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -55,12 +61,43 @@ func LoopbackOnly(refuse http.Handler) Middleware {
 	}
 }
 
-// loopbackRefusalCode is the default refusal's envelope code. Fixed rather than a
-// parameter for the reason the failed-auth throttle's code is: the code is what
-// an operator's log queries and alert rules key on across services, while the
-// MESSAGE is what differs per surface. A consumer needing a different code passes
-// its own refuse handler.
-const loopbackRefusalCode = "loopback_only"
+// LoopbackOption configures LoopbackOnly.
+type LoopbackOption func(*loopbackConfig)
+
+// loopbackConfig holds resolved LoopbackOnly configuration.
+type loopbackConfig struct {
+	responder ErrorResponder
+	code      ErrorCode
+	msg       string
+}
+
+// WithLoopbackError sets the code and message of LoopbackOnly's 403. code is
+// the machine token and msg the sentence; they are separately typed (see
+// ErrorCode) so the pair cannot be supplied transposed. An empty code omits the
+// field.
+func WithLoopbackError(code ErrorCode, msg string) LoopbackOption {
+	return func(c *loopbackConfig) { c.code, c.msg = code, msg }
+}
+
+// WithLoopbackResponder sets the ErrorResponder that writes LoopbackOnly's
+// 403, in place of WriteError's JSON envelope; it receives the status, code and
+// message, so it composes with WithLoopbackError. A responder is also the place
+// to log a refusal. A nil fn is ignored, keeping the default.
+func WithLoopbackResponder(fn ErrorResponder) LoopbackOption {
+	return func(c *loopbackConfig) {
+		if fn != nil {
+			c.responder = fn
+		}
+	}
+}
+
+// loopbackRefusalCode and loopbackRefusalMsg are the default refusal's
+// envelope code and message. The default code is shared across services
+// because it is what an operator's log queries and alert rules key on.
+const (
+	loopbackRefusalCode ErrorCode = "loopback_only"
+	loopbackRefusalMsg  string    = "this endpoint is loopback-only; call it from inside the container"
+)
 
 // proxyProvenanceHeaders are the headers a request acquires by travelling through
 // a browser or a reverse proxy.

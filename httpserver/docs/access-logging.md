@@ -1,6 +1,6 @@
 # Access logging and metrics
 
-This page is for a developer wiring httpserver's access log and request metrics. It covers request ids, the one-line access record, the bounds on what it records, the level policy, the metric hooks and the status recorder.
+This page is for a developer wiring httpserver's access log and request metrics. It covers request ids, the one-line access record, the bounds on what it records, the level policy, the metric hook and the status recorder.
 
 ## Request ids
 
@@ -13,7 +13,7 @@ This page is for a developer wiring httpserver's access log and request metrics.
 
 ## The access line
 
-`RequestLogger(next, opts...)` reuses a valid inbound `X-Request-ID` or mints a new one. It echoes the id on the response, puts it in the request context and records the status through a `StatusRecorder`. Then it emits one `Info` access line per request. `Logging(opts...)` is the same thing as a `Middleware`.
+`Logging(opts...)` is a `Middleware` that reuses a valid inbound `X-Request-ID` or mints a new one. It echoes the id on the response, puts it in the request context and records the status through a `StatusRecorder`. Then it emits one `Info` access line per request.
 
 An option that adds an attribute or a hook changes nothing until you pass it.
 
@@ -29,7 +29,7 @@ An option that adds an attribute or a hook changes nothing until you pass it.
 | `WithPathFunc(fn)` | Record your own value in place of the path |
 | `WithMaxLoggedPath(n)` | Cap the recorded path at `n` bytes instead of 512 |
 | `WithLogLevel(fn)` | Choose each line's level |
-| `ProbeLogLevel(paths...)` | Log probe endpoints at Debug while they succeed |
+| `WithProbeLogLevel(paths...)` | Log probe endpoints at Debug while they succeed |
 
 A skipped request still gets an id minted, echoed and threaded. It gets no access line and no metric hook, because a stream's open-to-close duration beside a synthetic status would mislead.
 
@@ -43,7 +43,7 @@ Use it instead of a skip rule over the upgrade route. A skip rule decides before
 
 Suppression removes the whole record, with no line and no metric hook, while the request id is still minted and echoed. Two cases keep their record. A handler that never calls `WriteHeader` sends an implicit 200, so ordinary requests are untouched. A handler that writes an explicit status and then hijacks, such as a `CONNECT` tunnel answering 200, also keeps its record.
 
-The skip options win over this one. `WithSkipPaths` and `WithSkipFunc` act before the handler runs, so this option can only remove a record, never restore one. It takes no status argument. To quiet a noisy route without losing records, lower its level with `WithLogLevel` or `ProbeLogLevel`.
+The skip options win over this one. `WithSkipPaths` and `WithSkipFunc` act before the handler runs, so this option can only remove a record, never restore one. It takes no status argument. To quiet a noisy route without losing records, lower its level with `WithLogLevel` or `WithProbeLogLevel`.
 
 ## What the line records
 
@@ -55,7 +55,7 @@ The path is capped at 512 bytes. An over-cap value keeps at most that many bytes
 
 The method is capped at 24 bytes, with no option. The longest method in IANA's registry is `UPDATEREDIRECTREF` at 17 characters. A longer method is recorded as the fixed `(overlong)` placeholder rather than a cut token.
 
-Both caps bound the log only. Request size stays the job of `WithMaxHeaderBytes`, and neither cap touches routing, the status or the `Allow` header.
+Both caps bound the log only. Request size stays the job of the server's `MaxHeaderBytes` field, and neither cap touches routing, the status or the `Allow` header.
 
 ### Route templates for paths that carry a credential
 
@@ -69,41 +69,29 @@ Pass the prefix the package that owns the routes exports, not a literal you copy
 
 ### Your own path policy
 
-`WithPathFunc(fn)` replaces `r.URL.Path` with `fn`'s return in the access line, in the `WithRecordMetric` path and in the hook-failure messages. Use it for a policy `WithTemplatePathsUnder` cannot express, such as a truncated form or a per-request decision.
+`WithPathFunc(fn)` replaces `r.URL.Path` with `fn`'s return in the access line and in the hook-failure messages. Use it for a policy `WithTemplatePathsUnder` cannot express, such as a truncated form or a per-request decision.
 
 `fn` runs when the line is written, after routing, so `r.Pattern` is set. It is empty on an unmatched request, so return your own placeholder for those. Skip rules test the raw path, and skipped requests never call `fn`.
 
-A panicking or empty-returning `fn` records `(path-redaction-failed)`, never the raw path. The request-based metric hooks are not affected by the path policy.
+A panicking or empty-returning `fn` records `(path-redaction-failed)`, never the raw path. The metric hook's labels are not affected by the path policy.
 
 ## Log level
 
 `WithLogLevel(fn)` chooses each access line's level from the request and the status. The default is `Info` for every line. A common policy for a polled service is `Debug` for 2xx and 3xx, `Warn` for 4xx and `Error` for 5xx. Skipped paths never call it, and a panicking policy falls back to `Info`.
 
-`ProbeLogLevel(paths...)` is a preset over it for health, readiness and metrics endpoints. On those exact paths, a success logs at `Debug`, a 4xx at `Warn` and a 5xx at `Error`. Every other request stays at `Info`.
+`WithProbeLogLevel(paths...)` is a preset over it for health, readiness and metrics endpoints. On those exact paths, a success logs at `Debug`, a 4xx at `Warn` and a 5xx at `Error`. Every other request stays at `Info`.
 
 Prefer it over skipping probe paths, which also hides a failing probe. Keep skip rules for streams, where one open-to-close line misleads by its shape. The two level options exclude each other, and the last one applied wins.
 
-## Metric hooks
+## The metric hook
 
-Three hooks receive one call per logged request. They exclude each other, and the last one applied wins. Each fires from the access log's deferred call, so a panicking handler is still recorded. A panicking hook skips that request's metric and leaves the connection alone.
+`WithRecordRouteMetric(fn)` calls `fn` once per logged request with a `RequestMetric`. It fires from the access log's deferred call, so a panicking handler is still recorded. A panicking hook skips that request's metric and leaves the connection alone, and a nil `fn` is ignored.
 
-| Option | Receives | Labels |
-| --- | --- | --- |
-| `WithRecordRouteMetric(fn)` | a `RequestMetric` | bounded by construction. Recommended |
-| `WithRecordMetric(fn)` | a `RequestMetric` | the access line's recorded values |
-| `WithRecordMetricRequest(fn)` | the request, status and latency | yours to bound |
+`RequestMetric` has named fields, `Method`, `Path`, `Status` and `Latency`, so a hook cannot read the method and path in the wrong order.
 
-`RequestMetric` has named fields, `Method`, `Path`, `Status` and `Latency`, so a hook cannot read the method and path in the wrong order. Both struct hooks take the same `RequestMetric`, so moving from one to the other changes only the option name.
-
-`WithRecordRouteMetric` hands the hook the label pair `RouteMetricLabels` derives. The app never sees the raw request through it, so it has no derivation to get wrong. Prefer it over calling `RouteMetricLabels` inside another hook. The path policy options do not reach these labels, because they bound a log line, not a set of label values. A nil `fn` is ignored.
-
-`WithRecordMetric` receives what the access line recorded. Those values are bounded in length but not in count, because a raw path under the cap is still one label value per URL a scanner invents. Use it for metrics only when a path policy already collapses paths onto templates.
-
-`WithRecordMetricRequest` receives the request itself, for a metric that needs something other than the standard pair, such as a per-tenant series keyed on an id the app validated. The app then owns the cardinality bound.
+The package derives the method and path labels, and the app never sees the raw request through the hook, so it has no derivation to get wrong. The path policy options do not reach these labels, because they bound a log line, not a set of label values.
 
 ### How the route labels are derived
-
-`RouteMetricLabels(r)` returns `(method, path)`.
 
 The method label is `r.Method` when it is one of the nine standard methods: `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `CONNECT`, `OPTIONS` and `TRACE` from RFC 9110, plus `PATCH` from RFC 5789. Anything else becomes `other`. That makes ten values whatever arrives, and a lowercase `get` is `other`, because HTTP methods are case-sensitive.
 

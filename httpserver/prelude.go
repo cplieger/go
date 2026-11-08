@@ -15,7 +15,7 @@ import (
 var ErrTrailingData = errors.New("httpserver: unexpected data after JSON value")
 
 // MaxJSONBody is the default maximum JSON request-body size (1 MiB) applied by
-// DecodeBody and DecodeBodyOptional.
+// DecodeBody.
 const MaxJSONBody int64 = 1 << 20
 
 // LimitBody caps the request body at maxBytes by replacing r.Body with an
@@ -245,17 +245,4 @@ func DecodeBody(w http.ResponseWriter, r *http.Request, v any, errMsg string) bo
 		return false
 	}
 	return true
-}
-
-// DecodeBodyOptional limits the body to MaxJSONBody and attempts a JSON decode
-// into v, discarding every error. It does NOT reliably leave v at its zero
-// value: trailing data ({"a":1} junk) leaves the LEADING value in v where
-// DecodeBody rejects it, and an oversize body is indistinguishable from an
-// absent one — its *http.MaxBytesError is discarded too, so the handler answers
-// 200 from a zero value (or from one that preceded the excess) while net/http
-// closes the connection. DecodeJSONInto separates all five outcomes, with
-// errors.Is(err, io.EOF) marking the absent body.
-func DecodeBodyOptional(w http.ResponseWriter, r *http.Request, v any) {
-	LimitBody(w, r, MaxJSONBody)
-	_ = json.NewDecoder(r.Body).Decode(v)
 }

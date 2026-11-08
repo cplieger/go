@@ -99,11 +99,11 @@ func WithRecoverResponder(fn ErrorResponder) RecoverOption {
 // net/http contract it is re-panicked so the server aborts the response the way
 // the handler intended (it is not logged and fires no hook).
 //
-// Placement relative to Logging matters. Put Recoverer INSIDE RequestLogger,
+// Placement relative to Logging matters. Put Recoverer INSIDE Logging,
 // i.e. Logging outermost, as in Chain(mux, Logging(), Recoverer()): the
-// recovered request then records a 500 before RequestLogger's deferred access
+// recovered request then records a 500 before Logging's deferred access
 // line runs, so the request logs as 500. If Recoverer sits OUTSIDE the logger,
-// RequestLogger's deferred line runs during the panic unwind and records the
+// Logging's deferred line runs during the panic unwind and records the
 // StatusRecorder's default 200, a misleading access line even though the client
 // still receives the 500.
 //
@@ -113,7 +113,7 @@ func WithRecoverResponder(fn ErrorResponder) RecoverOption {
 // (it still logs the panic and fires the hook) rather than corrupting the
 // partial response or mislabeling its status under an outer Logging. To detect
 // commitment it observes the response through a StatusRecorder, reusing an
-// existing one (such as RequestLogger's) when present.
+// existing one (such as Logging's) when present.
 func Recoverer(opts ...RecoverOption) Middleware {
 	c := &recoverConfig{}
 	for _, o := range opts {
@@ -132,7 +132,7 @@ func Recoverer(opts ...RecoverOption) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// The 500 must not be written onto a response the handler already
 			// committed, so the recovery body needs to know whether the response
-			// was written. If w already reports that (e.g. RequestLogger's
+			// was written. If w already reports that (e.g. Logging's
 			// StatusRecorder when Recoverer sits inside Logging), use it as-is;
 			// otherwise wrap it in a StatusRecorder that both observes commitment
 			// and stays transparent to streaming.
@@ -439,14 +439,49 @@ func setIfNonEmpty(h http.Header, key, val string) {
 	}
 }
 
-// Logging returns a Chain-composable Middleware wrapping RequestLogger with the
-// given options. It is exactly RequestLogger in middleware form; use
-// RequestLogger directly when you are not composing with Chain. See
-// RequestLogger for the request-id and access-log behavior and the available
-// LogOption values.
+// Logging returns a Chain-composable Middleware that gives each request a
+// request id, echoes it on the response HeaderRequestID header, threads it
+// through the request context (see RequestIDFromContext), and emits one
+// access-log line at Info after next returns:
+//
+//	logger.Info("http", "method", …, "path", …, "status", …,
+//		"duration_ms", …, "request_id", …)
+//
+// With WithClientIP the line additionally carries a "client_ip" attribute
+// resolved by ClientIP (spoof-proof, honoring only the trusted proxy ranges
+// passed to the option); WithClientIPFunc is the variant that resolves it with
+// a caller-supplied function, for a dynamic (e.g. config-reloaded) trusted set.
+// With WithPathFunc the recorded path is fn's return instead of r.URL.Path —
+// the token-redaction middle ground between logging a credential-bearing path
+// raw and skipping its access record entirely (fail-closed placeholder when
+// the transform fails; see the option).
+//
+// The two attacker-controlled attributes are bounded by default, whichever
+// policy produced them: the path to 512 bytes cut on a rune boundary plus a
+// truncation marker (WithMaxLoggedPath re-sets the cap), and the method to 24
+// bytes, over which it records a fixed "(overlong)" placeholder rather than a
+// misleading prefix. Both bounds apply to the LOG only — routing, the status,
+// and the response are unchanged.
+//
+// It records the status via a StatusRecorder that stays transparent to
+// http.ResponseController, so wrapped handlers can still Flush and Hijack. An
+// inbound HeaderRequestID is reused when it satisfies ValidRequestID; otherwise
+// a new id is minted with NewRequestID.
+//
+// A request matched by WithSkipPaths or WithSkipFunc still gets an id minted,
+// echoed, and threaded, but is served through the raw writer with no recorder,
+// no access-log line, and no metric hook. WithSkipUpgrades removes the record of
+// a request that actually SWITCHED PROTOCOLS (a completed WebSocket handshake),
+// decided from the response instead of predicted from the request, so every
+// refusal on the same route keeps its line; it can only remove a record, never
+// restore one a skip rule dropped.
+//
+// The access-log line and metric hook are emitted from a deferred call, so a
+// handler that panics is still logged (the status shows the recorded value)
+// before the panic continues up the stack to net/http.
 func Logging(opts ...LogOption) Middleware {
 	return func(next http.Handler) http.Handler {
-		return RequestLogger(next, opts...)
+		return requestLogger(next, opts...)
 	}
 }
 
@@ -458,9 +493,7 @@ func Logging(opts ...LogOption) Middleware {
 // per-asset POLICY that already has a home in WithStaticCacheControl. Three
 // consumers had hand-written this exact three-line wrapper — for a
 // state-reporting API, for an SPA's HTML and API responses, and for an /api/
-// subtree whose handlers set no cache directive at all — and the library
-// already set the same value internally at ReadinessHandler without exporting a
-// composable form.
+// subtree whose handlers set no cache directive at all.
 //
 // PLACEMENT AND OVERRIDE ORDERING STAY APP-OWNED, exactly like
 // WithStaticCacheControl's policy hook. The header is set before next runs and

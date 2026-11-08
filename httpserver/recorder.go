@@ -16,6 +16,7 @@ import (
 // deadline, http.ErrNotSupported on an HTTP/2 hijack), so type assertions,
 // http.NewResponseController and the sendfile fast path work through it.
 // Unwrap reaches the rest of the underlying writer, such as its deadlines.
+// The zero StatusRecorder is not usable; build one with NewStatusRecorder.
 type StatusRecorder struct {
 	http.ResponseWriter
 	status       int
@@ -113,7 +114,7 @@ func (s *StatusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // Protocols (the handshake went through this writer, as coder/websocket's
 // WriteHeader(101)-then-Hijack does), or it was hijacked before anything was
 // recorded (the handler wrote the handshake onto the connection itself). It is
-// the FACT behind RequestLogger's WithSkipUpgrades, which owns the policy of
+// the FACT behind Logging's WithSkipUpgrades, which owns the policy of
 // what to do about it; nothing here decides whether such a response is logged.
 func (s *StatusRecorder) switchedProtocol() bool {
 	return s.status == http.StatusSwitchingProtocols || s.hijackedBare

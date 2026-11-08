@@ -41,10 +41,7 @@ import (
 )
 
 func main() {
-	ready := &httpserver.Ready{}
-
 	mux := http.NewServeMux()
-	mux.Handle("GET /readyz", httpserver.ReadinessHandler(ready))
 	mux.HandleFunc("POST /things", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Name string `json:"name"`
@@ -69,7 +66,10 @@ func main() {
 	)
 
 	// Only header reads and idle connections time out, so streams stay open.
+	// Every other http.Server field is a plain assignment.
 	srv := httpserver.New(handler, httpserver.WithSlogErrorLog(slog.LevelError))
+	streams, endStreams := context.WithCancel(context.Background())
+	srv.BaseContext = func(net.Listener) context.Context { return streams }
 
 	// Bind first, so a port already in use fails here.
 	ln, err := net.Listen("tcp", ":8080")
@@ -80,10 +80,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ready.Set(true)
-	if err := httpserver.Run(ctx, srv, ln, func(context.Context) {
-		// application teardown after the drain
-	}, httpserver.WithPreDrain(func(context.Context) { ready.Set(false) })); err != nil {
+	if err := httpserver.Run(ctx, srv, ln,
+		// End long-lived streams so they do not hold the drain open.
+		httpserver.WithPreDrain(func(context.Context) { endStreams() }),
+		httpserver.WithTeardown(func(context.Context) {
+			// close what the handlers used, after the drain
+		}),
+	); err != nil {
 		panic(err)
 	}
 }
@@ -93,12 +96,12 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 
 ## API
 
-- Middleware: `Chain`, `Recoverer`, `SecurityHeaders`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
-- Logging and metrics: `RequestLogger` and its options, request-id helpers, `RouteMetricLabels`, `StatusRecorder`.
-- Trust checks: `ClientIP`, `ResolveClient`, `ParseCIDRs`, `ParseHostList` and `HostPolicy`, `CanonicalHost`, `LoopbackOnly`, `ClassifyBind`, `NewStaticTokenVerifier`.
-- Requests and responses: `WriteJSON`, `WriteError` and `ErrorCode`, `DecodeBody`, `DecodeJSONInto`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `CanonicalRequestPath`.
+- Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
+- Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`), `StatusRecorder` and `NewStatusRecorder`.
+- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy`, `CanonicalHost`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewStaticTokenVerifier`.
+- Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorCode` and `ErrorResponder`, `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler`, `InlineScriptHashes`, `InlineStyleHashes`.
-- Server: `New`, `Run` and its options, `Ready` and `ReadinessHandler`, `AwaitDone`, `CausedByCancellation`.
+- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver).
 
@@ -116,24 +119,24 @@ Behind a proxy, `ClientIP` is safe only when the trusted set holds every proxy h
 
 ## Graceful shutdown
 
-When `ctx` is cancelled, `Run` runs the `WithPreDrain` hook, then `srv.Shutdown` drains in-flight requests, then `onShutdown` runs. All three share one grace budget, 5 seconds unless you set `WithShutdownGrace`. Use the pre-drain hook to mark the instance unready or close long-lived streams, so they do not hold the drain open.
+When `ctx` is cancelled, `Run` runs the `WithPreDrain` hook, then `srv.Shutdown` drains in-flight requests, then the `WithTeardown` hook runs. All three share one grace budget, 5 seconds unless you set `WithShutdownGrace`. Use the pre-drain hook to mark the instance unready or close long-lived streams, so they do not hold the drain open.
 
-When `Serve` returns before `ctx` is cancelled, for example because the listener failed, neither hook runs. Pass `WithServeExit` to run your teardown in that case too. A `Run` error caused by the grace running out wraps `ErrShutdownGraceExpired`. [Server, readiness and shutdown](docs/server.md) has the full sequence.
+When `Serve` returns before `ctx` is cancelled, for example because the listener failed, neither hook runs. Pass `WithServeExit` to run your teardown in that case too. A `Run` error caused by the grace running out wraps `ErrShutdownGraceExpired`. [Server and shutdown](docs/server.md) has the full sequence.
 
 ## Related projects
 
 - [httpclient](https://github.com/cplieger/go/tree/main/httpclient) makes the requests your service sends out survive flaky servers. httpserver handles the requests coming in.
-- [health](https://github.com/cplieger/go/tree/main/health) is the container liveness probe for a Docker `HEALTHCHECK`. `ReadinessHandler` answers a load balancer instead.
+- [health](https://github.com/cplieger/go/tree/main/health) is the container liveness probe for a Docker `HEALTHCHECK`, and its `CheckHandler` answers a load balancer's readiness check.
 - [access](https://github.com/cplieger/access) handles user logins and sessions. `NewStaticTokenVerifier` checks one configured machine credential.
 
 ## Documentation
 
 - [Middleware](docs/middleware.md) covers ordering, recovery, security headers, compression, timeouts, rate limiting and `NoStore`.
-- [Access logging and metrics](docs/access-logging.md) covers request ids, the log line, its bounds and the metric hooks.
+- [Access logging and metrics](docs/access-logging.md) covers request ids, the log line, its bounds and the metric hook.
 - [Client IP, hosts and credentials](docs/trust-checks.md) covers proxy trust, the Host allowlist and loopback checks.
 - [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope, body decoding and path checks.
 - [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, caching and hash-pinned inline scripts.
-- [Server, readiness and shutdown](docs/server.md) covers timeouts, readiness and shutdown order.
+- [Server and shutdown](docs/server.md) covers timeouts and shutdown order.
 
 ## Credits
 
