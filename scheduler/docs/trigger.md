@@ -27,8 +27,9 @@ go func() {
 }()
 ln, err := trigger.Listen("/tmp/myapp.sock") // owner-only, stale file unlinked
 srv := &trigger.Server[payload]{Queue: queue}
-go srv.Serve(ctx, ln) // blocks until ctx ends, then closes ln and waits for the handlers
-// shutdown: when ctx ends, queue.Close(); Execute drains and returns; Serve returns
+served := make(chan error, 1)
+go func() { served <- srv.Serve(ctx, ln) }() // blocks until ctx ends, then closes ln and waits for the handlers
+// shutdown: when ctx ends, queue.Close(); wait for Execute to return; then err := <-served (nil after ctx ended)
 
 // Trigger subcommand: submit one run, wait for its own result.
 // Pass signal.NotifyContext so Ctrl-C unwinds the wait instead of killing

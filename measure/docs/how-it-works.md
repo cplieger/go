@@ -1,6 +1,6 @@
 # How measure works
 
-This page is for a Go developer using measure in a service. It covers each metric type and its methods, the registry, collectors, reading a registry with `Gather`, construction errors, label values, HTTP instrumentation, process metrics, the output format and the low-level writers.
+This page is for a Go developer using measure in a service. It covers each metric type and its methods, the registry, collectors, reading a registry with `Gather`, construction errors, label values, HTTP instrumentation, process metrics and the output format.
 
 ## Metric types
 
@@ -74,7 +74,7 @@ A constructor never panics on an invalid metric name, an invalid, reserved or du
 
 A construction error cannot be cleared. Rebuild the metric with a valid name, label set or buckets.
 
-A metric that carries a construction error records nothing. Its `Inc`, `Add`, `Set` and `Observe` calls do nothing, and the first one logs a warning through `log/slog` that names the metric and the error. If you record through an invalid metric before registering it, the first dropped record still leaves a trace in your logs. The metric never reaches the output, and the low-level writers write nothing for it.
+A metric that carries a construction error records nothing. Its `Inc`, `Add`, `Set` and `Observe` calls do nothing, and the first one logs a warning through `log/slog` that names the metric and the error. If you record through an invalid metric before registering it, the first dropped record still leaves a trace in your logs. The metric never reaches the output.
 
 An invalid registry prefix is captured the same way. Every `Register` and `MustRegister` call on that registry reports it, because no metric under that prefix could have a valid name.
 

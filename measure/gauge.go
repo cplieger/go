@@ -2,7 +2,6 @@ package measure
 
 import (
 	"math"
-	"strings"
 	"sync/atomic"
 )
 
@@ -68,15 +67,6 @@ func (g *Gauge) Dec() { g.Add(-1) }
 // Value returns the current gauge value.
 func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
 
-// writeGauge writes a gauge in Prometheus text format (IR shim). A gauge
-// carrying a construction error writes nothing.
-func writeGauge(b *strings.Builder, g *Gauge) {
-	if g.err != nil {
-		return
-	}
-	appendPrometheus(b, []metricFamily{g.family()})
-}
-
 // LabeledGauge tracks gauges per label combination.
 type LabeledGauge struct {
 	vals   map[labelKey]*atomic.Uint64
@@ -139,15 +129,4 @@ func (lg *LabeledGauge) Delete(labelVals ...string) {
 		return
 	}
 	lg.deleteSeries(lg.vals, lg.labels, labelVals)
-}
-
-// writeLabeledGauge writes a labeled gauge in Prometheus text format (IR
-// shim). A gauge carrying a construction error writes nothing.
-func writeLabeledGauge(b *strings.Builder, lg *LabeledGauge) {
-	if lg.err != nil {
-		return
-	}
-	if f, ok := lg.family(); ok {
-		appendPrometheus(b, []metricFamily{f})
-	}
 }

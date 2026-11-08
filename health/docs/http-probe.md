@@ -34,7 +34,7 @@ The probe checks every URL even after one fails, and writes one stderr line for 
 
 ## What it checks
 
-The probe sends a GET to exactly the URLs you pass, with Go's default HTTP client. It follows redirects, and it passes when the final response has a 2xx status. Any other status, a connection error or the end of the budget is a failure. It has no TCP mode and no setting for other status codes.
+The probe sends a GET to exactly the URLs you pass, with its own HTTP client over Go's default transport. It follows up to ten redirects, stops when the shared deadline passes, and passes when the final response has a 2xx status. Any other status, a connection error or the end of the budget is a failure. It has no TCP mode and no setting for other status codes.
 
 An `https://` URL works too. The probe verifies the server's certificate against the image's system certificates and has no option to skip that check, so the image needs CA certificates. `gcr.io/distroless/static-debian12` includes them.
 

@@ -164,7 +164,7 @@ measure leaves these out on purpose. The [non-goals](docs/non-goals.md) page giv
 
 ## Documentation
 
-- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather`, label values, HTTP instrumentation, process metrics and the low-level writers.
+- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather`, label values, HTTP instrumentation, process metrics and the output format.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 
 ## Credits

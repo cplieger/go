@@ -140,25 +140,35 @@ type Server[P any] struct {
 	Logger *slog.Logger
 
 	// handlers tracks the per-connection goroutines so Serve can wait for
-	// every accepted request to receive its final event. Bounded: every
-	// submitted job is guaranteed a result, and a not-yet-submitted
-	// connection is bounded by requestReadTimeout.
+	// every accepted request to receive its final event. Bounded once the
+	// executor finishes every submitted job, and a not-yet-submitted
+	// connection by requestReadTimeout.
 	handlers sync.WaitGroup
 }
 
 // Serve accepts run requests on ln until ctx is done, then closes ln and
-// waits: it returns once the accept loop has stopped and every accepted
-// request has its final event on the wire. Close the queue when ctx is done
-// too, so a waiting job is delivered its cancellation; the wait is bounded by
-// that guarantee and by the request read and event write timeouts. Serve
-// returns nil after ctx ended, and an error matching net.ErrClosed when ln
-// was closed first.
+// waits for every connection it accepted. It blocks, so start it in its own
+// goroutine and receive its result at shutdown.
+//
+// A connection ends once its job is finished and the final event written, or,
+// for a request not yet submitted, at the request read timeout. The final
+// event is best-effort: a write that fails or passes the event write timeout
+// is logged and the connection closed. Closing the queue finishes no job.
+// The executor does: Execute finishes every job it drains, as cancelled once
+// its context is done, so close the queue and let Execute return before
+// waiting on Serve. A run already in flight holds Serve until it returns.
+//
+// Serve returns nil when ctx ended, and an error matching net.ErrClosed when
+// ln was closed before ctx ended. Call Serve once per Server.
 func (s *Server[P]) Serve(ctx context.Context, ln net.Listener) error {
 	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
 	defer stop()
 	s.serve(ln)
+	// Read before the drain, so a ctx that ends while handlers finish does
+	// not turn a listener closed first into a clean return.
+	ctxEnded := ctx.Err() != nil
 	s.handlers.Wait()
-	if ctx.Err() != nil {
+	if ctxEnded {
 		return nil
 	}
 	return fmt.Errorf("trigger: listener closed before the context ended: %w", net.ErrClosed)

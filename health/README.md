@@ -70,7 +70,7 @@ Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write i
 ## API
 
 - Marker: `NewMarker` with its `WithLogger` option (`MarkerOption`), `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `Healthy` and `Within` methods, with the `Signal` interface.
-- Probe side: `RunProbe` and `Inspect` with the `WithMaxAge` option, with `Lease` to build its deadline, and the `Freshness` and `MarkerState` it reports.
+- Probe side: `RunProbe` and the `WithMaxAge` option, with `Lease` to build its deadline.
 - Reading a marker in-process: `Inspect`, `Freshness` and the `MarkerState` values.
 - Shutdown: `Latch`, `NewLatch`, and the `Set` and `BeginDrain` methods.
 - HTTP endpoint: `CheckHandler` with `Check`, and `Handler` for one signal.

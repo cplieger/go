@@ -140,7 +140,9 @@ func ParseInterval(raw string, def time.Duration, opts ...IntervalOption) Schedu
 	}
 	c := &intervalConfig{name: "interval", logger: slog.Default()}
 	for _, opt := range opts {
-		opt(c)
+		if opt != nil {
+			opt(c)
+		}
 	}
 
 	trimmed := strings.TrimSpace(raw)

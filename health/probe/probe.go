@@ -24,8 +24,9 @@ import (
 const DefaultTimeout = 5 * time.Second
 
 // client sends every probe GET. It is the package's own, not
-// http.DefaultClient, so no other package can change its transport, timeout
-// or redirect policy; its zero Timeout leaves the deadline to the context.
+// http.DefaultClient, so no other package can change its timeout, redirect
+// policy or cookie jar; it sends through http.DefaultTransport. Its zero
+// Timeout leaves the deadline to the context.
 var client = &http.Client{}
 
 // get performs a single liveness GET against target and returns nil when

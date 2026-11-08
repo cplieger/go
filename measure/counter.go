@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"math"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -200,17 +199,6 @@ func (lc *LabeledCounter) Delete(labelVals ...string) {
 	lc.deleteSeries(lc.vals, lc.labels, labelVals)
 }
 
-// writeCounter writes a counter in Prometheus text format. It is a thin shim
-// over the neutral IR (Counter.family) and the Prometheus encoder, retained as
-// part of the package's exported surface. A counter carrying a construction
-// error writes nothing: an invalid metric must never reach the exposition.
-func writeCounter(b *strings.Builder, c *Counter) {
-	if c.err != nil {
-		return
-	}
-	appendPrometheus(b, []metricFamily{c.family()})
-}
-
 // loadOrStore returns the entry for key, creating it with makeV under the
 // write lock when absent. loaded reports whether the entry already existed.
 // The hot loaded-path never reads s.name. Label values carrying invalid UTF-8
@@ -341,15 +329,4 @@ func (s *series) sortedLabelKeys[V any](vals map[labelKey]V) []labelKey {
 // buildLabelString builds a sorted, spec-escaped label string from labels and key.
 func buildLabelString(labels []string, key *labelKey) string {
 	return renderLabels(labelsFor(labels, key))
-}
-
-// writeLabeledCounter writes a labeled counter in Prometheus text format (IR
-// shim). A counter carrying a construction error writes nothing.
-func writeLabeledCounter(b *strings.Builder, lc *LabeledCounter) {
-	if lc.err != nil {
-		return
-	}
-	if f, ok := lc.family(); ok {
-		appendPrometheus(b, []metricFamily{f})
-	}
 }

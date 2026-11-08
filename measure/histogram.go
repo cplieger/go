@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -168,15 +167,6 @@ func (h *Histogram) snapshot() (sum float64, count int64, bucketVals []int64) {
 	return sum, count, bucketVals
 }
 
-// writeHistogram writes a histogram in Prometheus text format (IR shim). A
-// histogram carrying a construction error writes nothing.
-func writeHistogram(b *strings.Builder, h *Histogram) {
-	if h.err != nil {
-		return
-	}
-	appendPrometheus(b, []metricFamily{h.family()})
-}
-
 // LabeledHistogram tracks histograms per label combination.
 type LabeledHistogram struct {
 	vals   map[labelKey]*Histogram
@@ -255,17 +245,6 @@ func (lh *LabeledHistogram) Delete(labelVals ...string) {
 		return
 	}
 	lh.deleteSeries(lh.vals, lh.labels, labelVals)
-}
-
-// writeLabeledHistogram writes all child histograms in Prometheus text format
-// (IR shim). A histogram carrying a construction error writes nothing.
-func writeLabeledHistogram(b *strings.Builder, lh *LabeledHistogram) {
-	if lh.err != nil {
-		return
-	}
-	if f, ok := lh.family(); ok {
-		appendPrometheus(b, []metricFamily{f})
-	}
 }
 
 // Timer measures elapsed time and reports to a Histogram. Build one with

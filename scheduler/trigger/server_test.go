@@ -825,3 +825,65 @@ func (lw *lockedWriter) Write(p []byte) (int, error) {
 	defer lw.mu.Unlock()
 	return lw.w.Write(p)
 }
+
+// TestServe_WaitsForAnInFlightRunsFinalEvent pins why Serve has no separate
+// Wait: after ctx ends and the queue closes, Serve does not return while a
+// run it accepted is still going, and the client reads that run's done event
+// before Serve returns.
+func TestServe_WaitsForAnInFlightRunsFinalEvent(t *testing.T) {
+	sock := testSocketPath(t)
+	ln, err := Listen(sock)
+	if err != nil {
+		t.Fatalf("Listen() = %v", err)
+	}
+	q := NewQueue[testPayload](4)
+	release := make(chan struct{})
+	execDone := startExecutor(q, func(j *Job[testPayload]) {
+		j.Start()
+		<-release
+		j.Finish(Result{OK: true, Duration: time.Millisecond})
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	srv := &Server[testPayload]{Queue: q}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ctx, ln) }()
+
+	dec := rawRequest(t, sock, testPayload{})
+	if ev := nextEvent(t, dec); ev.Kind != EventQueued {
+		t.Fatalf("first event = %q, want %q", ev.Kind, EventQueued)
+	}
+	if ev := nextEvent(t, dec); ev.Kind != EventStarted {
+		t.Fatalf("second event = %q, want %q", ev.Kind, EventStarted)
+	}
+
+	cancel()
+	q.Close()
+	select {
+	case err := <-served:
+		t.Fatalf("Serve returned %v while an accepted run was still in flight", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	gotDone := make(chan Event, 1)
+	go func() {
+		var ev Event
+		if dec.Decode(&ev) == nil {
+			gotDone <- ev
+		}
+		close(gotDone)
+	}()
+	close(release)
+	ev, ok := <-gotDone
+	if !ok || ev.Kind != EventDone || !ev.OK {
+		t.Fatalf("final event = %+v (read %v), want an OK done event", ev, ok)
+	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("Serve after ctx ended = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after the run finished")
+	}
+	<-execDone
+}

@@ -479,7 +479,9 @@ func (f Freshness) Reason() string {
 func Inspect(path string, opts ...ProbeOption) Freshness {
 	var cfg probeConfig
 	for _, o := range opts {
-		o(&cfg)
+		if o != nil {
+			o(&cfg)
+		}
 	}
 	info, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
 	if statErr == nil {

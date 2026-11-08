@@ -4,14 +4,11 @@
 // Construction never panics on an invalid name, label or bucket set: the
 // error is captured into the metric and surfaces at registration, where
 // Register returns it and MustRegister panics. Such a metric records nothing
-// (one warning on the first dropped record) and its Write* function emits
-// nothing. A label-arity mismatch on a record path and a negative Counter.Add
-// panic.
+// (one warning on the first dropped record) and Handler emits nothing for it.
+// A label-arity mismatch on a record path and a negative Counter.Add panic.
 //
-// Finish registration before serving a custom handler built on the Write*
-// functions, which read a metric's name without the registry lock. Registry
-// handlers and record paths are safe concurrently with registration. What is
-// left out by design is listed in the README.
+// Registry handlers and record paths are safe concurrently with
+// registration. What is left out by design is listed in the README.
 package measure
 
 import (

@@ -22,7 +22,7 @@ func main() {
 
 `DefaultPath` is `/tmp/.healthy`. The two processes share nothing but that file, and the library starts no goroutine of its own.
 
-`RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker fails for another reason, and it writes one line to stderr naming the cause. `ProbeCheck` returns the same 0 or 1 without exiting, for tests.
+`RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker fails for another reason, and it writes one line to stderr naming the cause. `Inspect(path, opts...).Healthy()` gives the same verdict as a bool without exiting, for tests, and `Reason` gives the line `RunProbe` writes.
 
 `Set` is safe to call from any goroutine. Each call compares the value with the marker file as it stands, the state the probe reads without `WithMaxAge`: a file is healthy and no file is unhealthy. A change logs at Info level for healthy and at Warn level for unhealthy, and a call that changes nothing stays silent. So a first `Set(false)` at startup with no file logs nothing, and a `Set(false)` that removes a marker another process wrote logs Warn. It logs to the logger you pass with `NewMarker(path, health.WithLogger(l))`, or to `slog.Default()` at the time of each line.
 
