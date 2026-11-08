@@ -103,9 +103,12 @@ func Join(parts ...string) string {
 	return hashParts(parts)
 }
 
-// Split recovers the exact components [Join] encoded: Split(Join(parts...))
-// equals parts and Join(Split(key)) equals key for every in-bound key. It
-// checks no length, so an over-bound key Join would have hashed still splits.
+// Split recovers the exact components [Join] encoded: for every key Join
+// returned that is not a hashed identity, Split(key) gives back the parts and
+// Join of those parts gives back key. An in-bound set Join hashed because its
+// escaped form would begin with "sha256:" is a hashed identity too (see
+// Join). Split checks no length, so an over-bound key Join would have hashed
+// still splits.
 // A hashed identity is [ErrHashed]; any other "sha256:"-prefixed key is
 // [ErrMalformed], since Join emits no raw key with that prefix. An escape
 // before a non-reserved character, or a trailing dangling escape, is

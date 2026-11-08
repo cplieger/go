@@ -30,7 +30,9 @@ func (*noCopy) Unlock() {}
 // must materialize. The two are complements, not alternatives.
 //
 // Use one Budget per document, threaded through the decoders that charge it.
-// Create it with NewBudget or DefaultBudget: the caps are immutable afterwards,
+// Create it with NewBudget or DefaultBudget. The zero Budget is not one of
+// those: it has no allowance and rejects every non-empty charge. The caps are
+// immutable once built,
 // so a document cannot be part-way through its allowance when the allowance
 // changes. Copying a Budget would fork its running total, leaving two copies each
 // believing they hold the whole allowance, so a copy is a vet error. It is not
@@ -48,30 +50,48 @@ type Budget struct {
 	total    int
 }
 
-// NewBudget returns a Budget bounding one document to maxFieldBytes per decoded
-// value and maxTotalBytes of decoded text overall. Both must be positive: a
-// non-positive cap is a configuration mistake (ErrInvalidLimits), never read as
-// unbounded.
+// BudgetLimits are a Budget's two caps, named so that a call site cannot pass
+// one in the other's place. A zero field takes its DefaultBudget value, as a
+// zero Limits field does, and a negative one is a configuration mistake
+// (ErrInvalidLimits). Neither is ever read as unbounded.
+type BudgetLimits struct {
+	// MaxFieldBytes caps one decoded value.
+	MaxFieldBytes int
+	// MaxTotalBytes caps the decoded text the whole document may retain.
+	MaxTotalBytes int
+}
+
+// Default Budget caps: 4 KiB per decoded value, 4 MiB of decoded text per
+// document.
+const (
+	defaultMaxFieldBytes = 4 << 10
+	defaultMaxTotalBytes = 4 << 20
+)
+
+// NewBudget returns a Budget bounding one document to lim.MaxFieldBytes per
+// decoded value and lim.MaxTotalBytes of decoded text overall.
 //
-// Size maxTotalBytes from what the caller is willing to HOLD, which is usually
+// Size MaxTotalBytes from what the caller is willing to HOLD, which is usually
 // far below the transport cap. A consumer parsing a catalogue-scale document
 // sets it at that document's real ceiling; the DefaultBudget values are for a
 // small structured document and will reject a multi-megabyte payload.
-func NewBudget(maxFieldBytes, maxTotalBytes int) (*Budget, error) {
-	if err := requirePositive("maxFieldBytes", maxFieldBytes); err != nil {
+func NewBudget(lim BudgetLimits) (*Budget, error) {
+	maxField, err := orDefault("BudgetLimits.MaxFieldBytes", lim.MaxFieldBytes, defaultMaxFieldBytes)
+	if err != nil {
 		return nil, err
 	}
-	if err := requirePositive("maxTotalBytes", maxTotalBytes); err != nil {
+	maxTotal, err := orDefault("BudgetLimits.MaxTotalBytes", lim.MaxTotalBytes, defaultMaxTotalBytes)
+	if err != nil {
 		return nil, err
 	}
-	return &Budget{maxField: maxFieldBytes, maxTotal: maxTotalBytes}, nil
+	return &Budget{maxField: maxField, maxTotal: maxTotal}, nil
 }
 
 // DefaultBudget returns the decode-time counterpart of DefaultLimits: 4 KiB per
 // decoded value, 4 MiB of decoded text per document. The gap between this and
 // DefaultLimits.MaxTextRunBytes is entity-expansion headroom (see that field).
 func DefaultBudget() *Budget {
-	return &Budget{maxField: 4 << 10, maxTotal: 4 << 20}
+	return &Budget{maxField: defaultMaxFieldBytes, maxTotal: defaultMaxTotalBytes}
 }
 
 // MaxFieldBytes reports the per-value cap this Budget was built with.

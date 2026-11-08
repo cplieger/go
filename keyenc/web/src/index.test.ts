@@ -11,7 +11,7 @@ import {
   MAX_COMPONENT_BYTES,
   SEPARATOR,
   split,
-} from "./keyenc.js";
+} from "./index.js";
 import { Sha256 } from "./sha256.js";
 
 interface ConformanceCase {
@@ -176,6 +176,41 @@ describe("the size bound counts UTF-8 bytes per length class", () => {
     // TextEncoder uses for the replacement character.
     expect(isHashed(join("🔑".repeat(MAX_COMPONENT_BYTES / 4)))).toBe(false);
     expect(isHashed(join("🔑".repeat(MAX_COMPONENT_BYTES / 4 + 1)))).toBe(true);
+  });
+});
+
+describe("a lone surrogate is hashed losslessly", () => {
+  // TextEncoder turns a lone surrogate into U+FFFD, so hashing through it would
+  // give "\uD800" and "\uFFFD" one digest and let either forge the other's
+  // key. The component is hashed as its WTF-8 bytes instead, the bytes the Go
+  // half hashes for a string holding them; the digests below are Go's.
+  const pad = "x".repeat(MAX_COMPONENT_BYTES);
+
+  it("keeps a lone surrogate apart from the replacement character", () => {
+    expect(join("\uD800" + pad, "b")).not.toBe(join("\uFFFD" + pad, "b"));
+    expect(join("\uD800" + pad, "b")).not.toBe(join("\uDC00" + pad, "b"));
+  });
+
+  it("hashes the WTF-8 bytes the Go half hashes", () => {
+    expect(join("\uD800" + pad, "b")).toBe(
+      "sha256:42323e79739940b6156389194deeefa46bd297d9189f51ef7fb43e783efebec0",
+    );
+    expect(join("a\uDFFF" + pad)).toBe(
+      "sha256:ab76a459aea8bab60e7cba5b034793dc7aaaa403c086d9152c0fce14cba1a0dd",
+    );
+    expect(join("\uFFFD" + pad, "b")).toBe(
+      "sha256:a6805fa8685bbe4ad4703bdfd67aae1214fb31a26adc96ae0a2b1c31813793ce",
+    );
+  });
+
+  it("encodes a well-formed string around a lone surrogate unchanged", () => {
+    // An astral pair, a 2-byte and a 3-byte code point beside the surrogate
+    // take the manual path and must give their ordinary UTF-8 bytes, which the
+    // Go digest of the same bytes pins.
+    const mixed = "\u00e9\u3042\u{1F511}\uD800";
+    expect(join(mixed + pad)).toBe(
+      "sha256:e47d9794f1377087c07d0279d9d4cfb1f91596529a6d94a01b9a5a2199b1674b",
+    );
   });
 });
 

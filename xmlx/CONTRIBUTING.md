@@ -4,8 +4,8 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 ## Rules
 
-A new `Limits` field also needs a draw in `limitsGen` and in the `loose` literal of `prop_test.go`. Left out of `limitsGen`, every drawn `Limits` fails validation, so `TestPropPreflightMonotoneInLimits` passes without checking anything.
+A new `Limits` or `BudgetLimits` field takes its default at zero, so `resolve` or `NewBudget` needs its default and its `ConfigError` name. A new `Limits` field also needs a draw in `limitsGen` and in the `loose` literal of `prop_test.go`, from 1 up, since 0 means the default. Left out of `limitsGen`, the field sits at its default in every draw, so `TestPropPreflightMonotoneInLimits` never varies it.
 
 ## Releases
 
-A new `Limits` field whose zero value is rejected is a breaking change and takes `feat!:`. A caller that builds `Limits` with named fields still compiles, then gets `ErrInvalidLimits` from `Preflight` for the field it never set.
+A caller's `Limits` or `BudgetLimits` literal leaves a new bound at zero, so the bound is not a breaking change only when its zero value rejects no document that some existing value of that type accepts, including one that raised other bounds. In practice its zero value either resolves from the existing field it overlaps (a per-tag namespace bound whose zero means the caller's `MaxTagAttrs`) or sits above anything the existing fields can admit. Any other default is a breaking change and takes `feat!:`.

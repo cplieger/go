@@ -12,7 +12,7 @@ import (
 // newBudget builds a Budget for a test, failing on a configuration mistake.
 func newBudget(t *testing.T, maxField, maxTotal int) *xmlx.Budget {
 	t.Helper()
-	b, err := xmlx.NewBudget(maxField, maxTotal)
+	b, err := xmlx.NewBudget(xmlx.BudgetLimits{MaxFieldBytes: maxField, MaxTotalBytes: maxTotal})
 	if err != nil {
 		t.Fatalf("NewBudget(%d, %d): %v", maxField, maxTotal, err)
 	}
@@ -23,7 +23,7 @@ func newBudget(t *testing.T, maxField, maxTotal int) *xmlx.Budget {
 // properties), panicking on a configuration mistake because those callers pass
 // constants.
 func mustBudget(maxField, maxTotal int) *xmlx.Budget {
-	b, err := xmlx.NewBudget(maxField, maxTotal)
+	b, err := xmlx.NewBudget(xmlx.BudgetLimits{MaxFieldBytes: maxField, MaxTotalBytes: maxTotal})
 	if err != nil {
 		panic(err)
 	}
@@ -436,26 +436,26 @@ func TestBudgetDecodeTextSkipsNestedMarkupWhole(t *testing.T) {
 	}
 }
 
-// TestNewBudgetRefusesNonPositiveCaps pins the fail-closed configuration
-// contract: a bounds type that accepted a zero cap would bound nothing, so the
-// constructor refuses rather than handing back something that silently allows
-// everything. The parameter name is in the error because a caller staring at one
-// is looking for which argument they got wrong.
-func TestNewBudgetRefusesNonPositiveCaps(t *testing.T) {
+// TestNewBudgetRefusesNegativeCaps pins the fail-closed configuration
+// contract: a negative cap is a caller mistake, so the constructor refuses
+// rather than handing back something that bounds nothing. The field name is in
+// the error because a caller staring at one is looking for which cap they got
+// wrong.
+func TestNewBudgetRefusesNegativeCaps(t *testing.T) {
 	t.Parallel()
-	tests := map[string]struct{ field, total int }{
-		"maxFieldBytes": {field: 0, total: 10},
-		"maxTotalBytes": {field: 10, total: -1},
+	tests := map[string]xmlx.BudgetLimits{
+		"BudgetLimits.MaxFieldBytes": {MaxFieldBytes: -1, MaxTotalBytes: 10},
+		"BudgetLimits.MaxTotalBytes": {MaxFieldBytes: 10, MaxTotalBytes: -1},
 	}
-	for param, tt := range tests {
+	for param, lim := range tests {
 		t.Run(param, func(t *testing.T) {
 			t.Parallel()
-			b, err := xmlx.NewBudget(tt.field, tt.total)
+			b, err := xmlx.NewBudget(lim)
 			if b != nil {
 				t.Error("NewBudget returned a Budget alongside an error")
 			}
 			if !errors.Is(err, xmlx.ErrInvalidLimits) {
-				t.Fatalf("NewBudget(%d, %d) = %v, want ErrInvalidLimits", tt.field, tt.total, err)
+				t.Fatalf("NewBudget(%+v) = %v, want ErrInvalidLimits", lim, err)
 			}
 			if errors.Is(err, xmlx.ErrLimit) {
 				t.Error("a configuration mistake reported as ErrLimit: the caller would blame the document")
@@ -586,5 +586,43 @@ func TestBudgetDecodeTextStopsAtTheChunkThatCrossesACap(t *testing.T) {
 	}
 	if b.Total() != 0 {
 		t.Errorf("Total() = %d after the rejection, want 0: a refused value charges nothing", b.Total())
+	}
+}
+
+// TestNewBudgetZeroCapTakesItsDefault pins that a zero cap is bounded: it
+// takes DefaultBudget's value, never unbounded, so a BudgetLimits literal that
+// sets one cap keeps the other bounded.
+func TestNewBudgetZeroCapTakesItsDefault(t *testing.T) {
+	t.Parallel()
+	def := xmlx.DefaultBudget()
+	for _, tc := range []struct {
+		lim                  xmlx.BudgetLimits
+		wantField, wantTotal int
+	}{
+		{xmlx.BudgetLimits{}, def.MaxFieldBytes(), def.MaxTotalBytes()},
+		{xmlx.BudgetLimits{MaxFieldBytes: 7}, 7, def.MaxTotalBytes()},
+		{xmlx.BudgetLimits{MaxTotalBytes: 9}, def.MaxFieldBytes(), 9},
+	} {
+		b, err := xmlx.NewBudget(tc.lim)
+		if err != nil {
+			t.Fatalf("NewBudget(%+v) = %v, want a Budget", tc.lim, err)
+		}
+		if b.MaxFieldBytes() != tc.wantField || b.MaxTotalBytes() != tc.wantTotal {
+			t.Errorf("NewBudget(%+v) caps = (%d, %d), want (%d, %d)",
+				tc.lim, b.MaxFieldBytes(), b.MaxTotalBytes(), tc.wantField, tc.wantTotal)
+		}
+	}
+}
+
+// TestZeroBudgetRejectsEveryNonEmptyCharge pins the zero Budget's documented
+// behaviour: it has no allowance, so it is never mistaken for a working one.
+func TestZeroBudgetRejectsEveryNonEmptyCharge(t *testing.T) {
+	t.Parallel()
+	var b xmlx.Budget
+	if err := b.Charge("x"); !errors.Is(err, xmlx.ErrLimit) {
+		t.Errorf("zero Budget Charge(%q) = %v, want ErrLimit", "x", err)
+	}
+	if err := b.Charge(""); err != nil {
+		t.Errorf("zero Budget Charge(\"\") = %v, want nil", err)
 	}
 }

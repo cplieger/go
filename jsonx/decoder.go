@@ -31,17 +31,14 @@ var (
 	ErrDuplicateKey = errors.New("jsonx: duplicate object key")
 )
 
-// MaxDepth is the nesting ceiling every walk in this package observes: at most
-// MaxDepth containers open at once. encoding/json enforces this since Go 1.27
-// (its jsontext Decoder refuses to read the token that would open container
-// MaxDepth+1) and surfaces it as *json.SyntaxError; this package does not
-// translate it, because jsontext's own depth error is unexported and its
-// documented contents are subject to change. The constant exists only because
-// the stdlib does not export the threshold. Do not lower it to compensate for
-// a local check: TestPreflightDepthMatchesUnmarshal pins that Preflight's
-// depth acceptance set is exactly json.Unmarshal's, and a lower MaxDepth would
-// make Preflight reject a body Unmarshal accepts.
-const MaxDepth = 10000
+// Nesting depth is encoding/json's to bound, not this package's: since Go
+// 1.27 its jsontext Decoder refuses to read the token that would open
+// container 10001 and surfaces that as *json.SyntaxError, which this package
+// does not translate, because jsontext's own depth error is unexported and
+// its documented contents are subject to change. The package holds no depth
+// constant, since the value is the standard library's and a later Go may move
+// it; it promises only that its walks accept exactly the depth json.Unmarshal
+// does, which TestPreflightDepthMatchesUnmarshal pins.
 
 // maxKeySnippet bounds the untrusted key text a duplicate-key error renders,
 // so an oversized upstream key cannot balloon an error string or a log line.
@@ -66,16 +63,28 @@ type Decoder struct {
 // entry decoded through Map is charged against the budget, whichever
 // container it belongs to, so deeply nested or repeated containers cannot
 // multiply a per-container cap. elementBudget <= 0 means no aggregate budget
-// (per-container caps still apply).
+// (per-container caps still apply). A caller carrying one budget across
+// several bodies uses Next rather than passing a remainder here, since a
+// remainder of 0 would read as no budget at all.
 func NewDecoder(r io.Reader, elementBudget int) *Decoder {
 	dec := json.NewDecoder(r)
 	dec.UseNumber()
 	return &Decoder{dec: dec, limit: elementBudget}
 }
 
+// Next returns a Decoder reading from r under d's budget, with everything d
+// has charged already spent, so a caller paginating across several bodies
+// bounds the whole walk by one budget. Once the budget is spent, the first
+// element the new Decoder reaches fails with ErrElementBudget. d itself is
+// not changed, and the two Decoders share nothing but the starting count.
+func (d *Decoder) Next(r io.Reader) *Decoder {
+	next := NewDecoder(r, d.limit)
+	next.elements = d.elements
+	return next
+}
+
 // Elements reports how many array elements and map entries have been charged
-// against the budget so far, so a caller paginating across multiple bodies can
-// carry one budget across Decoders.
+// against the budget so far, counting what a Decoder built by Next inherited.
 func (d *Decoder) Elements() int { return d.elements }
 
 // More reports whether the current array or object has another element,
@@ -83,7 +92,9 @@ func (d *Decoder) Elements() int { return d.elements }
 func (d *Decoder) More() bool { return d.dec.More() }
 
 // Decode decodes the next value via json.Decoder.Decode, giving
-// stdlib-identical handling for scalar and leaf values.
+// stdlib-identical handling for scalar and leaf values, except that a number
+// decoded into an untyped any is a json.Number rather than a float64: the
+// Decoder calls UseNumber, so a large id is never rounded.
 func (d *Decoder) Decode(v any) error { return d.dec.Decode(v) }
 
 // count charges one decoded array element or map entry against the aggregate
@@ -108,9 +119,29 @@ func (d *Decoder) Open(delim json.Delim) (ok bool, err error) {
 		return false, nil
 	}
 	if got, isDelim := t.(json.Delim); !isDelim || got != delim {
-		return false, fmt.Errorf("expected %q, got %v", delim, t)
+		return false, fmt.Errorf("jsonx: expected %q, got %s", rune(delim), tokenKind(t))
 	}
 	return true, nil
+}
+
+// tokenKind names a token by its kind and never by its content, so a shape
+// mismatch error quotes no document bytes: a wire string can be any length
+// and carry any control byte.
+func tokenKind(t json.Token) string {
+	switch v := t.(type) {
+	case json.Delim:
+		return fmt.Sprintf("%q", rune(v))
+	case string:
+		return "a string"
+	case json.Number:
+		return "a number"
+	case bool:
+		return "a boolean"
+	case nil:
+		return "null"
+	default:
+		return fmt.Sprintf("a %T", t)
+	}
 }
 
 // Close consumes a container's closing delimiter (the token json.Decoder
@@ -128,7 +159,7 @@ func (d *Decoder) Key() (string, error) {
 	}
 	s, isString := t.(string)
 	if !isString {
-		return "", fmt.Errorf("expected object key, got %v", t)
+		return "", fmt.Errorf("jsonx: expected an object key, got %s", tokenKind(t))
 	}
 	return s, nil
 }
@@ -189,9 +220,9 @@ func (d *Decoder) Object(field func(key string) error) error {
 func (d *Decoder) End() error {
 	if _, err := d.dec.Token(); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return fmt.Errorf("trailing data after top-level value: %w", err)
+			return fmt.Errorf("jsonx: trailing data after top-level value: %w", err)
 		}
-		return errors.New("trailing data after top-level value")
+		return errors.New("jsonx: trailing data after top-level value")
 	}
 	return nil
 }
@@ -210,23 +241,39 @@ func (d *Decoder) End() error {
 // error (Unmarshal's null-into-slice); `[]` yields an empty non-nil slice.
 // Pass maxElems <= 0 for no per-array cap (the aggregate budget still
 // applies).
+//
+// On error the returned slice holds the elements decoded so far, as Map's
+// map does: prior unchanged when the value is not an array at all, otherwise
+// the first elements up to the one that failed. Elements decode in place into
+// prior's backing array while it has capacity, as json.Unmarshal regrows a
+// slice, so prior's own elements show what was decoded into them. When
+// decodeElem fails at an index within prior's length, that element holds
+// whatever decodeElem wrote before failing: the previous value if it wrote
+// nothing, a partial one if it wrote some. Array's own cap and budget checks
+// run before decodeElem, so they leave that element as it was. The error,
+// not the slice, is the result.
 func (d *Decoder) Array[T any](prior []T, maxElems int, what string, decodeElem func(*T) error) ([]T, error) {
 	ok, err := d.Open('[')
-	if err != nil || !ok {
-		return nil, err
+	if err != nil {
+		// Nothing was consumed into the slice, so the caller's own value
+		// stands, as Map leaves its map.
+		return prior, err
+	}
+	if !ok {
+		return nil, nil
 	}
 	s := prior
 	n := 0
 	for d.dec.More() {
 		if maxElems > 0 && n >= maxElems {
-			return nil, fmt.Errorf("%s: %w: %d", what, ErrArrayCap, maxElems)
+			return s[:n], fmt.Errorf("%s: %w: %d", what, ErrArrayCap, maxElems)
 		}
 		if err := d.count(); err != nil {
-			return nil, err
+			return s[:n], err
 		}
 		s = growForIndex(s, n)
 		if err := decodeElem(&s[n]); err != nil {
-			return nil, err
+			return s[:n], err
 		}
 		n++
 	}
@@ -333,14 +380,15 @@ func (d *Decoder) Map[V any](prior map[string]V, maxEntries int, what string, de
 	return m, d.Close()
 }
 
-// Preflight walks one complete JSON value from r, decoding nothing. It rejects
-// the first repeated object key, matched case-insensitively as encoding/json
-// matches fields, with ErrDuplicateKey, and rejects trailing data after the
-// value. It checks structure only, so an accepted body can still fail the
-// decode, and it judges neither content nor UTF-8 validity. Depth is bounded by
-// MaxDepth. It takes no caps: its cost is linear in the body, so the caller's
-// body cap bounds it (a Decoder caps elements as it builds them). It takes an
-// io.Reader because it runs on encoding/json's tokenizer.
+// Preflight bounds no size or count; a Decoder does that. It walks one
+// complete JSON value from r, decoding nothing, and rejects the first
+// repeated object key, matched case-insensitively as encoding/json matches
+// fields, with ErrDuplicateKey, and trailing data after the value. It checks
+// structure only, so an accepted body can still fail the decode, and it judges
+// neither content nor UTF-8 validity. It accepts exactly the nesting depth
+// json.Unmarshal accepts. Its cost is linear in the body, so the caller's body
+// cap bounds it. It takes an io.Reader because it runs on encoding/json's
+// tokenizer.
 func Preflight(r io.Reader) error {
 	d := NewDecoder(r, 0)
 	if err := d.preflightValue(); err != nil {
@@ -351,10 +399,10 @@ func Preflight(r io.Reader) error {
 
 // preflightValue consumes exactly one JSON value, recursing into objects and
 // arrays. A scalar is consumed by the leading Token call; a container is
-// closed by the trailing one. The recursion is bounded by MaxDepth without a
-// check here: encoding/json refuses to read the token that opens container
-// MaxDepth+1, so the Token call below fails before the frame that would
-// exceed it is entered.
+// closed by the trailing one. The recursion is bounded by encoding/json's
+// nesting ceiling without a check here: it refuses to read the token that
+// opens one container too many, so the Token call below fails before the
+// frame that would exceed it is entered.
 func (d *Decoder) preflightValue() error {
 	t, err := d.dec.Token()
 	if err != nil {
@@ -385,7 +433,7 @@ func (d *Decoder) preflightContainer(delim json.Delim) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unexpected JSON delimiter %q", delim)
+		return fmt.Errorf("jsonx: unexpected JSON delimiter %q", rune(delim))
 	}
 }
 

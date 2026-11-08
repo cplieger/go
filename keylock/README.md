@@ -60,7 +60,7 @@ The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/
 
 ## Contributing
 
-Issues and pull requests are welcome. The [shared contributing rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md) apply.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 

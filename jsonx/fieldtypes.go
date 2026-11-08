@@ -24,15 +24,15 @@ func unmarshalInt64[T ~int64](v *T, data []byte, p Policy) error {
 	return nil
 }
 
-// TolerantInt decodes a number-or-string integer field under the
+// TolerantZeroInt decodes a number-or-string integer field under the
 // TolerantZero policy: odd shapes and invalid values become 0, integral
 // float forms are accepted, and only a malformed JSON string errors.
-type TolerantInt int64
+type TolerantZeroInt int64
 
-var _ json.Unmarshaler = (*TolerantInt)(nil)
+var _ json.Unmarshaler = (*TolerantZeroInt)(nil)
 
 // UnmarshalJSON implements json.Unmarshaler under TolerantZero.
-func (v *TolerantInt) UnmarshalJSON(data []byte) error {
+func (v *TolerantZeroInt) UnmarshalJSON(data []byte) error {
 	return unmarshalInt64(v, data, TolerantZero())
 }
 

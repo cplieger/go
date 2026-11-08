@@ -97,12 +97,12 @@ if err := jsonx.Preflight(bytes.NewReader(body)); err != nil {
 
 ## API
 
-- `NewDecoder(r, elementBudget)` starts a walk over one JSON value. A budget of zero or less turns the aggregate bound off, so pass a real one. A `Decoder` is not safe for concurrent use.
+- `NewDecoder(r, elementBudget)` starts a walk over one JSON value. A budget of zero or less turns the aggregate bound off, so pass a real one. `Next(r)` continues the same budget over the next body of a paginated response. A `Decoder` is not safe for concurrent use.
 - `Array`, `Map` and `Object` decode a slice, a Go map and a struct-shaped object with `json.Unmarshal`'s null, empty and repeated-key handling.
 - `Decode` reads one value through `json.Decoder.Decode`, outside the caps and the budget. Decode a nested array or map through `Array` or `Map` to bound it. `Skip` discards an unknown field without building it.
 - `Open`, `More`, `Key`, `Close`, `End` and `Elements` are the lower-level walk, for shapes the helpers do not cover.
 - `Preflight` rejects a body that repeats an object key.
-- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`. `MaxDepth` is the nesting ceiling of 10000 that `encoding/json` enforces.
+- `ErrElementBudget`, `ErrArrayCap`, `ErrMapCap` and `ErrDuplicateKey` match with `errors.Is`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/jsonx).
 
@@ -115,7 +115,7 @@ A schema decoder built from these calls returns what `json.Unmarshal` would retu
 - Matching keys with `strings.EqualFold` gives `json.Unmarshal`'s case-insensitive field matching.
 - The decoder runs with `UseNumber`, so skipping a field never rejects a valid number such as `1e1000`. Decoding into an untyped `any` gives a `json.Number`.
 - The walk is never looser than the standard library. A fuzz test asserts that it rejects every body `json.Unmarshal` rejects.
-- `encoding/json` itself bounds nesting at `MaxDepth` for every walk, `Preflight` included.
+- `encoding/json` itself bounds nesting for every walk, `Preflight` included, and the walk accepts exactly the depth `json.Unmarshal` does.
 - A repeated-key error quotes at most 64 bytes of the key, so a hostile key cannot fill a log line.
 
 [How capped decoding works](capped-decoding-internals.md) covers each rule and the measured cost.

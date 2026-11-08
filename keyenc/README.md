@@ -90,7 +90,7 @@ The bytes change only where the plain form was already ambiguous. A key of one e
 
 ## Go and TypeScript build the same keys
 
-Both halves give identical keys for identical input, so a key built in one language can be looked up among keys built in the other. A shared fixture, `conformance/keys.json`, is generated from the Go half and checked by the TypeScript tests. Both count the size limit in UTF-8 bytes, so a key with multibyte text switches to a digest at the same point in each language. The TypeScript half computes SHA-256 in its own code, with no Web Crypto or `node:crypto`, so `join` stays synchronous. [How keyenc encodes a key](docs/how-it-works.md#go-and-typescript-agree) lists the details a reimplementation must match.
+Both halves give identical keys for identical valid UTF-8 input, so a key built in one language can be looked up among keys built in the other. A shared fixture, `conformance/keys.json`, is generated from the Go half and checked by the TypeScript tests. Both count the size limit in UTF-8 bytes, so a key with multibyte text switches to a digest at the same point in each language. The TypeScript half computes SHA-256 in its own code, with no Web Crypto or `node:crypto`, so `join` stays synchronous. [How keyenc encodes a key](docs/how-it-works.md#go-and-typescript-agree) lists the details a reimplementation must match.
 
 ## Unsupported by design
 

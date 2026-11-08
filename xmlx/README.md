@@ -13,7 +13,7 @@ xmlx is built for Go code that decodes XML it did not write, such as an RSS or A
 - `Preflight` scans the raw bytes once, with no allocation, and refuses an oversized text run or tag, too many attributes, elements or nesting levels, and any XML directive such as a DOCTYPE.
 - A `Budget` caps each decoded value and the document's total decoded text while the value is still being read.
 - Every rejection wraps one sentinel, `ErrLimit`, and names the bound. A `Preflight` rejection also gives the byte offset. No rejection quotes the document.
-- A bound of zero or less is a configuration error, so no setting silently means unbounded.
+- No setting means unbounded: a bound left at zero takes its default, and a negative one is a configuration error.
 
 Consider [mattermost/xml-roundtrip-validator](https://github.com/mattermost/xml-roundtrip-validator) if your security depends on the document's shape, such as XML signature validation or SAML. It rejects input that does not survive an `encoding/xml` round trip, and it pairs with `Preflight`.
 
@@ -41,7 +41,7 @@ if err := xml.Unmarshal(body, &doc); err != nil {
 With plain `xml.Unmarshal`, `Preflight` is the whole gate. A `Budget` works where you read tokens yourself, in a hand-written decoder or an `UnmarshalXML` method. Create one `Budget` per document and read each text field through it. `DecodeText` replaces `d.DecodeElement(&s, &start)` and refuses the value as soon as it grows past either cap:
 
 ```go
-budget, err := xmlx.NewBudget(4<<10, 4<<20) // per value, per document
+budget, err := xmlx.NewBudget(xmlx.BudgetLimits{MaxFieldBytes: 4 << 10, MaxTotalBytes: 4 << 20})
 if err != nil {
 	return err
 }
@@ -81,10 +81,10 @@ The package examples on pkg.go.dev show the gate, a rejection, a refused directi
 
 ## API
 
-- `Preflight` is the raw-byte gate, and `Limits` with `DefaultLimits` holds its five bounds.
-- `NewBudget` and `DefaultBudget` create the decode-time text accounting for one document, with `DecodeText`, `Charge`, `Total`, `Remaining`, `MaxFieldBytes` and `MaxTotalBytes`.
+- `Preflight` is the raw-byte gate, and `Limits` with `DefaultLimits` holds its five bounds. A zero field takes its `DefaultLimits` value.
+- `NewBudget` with `BudgetLimits`, and `DefaultBudget`, create the decode-time text accounting for one document, with `DecodeText`, `Charge`, `Total`, `Remaining`, `MaxFieldBytes` and `MaxTotalBytes`.
 - `LimitError`, `Kind` and `ErrLimit` describe a rejection. Match the class with `errors.Is(err, xmlx.ErrLimit)` and read `Kind`, `Limit` and `Offset` with `errors.AsType[*xmlx.LimitError](err)`.
-- `ConfigError` and `ErrInvalidLimits` report a bound set to zero or less. That is a setup mistake, and it never wraps `ErrLimit`.
+- `ConfigError` and `ErrInvalidLimits` report a negative bound. That is a setup mistake, and it never wraps `ErrLimit`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/xmlx).
 

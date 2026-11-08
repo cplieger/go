@@ -34,7 +34,7 @@ import { isHashed, join, split } from "@cplieger/keyenc";
 
 const key = join("streams", userID, ratingKey, audioID, subID);
 
-// Split is join's exact inverse, for a key that gets parsed again.
+// split inverts every key join did not hash, for a key that gets parsed again.
 const [kind, host] = split(forgeID);
 
 // Above MAX_COMPONENT_BYTES a key becomes a fixed-size digest, which is

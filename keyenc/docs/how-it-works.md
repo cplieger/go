@@ -27,7 +27,7 @@ Two cases do not follow the plain escaped join:
 
 ## Reading a key back
 
-For a field list under the size limit, `Split(Join(fields...))` returns `fields`, except for the single empty field above. For a key under the limit that `Split` accepts, `Join(Split(key)...)` returns `key`. `Split` does not repair a key it cannot read:
+For a key `Join` returned that is not a hashed identity, `Split(key)` returns the fields it was built from. Two in-bound field lists are hashed and so cannot be read back: the single empty field above, and a list whose escaped join would begin with `sha256:`. For a key under the limit that `Split` accepts, `Join(Split(key)...)` returns `key`. `Split` does not repair a key it cannot read:
 
 - It returns `ErrMalformed` when an escape comes before a character other than `:` or `\`, or when the key ends in a lone `\`. `Join` never writes either.
 - It returns `ErrHashed` for a digest, `sha256:` followed by 64 lowercase hex characters, because a digest holds no fields. Any other key that starts with `sha256:` returns `ErrMalformed`, because `Join` never writes one.
@@ -62,6 +62,7 @@ The two halves give identical keys for identical valid UTF-8 input. `conformance
 
 - The size limit counts UTF-8 bytes, not UTF-16 code units. JavaScript's `String.length` crosses the limit at a different point for multibyte text. The fixture has a case that is under the limit in code units and over it in bytes.
 - The digest uses the 8-byte big-endian length prefix per field described above. The fixture has a hashed case with two fields.
+- The TypeScript half counts a lone surrogate as 3 bytes and hashes it as its WTF-8 bytes, which are the bytes Go hashes for a string holding that sequence, so it never shares a digest with U+FFFD. Known-answer tests in `web/src/index.test.ts` pin those digests against the Go half; the fixture holds valid UTF-8 only.
 
 The TypeScript half computes SHA-256 itself, because `crypto.subtle.digest` is asynchronous and `join` returns its key synchronously.
 

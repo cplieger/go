@@ -106,8 +106,8 @@ func TestKindStringNamesEveryBound(t *testing.T) {
 // unset and what they set it to.
 func TestConfigErrorNamesTheField(t *testing.T) {
 	t.Parallel()
-	err := &xmlx.ConfigError{Field: "Limits.MaxDepth", Value: 0}
-	if got, want := err.Error(), "xmlx: Limits.MaxDepth must be positive, got 0"; got != want {
+	err := &xmlx.ConfigError{Field: "Limits.MaxDepth", Value: -1}
+	if got, want := err.Error(), "xmlx: Limits.MaxDepth must not be negative, got -1"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
 	if !errors.Is(err, xmlx.ErrInvalidLimits) {
@@ -116,7 +116,7 @@ func TestConfigErrorNamesTheField(t *testing.T) {
 	if errors.Is(err, xmlx.ErrLimit) {
 		t.Error("matches ErrLimit: a caller mistake would read as a document rejection")
 	}
-	if got := fmt.Sprintf("%v", &xmlx.ConfigError{Field: "Budget.MaxTotalBytes", Value: -3}); !strings.Contains(got, "-3") {
+	if got := fmt.Sprintf("%v", &xmlx.ConfigError{Field: "BudgetLimits.MaxTotalBytes", Value: -3}); !strings.Contains(got, "-3") {
 		t.Errorf("Error() = %q, want the offending value included", got)
 	}
 }

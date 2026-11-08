@@ -42,7 +42,7 @@ const (
 	// number. The string grammar is deliberately looser than JSON's own
 	// number grammar - a leading '+' and leading zeros are accepted -
 	// because quoted numbers are exactly where upstream serializers emit
-	// such forms ("007", "+5") and the origin decoders accepted them.
+	// such forms ("007", "+5").
 	ShapeNumericString
 )
 

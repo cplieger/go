@@ -84,8 +84,8 @@ func TestBoundedAllocationDoesNotScaleWithCardinality(t *testing.T) {
 }
 
 // TestPreflightAllocationBoundedByDepthCeiling pins the cost half of the
-// nesting bound: the depth guard stops the walk at MaxDepth frames rather
-// than at the end of the input, so a much larger all-opens body costs the
+// nesting bound: encoding/json's depth ceiling stops the walk after 10000
+// frames rather than at the end of the input, so a much larger all-opens body costs the
 // same as a small one. TestPreflightBoundsAllOpensBody asserts only that the
 // body IS refused, which a walk that recursed once per byte before failing
 // would also satisfy.
@@ -101,7 +101,7 @@ func TestPreflightAllocationBoundedByDepthCeiling(t *testing.T) {
 	hi := minAllocsPerRun(3, 4, func() { _ = jsonx.Preflight(bytes.NewReader(large)) })
 
 	if ceiling := 1.5 * lo; hi > ceiling {
-		t.Errorf("allocations grew with input length: %.0f at %d bytes -> %.0f at %d bytes, want the cost bounded by MaxDepth (ceiling %.0f)",
+		t.Errorf("allocations grew with input length: %.0f at %d bytes -> %.0f at %d bytes, want the cost bounded by the nesting ceiling (ceiling %.0f)",
 			lo, len(small), hi, len(large), ceiling)
 	}
 }
@@ -164,8 +164,8 @@ func BenchmarkPreflight(b *testing.B) {
 		}
 	})
 
-	// No SetBytes on this arm: the depth ceiling stops the walk after
-	// MaxDepth of the brackets, so throughput over the whole body is fiction.
+	// No SetBytes on this arm: the depth ceiling stops the walk after the
+	// first 10000 brackets, so throughput over the whole body is fiction.
 	b.Run("all-opens", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {

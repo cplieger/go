@@ -10,7 +10,7 @@ import (
 )
 
 // fixturePath is the cross-language golden fixture. Both implementations read
-// it: this test pins that Go produces these keys, and web/src/keyenc.test.ts
+// it: this test pins that Go produces these keys, and web/src/index.test.ts
 // pins that TypeScript produces the same ones. It is the only mechanism that
 // keeps the two halves byte-identical, which the forge-id call sites need
 // because a key built in one language is looked up against keys built in the

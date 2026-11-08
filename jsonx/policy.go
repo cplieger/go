@@ -34,6 +34,16 @@ const (
 // Gate order for numeric values: PaddedString, then FloatForm, then
 // Fractional, then the range check. Non-numeric shapes are dispatched on
 // their Shape field before any of those gates.
+//
+// How Policy grows: a fact field added after 1.0 gives, at its zero value,
+// the outcome every 1.0 policy already gives that input, so a Policy written
+// as a literal today decodes the same values tomorrow. A fact that 1.0
+// accepts everywhere, where a zero Disposition (Reject) would start refusing
+// it, gets a field type whose zero value accepts. A fact whose 1.0 outcome
+// differs by policy gets a field type whose zero value defers to the gate that
+// decides that input today. Deriving a variant from a
+// ready-made policy, as the examples do, is still the clearer way to say
+// which stance a field departs from.
 type Policy struct {
 	// MinValue is the smallest accepted value; anything below is
 	// OutOfRange.
@@ -73,8 +83,9 @@ type Policy struct {
 	OutOfRange Disposition
 }
 
-// TolerantZero returns the tolerant-zero policy (origin: seadex-scout's
-// Fribb id decoder). Any odd shape or invalid value decodes to 0 - an
+// TolerantZero returns the tolerant-zero policy, for an upstream id field
+// where one bad value must not fail the record. Any odd shape or invalid
+// value decodes to 0 - an
 // upstream placeholder must neither fail the record nor masquerade as a
 // valid id - with two deliberate exceptions: a malformed JSON string is
 // still an error (document corruption, not shape variance), and a
@@ -102,9 +113,8 @@ func TolerantZero() Policy {
 	}
 }
 
-// Strict returns the strict policy (origin: subflux's provider
-// ParseFlexInt core). It accepts a bare integer or a quoted decimal
-// integer anywhere in int64, tolerates null and "" as 0 (an absent value
+// Strict returns the strict policy. It accepts a bare integer or a quoted
+// decimal integer anywhere in int64, tolerates null and "" as 0 (an absent value
 // in either representation), and rejects everything else - float forms
 // (even integral ones), padded strings, non-numeric strings, non-number
 // shapes, overflows, and zero-length input.
@@ -126,10 +136,9 @@ func Strict() Policy {
 }
 
 // StrictAbsentZero returns the strict policy with zero-length input
-// tolerated as 0 (origin: plex-language-sync's FlexInt, which pins the
-// pre-flex json.Number behaviour where an absent field produced 0). It is
-// identical to Strict in every other field - a drift-guard test enforces
-// that.
+// tolerated as 0, for a caller that passes empty bytes for a field the JSON
+// left out. It is identical to Strict in every other field - a drift-guard
+// test enforces that.
 func StrictAbsentZero() Policy {
 	p := Strict()
 	p.EmptyInput = Zero
@@ -139,7 +148,7 @@ func StrictAbsentZero() Policy {
 // ParseInt64 classifies one JSON value's raw bytes and applies the policy:
 // the parsed value on acceptance, 0 on a tolerated fact, or a *ParseError
 // naming the rejecting gate. This is the functional core; the ready-made
-// field types (TolerantInt, StrictInt, StrictAbsentZeroInt) wrap it for
+// field types (TolerantZeroInt, StrictInt, StrictAbsentZeroInt) wrap it for
 // struct-tag use.
 func ParseInt64(data []byte, p Policy) (int64, error) {
 	facts := Classify(data)

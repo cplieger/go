@@ -13,7 +13,7 @@ func TestFieldTypesStructDecode(t *testing.T) {
 	t.Parallel()
 
 	type record struct {
-		Tolerant jsonx.TolerantInt         `json:"tolerant"`
+		Tolerant jsonx.TolerantZeroInt     `json:"tolerant"`
 		Strict   jsonx.StrictInt           `json:"strict"`
 		Absent   jsonx.StrictAbsentZeroInt `json:"absent"`
 	}
@@ -54,7 +54,7 @@ func TestFieldTypesStructDecode(t *testing.T) {
 func TestFieldTypesResetOnReuse(t *testing.T) {
 	t.Parallel()
 
-	var v jsonx.TolerantInt
+	var v jsonx.TolerantZeroInt
 	if err := v.UnmarshalJSON([]byte(`7`)); err != nil || v != 7 {
 		t.Fatalf("first decode = %d, %v, want 7, nil", v, err)
 	}
@@ -64,7 +64,7 @@ func TestFieldTypesResetOnReuse(t *testing.T) {
 
 	// End to end through duplicate JSON keys.
 	var w struct {
-		N jsonx.TolerantInt `json:"n"`
+		N jsonx.TolerantZeroInt `json:"n"`
 	}
 	if err := json.Unmarshal([]byte(`{"n":7,"n":false}`), &w); err != nil {
 		t.Fatalf("duplicate-key decode error: %v", err)
@@ -87,7 +87,7 @@ func TestFieldTypesNoPartialValueOnError(t *testing.T) {
 		t.Errorf("receiver after error = %d, want 0 (no partial value retained)", s)
 	}
 
-	v := jsonx.TolerantInt(7)
+	v := jsonx.TolerantZeroInt(7)
 	if err := v.UnmarshalJSON([]byte(`"broken`)); err == nil {
 		t.Fatal("UnmarshalJSON(malformed string) = nil error, want error")
 	}
@@ -128,7 +128,7 @@ func TestStrictAbsentZeroIntEmptyInput(t *testing.T) {
 func TestFieldTypesMarshalPlainNumber(t *testing.T) {
 	t.Parallel()
 	out, err := json.Marshal(struct {
-		A jsonx.TolerantInt         `json:"a"`
+		A jsonx.TolerantZeroInt     `json:"a"`
 		B jsonx.StrictInt           `json:"b"`
 		C jsonx.StrictAbsentZeroInt `json:"c"`
 	}{9, -3, 0})

@@ -15,7 +15,8 @@
 //
 // Two characters are reserved: ':' separates and '\' escapes. A component
 // containing neither is emitted verbatim, so a key whose fields are already
-// separator-free keeps its naive bytes. [Split] is the exact inverse. A key
+// separator-free keeps its naive bytes. [Split] inverts every key Join did not
+// hash; see Join for the in-bound lists it hashes. A key
 // with an inner list nests by passing an inner Join's result as one outer
 // component.
 //

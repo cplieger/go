@@ -54,9 +54,9 @@ That split is intended. A `Budget` bounds bytes retained and never document shap
 
 Every occurrence is charged, including repeats of one element name, because a document that sends `<title>` ten thousand times costs ten thousand decodes. The bound is on bytes, so repeated empty values cost nothing here. `MaxElements` bounds the element count at the raw-byte gate.
 
-## No silent defaults
+## Nothing is unbounded
 
-Every bound is explicit. A bound of zero or less is a configuration mistake, reported as `ErrInvalidLimits` with a `ConfigError` naming the field, and is never read as unbounded. A bounds library whose zero value bounded nothing would be the failure it exists to prevent.
+No bound is ever read as unbounded. A field of `Limits` or `BudgetLimits` left at zero takes its default, so a literal names only the bounds it tightens and a bound added in a later release is bounded in code written today. A negative bound is a configuration mistake, reported as `ErrInvalidLimits` with a `ConfigError` naming the field. A bounds library whose zero value bounded nothing would be the failure it exists to prevent.
 
 ## Rejections change nothing
 

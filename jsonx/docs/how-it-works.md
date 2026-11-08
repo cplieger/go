@@ -48,7 +48,7 @@ A rejection returns a `*ParseError`. Match it with `errors.As`, or with `errors.
 
 ## The field types
 
-`TolerantInt`, `StrictInt` and `StrictAbsentZeroInt` each reset to 0 before they decode. `encoding/json` reuses one field for a repeated object key, so `{"id":5,"id":null}` decodes as 0 rather than keeping the 5. On an error the field stays 0, never a partial value.
+`TolerantZeroInt`, `StrictInt` and `StrictAbsentZeroInt` each reset to 0 before they decode. `encoding/json` reuses one field for a repeated object key, so `{"id":5,"id":null}` decodes as 0 rather than keeping the 5. On an error the field stays 0, never a partial value.
 
 They marshal as plain numbers through their underlying `int64`. The wire form a value arrived in is not kept. Read it from `Classify` when you need it.
 
