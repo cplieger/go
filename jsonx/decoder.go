@@ -31,19 +31,14 @@ var (
 	ErrDuplicateKey = errors.New("jsonx: duplicate object key")
 )
 
-// maxDepth is the nesting ceiling every walk in this package observes: at most
-// maxDepth containers open at once. encoding/json enforces this since Go 1.27
-// (its jsontext Decoder refuses to read the token that would open container
-// maxDepth+1) and surfaces it as *json.SyntaxError; this package does not
-// translate it, because jsontext's own depth error is unexported and its
-// documented contents are subject to change. It is unexported because the
-// value is the standard library's, which a later Go may move; the package
-// promises only that its walks accept exactly the depth json.Unmarshal does.
-// Do not lower it to compensate for a local check:
-// TestPreflightDepthMatchesUnmarshal pins that Preflight's depth acceptance
-// set is exactly json.Unmarshal's, and a lower value would make Preflight
-// reject a body Unmarshal accepts.
-const maxDepth = 10000
+// Nesting depth is encoding/json's to bound, not this package's: since Go
+// 1.27 its jsontext Decoder refuses to read the token that would open
+// container 10001 and surfaces that as *json.SyntaxError, which this package
+// does not translate, because jsontext's own depth error is unexported and
+// its documented contents are subject to change. The package holds no depth
+// constant, since the value is the standard library's and a later Go may move
+// it; it promises only that its walks accept exactly the depth json.Unmarshal
+// does, which TestPreflightDepthMatchesUnmarshal pins.
 
 // maxKeySnippet bounds the untrusted key text a duplicate-key error renders,
 // so an oversized upstream key cannot balloon an error string or a log line.
@@ -404,10 +399,10 @@ func Preflight(r io.Reader) error {
 
 // preflightValue consumes exactly one JSON value, recursing into objects and
 // arrays. A scalar is consumed by the leading Token call; a container is
-// closed by the trailing one. The recursion is bounded by maxDepth without a
-// check here: encoding/json refuses to read the token that opens container
-// maxDepth+1, so the Token call below fails before the frame that would
-// exceed it is entered.
+// closed by the trailing one. The recursion is bounded by encoding/json's
+// nesting ceiling without a check here: it refuses to read the token that
+// opens one container too many, so the Token call below fails before the
+// frame that would exceed it is entered.
 func (d *Decoder) preflightValue() error {
 	t, err := d.dec.Token()
 	if err != nil {

@@ -399,14 +399,20 @@ func TestPreflightKeyFoldMatchesEqualFold(t *testing.T) {
 	}
 }
 
+// stdlibMaxDepth is encoding/json's nesting ceiling since Go 1.27, written out
+// here because the standard library does not export it and jsonx holds no
+// copy: the tests below check it against json.Unmarshal, so a toolchain that
+// moves it fails them.
+const stdlibMaxDepth = 10000
+
 // TestPreflightDepthMatchesUnmarshal pins the depth contract Preflight
 // promises: its acceptance set is exactly json.Unmarshal's, so it can never
 // admit a body the decode step would reject on depth, nor reject one it
 // would accept. The ceiling is encoding/json's, not this package's (jsontext
-// refuses to read the token that would open container MaxDepth+1), so both
-// boundary levels are asserted against json.Unmarshal rather than against
-// MaxDepth: a future toolchain that moves the stdlib ceiling fails this test
-// instead of leaving the constant to drift silently.
+// refuses to read the token that would open container stdlibMaxDepth+1), so
+// both boundary levels are asserted against json.Unmarshal rather than against
+// stdlibMaxDepth alone: a future toolchain that moves the stdlib ceiling fails
+// this test instead of leaving the constant to drift silently.
 //
 // The error TEXT is deliberately not pinned: jsontext keeps its depth error
 // unexported, so the type is the strongest stable assertion available.
@@ -427,26 +433,26 @@ func TestPreflightDepthMatchesUnmarshal(t *testing.T) {
 
 			// At the ceiling both accept, so the preflight adds no depth
 			// strictness of its own.
-			atCeiling := body(jsonx.MaxDepth)
+			atCeiling := body(stdlibMaxDepth)
 			var sink any
 			if err := json.Unmarshal(atCeiling, &sink); err != nil {
-				t.Fatalf("json.Unmarshal(%d nested) = %v, want it accepted; the stdlib ceiling moved and MaxDepth = %d is stale",
-					jsonx.MaxDepth, err, jsonx.MaxDepth)
+				t.Fatalf("json.Unmarshal(%d nested) = %v, want it accepted; the stdlib ceiling moved and stdlibMaxDepth = %d is stale",
+					stdlibMaxDepth, err, stdlibMaxDepth)
 			}
 			if err := jsonx.Preflight(bytes.NewReader(atCeiling)); err != nil {
-				t.Errorf("Preflight(%d nested) = %v, want it accepted (json.Unmarshal accepts it)", jsonx.MaxDepth, err)
+				t.Errorf("Preflight(%d nested) = %v, want it accepted (json.Unmarshal accepts it)", stdlibMaxDepth, err)
 			}
 
 			// One level over, both reject, and Preflight surfaces the
 			// tokenizer's own error rather than translating it.
-			overDeep := body(jsonx.MaxDepth + 1)
+			overDeep := body(stdlibMaxDepth + 1)
 			if err := json.Unmarshal(overDeep, &sink); err == nil {
-				t.Fatalf("json.Unmarshal(%d nested) = nil, want it rejected; the stdlib ceiling moved and MaxDepth = %d is stale",
-					jsonx.MaxDepth+1, jsonx.MaxDepth)
+				t.Fatalf("json.Unmarshal(%d nested) = nil, want it rejected; the stdlib ceiling moved and stdlibMaxDepth = %d is stale",
+					stdlibMaxDepth+1, stdlibMaxDepth)
 			}
 			err := jsonx.Preflight(bytes.NewReader(overDeep))
 			if _, ok := errors.AsType[*json.SyntaxError](err); !ok {
-				t.Errorf("Preflight(%d nested) = %v (%T), want encoding/json's *json.SyntaxError", jsonx.MaxDepth+1, err, err)
+				t.Errorf("Preflight(%d nested) = %v (%T), want encoding/json's *json.SyntaxError", stdlibMaxDepth+1, err, err)
 			}
 		})
 	}
@@ -454,7 +460,7 @@ func TestPreflightDepthMatchesUnmarshal(t *testing.T) {
 
 // TestPreflightBoundsAllOpensBody pins the hostile shape the package was
 // built for: 1 MiB of nothing but '['. It must be refused by the nesting
-// ceiling after MaxDepth frames rather than by recursing once per byte to
+// ceiling after stdlibMaxDepth frames rather than by recursing once per byte to
 // discover the body is truncated, so the cost is bounded by the ceiling and
 // not by the input length.
 func TestPreflightBoundsAllOpensBody(t *testing.T) {
