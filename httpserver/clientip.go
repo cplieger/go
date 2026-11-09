@@ -17,6 +17,11 @@ type ClientResolution struct {
 	// Peer is the host of r.RemoteAddr, unmapped; the zero Addr when it is
 	// not an IP address.
 	Peer netip.Addr
+	// PeerTrusted reports that Peer is inside the trusted set, whether or not
+	// it forwarded a client, so a caller that reads a trusted proxy's other
+	// headers (X-Forwarded-Proto, say) asks the same rule. Forwarded implies
+	// it, and UntrustedForwarding excludes it.
+	PeerTrusted bool
 	// Forwarded reports that IP came from X-Forwarded-For, which is read only
 	// when Peer is trusted.
 	Forwarded bool
@@ -42,9 +47,9 @@ func ResolveClient(r *http.Request, trusted ...netip.Prefix) ClientResolution {
 	if err == nil {
 		peer = peer.Unmap()
 	}
-	res := ClientResolution{IP: peer, Peer: peer}
+	res := ClientResolution{IP: peer, Peer: peer, PeerTrusted: inTrusted(peer, trusted)}
 	fwd := parseForwarding(r.Header)
-	if !inTrusted(peer, trusted) {
+	if !res.PeerTrusted {
 		res.UntrustedForwarding, res.IgnoredPublic = fwd.present(), fwd.public()
 		return res
 	}

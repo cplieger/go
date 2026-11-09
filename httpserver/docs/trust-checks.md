@@ -26,11 +26,12 @@ The answer is a `ClientResolution`:
 | --- | --- |
 | `IP` | The client address |
 | `Peer` | The socket peer, unmapped, or the zero address when `r.RemoteAddr` is not an IP |
+| `PeerTrusted` | The peer is inside the trusted set, whether or not it forwarded a client. `Forwarded` implies it and `UntrustedForwarding` excludes it |
 | `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
 | `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |
 | `IgnoredPublic` | One of those ignored headers named a public address, meaning global unicast and outside the private ranges |
 
-Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
+Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `PeerTrusted` tells that proxy apart from a direct client, so read another header a proxy sets, such as `X-Forwarded-Proto`, only when it is true. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
 
 For `IgnoredPublic`, an `X-Forwarded-For` or `X-Real-IP` entry names an address even when quoted, bracketed or followed by a port. A `Forwarded` element counts only when it follows RFC 7239 exactly. Its `name=value` pairs are joined by `;` with no spaces, and each name appears once. A `for` value with a port or an IPv6 address must be in quotes.
 

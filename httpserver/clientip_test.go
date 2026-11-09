@@ -333,6 +333,7 @@ func TestResolveClientReportsProvenance(t *testing.T) {
 			want := httpserver.ClientResolution{
 				IP:                  addrOrZero(t, tc.ip),
 				Peer:                addrOrZero(t, tc.peer),
+				PeerTrusted:         inPrefixes(addrOrZero(t, tc.peer), provenanceTrusted),
 				Forwarded:           tc.forwarded,
 				UntrustedForwarding: tc.untrusted,
 				IgnoredPublic:       tc.pub,
@@ -360,6 +361,46 @@ func TestResolveClientWithNoTrustedSetIgnoresEveryHeader(t *testing.T) {
 	}
 }
 
+// inPrefixes is the trust rule the tests hold ResolveClient to: a valid
+// address inside a prefix, an IPv4 one also inside an IPv4-mapped prefix.
+func inPrefixes(a netip.Addr, trusted []netip.Prefix) bool {
+	return a.IsValid() && slices.ContainsFunc(trusted, func(p netip.Prefix) bool {
+		return p.Contains(a) || (a.Is4() && p.Contains(netip.AddrFrom16(a.As16())))
+	})
+}
+
+// PeerTrusted reports the peer's trust whatever the headers say, so a trusted
+// proxy that forwarded nothing is told apart from a direct client.
+func TestResolveClientReportsPeerTrusted(t *testing.T) {
+	t.Parallel()
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("::ffff:172.16.0.0/108")}
+	for _, tc := range []struct {
+		name, remote, xff      string
+		peerTrusted, forwarded bool
+	}{
+		{"a trusted peer with no X-Forwarded-For", "10.0.0.1:4000", "", true, false},
+		{"a trusted peer forwarding a client", "10.0.0.1:4000", "192.168.1.20", true, true},
+		{"a trusted peer forwarding only trusted hops", "10.0.0.1:4000", "10.0.0.2", true, false},
+		{"an IPv4 peer inside an IPv4-mapped prefix", "172.16.0.9:4000", "", true, false},
+		{"an IPv4-mapped peer inside an IPv4 prefix", "[::ffff:10.0.0.1]:4000", "", true, false},
+		{"an untrusted peer", "192.168.1.50:4000", "203.0.113.9", false, false},
+		{"a peer that is no address", "pipe", "203.0.113.9", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			r.RemoteAddr = tc.remote
+			if tc.xff != "" {
+				r.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			got := httpserver.ResolveClient(r, trusted...)
+			if got.PeerTrusted != tc.peerTrusted || got.Forwarded != tc.forwarded {
+				t.Errorf("ResolveClient = %+v, want PeerTrusted %v and Forwarded %v", got, tc.peerTrusted, tc.forwarded)
+			}
+		})
+	}
+}
+
 // derivedResolution is ResolveClient's contract applied to the projection of
 // its one parse of the forwarding fields, so a resolver that reads a header
 // on its own, or drops a parsed fact, disagrees with it.
@@ -372,14 +413,10 @@ func derivedResolution(remote string, f httpserver.ForwardingFields, trusted []n
 	if err == nil {
 		peer = peer.Unmap()
 	}
-	isTrusted := func(a netip.Addr) bool {
-		return slices.ContainsFunc(trusted, func(p netip.Prefix) bool {
-			return p.Contains(a) || (a.Is4() && p.Contains(netip.AddrFrom16(a.As16())))
-		})
-	}
+	isTrusted := func(a netip.Addr) bool { return inPrefixes(a, trusted) }
 	isPublic := func(a netip.Addr) bool { return a.IsGlobalUnicast() && !a.IsPrivate() }
-	res := httpserver.ClientResolution{IP: peer, Peer: peer}
-	if !isTrusted(peer) {
+	res := httpserver.ClientResolution{IP: peer, Peer: peer, PeerTrusted: isTrusted(peer)}
+	if !res.PeerTrusted {
 		res.UntrustedForwarding = len(f.XFF)+len(f.RealIP)+len(f.Forwarded) > 0
 		for _, e := range slices.Concat(f.XFF, f.RealIP) {
 			res.IgnoredPublic = res.IgnoredPublic || isPublic(e.Addr)
@@ -520,9 +557,9 @@ func TestResolveClientTreatsAnOverCapFieldAsInvalid(t *testing.T) {
 	const trustedPeer, untrustedPeer = "10.0.0.1:4000", "192.168.1.50:4000"
 	a := netip.MustParseAddr
 	forwardedFrom := func(client netip.Addr) httpserver.ClientResolution {
-		return httpserver.ClientResolution{IP: client, Peer: a("10.0.0.1"), Forwarded: true}
+		return httpserver.ClientResolution{IP: client, Peer: a("10.0.0.1"), PeerTrusted: true, Forwarded: true}
 	}
-	peerOnly := httpserver.ClientResolution{IP: a("10.0.0.1"), Peer: a("10.0.0.1")}
+	peerOnly := httpserver.ClientResolution{IP: a("10.0.0.1"), Peer: a("10.0.0.1"), PeerTrusted: true}
 	ignored := func(public bool) httpserver.ClientResolution {
 		return httpserver.ClientResolution{IP: a("192.168.1.50"), Peer: a("192.168.1.50"), UntrustedForwarding: true, IgnoredPublic: public}
 	}
