@@ -79,7 +79,7 @@ const arbModel = fc.letrec<{
   ),
   HasCustomMapped: fc.record(
     {
-      // opaque: github.com/cplieger/go/wiregen/testdata/basic.CustomID is consumer-mapped, so its shape is not in wiregen's model
+      // opaque: github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID is consumer-mapped, so its shape is not in wiregen's model
       id: fc.jsonValue().filter((v) => v !== null) as unknown as fc.Arbitrary<Record<string, string>>,
       name: fc.string(),
     },

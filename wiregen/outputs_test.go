@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
-	"github.com/cplieger/go/wiregen/testdata/enums"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2/testdata/enums"
 )
 
 // Two outputs at one path, however spelled, are refused before anything is

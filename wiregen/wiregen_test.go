@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -403,7 +403,7 @@ func TestMappings(t *testing.T) {
 	)
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasCustomMapped]()}
 	r.Mappings = map[string]wiregen.Mapping{
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
 	}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "  id: string;") {
@@ -427,7 +427,7 @@ func TestMappings_CollectionElement(t *testing.T) {
 	)
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasMappedSlice]()}
 	r.Mappings = map[string]wiregen.Mapping{
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
 	}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "  ids: string[];") {
@@ -449,7 +449,7 @@ func TestMappingsWithoutDecoder(t *testing.T) {
 	)
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasCustomMapped]()}
 	r.Mappings = map[string]wiregen.Mapping{
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "string"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string"},
 	}
 	dec := mustGen(t, r.decodersFile)
 	if !strings.Contains(dec, "own(o, \"id\") as string") {
@@ -767,7 +767,7 @@ func TestGenerate_ContextCancellation(t *testing.T) {
 // --- TypeRef registration ---
 func TestTypeRef(t *testing.T) {
 	if wt := wiregen.TypeRef[basic.User](); wt.Name != "User" ||
-		wt.PkgPath != "github.com/cplieger/go/wiregen/testdata/basic" {
+		wt.PkgPath != "github.com/cplieger/go/wiregen/v2/testdata/basic" {
 		t.Errorf("TypeRef[User]() = %+v, want {basic, User}", wt)
 	}
 	if wt := wiregen.TypeRef[*basic.Address](); wt.Name != "Address" {
@@ -780,7 +780,7 @@ func TestTypeRef(t *testing.T) {
 func TestGenerate_UnknownTypeErrors(t *testing.T) {
 	r := newTestRegistry(wiregen.WithValidatorsImport("./v.js"))
 	r.Types = []wiregen.Type{
-		{PkgPath: "github.com/cplieger/go/wiregen/testdata/basic", Name: "NonExistentType"},
+		{PkgPath: "github.com/cplieger/go/wiregen/v2/testdata/basic", Name: "NonExistentType"},
 	}
 	err := r.generate(t.Context(), t.TempDir())
 	if err == nil {
@@ -796,7 +796,7 @@ func TestGenerate_UnknownTypeErrors(t *testing.T) {
 // both configuration errors, each with its own remedy in the message.
 func TestGenerate_RejectsDuplicateTypeNames(t *testing.T) {
 	const (
-		crossrefPkg = "github.com/cplieger/go/wiregen/testdata/crossref"
+		crossrefPkg = "github.com/cplieger/go/wiregen/v2/testdata/crossref"
 		depPkg      = crossrefPkg + "/dep"
 	)
 	cases := []struct {

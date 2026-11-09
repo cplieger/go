@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/wiregen/testdata/basic"
-	"github.com/cplieger/go/wiregen/testdata/edges"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2/testdata/edges"
 )
 
 // oracleSpecimens are the fixture types the oracle registers and checks. Each

@@ -487,6 +487,9 @@ func (g *generator) referencedTypes() []typeReference {
 	}
 	for _, u := range g.Unions {
 		refs = append(refs, typeReference{role: "union type", wt: u.Type})
+		for _, c := range slices.Sorted(maps.Keys(u.PayloadTypes)) {
+			refs = append(refs, typeReference{role: fmt.Sprintf("union case %q payload type", c), wt: u.PayloadTypes[c]})
+		}
 	}
 	return append(refs, typeReference{role: "ErrorEnvelope type", wt: g.ErrorEnvelope})
 }

@@ -21,8 +21,9 @@ type Endpoint struct {
     Description string
     Headers     []Header
     Errors      []ErrorRef
-    Security    []string // OpenAPI security scheme names; nil: public
-    Status      int      // the success status; zero: the kind's default
+    Security    []SecurityRequirement // the operation's alternatives, in order; nil: public
+    Servers     []Server              // the servers it answers on; nil: the document's
+    Status      int                   // the success status; zero: the kind's default
     Array       bool     // the body is a JSON array of Response
     Kind        Kind     // KindJSON, KindRaw, KindEventStream or KindRedirect
 }
@@ -31,6 +32,23 @@ type ErrorRef struct {
     Extensions map[string]any // OpenAPI x- members of the code's entry
     Code       string         // lower snake case
     Status     int            // 400 to 599
+}
+
+// SecurityRequirement maps each scheme a request must satisfy together to its
+// scope or role list; nil emits [], and an empty requirement makes security
+// optional.
+type SecurityRequirement map[string][]string
+
+type Server struct {
+    Variables   map[string]ServerVariable // one per {name} in URL
+    URL         string
+    Description string
+}
+
+type ServerVariable struct {
+    Default     string // required; one of Enum when Enum is set
+    Description string
+    Enum        []string
 }
 
 type Header struct {
@@ -110,6 +128,7 @@ The module at `WithTransportImport` is yours. It must export:
 - its path, query and header parameters, and its request body as a reference to the request form of its type.
 - its success response at its status: a JSON schema, a raw body's media type, `text/event-stream` with `x-events` naming each event's data schema, or a redirect's `Location` header.
 - its errors grouped by status, each with the `ErrorEnvelope` schema and `x-error-codes` mapping each code to its extensions.
-- `security` from `Endpoint.Security`, `[]` for a public endpoint, and `OpenAPI.SecuritySchemes` as `components.securitySchemes`.
+- `security` from `Endpoint.Security`, one Security Requirement Object per alternative, in order, each scheme with its scope list (`[{"session": []}, {"apiKey": ["chats:read"]}]`), `[]` for a public endpoint, and `OpenAPI.SecuritySchemes` as `components.securitySchemes`. A scheme that is not `oauth2` or `openIdConnect` may list role names, as OAS 3.1 allows.
+- `servers` from `Endpoint.Servers`, when set, overriding the document's for that operation. The TypeScript client still calls same-origin paths.
 
 [Type mapping](type-mapping.md#null-and-presence) covers how each type becomes a component.

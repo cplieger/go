@@ -1,6 +1,6 @@
 # wiregen
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/wiregen.svg)](https://pkg.go.dev/github.com/cplieger/go/wiregen) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=wiregen%2Fgo.mod)](https://github.com/cplieger/go/blob/main/wiregen/go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/wiregen/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/wiregen/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=wiregen%2Fgo.mod)](https://github.com/cplieger/go/blob/main/wiregen/go.mod)
 
 wiregen generates TypeScript types, validating JSON decoders, a typed HTTP client and an OpenAPI 3.1 document from your Go structs and endpoint table, so your TypeScript front end checks every payload your Go server sends.
 
@@ -22,7 +22,7 @@ Consider [tygo](https://github.com/gzuidhof/tygo) if you want TypeScript types a
 ## Install
 
 ```sh
-go get github.com/cplieger/go/wiregen@latest
+go get github.com/cplieger/go/wiregen/v2@latest
 ```
 
 ## Usage
@@ -59,7 +59,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/cplieger/go/wiregen"
+	"github.com/cplieger/go/wiregen/v2"
 
 	"example.com/app/wire"
 )
@@ -99,7 +99,7 @@ export const decodeUser: Decoder<User> = (v) => {
 - Register an enum by its type: `StringEnum[T]()` for a string type, `TextEnum[T]()` for a `uint8` type whose `MarshalText` names its members.
 - `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
 
-`Generate` returns an error for a configuration problem, a nil `Registry` or a nil context, and nothing exported panics. [Options and fields](docs/configuration.md) lists each option with its default, and the full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/wiregen).
+`Generate` returns an error for a configuration problem, a nil `Registry` or a nil context, and nothing exported panics. [Options and fields](docs/configuration.md) lists each option with its default, and the full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/wiregen/v2).
 
 ## The endpoint table is authoritative
 

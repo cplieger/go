@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/client"
-	"github.com/cplieger/go/wiregen/testdata/unions"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/client"
+	"github.com/cplieger/go/wiregen/v2/testdata/unions"
 )
 
 // newEndpointRegistry returns a registry with the transport import set and
@@ -100,7 +100,7 @@ func TestEndpoints_Validation(t *testing.T) {
 		{"name takes a client binding", []wiregen.Endpoint{get("qs", "/api/x")}, "qs, which the client module already uses"},
 		{"two names collide on their types", []wiregen.Endpoint{get("x", "/api/x"), get("xEndpoint", "/api/y")}, "already uses"},
 		{"unregistered response", []wiregen.Endpoint{with(get("x", "/api/x"), func(e *wiregen.Endpoint) {
-			e.Response = wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/testdata/client", Name: "Nope"}
+			e.Response = wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/v2/testdata/client", Name: "Nope"}
 		})}, "Nope not found"},
 	}
 	for _, tc := range cases {
@@ -397,7 +397,7 @@ func TestEndpointTypesJoinRegistry(t *testing.T) {
 	t.Run("same name from another package refused", func(t *testing.T) {
 		r := newEndpointRegistry(wiregen.Endpoint{
 			Name: "x", Method: "GET", Path: "/api/x", Kind: wiregen.KindJSON,
-			Response: wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/testdata/crossref", Name: "Item"},
+			Response: wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/v2/testdata/crossref", Name: "Item"},
 		})
 		requireGenerateError(t, r, "registered from two packages")
 	})

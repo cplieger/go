@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
 )
 
 // fastCheckStub types the fast-check import loosely enough to compile the

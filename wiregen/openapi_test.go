@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/client"
-	"github.com/cplieger/go/wiregen/testdata/openapi"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/client"
+	"github.com/cplieger/go/wiregen/v2/testdata/openapi"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -57,7 +57,10 @@ func fullReg() *testRegistry {
 				{Code: "gone", Status: 404},
 				internal,
 			},
-			Security:   []string{"bearer", "session"},
+			Security: []wiregen.SecurityRequirement{
+				{"session": nil},
+				{"bearer": {"items:read"}},
+			},
 			Extensions: map[string]any{"x-subflux-access": "read"},
 		},
 		{
@@ -310,7 +313,9 @@ func operation(t *testing.T, doc, method, path string) map[string]any {
 func TestSecurityAndExtensions(t *testing.T) {
 	doc := mustGen(t, fullReg().openapiFile)
 	get := operation(t, doc, "get", "/api/items/{id}")
-	if got := mustJSON(t, get["security"]); got != `[{"bearer":[]},{"session":[]}]` {
+	// Each requirement is one alternative, in order, with its scope list; nil
+	// scopes emit [].
+	if got := mustJSON(t, get["security"]); got != `[{"session":[]},{"bearer":["items:read"]}]` {
 		t.Errorf("getItem security = %s", got)
 	}
 	if get["x-subflux-access"] != "read" {
@@ -330,16 +335,82 @@ func TestSecurityAndExtensions(t *testing.T) {
 	if got := mustJSON(t, d.Components.SecuritySchemes); got != `{"bearer":{"scheme":"bearer","type":"http"},"session":{"in":"cookie","name":"sid","type":"apiKey"}}` {
 		t.Errorf("securitySchemes = %s", got)
 	}
-	t.Run("an undeclared scheme is refused", func(t *testing.T) {
+	t.Run("schemes in one requirement are satisfied together", func(t *testing.T) {
 		r := fullReg()
-		r.Endpoints[0].Security = []string{"oauth"}
-		requireGenerateError(t, r, `names security scheme "oauth"`)
+		r.Endpoints[0].Security = []wiregen.SecurityRequirement{{"bearer": {"a", "b"}, "session": nil}}
+		doc := mustGen(t, r.openapiFile)
+		if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["security"]); got != `[{"bearer":["a","b"],"session":[]}]` {
+			t.Errorf("security = %s", got)
+		}
 	})
+	t.Run("an empty requirement makes the operation's security optional", func(t *testing.T) {
+		r := fullReg()
+		r.Endpoints[0].Security = []wiregen.SecurityRequirement{{"bearer": nil}, {}}
+		doc := mustGen(t, r.openapiFile)
+		if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["security"]); got != `[{"bearer":[]},{}]` {
+			t.Errorf("security = %s", got)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		req  []wiregen.SecurityRequirement
+		want string
+	}{
+		{"an undeclared scheme", []wiregen.SecurityRequirement{{"oauth": nil}}, `names security scheme "oauth"`},
+		{"an undeclared scheme beside a declared one", []wiregen.SecurityRequirement{{"bearer": nil, "oauth": {"x"}}}, `names security scheme "oauth"`},
+		{"an empty scope", []wiregen.SecurityRequirement{{"bearer": {"read", ""}}}, `security scheme "bearer" lists an empty scope`},
+		{"a scope twice", []wiregen.SecurityRequirement{{"bearer": {"read", "read"}}}, `security scheme "bearer" lists scope "read" twice`},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := fullReg()
+			r.Endpoints[0].Security = tc.req
+			requireGenerateError(t, r, tc.want)
+		})
+	}
 	t.Run("a malformed scheme is refused", func(t *testing.T) {
 		r := fullReg()
 		r.OpenAPI.SecuritySchemes["bad"] = wiregen.SecurityScheme{Type: "apiKey", In: "body", Name: "k"}
 		requireGenerateError(t, r, `security scheme "bad": type apiKey needs a Name and In of header, query or cookie`)
 	})
+}
+
+func TestOperationServers(t *testing.T) {
+	loopback := wiregen.Server{
+		URL:         "http://127.0.0.1:{port}",
+		Description: "reachable only from loopback inside the container",
+		Variables:   map[string]wiregen.ServerVariable{"port": {Default: "9847"}},
+	}
+	r := fullReg()
+	r.Endpoints[0].Servers = []wiregen.Server{loopback, {URL: "https://{host}/v1", Variables: map[string]wiregen.ServerVariable{
+		"host": {Default: "a.example", Enum: []string{"a.example", "b.example"}, Description: "the region"},
+	}}}
+	doc := mustGen(t, r.openapiFile)
+	want := `[{"description":"reachable only from loopback inside the container","url":"http://127.0.0.1:{port}","variables":{"port":{"default":"9847"}}},` +
+		`{"url":"https://{host}/v1","variables":{"host":{"default":"a.example","description":"the region","enum":["a.example","b.example"]}}}]`
+	if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["servers"]); got != want {
+		t.Errorf("servers = %s\nwant %s", got, want)
+	}
+	if _, ok := operation(t, doc, "get", "/api/items")["servers"]; ok {
+		t.Error("an operation with no Servers carries a servers member")
+	}
+	for _, tc := range []struct {
+		name   string
+		server wiregen.Server
+		want   string
+	}{
+		{"no URL", wiregen.Server{}, "has a server with no URL"},
+		{"a placeholder with no variable", wiregen.Server{URL: "http://h:{port}"}, `server "http://h:{port}" uses {port}, which Variables does not define`},
+		{"a variable the URL does not use", wiregen.Server{URL: "http://h", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1"}}}, `server "http://h" defines variable "port", which its URL does not use`},
+		{"an empty default", wiregen.Server{URL: "http://h:{port}", Variables: map[string]wiregen.ServerVariable{"port": {}}}, `server "http://h:{port}" variable "port" has no Default`},
+		{"a default outside the enum", wiregen.Server{URL: "http://h:{port}", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1", Enum: []string{"2"}}}}, `server "http://h:{port}" variable "port" has Default "1", which is not in its Enum`},
+		{"an unclosed placeholder", wiregen.Server{URL: "http://h:{port"}, `server "http://h:{port" has an unclosed {`},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := fullReg()
+			r.Endpoints[0].Servers = []wiregen.Server{tc.server}
+			requireGenerateError(t, r, tc.want)
+		})
+	}
 }
 
 func TestOpenAPIOperations(t *testing.T) {

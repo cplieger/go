@@ -1,7 +1,10 @@
 // Package unions provides tagged-union fixtures for wiregen's Union tests.
 package unions
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // Kind names a Timing's shape.
 type Kind uint8
@@ -59,4 +62,46 @@ type Tree struct {
 type Untagged struct {
 	Kind *string `json:"kind,omitempty"`
 	Name string  `json:"name"`
+}
+
+// Command is a union whose tag selects the type its payload decodes as.
+type Command struct {
+	Type    string          `json:"type"`
+	ChatID  string          `json:"chat_id,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// CreateChat is the payload of a create command.
+type CreateChat struct {
+	Title string `json:"title"`
+	Pin   bool   `json:"pin,omitempty"`
+}
+
+// Rename is the payload of a rename command.
+type Rename struct {
+	Name string `json:"name"`
+}
+
+// Nested is a payload type whose request schema differs from its response
+// one: a decoder leaves a missing Note nil, so a request may omit it.
+type Nested struct {
+	Note  *string `json:"note"`
+	Inner Rename  `json:"inner"`
+}
+
+// RequiredPayload has a payload encoding/json writes in every case.
+type RequiredPayload struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// NotRaw has a payload field that is no json.RawMessage.
+type NotRaw struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload,omitempty"`
+}
+
+// Batch is a payload type that reaches its own union back.
+type Batch struct {
+	Commands []Command `json:"commands"`
 }

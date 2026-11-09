@@ -189,8 +189,8 @@ func (e *astEngine) reach(used map[string]map[direction]bool, wt Type, d directi
 	}
 	used[wt.Name][d] = true
 	ti := e.byName[wt.Name]
-	for i := range ti.Fields {
-		for f := &ti.Fields[i]; f != nil; f = f.Elem {
+	for _, top := range ti.graphFields() {
+		for f := top; f != nil; f = f.Elem {
 			if f.Kind == kindStruct {
 				e.reach(used, Type{PkgPath: e.gen.typeNames[f.GoTypeName], Name: f.GoTypeName}, d)
 			}

@@ -14,24 +14,36 @@ import (
 // rule. The TS type is a discriminated union, the decoder refuses a field
 // another case owns, and OpenAPI gets a oneOf with a discriminator whose cases
 // admit no other property.
+//
+// Payload, when set, names a json.RawMessage field of Type whose type the tag
+// selects: PayloadTypes maps every Cases key to the type that field decodes as
+// in that case, or to the zero Type for a case that carries no payload. The
+// payload field is listed in no case; it belongs to each case with a payload
+// type, keeps its own presence rule there, and is refused in the others. Each
+// payload type joins the registry's types.
 type Union struct {
-	Cases map[string][]string
-	Type  Type
-	Tag   string
+	Cases        map[string][]string
+	PayloadTypes map[string]Type
+	Type         Type
+	Tag          string
+	Payload      string
 }
 
-// unionInfo is one resolved Union: its tag's wire name and its cases in
-// emission order.
+// unionInfo is one resolved Union: its tag's and payload's wire names and
+// its cases in emission order.
 type unionInfo struct {
-	tag   string
-	cases []unionCase
+	tag     string
+	payload string // "" when the union types no payload
+	cases   []unionCase
 }
 
 // unionCase is one tag value and the non-tag fields it allows, in field
-// order.
+// order. payload is the payload field as this case types it, nil when the
+// case carries none.
 type unionCase struct {
-	value  string
-	fields []string
+	payload *fieldInfo
+	value   string
+	fields  []string
 }
 
 // resolveUnions attaches each registered Union to its type, reporting every
@@ -44,7 +56,7 @@ func (e *astEngine) resolveUnions() error {
 			errs = append(errs, fmt.Errorf("wiregen: union %s.%s is declared twice", u.Type.PkgPath, u.Type.Name))
 			continue
 		}
-		ui, err := e.resolveUnion(u, ti)
+		ui, err := e.resolveUnion(&u, ti)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: %w", u.Type.PkgPath, u.Type.Name, err))
 			continue
@@ -56,22 +68,19 @@ func (e *astEngine) resolveUnions() error {
 
 // resolveUnion checks u against ti's fields and orders its cases: by the tag
 // enum's declaration order, else by value.
-func (e *astEngine) resolveUnion(u Union, ti *typeInfo) (*unionInfo, error) {
+func (e *astEngine) resolveUnion(u *Union, ti *typeInfo) (*unionInfo, error) {
 	values, err := e.caseValues(u, ti)
 	if err != nil {
 		return nil, err
 	}
-	ui := &unionInfo{tag: u.Tag}
-	covered := map[string]bool{u.Tag: true}
-	for _, v := range values {
-		uc, err := resolveCase(u, ti, v)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range uc.fields {
-			covered[name] = true
-		}
-		ui.cases = append(ui.cases, uc)
+	raw, err := payloadField(u, ti, values)
+	if err != nil {
+		return nil, err
+	}
+	ui := &unionInfo{tag: u.Tag, payload: u.Payload}
+	covered, err := e.resolveCases(u, ti, values, raw, ui)
+	if err != nil {
+		return nil, err
 	}
 	for i := range ti.Fields {
 		f := &ti.Fields[i]
@@ -85,6 +94,82 @@ func (e *astEngine) resolveUnion(u Union, ti *typeInfo) (*unionInfo, error) {
 	return ui, nil
 }
 
+// resolveCases resolves each case of u into ui, typing its payload, and
+// returns the wire names some case covers.
+func (e *astEngine) resolveCases(u *Union, ti *typeInfo, values []string, raw *fieldInfo, ui *unionInfo) (map[string]bool, error) {
+	covered := map[string]bool{u.Tag: true}
+	for _, v := range values {
+		uc, err := resolveCase(u, ti, v)
+		if err != nil {
+			return nil, err
+		}
+		if pt := u.PayloadTypes[v]; raw != nil && pt != (Type{}) {
+			uc.payload = e.typedPayload(raw, pt)
+			uc.fields = withField(ti, uc.fields, u.Payload)
+		}
+		for _, name := range uc.fields {
+			covered[name] = true
+		}
+		ui.cases = append(ui.cases, uc)
+	}
+	return covered, nil
+}
+
+// payloadField checks u's payload declaration against ti and the case
+// values, returning the raw payload field, or nil when u types no payload.
+func payloadField(u *Union, ti *typeInfo, values []string) (*fieldInfo, error) {
+	if u.Payload == "" {
+		if len(u.PayloadTypes) > 0 {
+			return nil, errors.New("sets PayloadTypes without Payload")
+		}
+		return nil, nil
+	}
+	raw := ti.field(u.Payload)
+	switch {
+	case raw == nil:
+		return nil, fmt.Errorf("payload %q is no field of the type", u.Payload)
+	case raw.Kind != kindRaw:
+		return nil, fmt.Errorf("payload %q must be a json.RawMessage field", u.Payload)
+	case u.Payload == u.Tag:
+		return nil, fmt.Errorf("payload %q is the tag", u.Payload)
+	}
+	if keys := slices.Sorted(maps.Keys(u.PayloadTypes)); !slices.Equal(keys, slices.Sorted(slices.Values(values))) {
+		return nil, fmt.Errorf("PayloadTypes keys %v must be exactly the Cases keys %v", keys, slices.Sorted(slices.Values(values)))
+	}
+	typed := false
+	for _, v := range values {
+		if slices.Contains(u.Cases[v], u.Payload) {
+			return nil, fmt.Errorf("case %q lists the payload %q, which PayloadTypes places", v, u.Payload)
+		}
+		typed = typed || u.PayloadTypes[v] != (Type{})
+	}
+	if !typed {
+		return nil, fmt.Errorf("no case has a payload type, so payload %q can never be sent", u.Payload)
+	}
+	return raw, nil
+}
+
+// typedPayload is raw as a field of registered type pt: the same wire name
+// and presence, with pt's shape.
+func (e *astEngine) typedPayload(raw *fieldInfo, pt Type) *fieldInfo {
+	f := *raw
+	f.Kind, f.TSType, f.GoTypeName = kindStruct, e.gen.tsName(pt.Name), pt.Name
+	f.Elem, f.Bounds, f.Mapping, f.Refusals, f.InRefusals = nil, nil, nil, nil, nil
+	return &f
+}
+
+// withField adds name to fields, a case's field list, keeping ti's field
+// order.
+func withField(ti *typeInfo, fields []string, name string) []string {
+	out := make([]string, 0, len(fields)+1)
+	for i := range ti.Fields {
+		if n := ti.Fields[i].WireName; n == name || slices.Contains(fields, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (ui *unionInfo) inEveryCase(name string) bool {
 	for i := range ui.cases {
 		if !slices.Contains(ui.cases[i].fields, name) {
@@ -96,7 +181,7 @@ func (ui *unionInfo) inEveryCase(name string) bool {
 
 // caseValues checks u's tag field and returns its case values in emission
 // order.
-func (e *astEngine) caseValues(u Union, ti *typeInfo) ([]string, error) {
+func (e *astEngine) caseValues(u *Union, ti *typeInfo) ([]string, error) {
 	tag := ti.field(u.Tag)
 	if tag == nil {
 		return nil, fmt.Errorf("has no field %q to tag it", u.Tag)
@@ -120,7 +205,7 @@ func (e *astEngine) caseValues(u Union, ti *typeInfo) ([]string, error) {
 
 // resolveCase checks case v of u against ti and lists its fields in field
 // order.
-func resolveCase(u Union, ti *typeInfo, v string) (unionCase, error) {
+func resolveCase(u *Union, ti *typeInfo, v string) (unionCase, error) {
 	if !isComponentNamePart(v) {
 		return unionCase{}, fmt.Errorf("case %q must be letters, digits, '.', '-' or '_', since it names an OpenAPI component", v)
 	}
@@ -155,12 +240,34 @@ func (ti *typeInfo) field(name string) *fieldInfo {
 	return nil
 }
 
-// caseFields returns ti's fields uc allows, the tag first.
+// caseFields returns ti's fields uc allows, the tag first, the payload as uc
+// types it.
 func (ti *typeInfo) caseFields(uc *unionCase) []*fieldInfo {
 	out := make([]*fieldInfo, 0, 1+len(uc.fields))
 	out = append(out, ti.field(ti.Union.tag))
 	for _, name := range uc.fields {
+		if name == ti.Union.payload && uc.payload != nil {
+			out = append(out, uc.payload)
+			continue
+		}
 		out = append(out, ti.field(name))
+	}
+	return out
+}
+
+// graphFields returns every field a walk of the type graph follows from ti:
+// its own, then each case's typed payload, whose type its raw field hides.
+func (ti *typeInfo) graphFields() []*fieldInfo {
+	out := make([]*fieldInfo, 0, len(ti.Fields))
+	for i := range ti.Fields {
+		out = append(out, &ti.Fields[i])
+	}
+	if ti.Union != nil {
+		for i := range ti.Union.cases {
+			if p := ti.Union.cases[i].payload; p != nil {
+				out = append(out, p)
+			}
+		}
 	}
 	return out
 }

@@ -1,6 +1,7 @@
 package wiregen
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -88,12 +89,43 @@ type Endpoint struct {
 	Description string
 	Headers     []Header
 	Errors      []ErrorRef
-	Security    []string // OpenAPI security scheme names; nil: public
+	// Security are the operation's alternatives, in order: a request must
+	// satisfy one of them. nil: public.
+	Security []SecurityRequirement
+	// Servers are the servers this operation answers on, in place of the
+	// document's. nil: the document's.
+	Servers []Server
 	// Status is the success status: a 2xx, or a redirect's 3xx. Zero is 200,
 	// 204 for a KindJSON endpoint with no Response, and 302 for KindRedirect.
 	Status int
 	Array  bool // the body is a JSON array of Response
 	Kind   Kind
+}
+
+// SecurityRequirement is one OpenAPI Security Requirement Object
+// (https://spec.openapis.org/oas/v3.1.0#security-requirement-object): every
+// scheme it names must be satisfied together, each with its scope list. For
+// oauth2 and openIdConnect the list holds scopes; for any other scheme it may
+// hold role names. A nil list emits []. An empty requirement makes the
+// operation's security optional.
+type SecurityRequirement map[string][]string
+
+// Server is one OpenAPI Server Object
+// (https://spec.openapis.org/oas/v3.1.0#server-object). URL may hold
+// {name} placeholders, each defined by one of Variables.
+type Server struct {
+	Variables   map[string]ServerVariable
+	URL         string
+	Description string
+}
+
+// ServerVariable is one OpenAPI Server Variable Object
+// (https://spec.openapis.org/oas/v3.1.0#server-variable-object). Default is
+// required and, when Enum is set, one of its values.
+type ServerVariable struct {
+	Default     string
+	Description string
+	Enum        []string
 }
 
 // successStatus is e's success status, Status or its kind's default.
@@ -251,6 +283,9 @@ func validateEndpoint(e *Endpoint) error {
 	if err := validateExtensions("endpoint "+e.Name, e.Extensions); err != nil {
 		return err
 	}
+	if err := validateServers(e); err != nil {
+		return err
+	}
 	return validateHeaders(e)
 }
 
@@ -304,6 +339,63 @@ func validateStatus(e *Endpoint) error {
 		return fmt.Errorf("wiregen: endpoint %s has status %d; 204 is exactly the status of a JSON endpoint with no Response", e.Name, st)
 	}
 	return nil
+}
+
+// validateServers checks each of e's servers.
+func validateServers(e *Endpoint) error {
+	for i := range e.Servers {
+		if err := validateServer(&e.Servers[i]); err != nil {
+			return fmt.Errorf("wiregen: endpoint %s %w", e.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateServer checks one server: a URL, every {name} in it a variable,
+// every variable used, and each default present and, beside an enum, one of
+// its values.
+func validateServer(sv *Server) error {
+	if sv.URL == "" {
+		return errors.New("has a server with no URL")
+	}
+	used, err := serverPlaceholders(sv)
+	if err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(sv.Variables)) {
+		v := sv.Variables[name]
+		switch {
+		case !used[name]:
+			return fmt.Errorf("server %q defines variable %q, which its URL does not use", sv.URL, name)
+		case v.Default == "":
+			return fmt.Errorf("server %q variable %q has no Default", sv.URL, name)
+		case len(v.Enum) > 0 && !slices.Contains(v.Enum, v.Default):
+			return fmt.Errorf("server %q variable %q has Default %q, which is not in its Enum", sv.URL, name, v.Default)
+		}
+	}
+	return nil
+}
+
+// serverPlaceholders returns the {name} placeholders of sv's URL, refusing
+// one that is unclosed or that Variables does not define.
+func serverPlaceholders(sv *Server) (map[string]bool, error) {
+	used := map[string]bool{}
+	for rest := sv.URL; ; {
+		i := strings.IndexByte(rest, '{')
+		if i < 0 {
+			return used, nil
+		}
+		end := strings.IndexByte(rest[i:], '}')
+		if end < 0 {
+			return nil, fmt.Errorf("server %q has an unclosed {", sv.URL)
+		}
+		name := rest[i+1 : i+end]
+		if _, ok := sv.Variables[name]; !ok {
+			return nil, fmt.Errorf("server %q uses {%s}, which Variables does not define", sv.URL, name)
+		}
+		used[name] = true
+		rest = rest[i+end+1:]
+	}
 }
 
 // validateExtensions rejects an extension key outside OpenAPI's x- space
