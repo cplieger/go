@@ -277,8 +277,8 @@ func BenchmarkIsTransient_Permanent(b *testing.B) {
 //     "free when the secret is absent" belongs to the ERROR, not to
 //     RedactTransportError. The helper has to call Error() to find out whether
 //     the secret is there, so an error that BUILDS its message pays for that
-//     message on the no-op path — a *StatusError costs 5 allocations to redact
-//     nothing, because its Error() re-serializes the URL through redactURL.
+//     message on the no-op path: a *StatusError pays for fmt.Sprintf of its
+//     code and its stored URL.
 //   - The negative path is not the expensive path for the classifier (every
 //     class is 0), but it IS for the parser: a well-formed Retry-After is free
 //     and a malformed one costs 11, so the cheap input is the one a cooperating
@@ -627,9 +627,9 @@ func TestDoorAllocationsWithoutObserver(t *testing.T) {
 // cooperating upstream actually sends: delta-seconds, the form rate-limiters
 // emit, and an absent header, what most responses carry. Both are free and on
 // the per-response path: GetBytes parses Retry-After on every non-2xx, twice
-// on a retried one, and every door parses it on every response while an
-// Observer is set. The date forms measure 2 to 8 allocations, so they are NOT in this
-// table; their contract is the bounded one below.
+// on a retryable one, and every door parses it on every response while an
+// Observer is set. The date forms measure 2 to 8 allocations, so they are NOT
+// in this table; their contract is the bounded one below.
 func TestParseRetryAfterAllocationsOnWellFormedValues(t *testing.T) {
 	headers := map[string]string{
 		"delta_seconds":           "30",
@@ -689,29 +689,14 @@ func TestParseRetryAfterAllocationsAreBounded(t *testing.T) {
 	}
 }
 
-// TestParseRetryAfterCostDoesNotScaleWithHeaderLength is the contract the
-// benchmark tracker cannot see, and the reason this section exists.
-//
-// Retry-After is an attacker-or-upstream-controlled header string, parsed on
-// every non-2xx response, and on every response while an Observer is set,
-// before any policy has decided the peer is
-// misbehaving. An upstream that can make the parse a thousand times more
-// expensive by sending a thousand times more header has an amplification vector
-// inside the mechanism that is supposed to bound the damage a failing upstream
-// does.
-//
-// The measured answer is that the allocation COUNT is flat — 11 at one byte and
-// 11 at a megabyte — so the assertion is equality against the smallest input's
-// count rather than the literal 11. That way a stdlib change to the constant
-// leaves the test green while any length dependence turns it red, which is the
-// property worth gating.
-//
-// What is NOT asserted, and must not be read as passing: the byte volume grows
-// with the header at roughly 7x, because strconv.ParseInt clones the string into
-// its *NumError and each failed http.ParseTime layout does the same. A 1 MB
-// Retry-After copies about 7 MB. Gating that number would gate the stdlib's
-// error-reporting internals; the flat count is what says this package does not
-// itself scan, split or copy the header.
+// TestParseRetryAfterCostDoesNotScaleWithHeaderLength gates the allocation
+// COUNT of parsing an upstream-controlled Retry-After, parsed on every non-2xx
+// and on every response while an Observer is set, against header length: it
+// must equal the one-byte input's count (11 today), so a length dependence, an
+// amplification vector, turns it red and a stdlib constant change does not.
+// Byte volume is NOT gated: it grows about 7x with the header because
+// strconv.ParseInt and each failed http.ParseTime layout clone the string into
+// their errors, which is stdlib error reporting, not this package scanning it.
 func TestParseRetryAfterCostDoesNotScaleWithHeaderLength(t *testing.T) {
 	classes := map[string]struct {
 		build   func(n int) string
@@ -1058,19 +1043,10 @@ func TestRedactTransportErrorAllocations(t *testing.T) {
 		}
 	})
 
-	// This is the property that did NOT hold as expected, recorded rather than
-	// asserted away. "Free when the secret is absent" is a property of the
-	// ERROR, not of the helper: to decide whether the secret is present at all,
-	// RedactTransportError must call Error() and search the result, so an error
-	// whose Error() BUILDS its message pays for that message even when nothing
-	// is replaced. *StatusError is exactly that shape: its Error() formats the
-	// code and the stored, already redacted URL with fmt.Sprintf, so a caller
-	// redacting a known secret out of one of this package's own status errors
-	// pays for that formatting on the no-op path.
-	//
-	// The direction is asserted so a future change makes itself visible: if this
-	// ever becomes free (a cached message, a cheaper rendering), the test names
-	// what to do about it.
+	// RedactTransportError must render Error() to search it for the secret, so an
+	// error whose Error() builds its message, as *StatusError's fmt.Sprintf does,
+	// pays for that rendering even when nothing is replaced. The direction is
+	// asserted so a change that makes this free names itself.
 	t.Run("rendering_error_is_not_free_when_the_secret_is_absent", func(t *testing.T) {
 		statusErr := &StatusError{Code: 429, redacted: redactURL("https://api.example/v1/items?cmd=list")}
 		got := testing.AllocsPerRun(200, func() {

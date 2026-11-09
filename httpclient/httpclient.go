@@ -1505,10 +1505,11 @@ func rewrap(inner error, mark func(error) error) error {
 	return mark(inner)
 }
 
-// errRequestFailed stands in for the cause of a *url.Error that has none. It
-// is deliberately contentless: an error with no cause has nothing else to
-// report, and the one field such a *url.Error does carry is the URL this
-// package exists to keep out of logs.
+// errRequestFailed is the placeholder for a reduction with nothing left to
+// report: a *url.Error with no cause, one an As method surfaced with no chain,
+// an Unwrap() []error whose branches rejoin to nothing, or a chain past
+// maxURLErrorDepth. It is deliberately contentless: the one field such an
+// error carries is the URL this package exists to keep out of logs.
 var errRequestFailed = errors.New("request failed")
 
 // urlErrorCause returns the cause a *url.Error reduces to: urlErr.Err through

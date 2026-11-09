@@ -68,6 +68,16 @@ func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) 
 				t.Errorf("got %q, want the step over the placeholder", got)
 			}
 		}},
+		{"a join branch that reduces to nothing", errors.Join(sibling, emptyJoinURL{}), func(t *testing.T, got error) {
+			if got.Error() != "independent failure\nrequest failed" {
+				t.Errorf("got %q, want the sibling and the placeholder", got)
+			}
+		}},
+		{"a join of nil branches", nilBranchesURL{}, func(t *testing.T, got error) {
+			if got.Error() != "request failed" {
+				t.Errorf("got %q, want the placeholder", got)
+			}
+		}},
 		{"a cause that reduces to nothing", emptyJoinURL{}, func(t *testing.T, got error) {
 			if got.Error() != "request failed" {
 				t.Errorf("got %q, want the placeholder", got)
@@ -120,7 +130,7 @@ func TestStageError_renders_the_cause_as_w_does(t *testing.T) {
 }
 
 // emptyJoinURL surfaces a *url.Error through an As method and unwraps to no
-// branches, so its reduction is an empty errors.Join: nil.
+// branches, so its branches rejoin to nothing and it reduces to the placeholder.
 type emptyJoinURL struct{}
 
 func (emptyJoinURL) Error() string   { return "Get \"https://api.example/x?token=s3cret\": EOF" }
@@ -132,6 +142,11 @@ func (emptyJoinURL) As(target any) bool {
 	}
 	return false
 }
+
+// nilBranchesURL is emptyJoinURL with one nil branch, which errors.Join drops.
+type nilBranchesURL struct{ emptyJoinURL }
+
+func (nilBranchesURL) Unwrap() []error { return []error{nil} }
 
 // asURLError surfaces a *url.Error through an As method and no Unwrap, so the
 // reduction has no chain to descend.
