@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
-	"github.com/cplieger/go/wiregen/testdata/edges"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2/testdata/edges"
 )
 
 // Tests for decoder emission: the primitive validators chosen per field, the
@@ -205,7 +205,7 @@ func TestDecoders_OptionalPassthroughKeepsNull(t *testing.T) {
 // decoder on it, then decodes through that decoder when one is mapped and
 // casts to the mapped TS type when not.
 func TestDecoders_OptionalMappedField(t *testing.T) {
-	const customID = "github.com/cplieger/go/wiregen/testdata/basic.CustomID"
+	const customID = "github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID"
 	cases := []struct {
 		name    string
 		decoder string

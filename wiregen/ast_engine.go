@@ -57,7 +57,10 @@ type fieldInfo struct {
 	// ViaEmbedPtr: promoted through an embedded pointer, whose fields
 	// encoding/json skips when it is nil.
 	ViaEmbedPtr bool
-	Tagged      bool // wire name came from an explicit json tag
+	// RawNull: raw JSON typed as another shape (a union payload), whose bytes
+	// can be JSON null, which no omit option drops.
+	RawNull bool
+	Tagged  bool // wire name came from an explicit json tag
 }
 
 // wireKind is the one wire form encoding/json gives a value.
@@ -189,8 +192,8 @@ func (e *astEngine) reach(used map[string]map[direction]bool, wt Type, d directi
 	}
 	used[wt.Name][d] = true
 	ti := e.byName[wt.Name]
-	for i := range ti.Fields {
-		for f := &ti.Fields[i]; f != nil; f = f.Elem {
+	for _, top := range ti.graphFields() {
+		for f := top; f != nil; f = f.Elem {
 			if f.Kind == kindStruct {
 				e.reach(used, Type{PkgPath: e.gen.typeNames[f.GoTypeName], Name: f.GoTypeName}, d)
 			}
@@ -395,32 +398,54 @@ func wireName(ref EnumRef, c *types.Const) (name string, member bool, err error)
 	return name, werr == nil, nil
 }
 
+// lookupStruct finds wt's struct in pkg. A type an endpoint, event, union or
+// ErrorEnvelope names is refused under that role, with no hint a role cannot
+// use.
+func (e *astEngine) lookupStruct(pkg *packages.Package, wt Type) (*types.TypeName, *types.Struct, error) {
+	role, named := e.gen.typeRoles[wt.Name]
+	obj := pkg.Types.Scope().Lookup(wt.Name)
+	switch {
+	case obj == nil && named:
+		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
+	case obj == nil:
+		return nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
+	}
+	tn, ok := obj.(*types.TypeName)
+	switch {
+	case !ok && named:
+		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
+	case !ok:
+		return nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
+	}
+	st, ok := tn.Type().Underlying().(*types.Struct)
+	switch {
+	case !ok && named:
+		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a struct", role, wt.PkgPath, wt.Name)
+	case !ok:
+		return nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
+	}
+	return tn, st, nil
+}
+
 func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (*typeInfo, error) {
 	pkg, ok := allPkgs[wt.PkgPath]
 	if !ok {
 		return nil, fmt.Errorf("wiregen: package %q not loaded, and type %s needs it", wt.PkgPath, wt.Name)
 	}
 
-	obj := pkg.Types.Scope().Lookup(wt.Name)
-	if obj == nil {
-		return nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
-	}
-
-	tn, ok := obj.(*types.TypeName)
-	if !ok {
-		return nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
+	tn, st, err := e.lookupStruct(pkg, wt)
+	if err != nil {
+		return nil, err
 	}
 
 	ti := &typeInfo{Name: wt.Name}
 
 	ti.Doc = commentToJSDoc(typeDoc(pkg, wt.Name))
 
-	underlying := tn.Type().Underlying()
-	st, ok := underlying.(*types.Struct)
-	if !ok {
-		return nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
-	}
-	if c := marshalCodec(tn.Type()); c != codecPlain {
+	switch c, role := marshalCodec(tn.Type()), e.gen.typeRoles[wt.Name]; {
+	case c != codecPlain && role != "":
+		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is the "+role+", but "+c.why()+"; drop the method")
+	case c != codecPlain:
 		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
 	}
 	ti.Fields = e.resolveStructFields(st, pkg, allPkgs, 0, nil)

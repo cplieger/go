@@ -108,6 +108,28 @@ wiregen.Union{
 - `decodeTiming` reads the tag, refuses a present field another case owns, and decodes the case's fields.
 - The document carries a `oneOf` with a `discriminator` over one closed component per case, `Timing.shift` say, each with `additionalProperties: false`.
 
+A union whose tag also selects the type of a `json.RawMessage` field names it in `Payload`, and maps every case to that field's type in `PayloadTypes`, the zero `Type` for a case with no payload:
+
+```go
+wiregen.Union{
+    Type:  wiregen.TypeRef[wire.Command](),
+    Tag:   "type",
+    Cases: map[string][]string{"create": {}, "rename": {"chat_id"}, "close": {"chat_id"}},
+    Payload: "payload",
+    PayloadTypes: map[string]wiregen.Type{
+        "create": wiregen.TypeRef[wire.CreateChat](),
+        "rename": wiregen.TypeRef[wire.Rename](),
+        "close":  {},
+    },
+}
+```
+
+The payload field is listed in no case. It belongs to each case with a payload type, with its own omit options, and is refused in the others. A `json.RawMessage` can be `null` on the wire in two ways: encoding/json writes a nil one as `null` unless an omit option drops it, and writes one holding the bytes `null`, such as a request `null` decoded into it, whatever the options. So the payload is optional, and `null` reads as absent. Each payload type is a struct, as every registered type is, and joins the registry's types. `Generate` refuses a `Payload` that names no field, a payload field that is not a `json.RawMessage`, `PayloadTypes` set without `Payload`, `PayloadTypes` keys that are not exactly the case values, a case that lists the payload field, and a union where no case has a payload type.
+
+- The types file carries `| { type: "create"; payload?: CreateChat } | ...`.
+- The decoder decodes `payload` with that case's decoder, reads `null` as absent, and refuses a present payload in a case that has none.
+- In each case's component, `payload` is that type's `$ref` or `null`, or absent.
+
 ## Mappings
 
 `Registry.Mappings` gives a Go type the consumer's own wire form, in place of wiregen's reading of it. It is keyed by full `importpath.Type`, such as `".../uuid.UUID"`:

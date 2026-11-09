@@ -635,8 +635,8 @@ func (g *generator) arbReachability(engine *astEngine) map[string]map[string]boo
 func (g *generator) arbEdges(engine *astEngine) map[string][]string {
 	edges := make(map[string][]string, len(engine.types))
 	for _, ti := range engine.types {
-		for i := range ti.Fields {
-			edges[ti.Name] = append(edges[ti.Name], g.arbRefs(&ti.Fields[i])...)
+		for _, f := range ti.graphFields() {
+			edges[ti.Name] = append(edges[ti.Name], g.arbRefs(f)...)
 		}
 	}
 	return edges

@@ -1,12 +1,14 @@
 package wiregen
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -88,12 +90,43 @@ type Endpoint struct {
 	Description string
 	Headers     []Header
 	Errors      []ErrorRef
-	Security    []string // OpenAPI security scheme names; nil: public
+	// Security are the operation's alternatives, in order: a request must
+	// satisfy one of them. nil: public.
+	Security []SecurityRequirement
+	// Servers are the servers this operation answers on, in place of the
+	// document's. nil: the document's.
+	Servers []Server
 	// Status is the success status: a 2xx, or a redirect's 3xx. Zero is 200,
 	// 204 for a KindJSON endpoint with no Response, and 302 for KindRedirect.
 	Status int
 	Array  bool // the body is a JSON array of Response
 	Kind   Kind
+}
+
+// SecurityRequirement is one OpenAPI Security Requirement Object
+// (https://spec.openapis.org/oas/v3.1.0#security-requirement-object): every
+// scheme it names must be satisfied together, each with its role list, which
+// OAS 3.1 allows for the http, apiKey and mutualTLS schemes wiregen declares.
+// A nil list emits []. An empty requirement makes the operation's security
+// optional.
+type SecurityRequirement map[string][]string
+
+// Server is one OpenAPI Server Object
+// (https://spec.openapis.org/oas/v3.1.0#server-object). URL may hold
+// {name} placeholders, each defined by one of Variables.
+type Server struct {
+	Variables   map[string]ServerVariable
+	URL         string
+	Description string
+}
+
+// ServerVariable is one OpenAPI Server Variable Object
+// (https://spec.openapis.org/oas/v3.1.0#server-variable-object). Default is
+// required and, when Enum is set, one of its values.
+type ServerVariable struct {
+	Default     string
+	Description string
+	Enum        []string
 }
 
 // successStatus is e's success status, Status or its kind's default.
@@ -251,6 +284,9 @@ func validateEndpoint(e *Endpoint) error {
 	if err := validateExtensions("endpoint "+e.Name, e.Extensions); err != nil {
 		return err
 	}
+	if err := validateServers(e); err != nil {
+		return err
+	}
 	return validateHeaders(e)
 }
 
@@ -304,6 +340,134 @@ func validateStatus(e *Endpoint) error {
 		return fmt.Errorf("wiregen: endpoint %s has status %d; 204 is exactly the status of a JSON endpoint with no Response", e.Name, st)
 	}
 	return nil
+}
+
+// validateServers checks each of e's servers.
+func validateServers(e *Endpoint) error {
+	for i := range e.Servers {
+		if err := validateServer(&e.Servers[i]); err != nil {
+			return fmt.Errorf("wiregen: endpoint %s %w", e.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateServer checks one server: a URL, every {name} in it a variable,
+// every variable used, and each default present and, beside an enum, one of
+// its values.
+func validateServer(sv *Server) error {
+	if sv.URL == "" {
+		return errors.New("has a server with no URL")
+	}
+	used, err := serverPlaceholders(sv)
+	if err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(sv.Variables)) {
+		v := sv.Variables[name]
+		switch {
+		case !used[name]:
+			return fmt.Errorf("server %q defines variable %q, which its URL does not use", sv.URL, name)
+		case v.Default == "":
+			return fmt.Errorf("server %q variable %q has no Default", sv.URL, name)
+		case len(v.Enum) > 0 && !slices.Contains(v.Enum, v.Default):
+			return fmt.Errorf("server %q variable %q has Default %q, which is not in its Enum", sv.URL, name, v.Default)
+		}
+		// A value is substituted into the URL, so it obeys the URL's literal
+		// rules, braces included.
+		for _, val := range append([]string{v.Default}, v.Enum...) {
+			if !utf8.ValidString(val) {
+				return fmt.Errorf("server %q variable %q value %q is not valid UTF-8", sv.URL, name, val)
+			}
+			if r, bad := badServerValue(val); bad {
+				return fmt.Errorf("server %q variable %q value %q holds %q: %s, and a value holds no brace", sv.URL, name, val, r, serverRuneRule)
+			}
+		}
+	}
+	return nil
+}
+
+// serverPlaceholders returns the {name} placeholders of sv's URL, refusing
+// invalid UTF-8, an unbalanced brace, an empty or nested placeholder, one used
+// twice, one Variables does not define, and a literal character no server URL
+// holds. OAS 3.1.2 says a server URL has no query or fragment; the rest
+// follows OAS 3.2.0's server URL grammar
+// (https://spec.openapis.org/oas/v3.2.0#server-variable-object), which 3.1
+// leaves unstated: each variable once, named by one or more characters other
+// than braces, and literals with no space, control character, double quote,
+// any of <>\^`| or a % that starts no percent-encoding.
+func serverPlaceholders(sv *Server) (map[string]bool, error) {
+	if !utf8.ValidString(sv.URL) {
+		return nil, fmt.Errorf("server %q is not valid UTF-8", sv.URL)
+	}
+	used := map[string]bool{}
+	for rest := sv.URL; ; {
+		i := strings.IndexAny(rest, "{}")
+		if err := serverLiteral(sv.URL, rest, i); err != nil {
+			return nil, err
+		}
+		if i < 0 {
+			return used, nil
+		}
+		if rest[i] == '}' {
+			return nil, fmt.Errorf("server %q has an unbalanced }", sv.URL)
+		}
+		end := strings.IndexAny(rest[i+1:], "{}")
+		if end < 0 || rest[i+1+end] != '}' {
+			return nil, fmt.Errorf("server %q has an unclosed or nested {", sv.URL)
+		}
+		name := rest[i+1 : i+1+end]
+		switch _, ok := sv.Variables[name]; {
+		case name == "":
+			return nil, fmt.Errorf("server %q has an empty placeholder {}", sv.URL)
+		case used[name]:
+			return nil, fmt.Errorf("server %q uses {%s} twice", sv.URL, name)
+		case !ok:
+			return nil, fmt.Errorf("server %q uses {%s}, which Variables does not define", sv.URL, name)
+		}
+		used[name] = true
+		rest = rest[i+1+end+1:]
+	}
+}
+
+// serverLiteral refuses a character of rest before end (all of rest when end
+// is negative) that a server URL's literal text cannot hold.
+func serverLiteral(url, rest string, end int) error {
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	if r, bad := badServerRune(rest); bad {
+		return fmt.Errorf("server %q holds %q outside a placeholder: %s", url, r, serverRuneRule)
+	}
+	return nil
+}
+
+// serverRuneRule is what badServerRune refuses, for its errors.
+const serverRuneRule = "a server URL has no query, fragment, space, control character, double quote, any of <>\\^`| or a % that starts no percent-encoding"
+
+// badServerValue returns the first rune of a variable value that the URL it
+// is substituted into cannot hold: a brace, or what badServerRune refuses.
+func badServerValue(v string) (rune, bool) {
+	if i := strings.IndexAny(v, "{}"); i >= 0 {
+		return rune(v[i]), true
+	}
+	return badServerRune(v)
+}
+
+// badServerRune returns the first rune of s that a server URL's literal text,
+// or a value substituted into it, cannot hold.
+func badServerRune(s string) (rune, bool) {
+	for i, r := range s {
+		switch {
+		case r == '%':
+			if i+2 >= len(s) || !isHexDigit(s[i+1]) || !isHexDigit(s[i+2]) {
+				return r, true
+			}
+		case r == ' ' || unicode.IsControl(r) || strings.ContainsRune("?#\"<>\\^`|", r):
+			return r, true
+		}
+	}
+	return 0, false
 }
 
 // validateExtensions rejects an extension key outside OpenAPI's x- space

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
-	"github.com/cplieger/go/wiregen/testdata/edges"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2/testdata/edges"
 )
 
 // Tests for the Go-type → TypeScript-type mapping performed by the AST field
@@ -14,7 +14,7 @@ import (
 // maps, aliases, time.Time, []byte, json.RawMessage, interfaces, and the
 // empty/optional/unregistered edge cases.
 
-const edgesPkg = "github.com/cplieger/go/wiregen/testdata/edges"
+const edgesPkg = "github.com/cplieger/go/wiregen/v2/testdata/edges"
 
 // edgesReg builds a registry over the edges fixture package for the given
 // registered types. Shared by the type-mapping, embedding, tag, and decoder

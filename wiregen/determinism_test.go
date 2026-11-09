@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
-	"github.com/cplieger/go/wiregen/testdata/crossref"
-	"github.com/cplieger/go/wiregen/testdata/edges"
-	"github.com/cplieger/go/wiregen/testdata/unions"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2/testdata/crossref"
+	"github.com/cplieger/go/wiregen/v2/testdata/edges"
+	"github.com/cplieger/go/wiregen/v2/testdata/unions"
 )
 
 // Tests that generated output is deterministic: byte-identical run to run, and

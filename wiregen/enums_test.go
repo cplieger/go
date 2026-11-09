@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/enums"
-	"github.com/cplieger/go/wiregen/testdata/enums/a"
-	"github.com/cplieger/go/wiregen/testdata/enums/b"
-	"github.com/cplieger/go/wiregen/testdata/enums/owner"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/enums"
+	"github.com/cplieger/go/wiregen/v2/testdata/enums/a"
+	"github.com/cplieger/go/wiregen/v2/testdata/enums/b"
+	"github.com/cplieger/go/wiregen/v2/testdata/enums/owner"
 )
 
-const enumsPkg = "github.com/cplieger/go/wiregen/testdata/enums"
+const enumsPkg = "github.com/cplieger/go/wiregen/v2/testdata/enums"
 
 func enumsReg(refs []wiregen.EnumRef, types ...wiregen.Type) *testRegistry {
 	r := newTestRegistry()

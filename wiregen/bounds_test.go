@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/openapi"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/openapi"
 )
 
-const openapiPkg = "github.com/cplieger/go/wiregen/testdata/openapi"
+const openapiPkg = "github.com/cplieger/go/wiregen/v2/testdata/openapi"
 
 // boundsReg registers Create, whose fields carry every bound method.
 func boundsReg() *testRegistry {

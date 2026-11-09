@@ -1,4 +1,4 @@
-module github.com/cplieger/go/wiregen
+module github.com/cplieger/go/wiregen/v2
 
 go 1.27.3
 

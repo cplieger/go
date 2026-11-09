@@ -100,10 +100,31 @@ func (g *generator) validateSecurity() error {
 	}
 	for i := range g.Endpoints {
 		e := &g.Endpoints[i]
-		for _, s := range e.Security {
-			if _, ok := g.OpenAPI.SecuritySchemes[s]; !ok {
-				return fmt.Errorf("wiregen: endpoint %s names security scheme %q, which OpenAPI.SecuritySchemes does not declare", e.Name, s)
+		for _, req := range e.Security {
+			if err := g.validateRequirement(req); err != nil {
+				return fmt.Errorf("wiregen: endpoint %s %w", e.Name, err)
 			}
+		}
+	}
+	return nil
+}
+
+// validateRequirement checks one security requirement: each scheme
+// declared, and its role list free of empty and repeated roles.
+func (g *generator) validateRequirement(req SecurityRequirement) error {
+	for _, name := range slices.Sorted(maps.Keys(req)) {
+		if _, ok := g.OpenAPI.SecuritySchemes[name]; !ok {
+			return fmt.Errorf("names security scheme %q, which OpenAPI.SecuritySchemes does not declare", name)
+		}
+		seen := map[string]bool{}
+		for _, role := range req[name] {
+			switch {
+			case role == "":
+				return fmt.Errorf("security scheme %q lists an empty role", name)
+			case seen[role]:
+				return fmt.Errorf("security scheme %q lists role %q twice", name, role)
+			}
+			seen[role] = true
 		}
 	}
 	return nil
@@ -347,8 +368,8 @@ func (b *docBuilder) spreadDiffers(differs map[string]bool) {
 
 // refsAny reports whether any of ti's fields references a type in set.
 func (ti *typeInfo) refsAny(set map[string]bool) bool {
-	for i := range ti.Fields {
-		if refsAny(&ti.Fields[i], set) {
+	for _, f := range ti.graphFields() {
+		if refsAny(f, set) {
 			return true
 		}
 	}
@@ -512,8 +533,10 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 
 // fieldSchema is f's value schema in direction d. A pointer, slice, map or
 // []byte is nullable: in a request always, since null decodes to nil, and in
-// a response unless omitempty or omitzero, since nil encodes as null. A Count
-// lower bound of 1 or more makes it never nullable.
+// a response unless omitempty or omitzero, since nil encodes as null. A typed
+// union payload is nullable in a response even with an omit option, since its
+// bytes can be JSON null. A Count lower bound of 1 or more makes it never
+// nullable.
 func (b *docBuilder) fieldSchema(f *fieldInfo, d direction) any {
 	s := b.valueSchema(f, d)
 	null := f.nullIn()
@@ -597,13 +620,47 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 	responses := map[string]any{strconv.Itoa(e.successStatus()): b.successResponse(e)}
 	maps.Copy(responses, b.errorResponses(e))
 	op["responses"] = responses
-	security := make([]any, 0, len(e.Security))
-	for _, s := range e.Security {
-		security = append(security, map[string]any{s: []any{}})
+	op["security"] = securityValue(e.Security)
+	if len(e.Servers) > 0 {
+		op["servers"] = serversValue(e.Servers)
 	}
-	op["security"] = security
 	maps.Copy(op, e.Extensions)
 	return op
+}
+
+// securityValue renders an operation's security: one requirement object per
+// alternative, in order, a nil role list as [].
+func securityValue(reqs []SecurityRequirement) []any {
+	out := make([]any, 0, len(reqs))
+	for _, req := range reqs {
+		alt := make(map[string]any, len(req))
+		for name, roles := range req {
+			alt[name] = append([]string{}, roles...)
+		}
+		out = append(out, alt)
+	}
+	return out
+}
+
+// serversValue renders an operation's servers.
+func serversValue(servers []Server) []any {
+	out := make([]any, 0, len(servers))
+	for _, sv := range servers {
+		srv := omitEmpty(map[string]any{"url": sv.URL, kwDescription: sv.Description})
+		if len(sv.Variables) > 0 {
+			vars := make(map[string]any, len(sv.Variables))
+			for name, v := range sv.Variables {
+				vv := omitEmpty(map[string]any{"default": v.Default, kwDescription: v.Description})
+				if len(v.Enum) > 0 {
+					vv["enum"] = append([]string{}, v.Enum...)
+				}
+				vars[name] = vv
+			}
+			srv["variables"] = vars
+		}
+		out = append(out, srv)
+	}
+	return out
 }
 
 // parameters renders e's path, query and header parameters in that order.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
+	"github.com/cplieger/go/wiregen/v2"
 )
 
 // testRegistry pairs a registry with the options every render of it takes, so

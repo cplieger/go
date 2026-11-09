@@ -45,6 +45,49 @@ for (const body of bodies) {
 	}
 }
 
+// A payload-typed union type-checks under tsc and, under node, decodes each
+// case's payload with that case's decoder, refusing a payload in a case with
+// none and a payload of another case's shape; a null payload is absent.
+func TestUnion_PayloadDecoderRuns(t *testing.T) {
+	out := runTS(t, commandReg(), map[string]string{"main.ts": `import { decodeCommand } from "./decoders.gen.js";
+import type { Command } from "./types.gen.js";
+const bodies = [
+  '{"type":"create","payload":{"title":"a"}}',
+  '{"type":"rename","chat_id":"c","payload":{"name":"n"}}',
+  '{"type":"close","chat_id":"c"}',
+  '{"type":"create"}',
+  '{"type":"close","payload":{"name":"n"}}',
+  '{"type":"create","payload":{"name":"n"}}',
+  '{"type":"rename","payload":null}',
+];
+for (const body of bodies) {
+  try {
+    const c: Command = decodeCommand(JSON.parse(body));
+    if (c.type === "create" && c.payload !== undefined) {
+      const title: string = c.payload.title;
+      void title;
+    }
+    console.log("ok " + JSON.stringify(c));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"type":"create","payload":{"title":"a"}}`,
+		`ok {"type":"rename","chat_id":"c","payload":{"name":"n"}}`,
+		`ok {"type":"close","chat_id":"c"}`,
+		`ok {"type":"create"}`,
+		`refused $.command.payload: not allowed in this case`,
+		`refused $.create_chat.title: expected string, got undefined`,
+		`ok {"type":"rename"}`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
 // The bounded decoders of the full document's registry type-check, and
 // node runs them.
 func TestBoundedDecoders_typeCheck(t *testing.T) {

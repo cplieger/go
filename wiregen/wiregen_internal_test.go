@@ -12,9 +12,9 @@ import (
 // --- shared internal test helpers ---
 
 const (
-	basicPkg    = "github.com/cplieger/go/wiregen/testdata/basic"
-	edgesPkg    = "github.com/cplieger/go/wiregen/testdata/edges"
-	crossrefPkg = "github.com/cplieger/go/wiregen/testdata/crossref"
+	basicPkg    = "github.com/cplieger/go/wiregen/v2/testdata/basic"
+	edgesPkg    = "github.com/cplieger/go/wiregen/v2/testdata/edges"
+	crossrefPkg = "github.com/cplieger/go/wiregen/v2/testdata/crossref"
 )
 
 // checkContains and checkNotContains are the generated-output checks in

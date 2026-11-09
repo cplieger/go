@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/cplieger/go/wiregen/testdata/openapi"
+	"github.com/cplieger/go/wiregen/v2/testdata/openapi"
 )
 
 // FuzzOpenAPI_encodingsValidate holds the emitted schemas to encoding/json:

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
+	"github.com/cplieger/go/wiregen/v2"
 )
 
 // nodeArgs run a TS module by stripping its types, which node does natively

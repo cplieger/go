@@ -3,6 +3,7 @@ package wiregen_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -10,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/client"
-	"github.com/cplieger/go/wiregen/testdata/openapi"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/client"
+	"github.com/cplieger/go/wiregen/v2/testdata/openapi"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -57,7 +58,10 @@ func fullReg() *testRegistry {
 				{Code: "gone", Status: 404},
 				internal,
 			},
-			Security:   []string{"bearer", "session"},
+			Security: []wiregen.SecurityRequirement{
+				{"session": nil},
+				{"bearer": {"items:read"}},
+			},
 			Extensions: map[string]any{"x-subflux-access": "read"},
 		},
 		{
@@ -310,7 +314,9 @@ func operation(t *testing.T, doc, method, path string) map[string]any {
 func TestSecurityAndExtensions(t *testing.T) {
 	doc := mustGen(t, fullReg().openapiFile)
 	get := operation(t, doc, "get", "/api/items/{id}")
-	if got := mustJSON(t, get["security"]); got != `[{"bearer":[]},{"session":[]}]` {
+	// Each requirement is one alternative, in order, with its role list; a nil
+	// list emits [].
+	if got := mustJSON(t, get["security"]); got != `[{"session":[]},{"bearer":["items:read"]}]` {
 		t.Errorf("getItem security = %s", got)
 	}
 	if get["x-subflux-access"] != "read" {
@@ -330,15 +336,112 @@ func TestSecurityAndExtensions(t *testing.T) {
 	if got := mustJSON(t, d.Components.SecuritySchemes); got != `{"bearer":{"scheme":"bearer","type":"http"},"session":{"in":"cookie","name":"sid","type":"apiKey"}}` {
 		t.Errorf("securitySchemes = %s", got)
 	}
-	t.Run("an undeclared scheme is refused", func(t *testing.T) {
+	t.Run("schemes in one requirement are satisfied together", func(t *testing.T) {
 		r := fullReg()
-		r.Endpoints[0].Security = []string{"oauth"}
-		requireGenerateError(t, r, `names security scheme "oauth"`)
+		r.Endpoints[0].Security = []wiregen.SecurityRequirement{{"bearer": {"a", "b"}, "session": nil}}
+		doc := mustGen(t, r.openapiFile)
+		if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["security"]); got != `[{"bearer":["a","b"],"session":[]}]` {
+			t.Errorf("security = %s", got)
+		}
 	})
+	t.Run("an empty requirement makes the operation's security optional", func(t *testing.T) {
+		r := fullReg()
+		r.Endpoints[0].Security = []wiregen.SecurityRequirement{{"bearer": nil}, {}}
+		doc := mustGen(t, r.openapiFile)
+		if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["security"]); got != `[{"bearer":[]},{}]` {
+			t.Errorf("security = %s", got)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		req  []wiregen.SecurityRequirement
+		want string
+	}{
+		{"an undeclared scheme", []wiregen.SecurityRequirement{{"oauth": nil}}, `names security scheme "oauth"`},
+		{"an undeclared scheme beside a declared one", []wiregen.SecurityRequirement{{"bearer": nil, "oauth": {"x"}}}, `names security scheme "oauth"`},
+		{"an empty role", []wiregen.SecurityRequirement{{"bearer": {"read", ""}}}, `security scheme "bearer" lists an empty role`},
+		{"a role twice", []wiregen.SecurityRequirement{{"bearer": {"read", "read"}}}, `security scheme "bearer" lists role "read" twice`},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := fullReg()
+			r.Endpoints[0].Security = tc.req
+			requireGenerateError(t, r, tc.want)
+		})
+	}
 	t.Run("a malformed scheme is refused", func(t *testing.T) {
 		r := fullReg()
 		r.OpenAPI.SecuritySchemes["bad"] = wiregen.SecurityScheme{Type: "apiKey", In: "body", Name: "k"}
 		requireGenerateError(t, r, `security scheme "bad": type apiKey needs a Name and In of header, query or cookie`)
+	})
+}
+
+func TestOperationServers(t *testing.T) {
+	loopback := wiregen.Server{
+		URL:         "http://127.0.0.1:{port}",
+		Description: "reachable only from loopback inside the container",
+		Variables:   map[string]wiregen.ServerVariable{"port": {Default: "9847"}},
+	}
+	r := fullReg()
+	r.Endpoints[0].Servers = []wiregen.Server{loopback, {URL: "https://{host}/v1", Variables: map[string]wiregen.ServerVariable{
+		"host": {Default: "a.example", Enum: []string{"a.example", "b.example"}, Description: "the region"},
+	}}, {URL: "https://{the region}.example/", Variables: map[string]wiregen.ServerVariable{
+		"the region": {Default: "eu"},
+	}}}
+	doc := mustGen(t, r.openapiFile)
+	want := `[{"description":"reachable only from loopback inside the container","url":"http://127.0.0.1:{port}","variables":{"port":{"default":"9847"}}},` +
+		`{"url":"https://{host}/v1","variables":{"host":{"default":"a.example","description":"the region","enum":["a.example","b.example"]}}},` +
+		`{"url":"https://{the region}.example/","variables":{"the region":{"default":"eu"}}}]`
+	if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["servers"]); got != want {
+		t.Errorf("servers = %s\nwant %s", got, want)
+	}
+	if _, ok := operation(t, doc, "get", "/api/items")["servers"]; ok {
+		t.Error("an operation with no Servers carries a servers member")
+	}
+	for _, tc := range []struct {
+		name   string
+		server wiregen.Server
+		want   string
+	}{
+		{"no URL", wiregen.Server{}, "has a server with no URL"},
+		{"a placeholder with no variable", wiregen.Server{URL: "http://h:{port}"}, `server "http://h:{port}" uses {port}, which Variables does not define`},
+		{"a variable the URL does not use", wiregen.Server{URL: "http://h", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1"}}}, `server "http://h" defines variable "port", which its URL does not use`},
+		{"an empty default", wiregen.Server{URL: "http://h:{port}", Variables: map[string]wiregen.ServerVariable{"port": {}}}, `server "http://h:{port}" variable "port" has no Default`},
+		{"a default outside the enum", wiregen.Server{URL: "http://h:{port}", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1", Enum: []string{"2"}}}}, `server "http://h:{port}" variable "port" has Default "1", which is not in its Enum`},
+		{"an unclosed placeholder", wiregen.Server{URL: "http://h:{port"}, `server "http://h:{port" has an unclosed or nested {`},
+		{"a nested placeholder", wiregen.Server{URL: "http://h:{{port}}", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1"}}}, `server "http://h:{{port}}" has an unclosed or nested {`},
+		{"an unbalanced close", wiregen.Server{URL: "http://h:port}"}, `server "http://h:port}" has an unbalanced }`},
+		{"an empty placeholder", wiregen.Server{URL: "http://h:{}", Variables: map[string]wiregen.ServerVariable{"": {Default: "1"}}}, `server "http://h:{}" has an empty placeholder {}`},
+		{"a placeholder twice", wiregen.Server{URL: "http://{h}/{h}", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a"}}}, `server "http://{h}/{h}" uses {h} twice`},
+		{"a query", wiregen.Server{URL: "http://h/api?x=1"}, `server "http://h/api?x=1" holds '?' outside a placeholder`},
+		{"a fragment after a placeholder", wiregen.Server{URL: "http://{h}/#top", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a"}}}, `server "http://{h}/#top" holds '#' outside a placeholder`},
+		{"a space", wiregen.Server{URL: "http://h /a"}, `server "http://h /a" holds ' ' outside a placeholder`},
+		{"a control character", wiregen.Server{URL: "http://h/\x7f"}, `server "http://h/\x7f" holds '\x7f' outside a placeholder`},
+		{"a bare percent", wiregen.Server{URL: "http://h/100%"}, `server "http://h/100%" holds '%' outside a placeholder`},
+		{"a percent with one hex digit", wiregen.Server{URL: "http://h/%2"}, `server "http://h/%2" holds '%'`},
+		{"a percent with no hex digits", wiregen.Server{URL: "http://h/%zz"}, `server "http://h/%zz" holds '%'`},
+		{"invalid UTF-8", wiregen.Server{URL: "http://h/\xff"}, `server "http://h/\xff" is not valid UTF-8`},
+		{"a default holding a query", wiregen.Server{URL: "http://{h}/", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a?b"}}}, `server "http://{h}/" variable "h" value "a?b" holds '?'`},
+		{"an enum value holding a brace", wiregen.Server{URL: "http://{h}/", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a", Enum: []string{"a", "b}"}}}}, `variable "h" value "b}" holds '}'`},
+		{"a default that is not UTF-8", wiregen.Server{URL: "http://{h}/", Variables: map[string]wiregen.ServerVariable{"h": {Default: "\xff"}}}, `variable "h" value "\xff" is not valid UTF-8`},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := fullReg()
+			r.Endpoints[0].Servers = []wiregen.Server{tc.server}
+			requireGenerateError(t, r, tc.want)
+		})
+	}
+	for _, c := range "\"<>\\^`|" {
+		u := "http://h/a" + string(c) + "b"
+		t.Run(fmt.Sprintf("a literal %q is refused", c), func(t *testing.T) {
+			r := fullReg()
+			r.Endpoints[0].Servers = []wiregen.Server{{URL: u}}
+			requireGenerateError(t, r, fmt.Sprintf("server %q holds %q outside a placeholder", u, c))
+		})
+	}
+	t.Run("percent-encoding and an IPv6 zone are accepted", func(t *testing.T) {
+		r := fullReg()
+		r.Endpoints[0].Servers = []wiregen.Server{{URL: "http://h/a%20b"}, {URL: "http://[fe80::1%25eth0]/"}}
+		mustGen(t, r.openapiFile)
 	})
 }
 

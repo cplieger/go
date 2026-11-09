@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -123,10 +123,10 @@ func TestGenerateEvents_DataTypeResolvedAsIfInTypes(t *testing.T) {
 	cases := []struct {
 		name, typeName, wantErr string
 	}{
-		{"missing from its package", "Missing", "type Missing not found"},
-		{"a registered enum's name", "Status", "is registered twice"},
-		{"a string type", "Priority", "is not a struct"},
-		{"a constant", "StatusActive", "StatusActive in " + pkg + " is not a type"},
+		{"missing from its package", "Missing", `event "e" data type ` + pkg + ".Missing is not found in its package"},
+		{"a registered enum's name", "Status", `event "e" data type ` + pkg + ".Status is an enum; it must be a struct"},
+		{"a string type", "Priority", `event "e" data type ` + pkg + ".Priority is not a struct"},
+		{"a constant", "StatusActive", `event "e" data type ` + pkg + ".StatusActive is not a type"},
 		{"no name", "", "names no package-level type"},
 	}
 	for _, tc := range cases {
@@ -403,7 +403,7 @@ func TestMappings(t *testing.T) {
 	)
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasCustomMapped]()}
 	r.Mappings = map[string]wiregen.Mapping{
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
 	}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "  id: string;") {
@@ -427,7 +427,7 @@ func TestMappings_CollectionElement(t *testing.T) {
 	)
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasMappedSlice]()}
 	r.Mappings = map[string]wiregen.Mapping{
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string", Decoder: "reqStr"},
 	}
 	out := mustGen(t, r.typesFile)
 	if !strings.Contains(out, "  ids: string[];") {
@@ -449,7 +449,7 @@ func TestMappingsWithoutDecoder(t *testing.T) {
 	)
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasCustomMapped]()}
 	r.Mappings = map[string]wiregen.Mapping{
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "string"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string"},
 	}
 	dec := mustGen(t, r.decodersFile)
 	if !strings.Contains(dec, "own(o, \"id\") as string") {
@@ -767,7 +767,7 @@ func TestGenerate_ContextCancellation(t *testing.T) {
 // --- TypeRef registration ---
 func TestTypeRef(t *testing.T) {
 	if wt := wiregen.TypeRef[basic.User](); wt.Name != "User" ||
-		wt.PkgPath != "github.com/cplieger/go/wiregen/testdata/basic" {
+		wt.PkgPath != "github.com/cplieger/go/wiregen/v2/testdata/basic" {
 		t.Errorf("TypeRef[User]() = %+v, want {basic, User}", wt)
 	}
 	if wt := wiregen.TypeRef[*basic.Address](); wt.Name != "Address" {
@@ -777,17 +777,23 @@ func TestTypeRef(t *testing.T) {
 
 // --- Generate error paths ---
 
+// A Types entry no role names is refused as a registered type, with the
+// hints a Types entry can take.
 func TestGenerate_UnknownTypeErrors(t *testing.T) {
-	r := newTestRegistry(wiregen.WithValidatorsImport("./v.js"))
-	r.Types = []wiregen.Type{
-		{PkgPath: "github.com/cplieger/go/wiregen/testdata/basic", Name: "NonExistentType"},
-	}
-	err := r.generate(t.Context(), t.TempDir())
-	if err == nil {
-		t.Fatal("expected error when referencing non-existent type, got nil")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got: %v", err)
+	const pkg = "github.com/cplieger/go/wiregen/v2/testdata/basic"
+	for _, tc := range []struct{ name, typeName, want string }{
+		{"missing", "NonExistentType", "wiregen: type NonExistentType not found in package " + pkg},
+		{"a constant", "StatusActive", "wiregen: StatusActive in " + pkg + " is not a type"},
+		{"a string type", "Priority", "wiregen: registered type " + pkg + ".Priority is not a struct; register an enum with StringEnum or TextEnum, or map the type"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(wiregen.WithValidatorsImport("./v.js"))
+			r.Types = []wiregen.Type{{PkgPath: pkg, Name: tc.typeName}}
+			err := r.generate(t.Context(), t.TempDir())
+			if err == nil || err.Error() != tc.want {
+				t.Errorf("Generate() error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -796,7 +802,7 @@ func TestGenerate_UnknownTypeErrors(t *testing.T) {
 // both configuration errors, each with its own remedy in the message.
 func TestGenerate_RejectsDuplicateTypeNames(t *testing.T) {
 	const (
-		crossrefPkg = "github.com/cplieger/go/wiregen/testdata/crossref"
+		crossrefPkg = "github.com/cplieger/go/wiregen/v2/testdata/crossref"
 		depPkg      = crossrefPkg + "/dep"
 	)
 	cases := []struct {

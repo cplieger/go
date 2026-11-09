@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
-	"github.com/cplieger/go/wiregen/testdata/edges"
-	"github.com/cplieger/go/wiregen/testdata/unions"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2/testdata/edges"
+	"github.com/cplieger/go/wiregen/v2/testdata/unions"
 )
 
 // newArbRegistry is the arbitraries emitter's fixture: every field shape the
@@ -48,7 +48,7 @@ func newArbRegistry() *testRegistry {
 	r.Mappings = map[string]wiregen.Mapping{
 		// A mapping to a non-primitive TS type is the one shape wiregen has no
 		// model for, so it is the shape the fixture has to carry.
-		"github.com/cplieger/go/wiregen/testdata/basic.CustomID": {TS: "Record<string, string>"},
+		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "Record<string, string>"},
 	}
 	return r
 }
