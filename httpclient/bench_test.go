@@ -585,9 +585,12 @@ func TestBackoffPrimitivesAllocations(t *testing.T) {
 
 // TestDoorAllocationsWithoutObserver pins what a door costs with no Observer,
 // and with one whose funcs are both nil: the observation stays on the door's
-// stack and records nothing, so the counts are the doors' own. Do's one
-// allocation is its closure over the result; the transport's single try
-// allocates nothing; a retrying GET's three are the request clone.
+// stack and records nothing. Do's one allocation is its loopConfig
+// (newLoopConfig's result escapes), which the Observer field grows by 16
+// bytes; the transport's single try allocates nothing; a retrying GET's three
+// are the request clone (Request, URL and Header). A zero is also measured
+// over one run, because AllocsPerRun divides as an integer and would round a
+// rare allocation down to it.
 func TestDoorAllocationsWithoutObserver(t *testing.T) {
 	ctx := context.Background()
 	fn := func(context.Context) (int, error) { return 1, nil }
@@ -611,6 +614,9 @@ func TestDoorAllocationsWithoutObserver(t *testing.T) {
 			if got := testing.AllocsPerRun(200, tc.run); got != tc.want {
 				t.Errorf("allocations = %v, want %v", got, tc.want)
 			}
+			if got := testing.AllocsPerRun(1, tc.run); tc.want == 0 && got != 0 {
+				t.Errorf("allocations in one run = %v, want 0", got)
+			}
 		})
 	}
 }
@@ -618,9 +624,10 @@ func TestDoorAllocationsWithoutObserver(t *testing.T) {
 // TestParseRetryAfterAllocationsOnWellFormedValues pins the two input classes a
 // cooperating upstream actually sends: delta-seconds, the form rate-limiters
 // emit, and an absent header, what most responses carry. Both are free and on
-// the per-response path: GetBytes parses Retry-After on every retryable status,
-// and on every response while an Observer is set, and CheckStatus on every 429. The date forms measure 2 to 8 allocations,
-// so they are NOT in this table; their contract is the bounded one below.
+// the per-response path: GetBytes parses Retry-After on every retryable
+// status, and every door parses it on every response while an Observer is
+// set. The date forms measure 2 to 8 allocations, so they are NOT in this
+// table; their contract is the bounded one below.
 func TestParseRetryAfterAllocationsOnWellFormedValues(t *testing.T) {
 	headers := map[string]string{
 		"delta_seconds":           "30",

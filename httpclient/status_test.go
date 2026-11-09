@@ -299,3 +299,16 @@ func TestStatusError_Is_unrelated_target_returns_false(t *testing.T) {
 		t.Error("errors.Is(StatusError{429}, context.Canceled) = true, want false")
 	}
 }
+
+// %#v of GetBytes's *StatusError renders its URL redacted, as Error does,
+// never the raw URL it keeps unexported.
+func TestStatusError_GoString_redacts_the_url(t *testing.T) {
+	err := httpclient.NewStatusErrorForURL("http://user:s3cr3t@example.test/private?token=s3cr3t", http.StatusNotFound)
+	got := fmt.Sprintf("%#v", err)
+	if strings.Contains(got, "s3cr3t") || !strings.Contains(got, "example.test/private") || !strings.Contains(got, "Code:404") {
+		t.Errorf("%%#v = %s, want the redacted URL and the code", got)
+	}
+	if got := fmt.Sprintf("%#v", &httpclient.StatusError{Code: http.StatusTeapot}); got != `&httpclient.StatusError{URL:"", Code:418, RetryAfter:0s}` {
+		t.Errorf("%%#v of a CheckStatus error = %s", got)
+	}
+}

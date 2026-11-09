@@ -87,7 +87,7 @@ Credentials in logs are [CWE-532](https://cwe.mitre.org/data/definitions/532.htm
 
 A secret in the URL path is kept as written, and the URL is re-encoded on the way out. A space comes out as `%20`, a non-ASCII byte percent-encoded, and a `#` cuts the value at the fragment. So do not put a credential in a URL path you pass to `GetBytes`. If an API requires one, pass `WithLogger` a logger whose handler redacts both the raw and the percent-encoded form, and redact the returned error before you log it.
 
-`LogSafeError(err)` is the reduction httpclient applies to every transport error it logs. Use it when you wrap transport errors into your own messages. It returns any other error unchanged, keeps `errors.Is` and `errors.As` working, and never turns a non-nil error into nil. It equals `RedactTransportError(err, "", "")`.
+`LogSafeError(err)` is the reduction httpclient applies to every transport error it logs. Use it when you wrap transport errors into your own messages: reduce first, then wrap. It replaces each `*url.Error` with its cause and keeps this package's marks (`Permanent`, `MarkTransient`, `AttemptTimeout`), the transport's "rewind request body" and "prepare retry" steps and every `errors.Join` branch, so `errors.Is` and `errors.As` still find the cause and the marks. Any other wrapper above a `*url.Error` is dropped, because its text was rendered with the URL. It returns an error with no `*url.Error` unchanged and never turns a non-nil error into nil. It equals `RedactTransportError(err, "", "")`.
 
 ### Why drain errors are not logged
 

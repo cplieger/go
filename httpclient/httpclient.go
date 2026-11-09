@@ -84,6 +84,16 @@ type StatusError struct {
 
 var _ Transient = (*StatusError)(nil)
 
+// GoString renders e for %#v with its URL redacted, as Error renders it, so
+// the unexported raw URL cannot reach a debug line either.
+func (e *StatusError) GoString() string {
+	shown := ""
+	if e.rawURL != "" {
+		shown = redactURL(e.rawURL)
+	}
+	return fmt.Sprintf("&httpclient.StatusError{URL:%q, Code:%d, RetryAfter:%s}", shown, e.Code, e.RetryAfter)
+}
+
 func (e *StatusError) Error() string {
 	if e.rawURL == "" {
 		return fmt.Sprintf("HTTP %d", e.Code)
@@ -1406,8 +1416,10 @@ func redactURL(rawURL string) string {
 // LogSafeError returns an error whose message is safe to log. Every *url.Error
 // in err's chain, which renders the raw request URL, is replaced by its cause.
 // The marks this package renders on the fly ([Permanent], [MarkTransient],
-// [AttemptTimeout]) and each branch of an errors.Join are kept around the
-// reduced cause, so [IsPermanent], [IsTransient] and every sibling survive.
+// [AttemptTimeout]), the RetryRoundTripper's "rewind request body" and
+// "prepare retry" steps, and each branch of an errors.Join are kept around the
+// reduced cause, so [IsPermanent], [IsTransient], the step and every sibling
+// survive.
 // Any other wrapper above a *url.Error is dropped, because its message was
 // rendered with the URL in it: reduce a transport error before you wrap it with
 // your own context. An error with no *url.Error is returned unchanged, a chain
@@ -1463,6 +1475,8 @@ func reduceURL(err error, budget int) error {
 		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &transientError{Err: inner} })
 	case *attemptTimeoutError:
 		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &attemptTimeoutError{Err: inner} })
+	case *stageError:
+		return rewrap(reduceURL(e.err, budget), func(inner error) error { return &stageError{stage: e.stage, err: inner} })
 	case interface{ Unwrap() []error }:
 		branches := e.Unwrap()
 		kept := make([]error, 0, len(branches))

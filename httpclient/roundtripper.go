@@ -235,7 +235,10 @@ func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}, obs.settle)
 	switch {
 	case errors.Is(stopErr, ErrMaxElapsed) && err != nil:
-		return nil, obs.finish(fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err))
+		// The observer gets the cause reduced inside the wrap, so its record
+		// keeps the ceiling and the format.
+		return nil, obs.finishAs(fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err),
+			fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, LogSafeError(err)))
 	case errors.Is(stopErr, ErrMaxElapsed):
 		return nil, obs.finish(fmt.Errorf("%w (%s)", ErrMaxElapsed, rt.maxElapsedTime))
 	case stopErr != nil:
@@ -271,17 +274,30 @@ func (rt *RetryRoundTripper) buildAttemptRequest(ctx context.Context, req *http.
 	if req.GetBody != nil {
 		body, bodyErr := req.GetBody()
 		if bodyErr != nil {
-			return nil, fmt.Errorf("rewind request body: %w", bodyErr)
+			return nil, &stageError{stage: "rewind request body", err: bodyErr}
 		}
 		tryReq.Body = body
 	}
 	if rt.prepareRetry != nil {
 		if prepErr := rt.prepareRetry(tryReq); prepErr != nil {
-			return nil, fmt.Errorf("prepare retry: %w", prepErr)
+			return nil, &stageError{stage: "prepare retry", err: prepErr}
 		}
 	}
 	return tryReq, nil
 }
+
+// stageError names the step of a retry that failed before its send: the body
+// rewind or PrepareRetry. LogSafeError keeps it around the reduced cause, as it
+// keeps this package's marks, so a redacted error still says which step
+// failed rather than reading as the upstream's.
+type stageError struct {
+	err   error
+	stage string
+}
+
+func (e *stageError) Error() string { return e.stage + ": " + e.err.Error() }
+
+func (e *stageError) Unwrap() error { return e.err }
 
 // CloseIdleConnections closes the base transport's idle connections where it
 // can, so [http.Client.CloseIdleConnections] reaches them.

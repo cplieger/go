@@ -539,11 +539,9 @@ func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...G
 	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
 		obs.begin(n)
 		attemptStart := time.Now()
-		r := getAttempt(ctx, client, reqURL, &cfg)
+		r := getAttempt(ctx, client, reqURL, &cfg, &obs)
 		body, err, retryAfter = r.body, r.err, r.wait
-		if obs.on {
-			obs.end(err, r.status, ParseRetryAfter(r.header.Get("Retry-After")))
-		}
+		obs.endHeader(err, r.status, r.header)
 		if err == nil {
 			logSlowUpstream(log, reqURL, attemptStart)
 		}
@@ -610,8 +608,8 @@ type getResult struct {
 	retry  bool
 }
 
-// getAttempt performs a single HTTP GET attempt.
-func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *getConfig) getResult {
+// getAttempt performs a single HTTP GET attempt, telling obs when it sends.
+func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *getConfig, obs *observation) getResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
 	if err != nil {
 		return getResult{err: err}
@@ -619,7 +617,8 @@ func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *ge
 	if cfg.setHeaders != nil {
 		cfg.setHeaders(req)
 	}
-	resp, err := client.Do(req) //nolint:bodyclose // resp.Body is closed on every path: DrainClose (429/5xx, non-2xx) or ReadLimitedBody's deferred close (2xx); bodyclose can't trace the close through the helper.
+	obs.sending()
+	resp, err := client.Do(req) //nolint:bodyclose // resp.Body is closed on every path: DrainClose (429/5xx, non-2xx), ReadLimitedBody's deferred close (2xx), or Client.Do itself when it returns a response with an error (a CheckRedirect refusal); bodyclose can't trace the close through the helpers.
 	r := getResult{retry: retryableRoundTrip(resp, err)}
 	if resp != nil {
 		// Client.Do returns a response WITH an error when CheckRedirect refuses a

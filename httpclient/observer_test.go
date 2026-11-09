@@ -561,14 +561,33 @@ func TestTransportObserver_context_end_after_a_try(t *testing.T) {
 	}
 }
 
-// The transport times a try from its send: a slow PrepareRetry is not the
-// upstream's time.
-func TestTransportObserver_duration_excludes_prepare_retry(t *testing.T) {
+// stamp records the instant a step before the send ended.
+type stamp struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (s *stamp) mark() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.at = time.Now()
+}
+
+func (s *stamp) get() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.at
+}
+
+// The transport times a try from its send: a PrepareRetry is not the
+// upstream's time, so the try starts after it returned.
+func TestTransportObserver_start_follows_prepare_retry(t *testing.T) {
 	var rec record
+	var prepared stamp
 	srv := statusServer(t, nil, http.StatusServiceUnavailable)
 	client := httpclient.NewRetry(nil, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{
 		MaxAttempts: 2, BaseDelay: time.Millisecond, Observer: rec.observer(),
-		PrepareRetry: func(*http.Request) error { time.Sleep(50 * time.Millisecond); return nil },
+		PrepareRetry: func(*http.Request) error { time.Sleep(time.Millisecond); prepared.mark(); return nil },
 	})
 	resp, err := client.Get(srv.URL)
 	if err != nil {
@@ -576,8 +595,99 @@ func TestTransportObserver_duration_excludes_prepare_retry(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 	rec.check(t, 2)
-	if a := rec.attempts[1]; a.Duration >= 50*time.Millisecond {
-		t.Errorf("second attempt Duration = %v, which counts the 50ms PrepareRetry", a.Duration)
+	if a := rec.attempts[1]; a.Start.Before(prepared.get()) {
+		t.Errorf("second attempt started %v before PrepareRetry returned", prepared.get().Sub(a.Start))
+	}
+}
+
+// GetBytes times a try from its send: WithHeaders is not the upstream's time,
+// so the try starts after it returned.
+func TestWithObserver_GetBytes_start_follows_headers(t *testing.T) {
+	var rec record
+	var headed stamp
+	srv := statusServer(t, nil, http.StatusOK)
+	_, err := httpclient.GetBytes(t.Context(), httpclient.New(5*time.Second), srv.URL,
+		httpclient.WithHeaders(func(*http.Request) { time.Sleep(time.Millisecond); headed.mark() }),
+		httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.check(t, 1)
+	if a := rec.attempts[0]; a.Start.Before(headed.get()) {
+		t.Errorf("attempt started %v before WithHeaders returned", headed.get().Sub(a.Start))
+	}
+}
+
+// A PrepareRetry failure is observed as that step's, redacted, not as the
+// upstream's: the step survives LogSafeError and the URL does not.
+func TestTransportObserver_prepare_retry_failure_keeps_its_step(t *testing.T) {
+	var rec record
+	srv := statusServer(t, nil, http.StatusServiceUnavailable)
+	refresh := &url.Error{Op: "Post", URL: "http://user:s3cr3t@token.example/refresh?token=s3cr3t", Err: errors.New("connection refused")}
+	rt := httpclient.NewRetryRoundTripper(nil, httpclient.TransportConfig{
+		MaxAttempts: 2, BaseDelay: time.Millisecond, Observer: rec.observer(),
+		PrepareRetry: func(*http.Request) error { return refresh },
+	})
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, http.NoBody)
+	_, err := rt.RoundTrip(req) //nolint:bodyclose // error path, no body
+	if !errors.Is(err, refresh) || !strings.HasPrefix(err.Error(), "prepare retry: ") {
+		t.Fatalf("RoundTrip err = %v, want the prepare retry step over the refresh error", err)
+	}
+	o := rec.check(t, 2)
+	for _, e := range []error{rec.attempts[1].Err, o.Err} {
+		if e.Error() != "prepare retry: connection refused" {
+			t.Errorf("observed error %q, want the step over the redacted cause", e)
+		}
+	}
+}
+
+// callerTransient is a Do caller's own wrapper over a transport error, with a
+// class and a Retry-After hint of its own.
+type callerTransient struct{ err error }
+
+func (c callerTransient) Error() string               { return "fetch: " + c.err.Error() }
+func (c callerTransient) Unwrap() error               { return c.err }
+func (callerTransient) IsTransient() bool             { return true }
+func (callerTransient) RetryAfterHint() time.Duration { return 3 * time.Second }
+
+// A caller's own wrapper above a *url.Error is dropped from the record with
+// its URL, as LogSafeError documents, while Do acts on it and returns it, and
+// the record keeps the hint Do read before the redaction.
+func TestWithObserver_Do_caller_wrapper_is_dropped(t *testing.T) {
+	var rec record
+	wrapped := callerTransient{&url.Error{Op: "Get", URL: "http://example.test/feed?token=s3cr3t", Err: errors.New("boom")}}
+	_, err := httpclient.Do(t.Context(), func(context.Context) (struct{}, error) {
+		return struct{}{}, wrapped
+	}, httpclient.WithMaxAttempts(1), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
+	if !httpclient.IsTransient(err) || !strings.Contains(err.Error(), "s3cr3t") {
+		t.Fatalf("Do err = %v, want the caller's wrapper unchanged", err)
+	}
+	rec.check(t, 1)
+	a := rec.attempts[0]
+	if _, kept := errors.AsType[callerTransient](a.Err); kept || httpclient.IsTransient(a.Err) || a.Err.Error() != "boom" {
+		t.Errorf("attempt Err = %v, want the bare cause with the wrapper dropped", a.Err)
+	}
+	if a.RetryAfter != 3*time.Second {
+		t.Errorf("attempt RetryAfter = %v, want the hint read before the redaction", a.RetryAfter)
+	}
+}
+
+// A MaxElapsedTime stop over a *url.Error is observed with the ceiling and
+// the format the door returns, the URL reduced inside the wrap.
+func TestTransportObserver_max_elapsed_over_a_url_error(t *testing.T) {
+	var rec record
+	cause := httpclient.MarkTransient(errors.New("boom"))
+	rt := httpclient.NewRetryRoundTripper(urlErrorRT{cause: cause}, httpclient.TransportConfig{
+		BaseDelay: time.Hour, MaxElapsedTime: time.Second, Observer: rec.observer(),
+	})
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.test/x?token=s3cr3t", http.NoBody)
+	_, err := rt.RoundTrip(req) //nolint:bodyclose // error path, no body
+	if !errors.Is(err, httpclient.ErrMaxElapsed) {
+		t.Fatalf("RoundTrip err = %v, want ErrMaxElapsed", err)
+	}
+	o := rec.check(t, 1)
+	if got := o.Err.Error(); got != "max elapsed time exceeded (1s): boom" || !errors.Is(o.Err, httpclient.ErrMaxElapsed) || !errors.Is(o.Err, cause) {
+		t.Errorf("Outcome.Err = %q, want the ceiling over the reduced cause", got)
 	}
 }
 

@@ -9,23 +9,30 @@ import (
 // Attempt is one try a door made: one call of Do's function, one GetBytes
 // request, or one RetryRoundTripper round trip.
 type Attempt struct {
-	// Start is when the try began. For the transport it is the send, after
-	// any body rewind and PrepareRetry, or the try's start if either failed.
+	// Start is when the try began: for Do, the function's call; for GetBytes,
+	// the send, after the request build and WithHeaders; for the transport,
+	// the send, after any body rewind and PrepareRetry, or the try's start if
+	// either failed.
 	Start time.Time
-	// Err is the try's error as LogSafeError renders it, so no URL, userinfo
-	// or query value reaches the observer: Do's function error (marked with
+	// Err is the try's error as LogSafeError renders it, so no *url.Error's
+	// raw URL reaches the observer: Do's function error (marked with
 	// AttemptTimeout when WithAttemptTimeout's bound expired), GetBytes's
-	// request or read error, the transport's base round-trip error. It keeps
-	// this package's marks, so IsTransient, IsPermanent and errors.As still
-	// read it. It is nil when the try succeeded; for the transport, a
-	// response of any status is a success and Status carries it.
+	// request or read error, whose *StatusError names the request URL
+	// redacted, or the transport's base round-trip error. LogSafeError keeps
+	// this package's marks (Permanent, MarkTransient, AttemptTimeout), the
+	// transport's retry steps and every errors.Join branch, so IsTransient and
+	// IsPermanent read them. Any other wrapper above a *url.Error is dropped
+	// with its type and text, a Do caller's own included: reduce a transport
+	// error with LogSafeError before wrapping it if the observer must see the
+	// wrapper. It is nil when the try succeeded; for the transport, a response
+	// of any status is a success and Status carries it.
 	Err error
 	// Duration runs from the send to the answer or the error. GetBytes
 	// includes the body read; the transport stops at the response headers.
 	Duration time.Duration
 	// RetryAfter is the response's Retry-After, capped at RetryAfterCap, zero
-	// when there is none. Do reads it from Err: a RetryAfterHint, else a
-	// *StatusError's RetryAfter.
+	// when there is none. Do reads it from the function's error before the
+	// redaction: a RetryAfterHint, else a *StatusError's RetryAfter.
 	RetryAfter time.Duration
 	// Wait is the sleep the door starts before the next try: the backoff, a
 	// Retry-After or a rate-limit wait. It is zero when the call ends after
@@ -48,7 +55,8 @@ type Outcome struct {
 	// success. A transport call that returned a response, of any status, has
 	// a nil Err.
 	Err error
-	// Duration runs from the first send to the return, waits included.
+	// Duration runs from the call's start to its return, every try and wait
+	// included.
 	Duration time.Duration
 	// Attempts is the number of tries, which is the number of Attempt calls.
 	Attempts int
@@ -85,8 +93,7 @@ func WithObserver(o Observer) Option { return observerOption(o) }
 
 // observation is one call's state on its way to an Observer: the attempt in
 // progress and the call's start. With neither func set it is off, and every
-// method but begin returns at once, so a door with no observer pays only for
-// the attempt number.
+// method returns at once.
 type observation struct {
 	obs     Observer
 	start   time.Time
@@ -106,14 +113,14 @@ func newObservation(obs Observer) observation {
 
 // begin opens attempt n, 0-based as schedule.run counts.
 func (o *observation) begin(n int) {
-	o.attempt = Attempt{Number: n + 1}
 	if o.on {
-		o.attempt.Start = time.Now()
+		o.attempt = Attempt{Number: n + 1, Start: time.Now()}
 	}
 }
 
-// sending restamps the open attempt's start at its send, so the transport's
-// rewind and PrepareRetry do not count as the upstream's time.
+// sending restamps the open attempt's start at its send, so GetBytes's request
+// build and WithHeaders, and the transport's rewind and PrepareRetry, do not
+// count as the upstream's time.
 func (o *observation) sending() {
 	if o.on {
 		o.attempt.Start = time.Now()
@@ -121,11 +128,8 @@ func (o *observation) sending() {
 }
 
 // end closes the open attempt with its error, redacted, its status and its
-// Retry-After.
+// Retry-After. Its callers check on first, so they skip their own parsing.
 func (o *observation) end(err error, status int, retryAfter time.Duration) {
-	if !o.on {
-		return
-	}
 	a := &o.attempt
 	a.Duration = time.Since(a.Start)
 	a.Err = LogSafeError(err)
@@ -143,14 +147,20 @@ func (o *observation) endErr(err error) {
 // endResponse closes the open attempt from a round trip's result: resp's
 // status and capped Retry-After when one arrived, with or without err.
 func (o *observation) endResponse(resp *http.Response, err error) {
-	if !o.on {
+	if resp == nil {
+		o.endHeader(err, 0, nil)
 		return
 	}
-	var status int
-	if resp != nil {
-		status = resp.StatusCode
+	o.endHeader(err, resp.StatusCode, resp.Header)
+}
+
+// endHeader closes the open attempt from a status and the header it came
+// with, zero and nil when no response arrived, reading the header's
+// Retry-After capped.
+func (o *observation) endHeader(err error, status int, header http.Header) {
+	if o.on {
+		o.end(err, status, ParseRetryAfter(header.Get("Retry-After")))
 	}
-	o.end(err, status, retryAfterOf(resp))
 }
 
 // settle reports the open attempt with the wait that follows it; schedule.run
@@ -164,11 +174,15 @@ func (o *observation) settle(wait time.Duration) {
 
 // finish reports the call's outcome with err redacted and returns err
 // unchanged, so a door can end with return o.finish(err).
-func (o *observation) finish(err error) error {
+func (o *observation) finish(err error) error { return o.finishAs(err, err) }
+
+// finishAs reports rec, redacted, as the outcome and returns ret: a door whose
+// returned error wraps a cause reduces the cause first and reports that.
+func (o *observation) finishAs(ret, rec error) error {
 	if o.on && o.obs.Outcome != nil {
-		o.obs.Outcome(Outcome{Err: LogSafeError(err), Duration: time.Since(o.start), Attempts: o.attempt.Number})
+		o.obs.Outcome(Outcome{Err: LogSafeError(rec), Duration: time.Since(o.start), Attempts: o.attempt.Number})
 	}
-	return err
+	return ret
 }
 
 // errStatus reads the status and Retry-After a Do error carries: a
