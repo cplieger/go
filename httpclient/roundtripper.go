@@ -192,8 +192,11 @@ func (rt *RetryRoundTripper) getCheckRetry() CheckRetry {
 func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	obs := newObservation(rt.observer)
 	if !rt.canRetry(req) {
+		if !obs.on {
+			return rt.roundTripOnce(req)
+		}
 		obs.begin(0)
-		resp, err := rt.observedTrip(obs, req)
+		resp, err := rt.observedTrip(&obs, req)
 		obs.settle(0)
 		return resp, obs.finish(err)
 	}
@@ -206,10 +209,10 @@ func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		tryReq, buildErr := rt.buildAttemptRequest(ctx, req, n)
 		if buildErr != nil {
 			resp, err = nil, buildErr
-			obs.end(err, 0, 0)
+			obs.endResponse(nil, err)
 			return true, 0
 		}
-		resp, err = rt.observedTrip(obs, tryReq) //nolint:bodyclose // the body goes back to the caller, or drainResp closes it in pause or on a stop
+		resp, err = rt.observedTrip(&obs, tryReq) //nolint:bodyclose // the body goes back to the caller, or drainResp closes it in pause or on a stop
 		retry, checkErr := check(ctx, resp, err)
 		switch {
 		case checkErr != nil:
@@ -241,15 +244,12 @@ func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return resp, obs.finish(err)
 }
 
-// observedTrip sends one attempt and closes the observation's open attempt
-// with its result.
+// observedTrip sends one attempt, timed from its send, and closes the
+// observation's open attempt with its result.
 func (rt *RetryRoundTripper) observedTrip(obs *observation, req *http.Request) (*http.Response, error) {
+	obs.sending()
 	resp, err := rt.roundTripOnce(req)
-	var status int
-	if resp != nil {
-		status = resp.StatusCode
-	}
-	obs.end(err, status, retryAfterOf(resp))
+	obs.endResponse(resp, err)
 	return resp, err
 }
 

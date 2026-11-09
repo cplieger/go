@@ -99,6 +99,48 @@ func BenchmarkRetryRoundTripper_RetryThenSuccess(b *testing.B) {
 	}
 }
 
+// BenchmarkRetryRoundTripper_SingleTry is the path of a request the
+// transport may not replay, which a door with no Observer sends straight
+// through.
+func BenchmarkRetryRoundTripper_SingleTry(b *testing.B) {
+	okResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("ok")),
+		Header:     http.Header{},
+	}
+	rt := NewRetryRoundTripper(&stubRT{resp: okResp}, TransportConfig{})
+	req, _ := http.NewRequestWithContext(b.Context(), http.MethodPost, "http://example.com", strings.NewReader("x"))
+
+	for b.Loop() {
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+}
+
+// --- Do benchmarks ---
+
+func BenchmarkDo_Success(b *testing.B) {
+	fn := func(context.Context) (int, error) { return 1, nil }
+	for b.Loop() {
+		if _, err := Do(b.Context(), fn); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDo_SuccessObserved(b *testing.B) {
+	fn := func(context.Context) (int, error) { return 1, nil }
+	obs := WithObserver(Observer{Attempt: func(Attempt) {}, Outcome: func(Outcome) {}})
+	for b.Loop() {
+		if _, err := Do(b.Context(), fn, obs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // --- JitteredBackoff benchmark ---
 
 func BenchmarkJitteredBackoff(b *testing.B) {
@@ -541,11 +583,43 @@ func TestBackoffPrimitivesAllocations(t *testing.T) {
 	}
 }
 
+// TestDoorAllocationsWithoutObserver pins what a door costs with no Observer,
+// and with one whose funcs are both nil: the observation stays on the door's
+// stack and records nothing, so the counts are the doors' own. Do's one
+// allocation is its closure over the result; the transport's single try
+// allocates nothing; a retrying GET's three are the request clone.
+func TestDoorAllocationsWithoutObserver(t *testing.T) {
+	ctx := context.Background()
+	fn := func(context.Context) (int, error) { return 1, nil }
+	okResp := &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: http.Header{}}
+	rt := NewRetryRoundTripper(&stubRT{resp: okResp}, TransportConfig{})
+	empty := NewRetryRoundTripper(&stubRT{resp: okResp}, TransportConfig{Observer: Observer{}})
+	post, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://example.com", strings.NewReader("x"))
+	get, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.com", http.NoBody)
+	for _, tc := range []struct {
+		name string
+		run  func()
+		want float64
+	}{
+		{"Do", func() { _, errSink = Do(ctx, fn) }, 1},
+		{"transport single try", func() { _, errSink = rt.RoundTrip(post) }, 0},                    //nolint:bodyclose // the stub answers http.NoBody
+		{"transport single try, empty Observer", func() { _, errSink = empty.RoundTrip(post) }, 0}, //nolint:bodyclose // the stub answers http.NoBody
+		{"transport GET", func() { _, errSink = rt.RoundTrip(get) }, 3},                            //nolint:bodyclose // the stub answers http.NoBody
+		{"transport GET, empty Observer", func() { _, errSink = empty.RoundTrip(get) }, 3},         //nolint:bodyclose // the stub answers http.NoBody
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := testing.AllocsPerRun(200, tc.run); got != tc.want {
+				t.Errorf("allocations = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestParseRetryAfterAllocationsOnWellFormedValues pins the two input classes a
 // cooperating upstream actually sends: delta-seconds, the form rate-limiters
 // emit, and an absent header, what most responses carry. Both are free and on
 // the per-response path: GetBytes parses Retry-After on every retryable status,
-// and CheckStatus on every 429. The date forms measure 2 to 8 allocations,
+// and on every response while an Observer is set, and CheckStatus on every 429. The date forms measure 2 to 8 allocations,
 // so they are NOT in this table; their contract is the bounded one below.
 func TestParseRetryAfterAllocationsOnWellFormedValues(t *testing.T) {
 	headers := map[string]string{

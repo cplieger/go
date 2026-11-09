@@ -159,18 +159,18 @@ An `Observer` receives one `Attempt` per try and then one `Outcome` per call, fr
 | `Attempt` field | Meaning |
 | --- | --- |
 | `Number` | 1 for the first try |
-| `Start`, `Duration` | When the try began, and the time to its answer or error. `GetBytes` includes the body read; the transport stops at the response headers |
-| `Err` | The try's error, nil when it succeeded. `Do` passes your function's error unchanged, `GetBytes` passes it redacted as it returns errors, and the transport passes the base transport's. For the transport, a response of any status is a success |
-| `Status` | The HTTP status, 0 when no response arrived. `Do` reads it from a `*StatusError` in `Err` |
-| `RetryAfter` | The response's `Retry-After`, capped at 60 seconds, 0 when none. `Do` reads it from `Err` |
-| `Wait` | The sleep before the next try, 0 when none follows |
+| `Start`, `Duration` | When the try began, and the time to its answer or error. `GetBytes` includes the body read; the transport stops at the response headers and does not count a body rewind or `PrepareRetry` |
+| `Err` | The try's error as `LogSafeError` renders it, nil when the try succeeded: your function's error for `Do` (with the `AttemptTimeout` mark when `WithAttemptTimeout`'s bound expired), the request or read error for `GetBytes`, the base round trip's error for the transport. For the transport, a response of any status is a success |
+| `Status` | The HTTP status, 0 when no response arrived. A redirect the client refused still arrived, so it keeps its 3xx. `Do` reads it from a `*StatusError` in `Err` |
+| `RetryAfter` | The response's `Retry-After`, capped at 60 seconds, 0 when none. `Do` reads it from `Err`: a `RetryAfterHint`, else the `*StatusError`'s |
+| `Wait` | The sleep the door starts before the next try (the backoff, a `Retry-After` or a rate-limit wait), 0 when the call ends after this try |
 | `Cause` | `CauseOf(Err)` |
 
-`Outcome` holds the error the door returned (nil for a transport call that returned a response of any status), the time from the first send to the return with every wait included, and the number of attempts. A context that ends during a wait stops the call: that attempt keeps its `Wait`, no attempt follows, and the outcome carries the context's error. When a `CheckRetry` error or the end of the context stops the call, the attempt keeps its own result and the outcome carries the stop.
+`Outcome` holds the error the door returned, as `LogSafeError` renders it (nil for a transport call that returned a response of any status), the time from the first send to the return with every wait included, and the number of attempts. A context that ends during a wait stops the call: that attempt keeps its `Wait`, no attempt follows, and the outcome carries the context's error. When a `CheckRetry` error or the end of the context stops the call, the attempt keeps its own result and the outcome carries the stop.
 
-Neither record holds a URL, a host or a failure class. Give each upstream its own observer, and derive a class from `Err` with `IsTransient`, `IsPermanent`, the `*StatusError` code and `Cause`.
+Neither record holds a URL, a host or a failure class. Every error passes through `LogSafeError` on its way in, so a `*url.Error`'s URL, with its userinfo and query, never reaches the observer, while the door still returns its own error unchanged. The text can still name the address a dial or DNS lookup failed on. Give each upstream its own observer, and derive a class from `Err` with `IsTransient`, `IsPermanent`, the `*StatusError` code and `Cause`, which the redaction keeps.
 
-The observer runs on the calling goroutine, outside any lock, so concurrent calls on one door, or on one shared `RetryRoundTripper`, call it concurrently. Its functions must return quickly and must not call back into the door. A nil function is skipped, so a caller that only counts calls sets `Outcome` alone.
+The observer runs on the calling goroutine, outside any lock, so concurrent calls on one door, or on one shared `RetryRoundTripper`, call it concurrently. Its functions must return quickly and must not call back into the door. A nil function is skipped, so a caller that only counts calls sets `Outcome` alone, and an `Observer` with neither function is the same as none: the door records nothing.
 
 ## Backoff building blocks
 

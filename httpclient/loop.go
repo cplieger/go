@@ -488,8 +488,7 @@ func Do[T any](ctx context.Context, fn func(ctx context.Context) (T, error), opt
 	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
 		obs.begin(n)
 		result, err = cfg.runAttempt(ctx, fn)
-		status, retryAfter := errStatus(err)
-		obs.end(err, status, retryAfter)
+		obs.endErr(err)
 		if err == nil {
 			cfg.logRetrySuccess(n)
 			return true, 0
@@ -533,19 +532,22 @@ func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...G
 	log := cfg.logger
 
 	obs := newObservation(cfg.observer)
+	start := time.Now()
 	var body []byte
 	var err error
 	var retryAfter time.Duration
 	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
 		obs.begin(n)
-		var retry bool
-		var status int
-		body, status, retry, retryAfter, err = getAttempt(ctx, client, reqURL, &cfg)
-		obs.end(LogSafeError(err), status, retryAfter)
-		if err == nil {
-			logSlowUpstream(log, reqURL, obs.attempt.Start)
+		attemptStart := time.Now()
+		r := getAttempt(ctx, client, reqURL, &cfg)
+		body, err, retryAfter = r.body, r.err, r.wait
+		if obs.on {
+			obs.end(err, r.status, ParseRetryAfter(r.header.Get("Retry-After")))
 		}
-		return !retry, retryAfter
+		if err == nil {
+			logSlowUpstream(log, reqURL, attemptStart)
+		}
+		return !r.retry, retryAfter
 	}, func(retry int, _ time.Duration) {
 		log.Debug("http request failed, will retry",
 			"url", redactURL(reqURL), "attempt", retry, "max", cfg.maxAttempts, "error", LogSafeError(err))
@@ -558,7 +560,7 @@ func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...G
 	case !exhausted:
 		return nil, obs.finish(LogSafeError(err))
 	}
-	elapsed := time.Since(obs.start).Round(time.Millisecond)
+	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Log(ctx, cfg.exhaustedLevel(), "http retries exhausted",
 		"url", redactURL(reqURL), "attempts", cfg.maxAttempts, "elapsed", elapsed, "error", LogSafeError(err))
 	exhaustedErr := fmt.Errorf("retries exhausted after %s: %w", elapsed, LogSafeError(err))
@@ -595,44 +597,63 @@ func logSlowUpstream(log *slog.Logger, reqURL string, attemptStart time.Time) {
 	}
 }
 
-// getAttempt performs a single HTTP GET attempt and returns the body on
-// success, or the failure with whether to retry it. Any response also gives
-// its status and capped Retry-After.
-func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *getConfig) (body []byte, status int, retry bool, retryAfter time.Duration, err error) {
+// getResult is one GetBytes attempt: the body on success, else the failure
+// and whether to retry it, with the explicit wait a retried status asks for.
+// A response that arrived, with or without an error, also gives its status
+// and header.
+type getResult struct {
+	err    error
+	header http.Header
+	body   []byte
+	status int
+	wait   time.Duration
+	retry  bool
+}
+
+// getAttempt performs a single HTTP GET attempt.
+func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *getConfig) getResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
 	if err != nil {
-		return nil, 0, false, 0, err
+		return getResult{err: err}
 	}
 	if cfg.setHeaders != nil {
 		cfg.setHeaders(req)
 	}
 	resp, err := client.Do(req) //nolint:bodyclose // resp.Body is closed on every path: DrainClose (429/5xx, non-2xx) or ReadLimitedBody's deferred close (2xx); bodyclose can't trace the close through the helper.
-	retry = retryableRoundTrip(resp, err)
-	if err != nil {
-		return nil, 0, retry, 0, err
+	r := getResult{retry: retryableRoundTrip(resp, err)}
+	if resp != nil {
+		// Client.Do returns a response WITH an error when CheckRedirect refuses a
+		// hop, having closed its body: the status still arrived.
+		r.status, r.header = resp.StatusCode, resp.Header
 	}
-	status, retryAfter = resp.StatusCode, retryAfterOf(resp)
-	if retry {
+	if err != nil {
+		r.err = err
+		return r
+	}
+	if r.retry {
 		DrainClose(resp.Body)
-		return nil, status, true, retryAfter, newStatusError(resp, reqURL)
+		r.wait, r.err = retryAfterOf(resp), newStatusError(resp, reqURL)
+		return r
 	}
 	// Any other non-2xx is permanent for this door: a redirect stub or an error
 	// page is not the requested resource. CheckStatus owns the success band;
 	// this door's error adds the request URL.
 	if CheckStatus(resp) != nil {
 		DrainClose(resp.Body)
-		return nil, status, false, retryAfter, newStatusError(resp, reqURL)
+		r.err = newStatusError(resp, reqURL)
+		return r
 	}
 	// Read the body with overflow detection: an over-limit body fails loud with
 	// *ResponseTooLargeError rather than being silently truncated (a truncated
 	// payload that looks complete is a corruption hazard). ReadLimitedBody owns
 	// the cap+1 probe, its int64-overflow guard, and closing the body.
-	body, err = ReadLimitedBody(resp.Body, cfg.maxBodyBytes)
+	r.body, err = ReadLimitedBody(resp.Body, cfg.maxBodyBytes)
 	if err != nil {
 		if _, ok := errors.AsType[*ResponseTooLargeError](err); ok {
-			return nil, status, false, retryAfter, err
+			r.err = err
+			return r
 		}
-		return nil, status, false, retryAfter, fmt.Errorf("read response: %w", err)
+		r.err = fmt.Errorf("read response: %w", err)
 	}
-	return body, status, false, retryAfter, nil
+	return r
 }

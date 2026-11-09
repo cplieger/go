@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,28 @@ func (r *record) observer() httpclient.Observer {
 			r.order = append(r.order, "outcome")
 		},
 	}
+}
+
+// mustOutcome returns the one Outcome the observer got.
+func (r *record) mustOutcome(t *testing.T) httpclient.Outcome {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.outcomes) != 1 {
+		t.Fatalf("observer got %d outcomes, want 1", len(r.outcomes))
+	}
+	return r.outcomes[0]
+}
+
+// errs lists the attempts' errors.
+func (r *record) errs() []error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]error, 0, len(r.attempts))
+	for _, a := range r.attempts {
+		out = append(out, a.Err)
+	}
+	return out
 }
 
 // check asserts the invariants every door keeps: the attempts arrive
@@ -107,6 +130,7 @@ func TestWithObserver_Do_reports_each_attempt_then_the_outcome(t *testing.T) {
 	calls := 0
 	got, err := httpclient.Do(t.Context(), func(context.Context) (int, error) {
 		calls++
+		time.Sleep(2 * time.Millisecond)
 		if calls < 3 {
 			return 0, errFlaky
 		}
@@ -118,6 +142,16 @@ func TestWithObserver_Do_reports_each_attempt_then_the_outcome(t *testing.T) {
 	o := rec.check(t, 3)
 	if o.Err != nil {
 		t.Errorf("Outcome.Err = %v, want nil", o.Err)
+	}
+	var spent time.Duration
+	for _, a := range rec.attempts {
+		if a.Duration < 2*time.Millisecond {
+			t.Errorf("attempt %d Duration = %v, shorter than the try's 2ms", a.Number, a.Duration)
+		}
+		spent += a.Duration + a.Wait
+	}
+	if o.Duration < spent {
+		t.Errorf("Outcome.Duration = %v, shorter than the tries and waits %v", o.Duration, spent)
 	}
 	for i, a := range rec.attempts {
 		if wantErr := i < 2; (a.Err != nil) != wantErr || (wantErr && !errors.Is(a.Err, errFlaky)) {
@@ -227,15 +261,15 @@ func TestWithObserver_GetBytes_reports_status_and_the_body_read(t *testing.T) {
 
 func TestWithObserver_GetBytes_reports_retry_after_and_a_settled_status(t *testing.T) {
 	var rec record
-	srv := statusServer(t, http.Header{"Retry-After": {"30"}}, http.StatusNotFound)
+	srv := statusServer(t, http.Header{"Retry-After": {"7200"}}, http.StatusNotFound)
 	_, err := httpclient.GetBytes(t.Context(), httpclient.New(5*time.Second), srv.URL,
 		httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
 	if se, ok := errors.AsType[*httpclient.StatusError](err); !ok || se.Code != http.StatusNotFound {
 		t.Fatalf("GetBytes err = %v, want the 404", err)
 	}
 	o := rec.check(t, 1)
-	if a := rec.attempts[0]; a.Status != http.StatusNotFound || a.RetryAfter != 30*time.Second {
-		t.Errorf("attempt Status, RetryAfter = %d, %v, want 404, 30s", a.Status, a.RetryAfter)
+	if a := rec.attempts[0]; a.Status != http.StatusNotFound || a.RetryAfter != httpclient.RetryAfterCap {
+		t.Errorf("attempt Status, RetryAfter = %d, %v, want 404, RetryAfterCap", a.Status, a.RetryAfter)
 	}
 	if o.Err == nil || o.Err.Error() != err.Error() {
 		t.Errorf("Outcome.Err = %v, want what GetBytes returned, %v", o.Err, err)
@@ -244,15 +278,15 @@ func TestWithObserver_GetBytes_reports_retry_after_and_a_settled_status(t *testi
 
 func TestWithObserver_GetBytes_too_large_body(t *testing.T) {
 	var rec record
-	srv := statusServer(t, nil, http.StatusOK)
+	srv := statusServer(t, http.Header{"Retry-After": {"5"}}, http.StatusOK)
 	_, err := httpclient.GetBytes(t.Context(), httpclient.New(5*time.Second), srv.URL,
 		httpclient.WithMaxBodyBytes(1), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
 	if _, ok := errors.AsType[*httpclient.ResponseTooLargeError](err); !ok {
 		t.Fatalf("GetBytes err = %v, want *ResponseTooLargeError", err)
 	}
 	rec.check(t, 1)
-	if a := rec.attempts[0]; a.Status != http.StatusOK || a.Cause != httpclient.CauseTooLarge {
-		t.Errorf("attempt Status, Cause = %d, %v, want 200, too large", a.Status, a.Cause)
+	if a := rec.attempts[0]; a.Status != http.StatusOK || a.Cause != httpclient.CauseTooLarge || a.RetryAfter != 5*time.Second {
+		t.Errorf("attempt Status, Cause, RetryAfter = %d, %v, %v, want 200, too large, 5s", a.Status, a.Cause, a.RetryAfter)
 	}
 }
 
@@ -318,7 +352,7 @@ func TestTransportObserver_single_try_request(t *testing.T) {
 // and the outcome carries ErrMaxElapsed.
 func TestTransportObserver_max_elapsed_stop(t *testing.T) {
 	var rec record
-	srv := statusServer(t, http.Header{"Retry-After": {"30"}}, http.StatusServiceUnavailable)
+	srv := statusServer(t, http.Header{"Retry-After": {"7200"}}, http.StatusServiceUnavailable)
 	client := httpclient.NewRetry(nil, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{
 		MaxElapsedTime: time.Second, Observer: rec.observer(),
 	})
@@ -330,8 +364,8 @@ func TestTransportObserver_max_elapsed_stop(t *testing.T) {
 	if !errors.Is(o.Err, httpclient.ErrMaxElapsed) {
 		t.Errorf("Outcome.Err = %v, want ErrMaxElapsed", o.Err)
 	}
-	if a := rec.attempts[0]; a.RetryAfter != 30*time.Second {
-		t.Errorf("attempt RetryAfter = %v, want 30s", a.RetryAfter)
+	if a := rec.attempts[0]; a.RetryAfter != httpclient.RetryAfterCap {
+		t.Errorf("attempt RetryAfter = %v, want RetryAfterCap", a.RetryAfter)
 	}
 }
 
@@ -376,6 +410,253 @@ func TestTransportObserver_rewind_failure(t *testing.T) {
 	o := rec.check(t, 2)
 	if a := rec.attempts[1]; !errors.Is(a.Err, rewind) || a.Status != 0 || !errors.Is(o.Err, rewind) {
 		t.Errorf("second attempt Err, Status = %v, %d and Outcome.Err = %v, want the rewind failure, 0 and it again", a.Err, a.Status, o.Err)
+	}
+}
+
+// A redirect the client refuses still delivered its response: the attempt
+// keeps that status and Retry-After, and the refusal reaches the observer
+// redacted, while GetBytes returns what it returns with no observer.
+func TestWithObserver_GetBytes_redirect_refusal_keeps_status(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "7200")
+		w.Header().Set("Location", "http://user:s3cr3t@elsewhere.example/x?token=s3cr3t")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	get := func(opts ...httpclient.GetOption) error {
+		_, err := httpclient.GetBytes(t.Context(), httpclient.New(5*time.Second), srv.URL,
+			append([]httpclient.GetOption{httpclient.WithMaxAttempts(1), httpclient.WithLogger(discardLogger())}, opts...)...)
+		return err
+	}
+	plain := get()
+	var rec record
+	err := get(httpclient.WithObserver(rec.observer()))
+	if _, ok := errors.AsType[*httpclient.RedirectRefusedError](err); !ok || err.Error() != plain.Error() {
+		t.Fatalf("GetBytes err = %v, want the refusal it returns unobserved, %v", err, plain)
+	}
+	o := rec.check(t, 1)
+	a := rec.attempts[0]
+	if a.Status != http.StatusFound || a.RetryAfter != httpclient.RetryAfterCap {
+		t.Errorf("attempt Status, RetryAfter = %d, %v, want 302, RetryAfterCap", a.Status, a.RetryAfter)
+	}
+	for _, e := range []error{a.Err, o.Err} {
+		if _, ok := errors.AsType[*httpclient.RedirectRefusedError](e); !ok || strings.Contains(e.Error(), "s3cr3t") {
+			t.Errorf("observed error %v, want the redacted refusal", e)
+		}
+	}
+}
+
+// urlErrorRT fails every round trip with the *url.Error an http.Client would
+// build, URL and all, as a base wrapping another client does.
+type urlErrorRT struct{ cause error }
+
+func (u urlErrorRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: u.cause}
+}
+
+// Every door hands the observer its errors through LogSafeError, so a URL's
+// userinfo and query never cross the hook, while the door still returns its
+// own error.
+func TestObserver_errors_are_redacted_at_every_door(t *testing.T) {
+	const target = "http://user:s3cr3t@example.test/feed?token=s3cr3t"
+	cause := httpclient.MarkTransient(errors.New("boom"))
+	for _, door := range []struct {
+		name string
+		call func(httpclient.Observer) error
+	}{
+		{"Do", func(obs httpclient.Observer) error {
+			_, err := httpclient.Do(t.Context(), func(ctx context.Context) (struct{}, error) {
+				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+				_, err := urlErrorRT{cause: cause}.RoundTrip(req) //nolint:bodyclose // error path, no body
+				return struct{}{}, err
+			}, httpclient.WithMaxAttempts(1), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(obs))
+			return err
+		}},
+		{"transport", func(obs httpclient.Observer) error {
+			rt := httpclient.NewRetryRoundTripper(urlErrorRT{cause: cause}, httpclient.TransportConfig{MaxAttempts: 2, BaseDelay: time.Millisecond, Observer: obs})
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+			_, err := rt.RoundTrip(req) //nolint:bodyclose // error path, no body
+			return err
+		}},
+	} {
+		t.Run(door.name, func(t *testing.T) {
+			var rec record
+			err := door.call(rec.observer())
+			if !strings.Contains(err.Error(), "s3cr3t") {
+				t.Errorf("the door returned %q, want its own unredacted error", err)
+			}
+			o := rec.mustOutcome(t)
+			for _, e := range append([]error{o.Err}, rec.errs()...) {
+				if _, isURL := errors.AsType[*url.Error](e); isURL || strings.Contains(e.Error(), "s3cr3t") || !errors.Is(e, cause) || !httpclient.IsTransient(e) {
+					t.Errorf("observed error %q, want the redacted cause with its mark", e)
+				}
+			}
+		})
+	}
+}
+
+// A context that ends during a GetBytes or transport wait stops the call:
+// the attempt keeps its wait, none follows, and the outcome is the context's.
+func TestObserver_context_end_during_the_wait(t *testing.T) {
+	srv := statusServer(t, nil, http.StatusServiceUnavailable)
+	for _, door := range []struct {
+		name string
+		call func(context.Context, httpclient.Observer) error
+	}{
+		{"GetBytes", func(ctx context.Context, obs httpclient.Observer) error {
+			_, err := httpclient.GetBytes(ctx, httpclient.New(5*time.Second), srv.URL,
+				httpclient.WithBaseDelay(time.Hour), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(obs))
+			return err
+		}},
+		{"transport", func(ctx context.Context, obs httpclient.Observer) error {
+			client := httpclient.NewRetry(nil, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{BaseDelay: time.Hour, Observer: obs})
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, http.NoBody)
+			_, err := client.Do(req) //nolint:bodyclose // error path, no body
+			return err
+		}},
+	} {
+		t.Run(door.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			var attempts []httpclient.Attempt
+			var outcome httpclient.Outcome
+			err := door.call(ctx, httpclient.Observer{
+				Attempt: func(a httpclient.Attempt) { attempts = append(attempts, a); cancel() },
+				Outcome: func(o httpclient.Outcome) { outcome = o },
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want context.Canceled", err)
+			}
+			if len(attempts) != 1 || attempts[0].Wait < 30*time.Minute || attempts[0].Status != http.StatusServiceUnavailable {
+				t.Fatalf("attempts = %+v, want one 503 with the hour's jittered wait", attempts)
+			}
+			if outcome.Attempts != 1 || !errors.Is(outcome.Err, context.Canceled) {
+				t.Errorf("Outcome = %+v, want 1 attempt and context.Canceled", outcome)
+			}
+		})
+	}
+}
+
+// cancelRT answers a retryable 503 after ending the request's context, so the
+// transport stops on the context once the try is judged.
+type cancelRT struct{ cancel context.CancelFunc }
+
+func (c cancelRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.cancel()
+	return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: http.NoBody, Request: req}, nil
+}
+
+// A context that ends during a transport try leaves the try its own 503 and
+// gives the outcome the context's error.
+func TestTransportObserver_context_end_after_a_try(t *testing.T) {
+	var rec record
+	ctx, cancel := context.WithCancel(t.Context())
+	rt := httpclient.NewRetryRoundTripper(cancelRT{cancel: cancel}, httpclient.TransportConfig{Observer: rec.observer()})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.test/", http.NoBody)
+	if _, err := rt.RoundTrip(req); !errors.Is(err, context.Canceled) { //nolint:bodyclose // error path, no body
+		t.Fatalf("RoundTrip err = %v, want context.Canceled", err)
+	}
+	o := rec.check(t, 1)
+	if a := rec.attempts[0]; a.Status != http.StatusServiceUnavailable || a.Err != nil || !errors.Is(o.Err, context.Canceled) {
+		t.Errorf("attempt Status, Err = %d, %v and Outcome.Err = %v, want 503, nil and context.Canceled", a.Status, a.Err, o.Err)
+	}
+}
+
+// The transport times a try from its send: a slow PrepareRetry is not the
+// upstream's time.
+func TestTransportObserver_duration_excludes_prepare_retry(t *testing.T) {
+	var rec record
+	srv := statusServer(t, nil, http.StatusServiceUnavailable)
+	client := httpclient.NewRetry(nil, httpclient.DefaultRedirectPolicy, httpclient.TransportConfig{
+		MaxAttempts: 2, BaseDelay: time.Millisecond, Observer: rec.observer(),
+		PrepareRetry: func(*http.Request) error { time.Sleep(50 * time.Millisecond); return nil },
+	})
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	rec.check(t, 2)
+	if a := rec.attempts[1]; a.Duration >= 50*time.Millisecond {
+		t.Errorf("second attempt Duration = %v, which counts the 50ms PrepareRetry", a.Duration)
+	}
+}
+
+// Under WithAttemptTimeout, the try whose own bound expired is reported with
+// the mark Do classifies it by.
+func TestWithObserver_Do_attempt_timeout(t *testing.T) {
+	var rec record
+	_, _ = httpclient.Do(t.Context(), func(ctx context.Context) (struct{}, error) {
+		<-ctx.Done()
+		return struct{}{}, ctx.Err()
+	}, httpclient.WithAttemptTimeout(time.Millisecond), httpclient.WithMaxAttempts(1),
+		httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
+	rec.check(t, 1)
+	if a := rec.attempts[0]; !httpclient.IsAttemptTimeout(a.Err) || a.Cause != httpclient.CauseTimeout {
+		t.Errorf("attempt Err, Cause = %v, %v, want the AttemptTimeout mark and timeout", a.Err, a.Cause)
+	}
+}
+
+// hintedStatus carries both a Retry-After hint and a *StatusError whose own
+// Retry-After differs.
+type hintedStatus struct{ *httpclient.StatusError }
+
+func (hintedStatus) RetryAfterHint() time.Duration { return 2 * time.Second }
+func (h hintedStatus) Unwrap() error               { return h.StatusError }
+
+// Do reads Retry-After from a RetryAfterHint first, else a *StatusError, and
+// floors a negative value at zero.
+func TestWithObserver_Do_retry_after_sources(t *testing.T) {
+	srv := statusServer(t, http.Header{"Retry-After": {"4"}}, http.StatusServiceUnavailable)
+	for _, tc := range []struct {
+		name   string
+		err    func(context.Context) error
+		status int
+		want   time.Duration
+	}{
+		{"GetBytes's exhaustion hint", func(ctx context.Context) error {
+			_, err := httpclient.GetBytes(ctx, httpclient.New(5*time.Second), srv.URL, httpclient.WithMaxAttempts(1), httpclient.WithLogger(discardLogger()))
+			return err
+		}, http.StatusServiceUnavailable, 4 * time.Second},
+		{"a hint over the status error's own", func(context.Context) error {
+			return hintedStatus{&httpclient.StatusError{Code: http.StatusServiceUnavailable, RetryAfter: 9 * time.Second}}
+		}, http.StatusServiceUnavailable, 2 * time.Second},
+		{"a negative value", func(context.Context) error {
+			return &httpclient.StatusError{Code: http.StatusServiceUnavailable, RetryAfter: -time.Second}
+		}, http.StatusServiceUnavailable, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rec record
+			_, _ = httpclient.Do(t.Context(), func(ctx context.Context) (struct{}, error) {
+				return struct{}{}, tc.err(ctx)
+			}, httpclient.WithMaxAttempts(1), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
+			rec.check(t, 1)
+			if a := rec.attempts[0]; a.Status != tc.status || a.RetryAfter != tc.want {
+				t.Errorf("attempt Status, RetryAfter = %d, %v, want %d, %v", a.Status, a.RetryAfter, tc.status, tc.want)
+			}
+		})
+	}
+}
+
+// Under WithRateLimitOnly a 429's wait is the rate-limit wait, and a context
+// that ends during it is the outcome.
+func TestWithObserver_Do_rate_limit_only_wait(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	var attempts []httpclient.Attempt
+	var outcome httpclient.Outcome
+	_, err := httpclient.Do(ctx, func(context.Context) (struct{}, error) {
+		return struct{}{}, &httpclient.StatusError{Code: http.StatusTooManyRequests}
+	}, httpclient.WithRateLimitOnly(time.Hour), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(httpclient.Observer{
+		Attempt: func(a httpclient.Attempt) { attempts = append(attempts, a); cancel() },
+		Outcome: func(o httpclient.Outcome) { outcome = o },
+	}))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Do err = %v, want context.Canceled", err)
+	}
+	if len(attempts) != 1 || attempts[0].Status != http.StatusTooManyRequests || attempts[0].Wait != time.Hour {
+		t.Fatalf("attempts = %+v, want one 429 with the hour's wait", attempts)
+	}
+	if !errors.Is(outcome.Err, context.Canceled) {
+		t.Errorf("Outcome.Err = %v, want context.Canceled", outcome.Err)
 	}
 }
 
