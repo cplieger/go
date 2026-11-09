@@ -235,10 +235,13 @@ func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}, obs.settle)
 	switch {
 	case errors.Is(stopErr, ErrMaxElapsed) && err != nil:
+		ret := fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err)
+		if !obs.on {
+			return nil, ret
+		}
 		// The observer gets the cause reduced inside the wrap, so its record
 		// keeps the ceiling and the format.
-		return nil, obs.finishAs(fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err),
-			fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, LogSafeError(err)))
+		return nil, obs.finishAs(ret, fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, LogSafeError(err)))
 	case errors.Is(stopErr, ErrMaxElapsed):
 		return nil, obs.finish(fmt.Errorf("%w (%s)", ErrMaxElapsed, rt.maxElapsedTime))
 	case stopErr != nil:
@@ -295,7 +298,14 @@ type stageError struct {
 	stage string
 }
 
-func (e *stageError) Error() string { return e.stage + ": " + e.err.Error() }
+// Error renders the cause as fmt.Errorf's %w would, so a cause that formats
+// itself reads as it did before the step had a type.
+func (e *stageError) Error() string {
+	if e.err == nil {
+		return e.stage
+	}
+	return fmt.Sprintf("%s: %v", e.stage, e.err)
+}
 
 func (e *stageError) Unwrap() error { return e.err }
 

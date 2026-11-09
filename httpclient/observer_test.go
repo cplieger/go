@@ -641,6 +641,86 @@ func TestTransportObserver_prepare_retry_failure_keeps_its_step(t *testing.T) {
 	}
 }
 
+// A body that cannot be rewound for a retry is observed as that step's
+// failure, redacted, like a PrepareRetry failure.
+func TestTransportObserver_rewind_failure_keeps_its_step(t *testing.T) {
+	var rec record
+	srv := statusServer(t, nil, http.StatusServiceUnavailable)
+	refresh := &url.Error{Op: "Get", URL: "http://user:s3cr3t@body.example/x?token=s3cr3t", Err: errors.New("connection refused")}
+	rt := httpclient.NewRetryRoundTripper(nil, httpclient.TransportConfig{
+		MaxAttempts: 2, BaseDelay: time.Millisecond, Observer: rec.observer(),
+	})
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL, strings.NewReader("x"))
+	req.Header.Set("Idempotency-Key", "k")
+	req.GetBody = func() (io.ReadCloser, error) { return nil, refresh }
+	_, err := rt.RoundTrip(req) //nolint:bodyclose // error path, no body
+	if !errors.Is(err, refresh) || !strings.HasPrefix(err.Error(), "rewind request body: ") {
+		t.Fatalf("RoundTrip err = %v, want the rewind step over the body error", err)
+	}
+	o := rec.check(t, 2)
+	for _, e := range []error{rec.attempts[1].Err, o.Err} {
+		if e.Error() != "rewind request body: connection refused" {
+			t.Errorf("observed error %q, want the step over the redacted cause", e)
+		}
+	}
+}
+
+// statusOverURL reports a *StatusError through an As method while it wraps a
+// *url.Error, so the redaction drops it with the wrapper.
+type statusOverURL struct {
+	se  *httpclient.StatusError
+	err error
+}
+
+func (e statusOverURL) Error() string { return "status: " + e.err.Error() }
+func (e statusOverURL) Unwrap() error { return e.err }
+func (e statusOverURL) As(target any) bool {
+	if p, ok := target.(**httpclient.StatusError); ok {
+		*p = e.se
+		return true
+	}
+	return false
+}
+
+// Do reads Status and RetryAfter from the function's error before the
+// redaction, so they survive a wrapper the redaction drops.
+func TestWithObserver_Do_status_read_before_the_redaction(t *testing.T) {
+	var rec record
+	wrapped := statusOverURL{
+		se:  &httpclient.StatusError{Code: http.StatusServiceUnavailable, RetryAfter: 4 * time.Second},
+		err: &url.Error{Op: "Get", URL: "http://example.test/?token=s3cr3t", Err: errors.New("boom")},
+	}
+	_, _ = httpclient.Do(t.Context(), func(context.Context) (struct{}, error) {
+		return struct{}{}, wrapped
+	}, httpclient.WithMaxAttempts(1), httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
+	o := rec.check(t, 1)
+	a := rec.attempts[0]
+	if a.Status != http.StatusServiceUnavailable || a.RetryAfter != 4*time.Second {
+		t.Errorf("attempt Status, RetryAfter = %d, %v, want 503, 4s", a.Status, a.RetryAfter)
+	}
+	for _, e := range []error{a.Err, o.Err} {
+		if _, ok := errors.AsType[*httpclient.StatusError](e); ok {
+			t.Errorf("observed error %v still reaches the *StatusError the redaction dropped", e)
+		}
+	}
+}
+
+// A GetBytes request that cannot be built is a try with no send: it keeps
+// the try's start and the build error.
+func TestWithObserver_GetBytes_unbuildable_request(t *testing.T) {
+	var rec record
+	before := time.Now()
+	_, err := httpclient.GetBytes(t.Context(), httpclient.New(5*time.Second), "http://h/\x7f",
+		httpclient.WithLogger(discardLogger()), httpclient.WithObserver(rec.observer()))
+	if err == nil {
+		t.Fatal("GetBytes built a request from a URL with a control character")
+	}
+	rec.check(t, 1)
+	if a := rec.attempts[0]; a.Err == nil || a.Start.Before(before) || a.Status != 0 {
+		t.Errorf("attempt Start, Err, Status = %v, %v, %d, want the try's start, the build error and no status", a.Start, a.Err, a.Status)
+	}
+}
+
 // callerTransient is a Do caller's own wrapper over a transport error, with a
 // class and a Retry-After hint of its own.
 type callerTransient struct{ err error }

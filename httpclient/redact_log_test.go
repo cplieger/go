@@ -26,9 +26,15 @@ func TestStatusError_ErrorRedactsURL(t *testing.T) {
 	if !strings.Contains(msg, "HTTP 429") {
 		t.Errorf("StatusError.Error() = %q, want status code", msg)
 	}
-	// The raw URL is kept unexported for the redacted rendering only.
-	if !strings.Contains(httpclient.StatusErrorURL(se), "supersecret") {
-		t.Error("the raw URL should be kept for Error() to redact")
+	// The URL is redacted when the error is built, so no rendering of it,
+	// reflection over the pointer or a copy of the value, can reach the raw
+	// one.
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%t", "%x"} {
+		for _, v := range []any{se, *se} {
+			if got := fmt.Sprintf(verb, v); strings.Contains(got, "supersecret") || strings.Contains(got, "pw@") {
+				t.Errorf("Sprintf(%q, %T) = %q, leaked the raw URL", verb, v, got)
+			}
+		}
 	}
 }
 

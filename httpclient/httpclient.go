@@ -71,11 +71,12 @@ var (
 // response. Match a status class with errors.Is against [ErrUnauthorized],
 // [ErrForbidden], [ErrRateLimited] or [ErrServerError], or read Code.
 type StatusError struct {
-	// rawURL is the URL GetBytes was given, unredacted; Error() renders it
-	// redacted. CheckStatus leaves it empty. It is unexported so encoding/json
-	// cannot carry its credentials into a log.
-	rawURL string
-	Code   int
+	// redacted is the URL GetBytes was given, its userinfo and query values
+	// masked at construction, so no rendering of the error, reflection and
+	// value copies included, can reach the raw one. CheckStatus leaves it
+	// empty.
+	redacted string
+	Code     int
 	// RetryAfter is the response's Retry-After, raw and uncapped, zero when
 	// absent or malformed. The server controls it (CWE-400): bound it before
 	// sleeping on it, as Do's rate-limit options do.
@@ -84,21 +85,11 @@ type StatusError struct {
 
 var _ Transient = (*StatusError)(nil)
 
-// GoString renders e for %#v with its URL redacted, as Error renders it, so
-// the unexported raw URL cannot reach a debug line either.
-func (e *StatusError) GoString() string {
-	shown := ""
-	if e.rawURL != "" {
-		shown = redactURL(e.rawURL)
-	}
-	return fmt.Sprintf("&httpclient.StatusError{URL:%q, Code:%d, RetryAfter:%s}", shown, e.Code, e.RetryAfter)
-}
-
 func (e *StatusError) Error() string {
-	if e.rawURL == "" {
+	if e.redacted == "" {
 		return fmt.Sprintf("HTTP %d", e.Code)
 	}
-	return fmt.Sprintf("HTTP %d from %s", e.Code, redactURL(e.rawURL))
+	return fmt.Sprintf("HTTP %d from %s", e.Code, e.redacted)
 }
 
 // Is matches the sentinel for e's Code.
@@ -125,7 +116,11 @@ func (e *StatusError) IsTransient() bool {
 // newStatusError builds the *StatusError for resp, a non-2xx response to a
 // request for reqURL.
 func newStatusError(resp *http.Response, reqURL string) *StatusError {
-	return &StatusError{rawURL: reqURL, Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
+	se := &StatusError{Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
+	if reqURL != "" {
+		se.redacted = redactURL(reqURL)
+	}
+	return se
 }
 
 // ResponseTooLargeError is returned by GetBytes when the response body exceeds
@@ -459,11 +454,14 @@ func ParseRetryAfterResponse(resp *http.Response) time.Duration {
 // a client that does not follow redirects (see [RefuseAllRedirects]) and is
 // reported as a failure, not a completed request.
 func CheckStatus(resp *http.Response) error {
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	if succeeded(resp.StatusCode) {
 		return nil
 	}
 	return newStatusError(resp, "")
 }
+
+// succeeded reports whether code is in the 2xx success band.
+func succeeded(code int) bool { return code >= 200 && code < 300 }
 
 // IsRetryableStatus is the one status rule every retry door applies: true for
 // 408, 429 and 500 to 599 less the codes whose answer repeats, false for every
@@ -1416,10 +1414,10 @@ func redactURL(rawURL string) string {
 // LogSafeError returns an error whose message is safe to log. Every *url.Error
 // in err's chain, which renders the raw request URL, is replaced by its cause.
 // The marks this package renders on the fly ([Permanent], [MarkTransient],
-// [AttemptTimeout]), the RetryRoundTripper's "rewind request body" and
-// "prepare retry" steps, and each branch of an errors.Join are kept around the
-// reduced cause, so [IsPermanent], [IsTransient], the step and every sibling
-// survive.
+// [AttemptTimeout], and the RetryRoundTripper's "rewind request body" and
+// "prepare retry" steps) are kept around the reduced cause, and so is each
+// branch of an errors.Join or a multi-%w fmt.Errorf, rejoined with errors.Join,
+// which drops a multi-%w wrapper's own text.
 // Any other wrapper above a *url.Error is dropped, because its message was
 // rendered with the URL in it: reduce a transport error before you wrap it with
 // your own context. An error with no *url.Error is returned unchanged, a chain
@@ -1456,7 +1454,8 @@ func reduceURLErrors(err error) error {
 var errURLDepth = errors.New("url error depth exceeded")
 
 // reduceURL rebuilds err with each *url.Error replaced by its cause, keeping
-// this package's marks and every errors.Join branch, and dropping any other
+// this package's marks, the transport's stageError steps and every branch of
+// an Unwrap() []error (rejoined with errors.Join), and dropping any other
 // wrapper above a *url.Error. budget counts the replacements left; the result
 // is errURLDepth once a *url.Error remains when it runs out.
 func reduceURL(err error, budget int) error {
@@ -1476,7 +1475,13 @@ func reduceURL(err error, budget int) error {
 	case *attemptTimeoutError:
 		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &attemptTimeoutError{Err: inner} })
 	case *stageError:
-		return rewrap(reduceURL(e.err, budget), func(inner error) error { return &stageError{stage: e.stage, err: inner} })
+		inner := reduceURL(e.err, budget)
+		if inner == nil {
+			// A cause whose only content was a URL reduces to nothing; the step
+			// keeps a placeholder, so it still renders.
+			inner = errRequestFailed
+		}
+		return rewrap(inner, func(inner error) error { return &stageError{stage: e.stage, err: inner} })
 	case interface{ Unwrap() []error }:
 		branches := e.Unwrap()
 		kept := make([]error, 0, len(branches))

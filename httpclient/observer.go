@@ -9,26 +9,19 @@ import (
 // Attempt is one try a door made: one call of Do's function, one GetBytes
 // request, or one RetryRoundTripper round trip.
 type Attempt struct {
-	// Start is when the try began: for Do, the function's call; for GetBytes,
-	// the send, after the request build and WithHeaders; for the transport,
-	// the send, after any body rewind and PrepareRetry, or the try's start if
-	// either failed.
+	// Start is when the try began: Do's function call, or the send for
+	// GetBytes (after the request build and WithHeaders) and the transport
+	// (after any rewind and PrepareRetry); a try that failed before its send
+	// keeps the moment it began.
 	Start time.Time
 	// Err is the try's error as LogSafeError renders it, so no *url.Error's
-	// raw URL reaches the observer: Do's function error (marked with
-	// AttemptTimeout when WithAttemptTimeout's bound expired), GetBytes's
-	// request or read error, whose *StatusError names the request URL
-	// redacted, or the transport's base round-trip error. LogSafeError keeps
-	// this package's marks (Permanent, MarkTransient, AttemptTimeout), the
-	// transport's retry steps and every errors.Join branch, so IsTransient and
-	// IsPermanent read them. Any other wrapper above a *url.Error is dropped
-	// with its type and text, a Do caller's own included: reduce a transport
-	// error with LogSafeError before wrapping it if the observer must see the
-	// wrapper. It is nil when the try succeeded; for the transport, a response
-	// of any status is a success and Status carries it.
+	// raw URL reaches the observer, and LogSafeError's documented wrappers
+	// survive; any other wrapper above a *url.Error, a Do caller's own
+	// included, is dropped. It is nil when the try succeeded; for the
+	// transport, a response of any status is a success and Status carries it.
 	Err error
-	// Duration runs from the send to the answer or the error. GetBytes
-	// includes the body read; the transport stops at the response headers.
+	// Duration runs from Start to the answer or the error. GetBytes includes
+	// the body read; the transport stops at the response headers.
 	Duration time.Duration
 	// RetryAfter is the response's Retry-After, capped at RetryAfterCap, zero
 	// when there is none. Do reads it from the function's error before the
@@ -43,7 +36,7 @@ type Attempt struct {
 	// Number is the try's place in the call, 1 for the first.
 	Number int
 	// Status is the HTTP status, zero when no response arrived. Do reads it
-	// from a *StatusError in Err.
+	// from the function's error before the redaction, from a *StatusError.
 	Status int
 	// Cause is CauseOf(Err).
 	Cause Cause
@@ -92,8 +85,8 @@ func (o observerOption) applyGet(c *getConfig) { o.applyDo(&c.loopConfig) }
 func WithObserver(o Observer) Option { return observerOption(o) }
 
 // observation is one call's state on its way to an Observer: the attempt in
-// progress and the call's start. With neither func set it is off, and every
-// method returns at once.
+// progress and the call's start. With neither func set it is off: every
+// method returns at once, except end, which only its gated callers reach.
 type observation struct {
 	obs     Observer
 	start   time.Time

@@ -538,12 +538,11 @@ func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...G
 	var retryAfter time.Duration
 	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
 		obs.begin(n)
-		attemptStart := time.Now()
 		r := getAttempt(ctx, client, reqURL, &cfg, &obs)
 		body, err, retryAfter = r.body, r.err, r.wait
 		obs.endHeader(err, r.status, r.header)
 		if err == nil {
-			logSlowUpstream(log, reqURL, attemptStart)
+			logSlowUpstream(log, reqURL, r.sent)
 		}
 		return !r.retry, retryAfter
 	}, func(retry int, _ time.Duration) {
@@ -600,6 +599,7 @@ func logSlowUpstream(log *slog.Logger, reqURL string, attemptStart time.Time) {
 // A response that arrived, with or without an error, also gives its status
 // and header.
 type getResult struct {
+	sent   time.Time // when the request went out; zero if it was never built
 	err    error
 	header http.Header
 	body   []byte
@@ -618,8 +618,9 @@ func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *ge
 		cfg.setHeaders(req)
 	}
 	obs.sending()
+	sent := time.Now()
 	resp, err := client.Do(req) //nolint:bodyclose // resp.Body is closed on every path: DrainClose (429/5xx, non-2xx), ReadLimitedBody's deferred close (2xx), or Client.Do itself when it returns a response with an error (a CheckRedirect refusal); bodyclose can't trace the close through the helpers.
-	r := getResult{retry: retryableRoundTrip(resp, err)}
+	r := getResult{sent: sent, retry: retryableRoundTrip(resp, err)}
 	if resp != nil {
 		// Client.Do returns a response WITH an error when CheckRedirect refuses a
 		// hop, having closed its body: the status still arrived.
@@ -635,9 +636,9 @@ func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *ge
 		return r
 	}
 	// Any other non-2xx is permanent for this door: a redirect stub or an error
-	// page is not the requested resource. CheckStatus owns the success band;
-	// this door's error adds the request URL.
-	if CheckStatus(resp) != nil {
+	// page is not the requested resource. succeeded owns the success band,
+	// which CheckStatus shares; this door's error adds the request URL.
+	if !succeeded(resp.StatusCode) {
 		DrainClose(resp.Body)
 		r.err = newStatusError(resp, reqURL)
 		return r

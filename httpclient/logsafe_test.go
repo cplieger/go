@@ -9,9 +9,10 @@ import (
 	"testing"
 )
 
-// LogSafeError keeps this package's marks and every errors.Join branch around
-// the reduced cause, and drops any other wrapper above a *url.Error, whose
-// message was rendered with the URL in it.
+// LogSafeError keeps this package's marks, the transport's retry steps and
+// every errors.Join or multi-%w branch around the reduced cause, and drops any
+// other wrapper above a *url.Error, whose message was rendered with the URL in
+// it.
 func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) {
 	t.Parallel()
 	const secretURL = "https://api.example/x?token=s3cret"
@@ -53,6 +54,19 @@ func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) 
 			if !errors.Is(got, sibling) || !errors.Is(got, io.ErrUnexpectedEOF) {
 				t.Errorf("got %v, want both wrapped errors kept", got)
 			}
+			if got.Error() != "independent failure\nunexpected EOF" {
+				t.Errorf("got %q, want the branches rejoined without the wrapper's text", got)
+			}
+		}},
+		{"retry step", &stageError{stage: "prepare retry", err: urlErr()}, func(t *testing.T, got error) {
+			if got.Error() != "prepare retry: unexpected EOF" || !errors.Is(got, io.ErrUnexpectedEOF) {
+				t.Errorf("got %q, want the step kept over the cause", got)
+			}
+		}},
+		{"retry step over a cause that reduces to nothing", &stageError{stage: "rewind request body", err: emptyJoinURL{}}, func(t *testing.T, got error) {
+			if got.Error() != "rewind request body: request failed" {
+				t.Errorf("got %q, want the step over the placeholder", got)
+			}
 		}},
 	}
 	for _, tc := range cases {
@@ -68,6 +82,20 @@ func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) 
 			tc.check(t, got)
 		})
 	}
+}
+
+// emptyJoinURL surfaces a *url.Error through an As method and unwraps to no
+// branches, so its reduction is an empty errors.Join: nil.
+type emptyJoinURL struct{}
+
+func (emptyJoinURL) Error() string   { return "Get \"https://api.example/x?token=s3cret\": EOF" }
+func (emptyJoinURL) Unwrap() []error { return nil }
+func (emptyJoinURL) As(target any) bool {
+	if p, ok := target.(**url.Error); ok {
+		*p = &url.Error{Op: "Get", URL: "https://api.example/x?token=s3cret", Err: io.EOF}
+		return true
+	}
+	return false
 }
 
 // asURLError surfaces a *url.Error through an As method and no Unwrap, so the

@@ -588,9 +588,9 @@ func TestBackoffPrimitivesAllocations(t *testing.T) {
 // stack and records nothing. Do's one allocation is its loopConfig
 // (newLoopConfig's result escapes), which the Observer field grows by 16
 // bytes; the transport's single try allocates nothing; a retrying GET's three
-// are the request clone (Request, URL and Header). A zero is also measured
-// over one run, because AllocsPerRun divides as an integer and would round a
-// rare allocation down to it.
+// are the request clone (Request, URL and Header). A zero is also checked as
+// the exact malloc count over 200 runs, because AllocsPerRun divides as an
+// integer and rounds a rare allocation down.
 func TestDoorAllocationsWithoutObserver(t *testing.T) {
 	ctx := context.Background()
 	fn := func(context.Context) (int, error) { return 1, nil }
@@ -614,8 +614,10 @@ func TestDoorAllocationsWithoutObserver(t *testing.T) {
 			if got := testing.AllocsPerRun(200, tc.run); got != tc.want {
 				t.Errorf("allocations = %v, want %v", got, tc.want)
 			}
-			if got := testing.AllocsPerRun(1, tc.run); tc.want == 0 && got != 0 {
-				t.Errorf("allocations in one run = %v, want 0", got)
+			if tc.want == 0 {
+				if got := mallocsOver(200, tc.run); got != 0 {
+					t.Errorf("%d allocations over 200 runs, want 0", got)
+				}
 			}
 		})
 	}
@@ -1069,7 +1071,7 @@ func TestRedactTransportErrorAllocations(t *testing.T) {
 	// ever becomes free (a cached message, a cheaper rendering), the test names
 	// what to do about it.
 	t.Run("rendering_error_is_not_free_when_the_secret_is_absent", func(t *testing.T) {
-		statusErr := &StatusError{Code: 429, rawURL: "https://api.example/v1/items?cmd=list"}
+		statusErr := &StatusError{Code: 429, redacted: redactURL("https://api.example/v1/items?cmd=list")}
 		got := testing.AllocsPerRun(200, func() {
 			errSink = RedactTransportError(statusErr, "", redactSecret)
 		})
@@ -1165,7 +1167,7 @@ func TestLogSafeErrorAllocations(t *testing.T) {
 		"plain_error":        errors.New("connection refused"),
 		"url_error":          &url.Error{Op: "Get", URL: "https://u:p@api.example/x?k=v", Err: cause},
 		"url_error_no_cause": &url.Error{Op: "Get", URL: "https://api.example/x"},
-		"status_error":       &StatusError{Code: 503, rawURL: "https://api.example/x?apikey=secret"},
+		"status_error":       &StatusError{Code: 503, redacted: redactURL("https://api.example/x?apikey=secret")},
 		"wrapped_url_error":  fmt.Errorf("fetch: %w", &url.Error{Op: "Get", URL: "https://api.example/x", Err: cause}),
 	}
 	for name, err := range cases {
@@ -1186,6 +1188,20 @@ func TestLogSafeErrorAllocations(t *testing.T) {
 // allocation count untouched, so a contract written only on the count cannot
 // see that class at all. Same shape as AllocsPerRun: one settling run, then the
 // delta over n runs measured from a known GC point.
+// mallocsOver returns the exact number of heap allocations n runs of f make,
+// after one warm-up run, with one P so no other goroutine's count lands in it.
+func mallocsOver(n int, f func()) uint64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	f()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range n {
+		f()
+	}
+	runtime.ReadMemStats(&after)
+	return after.Mallocs - before.Mallocs
+}
+
 func allocBytesPerRun(n int, f func()) uint64 {
 	f()
 	runtime.GC()
