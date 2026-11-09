@@ -373,19 +373,33 @@ func validateServer(sv *Server) error {
 		case len(v.Enum) > 0 && !slices.Contains(v.Enum, v.Default):
 			return fmt.Errorf("server %q variable %q has Default %q, which is not in its Enum", sv.URL, name, v.Default)
 		}
+		// A value is substituted into the URL, so it obeys the URL's literal
+		// rules, braces included.
+		for _, val := range append([]string{v.Default}, v.Enum...) {
+			if !utf8.ValidString(val) {
+				return fmt.Errorf("server %q variable %q value %q is not valid UTF-8", sv.URL, name, val)
+			}
+			if r, bad := badServerValue(val); bad {
+				return fmt.Errorf("server %q variable %q value %q holds %q: %s, and a value holds no brace", sv.URL, name, val, r, serverRuneRule)
+			}
+		}
 	}
 	return nil
 }
 
-// serverPlaceholders returns the {name} placeholders of sv's URL, refusing an
-// unbalanced brace, an empty or nested placeholder, one used twice, one
-// Variables does not define, and a literal character no server URL holds.
-// OAS 3.1.1 says a server URL has no query or fragment; the rest follows OAS
-// 3.2.0's server URL grammar
+// serverPlaceholders returns the {name} placeholders of sv's URL, refusing
+// invalid UTF-8, an unbalanced brace, an empty or nested placeholder, one used
+// twice, one Variables does not define, and a literal character no server URL
+// holds. OAS 3.1.2 says a server URL has no query or fragment; the rest
+// follows OAS 3.2.0's server URL grammar
 // (https://spec.openapis.org/oas/v3.2.0#server-variable-object), which 3.1
 // leaves unstated: each variable once, named by one or more characters other
-// than braces, and literals with no space, control character or "<>\^`|.
+// than braces, and literals with no space, control character, double quote,
+// any of <>\^`| or a % that starts no percent-encoding.
 func serverPlaceholders(sv *Server) (map[string]bool, error) {
+	if !utf8.ValidString(sv.URL) {
+		return nil, fmt.Errorf("server %q is not valid UTF-8", sv.URL)
+	}
 	used := map[string]bool{}
 	for rest := sv.URL; ; {
 		i := strings.IndexAny(rest, "{}")
@@ -422,13 +436,38 @@ func serverLiteral(url, rest string, end int) error {
 	if end >= 0 {
 		rest = rest[:end]
 	}
-	if j := strings.IndexFunc(rest, func(r rune) bool {
-		return r == ' ' || unicode.IsControl(r) || strings.ContainsRune("?#\"<>\\^`|", r)
-	}); j >= 0 {
-		r, _ := utf8.DecodeRuneInString(rest[j:])
-		return fmt.Errorf("server %q holds %q outside a placeholder: a server URL has no query, fragment, space, control character or any of \"<>\\^`|", url, r)
+	if r, bad := badServerRune(rest); bad {
+		return fmt.Errorf("server %q holds %q outside a placeholder: %s", url, r, serverRuneRule)
 	}
 	return nil
+}
+
+// serverRuneRule is what badServerRune refuses, for its errors.
+const serverRuneRule = "a server URL has no query, fragment, space, control character, double quote, any of <>\\^`| or a % that starts no percent-encoding"
+
+// badServerValue returns the first rune of a variable value that the URL it
+// is substituted into cannot hold: a brace, or what badServerRune refuses.
+func badServerValue(v string) (rune, bool) {
+	if i := strings.IndexAny(v, "{}"); i >= 0 {
+		return rune(v[i]), true
+	}
+	return badServerRune(v)
+}
+
+// badServerRune returns the first rune of s that a server URL's literal text,
+// or a value substituted into it, cannot hold.
+func badServerRune(s string) (rune, bool) {
+	for i, r := range s {
+		switch {
+		case r == '%':
+			if i+2 >= len(s) || !isHexDigit(s[i+1]) || !isHexDigit(s[i+2]) {
+				return r, true
+			}
+		case r == ' ' || unicode.IsControl(r) || strings.ContainsRune("?#\"<>\\^`|", r):
+			return r, true
+		}
+	}
+	return 0, false
 }
 
 // validateExtensions rejects an extension key outside OpenAPI's x- space

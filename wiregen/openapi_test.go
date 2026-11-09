@@ -3,6 +3,7 @@ package wiregen_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -415,6 +416,13 @@ func TestOperationServers(t *testing.T) {
 		{"a fragment after a placeholder", wiregen.Server{URL: "http://{h}/#top", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a"}}}, `server "http://{h}/#top" holds '#' outside a placeholder`},
 		{"a space", wiregen.Server{URL: "http://h /a"}, `server "http://h /a" holds ' ' outside a placeholder`},
 		{"a control character", wiregen.Server{URL: "http://h/\x7f"}, `server "http://h/\x7f" holds '\x7f' outside a placeholder`},
+		{"a bare percent", wiregen.Server{URL: "http://h/100%"}, `server "http://h/100%" holds '%' outside a placeholder`},
+		{"a percent with one hex digit", wiregen.Server{URL: "http://h/%2"}, `server "http://h/%2" holds '%'`},
+		{"a percent with no hex digits", wiregen.Server{URL: "http://h/%zz"}, `server "http://h/%zz" holds '%'`},
+		{"invalid UTF-8", wiregen.Server{URL: "http://h/\xff"}, `server "http://h/\xff" is not valid UTF-8`},
+		{"a default holding a query", wiregen.Server{URL: "http://{h}/", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a?b"}}}, `server "http://{h}/" variable "h" value "a?b" holds '?'`},
+		{"an enum value holding a brace", wiregen.Server{URL: "http://{h}/", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a", Enum: []string{"a", "b}"}}}}, `variable "h" value "b}" holds '}'`},
+		{"a default that is not UTF-8", wiregen.Server{URL: "http://{h}/", Variables: map[string]wiregen.ServerVariable{"h": {Default: "\xff"}}}, `variable "h" value "\xff" is not valid UTF-8`},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := fullReg()
@@ -422,6 +430,19 @@ func TestOperationServers(t *testing.T) {
 			requireGenerateError(t, r, tc.want)
 		})
 	}
+	for _, c := range "\"<>\\^`|" {
+		u := "http://h/a" + string(c) + "b"
+		t.Run(fmt.Sprintf("a literal %q is refused", c), func(t *testing.T) {
+			r := fullReg()
+			r.Endpoints[0].Servers = []wiregen.Server{{URL: u}}
+			requireGenerateError(t, r, fmt.Sprintf("server %q holds %q outside a placeholder", u, c))
+		})
+	}
+	t.Run("percent-encoding and an IPv6 zone are accepted", func(t *testing.T) {
+		r := fullReg()
+		r.Endpoints[0].Servers = []wiregen.Server{{URL: "http://h/a%20b"}, {URL: "http://[fe80::1%25eth0]/"}}
+		mustGen(t, r.openapiFile)
+	})
 }
 
 func TestOpenAPIOperations(t *testing.T) {

@@ -370,17 +370,23 @@ func TestUnion_PayloadTypeNotAStruct(t *testing.T) {
 		name  string
 		enums []wiregen.EnumRef
 		types []wiregen.Type
+		both  bool // rename names it too, after create
 		want  string
 	}{
-		{"an unregistered non-struct", nil, nil, role + " is not a struct"},
-		{"a non-struct also in Types", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, role + " is not a struct"},
-		{"a registered enum", []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}, nil, role + " is an enum; it must be a struct"},
+		{"an unregistered non-struct", nil, nil, false, role + " is not a struct"},
+		{"a non-struct also in Types", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, false, role + " is not a struct"},
+		{"a non-struct two roles name, under the first", nil, nil, true, role + " is not a struct"},
+		{"a non-struct in Types two roles name, under the first", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, true, role + " is not a struct"},
+		{"a registered enum", []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}, nil, false, role + " is an enum; it must be a struct"},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := newTestRegistry()
 			r.Enums, r.Types = tc.enums, tc.types
 			u := commandUnion()
 			u.PayloadTypes["create"] = wiregen.TypeRef[unions.Kind]()
+			if tc.both {
+				u.PayloadTypes["rename"] = wiregen.TypeRef[unions.Kind]()
+			}
 			r.Unions = []wiregen.Union{u}
 			err := r.generate(t.Context(), t.TempDir())
 			if err == nil || err.Error() != "wiregen: "+tc.want {
@@ -418,9 +424,10 @@ func TestUnion_PayloadRecursionCapped(t *testing.T) {
 	}
 }
 
-// A payload with no omit option, typed in every case, is written as null when
-// the json.RawMessage is nil: its response schema is nullable and validates
-// what encoding/json writes for the zero value.
+// Each way encoding/json writes a typed payload as null (a nil RawMessage with
+// no omit option, the bytes null under omitempty or omitzero, and a pointer to
+// a nil RawMessage) validates against the response component, and the TS
+// member stays optional.
 func TestUnion_PayloadNilWritesNull(t *testing.T) {
 	null := json.RawMessage("null")
 	nilRaw := json.RawMessage(nil)

@@ -533,8 +533,10 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 
 // fieldSchema is f's value schema in direction d. A pointer, slice, map or
 // []byte is nullable: in a request always, since null decodes to nil, and in
-// a response unless omitempty or omitzero, since nil encodes as null. A Count
-// lower bound of 1 or more makes it never nullable.
+// a response unless omitempty or omitzero, since nil encodes as null. A typed
+// union payload is nullable in a response even with an omit option, since its
+// bytes can be JSON null. A Count lower bound of 1 or more makes it never
+// nullable.
 func (b *docBuilder) fieldSchema(f *fieldInfo, d direction) any {
 	s := b.valueSchema(f, d)
 	null := f.nullIn()

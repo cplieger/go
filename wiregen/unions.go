@@ -20,8 +20,9 @@ import (
 // in that case, or to the zero Type for a case that carries no payload. The
 // payload field is listed in no case; it belongs to each case with a payload
 // type, keeps its own omit options there, and is refused in the others. A
-// json.RawMessage can always be null on the wire, so the typed payload is
-// optional and nullable. Each payload type is a struct, as every registered
+// json.RawMessage can always be null on the wire, so the typed payload's
+// TypeScript member is optional, its schemas are nullable, and a decoder
+// reads null as absent. Each payload type is a struct, as every registered
 // type is, and joins the registry's types.
 type Union struct {
 	Cases        map[string][]string

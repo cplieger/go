@@ -298,8 +298,9 @@ type generator struct {
 	// enums also holds the members the engine discovered.
 	typeNames map[string]string
 	enums     map[string]enumDef
-	// typeRoles names the role of each type only an endpoint, event, union or
-	// ErrorEnvelope names, for the errors that refuse it.
+	// typeRoles names the first role an endpoint, event, union or
+	// ErrorEnvelope gives each type, listed in Types or not, for the errors
+	// that refuse it.
 	typeRoles map[string]string
 	files     []genFile // every output, content unrendered
 	Registry
@@ -444,8 +445,9 @@ func (g *generator) registerNames() error {
 }
 
 // registerTypes fills typeNames from Types, then appends each type the
-// endpoints, events, unions and ErrorEnvelope name that Types lacks. It returns the
-// bare names taken, for the enums to share.
+// endpoints, events, unions and ErrorEnvelope name that Types lacks, and
+// records each referenced type's first role. It returns the bare names taken,
+// for the enums to share.
 func (g *generator) registerTypes() (map[string]string, error) {
 	g.typeNames = make(map[string]string, len(g.Types))
 	g.typeRoles = map[string]string{}
