@@ -19,8 +19,9 @@ import (
 // selects: PayloadTypes maps every Cases key to the type that field decodes as
 // in that case, or to the zero Type for a case that carries no payload. The
 // payload field is listed in no case; it belongs to each case with a payload
-// type, keeps its own presence rule there, and is refused in the others. Each
-// payload type joins the registry's types.
+// type, keeps its own presence rule there, and is refused in the others.
+// Each payload type is a struct, as a struct field's type would be, and joins
+// the registry's types.
 type Union struct {
 	Cases        map[string][]string
 	PayloadTypes map[string]Type
@@ -103,7 +104,7 @@ func (e *astEngine) resolveCases(u *Union, ti *typeInfo, values []string, raw *f
 		if err != nil {
 			return nil, err
 		}
-		if pt := u.PayloadTypes[v]; raw != nil && pt != (Type{}) {
+		if pt := u.PayloadTypes[v]; pt != (Type{}) {
 			uc.payload = e.typedPayload(raw, pt)
 			uc.fields = withField(ti, uc.fields, u.Payload)
 		}
@@ -130,8 +131,6 @@ func payloadField(u *Union, ti *typeInfo, values []string) (*fieldInfo, error) {
 		return nil, fmt.Errorf("payload %q is no field of the type", u.Payload)
 	case raw.Kind != kindRaw:
 		return nil, fmt.Errorf("payload %q must be a json.RawMessage field", u.Payload)
-	case u.Payload == u.Tag:
-		return nil, fmt.Errorf("payload %q is the tag", u.Payload)
 	}
 	if keys := slices.Sorted(maps.Keys(u.PayloadTypes)); !slices.Equal(keys, slices.Sorted(slices.Values(values))) {
 		return nil, fmt.Errorf("PayloadTypes keys %v must be exactly the Cases keys %v", keys, slices.Sorted(slices.Values(values)))
@@ -155,6 +154,10 @@ func (e *astEngine) typedPayload(raw *fieldInfo, pt Type) *fieldInfo {
 	f := *raw
 	f.Kind, f.TSType, f.GoTypeName = kindStruct, e.gen.tsName(pt.Name), pt.Name
 	f.Elem, f.Bounds, f.Mapping, f.Refusals, f.InRefusals = nil, nil, nil, nil, nil
+	// A json.RawMessage is a byte slice: its own nil writes null and null
+	// decodes to it. As a struct that nil is one more pointer level, so the
+	// presence rules derive null and absence as they do for any pointer.
+	f.Ptrs++
 	return &f
 }
 
@@ -246,7 +249,7 @@ func (ti *typeInfo) caseFields(uc *unionCase) []*fieldInfo {
 	out := make([]*fieldInfo, 0, 1+len(uc.fields))
 	out = append(out, ti.field(ti.Union.tag))
 	for _, name := range uc.fields {
-		if name == ti.Union.payload && uc.payload != nil {
+		if name == ti.Union.payload {
 			out = append(out, uc.payload)
 			continue
 		}

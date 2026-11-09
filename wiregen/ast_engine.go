@@ -418,6 +418,9 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 	underlying := tn.Type().Underlying()
 	st, ok := underlying.(*types.Struct)
 	if !ok {
+		if role, named := e.gen.typeRoles[wt.Name]; named {
+			return nil, fmt.Errorf("wiregen: %s %s.%s is not a struct", role, wt.PkgPath, wt.Name)
+		}
 		return nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
 	}
 	if c := marshalCodec(tn.Type()); c != codecPlain {

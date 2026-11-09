@@ -124,8 +124,8 @@ func TestGenerateEvents_DataTypeResolvedAsIfInTypes(t *testing.T) {
 		name, typeName, wantErr string
 	}{
 		{"missing from its package", "Missing", "type Missing not found"},
-		{"a registered enum's name", "Status", "is registered twice"},
-		{"a string type", "Priority", "is not a struct"},
+		{"a registered enum's name", "Status", `event "e" data type ` + pkg + ".Status is an enum; it must be a struct"},
+		{"a string type", "Priority", `event "e" data type ` + pkg + ".Priority is not a struct"},
 		{"a constant", "StatusActive", "StatusActive in " + pkg + " is not a type"},
 		{"no name", "", "names no package-level type"},
 	}

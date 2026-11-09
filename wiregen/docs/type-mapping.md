@@ -124,7 +124,7 @@ wiregen.Union{
 }
 ```
 
-The payload field is listed in no case. It belongs to each case with a payload type, with its own presence rule, and is refused in the others. Each payload type joins the registry's types.
+The payload field is listed in no case. It belongs to each case with a payload type, with its own presence rule, and is refused in the others: a nil `json.RawMessage` writes `null` unless an omit option drops it, so the payload is nullable as a pointer field would be. Each payload type is a struct, as a struct field's type would be, and joins the registry's types. `Generate` refuses a payload field that is not a `json.RawMessage`, `PayloadTypes` keys that are not exactly the case values, a case that lists the payload field, and a union where no case has a payload type.
 
 - The types file carries `| { type: "create"; payload?: CreateChat } | ...`.
 - The decoder decodes `payload` with that case's decoder, and refuses a present payload in a case that has none.

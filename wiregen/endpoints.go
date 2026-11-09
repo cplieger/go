@@ -104,10 +104,10 @@ type Endpoint struct {
 
 // SecurityRequirement is one OpenAPI Security Requirement Object
 // (https://spec.openapis.org/oas/v3.1.0#security-requirement-object): every
-// scheme it names must be satisfied together, each with its scope list. For
-// oauth2 and openIdConnect the list holds scopes; for any other scheme it may
-// hold role names. A nil list emits []. An empty requirement makes the
-// operation's security optional.
+// scheme it names must be satisfied together, each with its role list, which
+// OAS 3.1 allows for the http, apiKey and mutualTLS schemes wiregen declares.
+// A nil list emits []. An empty requirement makes the operation's security
+// optional.
 type SecurityRequirement map[string][]string
 
 // Server is one OpenAPI Server Object
@@ -376,25 +376,35 @@ func validateServer(sv *Server) error {
 	return nil
 }
 
-// serverPlaceholders returns the {name} placeholders of sv's URL, refusing
-// one that is unclosed or that Variables does not define.
+// serverPlaceholders returns the {name} placeholders of sv's URL, refusing an
+// unbalanced brace, an empty or nested placeholder, one used twice, and one
+// Variables does not define. OAS's server URL grammar allows each variable
+// once, named by one or more characters other than braces.
 func serverPlaceholders(sv *Server) (map[string]bool, error) {
 	used := map[string]bool{}
 	for rest := sv.URL; ; {
-		i := strings.IndexByte(rest, '{')
+		i := strings.IndexAny(rest, "{}")
 		if i < 0 {
 			return used, nil
 		}
-		end := strings.IndexByte(rest[i:], '}')
-		if end < 0 {
-			return nil, fmt.Errorf("server %q has an unclosed {", sv.URL)
+		if rest[i] == '}' {
+			return nil, fmt.Errorf("server %q has an unbalanced }", sv.URL)
 		}
-		name := rest[i+1 : i+end]
-		if _, ok := sv.Variables[name]; !ok {
+		end := strings.IndexAny(rest[i+1:], "{}")
+		if end < 0 || rest[i+1+end] != '}' {
+			return nil, fmt.Errorf("server %q has an unclosed or nested {", sv.URL)
+		}
+		name := rest[i+1 : i+1+end]
+		switch _, ok := sv.Variables[name]; {
+		case name == "":
+			return nil, fmt.Errorf("server %q has an empty placeholder {}", sv.URL)
+		case used[name]:
+			return nil, fmt.Errorf("server %q uses {%s} twice", sv.URL, name)
+		case !ok:
 			return nil, fmt.Errorf("server %q uses {%s}, which Variables does not define", sv.URL, name)
 		}
 		used[name] = true
-		rest = rest[i+end+1:]
+		rest = rest[i+1+end+1:]
 	}
 }
 

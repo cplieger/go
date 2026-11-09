@@ -298,6 +298,9 @@ type generator struct {
 	// enums also holds the members the engine discovered.
 	typeNames map[string]string
 	enums     map[string]enumDef
+	// typeRoles names the role of each type only an endpoint, event, union or
+	// ErrorEnvelope names, for the errors that refuse it.
+	typeRoles map[string]string
 	files     []genFile // every output, content unrendered
 	Registry
 	o options
@@ -429,6 +432,9 @@ func (g *generator) registerNames() error {
 	}
 	g.enums = make(map[string]enumDef, len(g.Enums))
 	for _, ref := range g.Enums {
+		if role, ok := g.typeRoles[ref.Type.Name]; ok && g.typeNames[ref.Type.Name] == ref.Type.PkgPath {
+			return fmt.Errorf("wiregen: %s %s.%s is an enum; it must be a struct", role, ref.Type.PkgPath, ref.Type.Name)
+		}
 		if err := registerName(seen, "enum", ref.Type); err != nil {
 			return err
 		}
@@ -442,6 +448,7 @@ func (g *generator) registerNames() error {
 // bare names taken, for the enums to share.
 func (g *generator) registerTypes() (map[string]string, error) {
 	g.typeNames = make(map[string]string, len(g.Types))
+	g.typeRoles = map[string]string{}
 	seen := make(map[string]string, len(g.Types)+len(g.Enums))
 	for _, wt := range g.Types {
 		if err := registerName(seen, "type", wt); err != nil {
@@ -457,6 +464,7 @@ func (g *generator) registerTypes() (map[string]string, error) {
 			return nil, err
 		}
 		g.typeNames[ref.wt.Name] = ref.wt.PkgPath
+		g.typeRoles[ref.wt.Name] = ref.role
 		g.Types = append(g.Types, ref.wt)
 	}
 	return seen, nil

@@ -403,7 +403,11 @@ func TestOperationServers(t *testing.T) {
 		{"a variable the URL does not use", wiregen.Server{URL: "http://h", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1"}}}, `server "http://h" defines variable "port", which its URL does not use`},
 		{"an empty default", wiregen.Server{URL: "http://h:{port}", Variables: map[string]wiregen.ServerVariable{"port": {}}}, `server "http://h:{port}" variable "port" has no Default`},
 		{"a default outside the enum", wiregen.Server{URL: "http://h:{port}", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1", Enum: []string{"2"}}}}, `server "http://h:{port}" variable "port" has Default "1", which is not in its Enum`},
-		{"an unclosed placeholder", wiregen.Server{URL: "http://h:{port"}, `server "http://h:{port" has an unclosed {`},
+		{"an unclosed placeholder", wiregen.Server{URL: "http://h:{port"}, `server "http://h:{port" has an unclosed or nested {`},
+		{"a nested placeholder", wiregen.Server{URL: "http://h:{{port}}", Variables: map[string]wiregen.ServerVariable{"port": {Default: "1"}}}, `server "http://h:{{port}}" has an unclosed or nested {`},
+		{"an unbalanced close", wiregen.Server{URL: "http://h:port}"}, `server "http://h:port}" has an unbalanced }`},
+		{"an empty placeholder", wiregen.Server{URL: "http://h:{}", Variables: map[string]wiregen.ServerVariable{"": {Default: "1"}}}, `server "http://h:{}" has an empty placeholder {}`},
+		{"a placeholder twice", wiregen.Server{URL: "http://{h}/{h}", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a"}}}, `server "http://{h}/{h}" uses {h} twice`},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := fullReg()

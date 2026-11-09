@@ -1,6 +1,7 @@
 package wiregen_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -314,7 +315,7 @@ func TestUnion_PayloadTypeReachedOnlyThroughPayload(t *testing.T) {
 	// Nested is reached only through the rename payload of a request body, so
 	// its request form exists and the request case references it.
 	component(t, doc, "NestedInput")
-	if got := prop(t, component(t, doc, "CommandInput.rename"), "payload"); got != `{"$ref":"#/components/schemas/NestedInput"}` {
+	if got := prop(t, component(t, doc, "CommandInput.rename"), "payload"); got != `{"anyOf":[{"$ref":"#/components/schemas/NestedInput"},{"type":"null"}]}` {
 		t.Errorf("the request rename payload = %s, want NestedInput", got)
 	}
 	if _, err := r.arbitrariesFile(t.Context()); err != nil {
@@ -358,6 +359,32 @@ func TestUnion_PayloadRefusals(t *testing.T) {
 	}
 }
 
+// A payload type that is no struct is refused under its role, with no hint
+// to register it as an enum, whether or not it is registered as one.
+func TestUnion_PayloadTypeNotAStruct(t *testing.T) {
+	const role = `union case "create" payload type github.com/cplieger/go/wiregen/v2/testdata/unions.Kind`
+	for _, tc := range []struct {
+		name  string
+		enums []wiregen.EnumRef
+		want  string
+	}{
+		{"an unregistered non-struct", nil, role + " is not a struct"},
+		{"a registered enum", []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}, role + " is an enum; it must be a struct"},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := newTestRegistry()
+			r.Enums = tc.enums
+			u := commandUnion()
+			u.PayloadTypes["create"] = wiregen.TypeRef[unions.Kind]()
+			r.Unions = []wiregen.Union{u}
+			err := r.generate(t.Context(), t.TempDir())
+			if err == nil || err.Error() != "wiregen: "+tc.want {
+				t.Errorf("Generate() error = %v, want %q", err, "wiregen: "+tc.want)
+			}
+		})
+	}
+}
+
 // A union that reaches itself only through a payload type is depth-capped
 // like any recursive type, or its arbitrary would draw without end.
 func TestUnion_PayloadRecursionCapped(t *testing.T) {
@@ -369,5 +396,33 @@ func TestUnion_PayloadRecursionCapped(t *testing.T) {
 	out := mustGen(t, r.arbitrariesFile)
 	if entry := letrecEntry(t, out, "Command"); !strings.HasPrefix(entry, "fc.oneof(\n    { maxDepth: 5") {
 		t.Fatalf("Command arbitrary is not depth-capped:\n%s", entry)
+	}
+}
+
+// A payload with no omit option, typed in every case, is written as null when
+// the json.RawMessage is nil: its response schema is nullable and validates
+// what encoding/json writes for the zero value.
+func TestUnion_PayloadNilWritesNull(t *testing.T) {
+	r := newTestRegistry()
+	r.Unions = []wiregen.Union{{
+		Type: wiregen.TypeRef[unions.RequiredPayload](), Tag: "type",
+		Cases:        map[string][]string{"create": {}},
+		Payload:      "payload",
+		PayloadTypes: map[string]wiregen.Type{"create": wiregen.TypeRef[unions.CreateChat]()},
+	}}
+	r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
+	doc := mustGen(t, r.openapiFile)
+	body, err := json.Marshal(unions.RequiredPayload{Type: "create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"type":"create","payload":null}` {
+		t.Fatalf("encoding/json wrote %s", body)
+	}
+	if err := validates(t, compiled(t, doc, "#/components/schemas/RequiredPayload"), string(body)); err != nil {
+		t.Errorf("the zero value's encoding fails its schema: %v", err)
+	}
+	if types := mustGen(t, r.typesFile); !strings.Contains(types, `{ type: "create"; payload?: CreateChat }`) {
+		t.Errorf("a payload that can be null is not optional:\n%s", types)
 	}
 }

@@ -35,8 +35,7 @@ type ErrorRef struct {
 }
 
 // SecurityRequirement maps each scheme a request must satisfy together to its
-// scope or role list; nil emits [], and an empty requirement makes security
-// optional.
+// role list; nil emits [], and an empty requirement makes security optional.
 type SecurityRequirement map[string][]string
 
 type Server struct {
@@ -128,7 +127,7 @@ The module at `WithTransportImport` is yours. It must export:
 - its path, query and header parameters, and its request body as a reference to the request form of its type.
 - its success response at its status: a JSON schema, a raw body's media type, `text/event-stream` with `x-events` naming each event's data schema, or a redirect's `Location` header.
 - its errors grouped by status, each with the `ErrorEnvelope` schema and `x-error-codes` mapping each code to its extensions.
-- `security` from `Endpoint.Security`, one Security Requirement Object per alternative, in order, each scheme with its scope list (`[{"session": []}, {"apiKey": ["chats:read"]}]`), `[]` for a public endpoint, and `OpenAPI.SecuritySchemes` as `components.securitySchemes`. A scheme that is not `oauth2` or `openIdConnect` may list role names, as OAS 3.1 allows.
+- `security` from `Endpoint.Security`, one Security Requirement Object per alternative, in order, each scheme with its scope list (`[{"session": []}, {"apiKey": ["chats:read"]}]`), `[]` for a public endpoint, and `OpenAPI.SecuritySchemes` as `components.securitySchemes`. Each list holds role names, which OAS 3.1 allows for the `http`, `apiKey` and `mutualTLS` schemes wiregen declares.
 - `servers` from `Endpoint.Servers`, when set, overriding the document's for that operation. The TypeScript client still calls same-origin paths.
 
 [Type mapping](type-mapping.md#null-and-presence) covers how each type becomes a component.
