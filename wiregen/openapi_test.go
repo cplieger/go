@@ -313,8 +313,8 @@ func operation(t *testing.T, doc, method, path string) map[string]any {
 func TestSecurityAndExtensions(t *testing.T) {
 	doc := mustGen(t, fullReg().openapiFile)
 	get := operation(t, doc, "get", "/api/items/{id}")
-	// Each requirement is one alternative, in order, with its scope list; nil
-	// scopes emit [].
+	// Each requirement is one alternative, in order, with its role list; a nil
+	// list emits [].
 	if got := mustJSON(t, get["security"]); got != `[{"session":[]},{"bearer":["items:read"]}]` {
 		t.Errorf("getItem security = %s", got)
 	}
@@ -358,8 +358,8 @@ func TestSecurityAndExtensions(t *testing.T) {
 	}{
 		{"an undeclared scheme", []wiregen.SecurityRequirement{{"oauth": nil}}, `names security scheme "oauth"`},
 		{"an undeclared scheme beside a declared one", []wiregen.SecurityRequirement{{"bearer": nil, "oauth": {"x"}}}, `names security scheme "oauth"`},
-		{"an empty scope", []wiregen.SecurityRequirement{{"bearer": {"read", ""}}}, `security scheme "bearer" lists an empty scope`},
-		{"a scope twice", []wiregen.SecurityRequirement{{"bearer": {"read", "read"}}}, `security scheme "bearer" lists scope "read" twice`},
+		{"an empty role", []wiregen.SecurityRequirement{{"bearer": {"read", ""}}}, `security scheme "bearer" lists an empty role`},
+		{"a role twice", []wiregen.SecurityRequirement{{"bearer": {"read", "read"}}}, `security scheme "bearer" lists role "read" twice`},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := fullReg()
@@ -383,10 +383,13 @@ func TestOperationServers(t *testing.T) {
 	r := fullReg()
 	r.Endpoints[0].Servers = []wiregen.Server{loopback, {URL: "https://{host}/v1", Variables: map[string]wiregen.ServerVariable{
 		"host": {Default: "a.example", Enum: []string{"a.example", "b.example"}, Description: "the region"},
+	}}, {URL: "https://{the region}.example/", Variables: map[string]wiregen.ServerVariable{
+		"the region": {Default: "eu"},
 	}}}
 	doc := mustGen(t, r.openapiFile)
 	want := `[{"description":"reachable only from loopback inside the container","url":"http://127.0.0.1:{port}","variables":{"port":{"default":"9847"}}},` +
-		`{"url":"https://{host}/v1","variables":{"host":{"default":"a.example","description":"the region","enum":["a.example","b.example"]}}}]`
+		`{"url":"https://{host}/v1","variables":{"host":{"default":"a.example","description":"the region","enum":["a.example","b.example"]}}},` +
+		`{"url":"https://{the region}.example/","variables":{"the region":{"default":"eu"}}}]`
 	if got := mustJSON(t, operation(t, doc, "get", "/api/items/{id}")["servers"]); got != want {
 		t.Errorf("servers = %s\nwant %s", got, want)
 	}
@@ -408,6 +411,10 @@ func TestOperationServers(t *testing.T) {
 		{"an unbalanced close", wiregen.Server{URL: "http://h:port}"}, `server "http://h:port}" has an unbalanced }`},
 		{"an empty placeholder", wiregen.Server{URL: "http://h:{}", Variables: map[string]wiregen.ServerVariable{"": {Default: "1"}}}, `server "http://h:{}" has an empty placeholder {}`},
 		{"a placeholder twice", wiregen.Server{URL: "http://{h}/{h}", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a"}}}, `server "http://{h}/{h}" uses {h} twice`},
+		{"a query", wiregen.Server{URL: "http://h/api?x=1"}, `server "http://h/api?x=1" holds '?' outside a placeholder`},
+		{"a fragment after a placeholder", wiregen.Server{URL: "http://{h}/#top", Variables: map[string]wiregen.ServerVariable{"h": {Default: "a"}}}, `server "http://{h}/#top" holds '#' outside a placeholder`},
+		{"a space", wiregen.Server{URL: "http://h /a"}, `server "http://h /a" holds ' ' outside a placeholder`},
+		{"a control character", wiregen.Server{URL: "http://h/\x7f"}, `server "http://h/\x7f" holds '\x7f' outside a placeholder`},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := fullReg()

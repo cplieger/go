@@ -127,7 +127,7 @@ The module at `WithTransportImport` is yours. It must export:
 - its path, query and header parameters, and its request body as a reference to the request form of its type.
 - its success response at its status: a JSON schema, a raw body's media type, `text/event-stream` with `x-events` naming each event's data schema, or a redirect's `Location` header.
 - its errors grouped by status, each with the `ErrorEnvelope` schema and `x-error-codes` mapping each code to its extensions.
-- `security` from `Endpoint.Security`, one Security Requirement Object per alternative, in order, each scheme with its scope list (`[{"session": []}, {"apiKey": ["chats:read"]}]`), `[]` for a public endpoint, and `OpenAPI.SecuritySchemes` as `components.securitySchemes`. Each list holds role names, which OAS 3.1 allows for the `http`, `apiKey` and `mutualTLS` schemes wiregen declares.
+- `security` from `Endpoint.Security`, one Security Requirement Object per alternative, in order, each scheme with its role list (`[{"session": []}, {"apiKey": ["chats:read"]}]`), `[]` for a public endpoint, and `OpenAPI.SecuritySchemes` as `components.securitySchemes`. A role list holds the role names, such as an API key's scopes, that OAS 3.1 allows for the `http`, `apiKey` and `mutualTLS` schemes wiregen declares.
 - `servers` from `Endpoint.Servers`, when set, overriding the document's for that operation. The TypeScript client still calls same-origin paths.
 
 [Type mapping](type-mapping.md#null-and-presence) covers how each type becomes a component.

@@ -123,10 +123,10 @@ func TestGenerateEvents_DataTypeResolvedAsIfInTypes(t *testing.T) {
 	cases := []struct {
 		name, typeName, wantErr string
 	}{
-		{"missing from its package", "Missing", "type Missing not found"},
+		{"missing from its package", "Missing", `event "e" data type ` + pkg + ".Missing is not found in its package"},
 		{"a registered enum's name", "Status", `event "e" data type ` + pkg + ".Status is an enum; it must be a struct"},
 		{"a string type", "Priority", `event "e" data type ` + pkg + ".Priority is not a struct"},
-		{"a constant", "StatusActive", "StatusActive in " + pkg + " is not a type"},
+		{"a constant", "StatusActive", `event "e" data type ` + pkg + ".StatusActive is not a type"},
 		{"no name", "", "names no package-level type"},
 	}
 	for _, tc := range cases {
@@ -777,17 +777,23 @@ func TestTypeRef(t *testing.T) {
 
 // --- Generate error paths ---
 
+// A Types entry no role names is refused as a registered type, with the
+// hints a Types entry can take.
 func TestGenerate_UnknownTypeErrors(t *testing.T) {
-	r := newTestRegistry(wiregen.WithValidatorsImport("./v.js"))
-	r.Types = []wiregen.Type{
-		{PkgPath: "github.com/cplieger/go/wiregen/v2/testdata/basic", Name: "NonExistentType"},
-	}
-	err := r.generate(t.Context(), t.TempDir())
-	if err == nil {
-		t.Fatal("expected error when referencing non-existent type, got nil")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got: %v", err)
+	const pkg = "github.com/cplieger/go/wiregen/v2/testdata/basic"
+	for _, tc := range []struct{ name, typeName, want string }{
+		{"missing", "NonExistentType", "wiregen: type NonExistentType not found in package " + pkg},
+		{"a constant", "StatusActive", "wiregen: StatusActive in " + pkg + " is not a type"},
+		{"a string type", "Priority", "wiregen: registered type " + pkg + ".Priority is not a struct; register an enum with StringEnum or TextEnum, or map the type"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(wiregen.WithValidatorsImport("./v.js"))
+			r.Types = []wiregen.Type{{PkgPath: pkg, Name: tc.typeName}}
+			err := r.generate(t.Context(), t.TempDir())
+			if err == nil || err.Error() != tc.want {
+				t.Errorf("Generate() error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

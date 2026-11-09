@@ -19,9 +19,10 @@ import (
 // selects: PayloadTypes maps every Cases key to the type that field decodes as
 // in that case, or to the zero Type for a case that carries no payload. The
 // payload field is listed in no case; it belongs to each case with a payload
-// type, keeps its own presence rule there, and is refused in the others.
-// Each payload type is a struct, as a struct field's type would be, and joins
-// the registry's types.
+// type, keeps its own omit options there, and is refused in the others. A
+// json.RawMessage can always be null on the wire, so the typed payload is
+// optional and nullable. Each payload type is a struct, as every registered
+// type is, and joins the registry's types.
 type Union struct {
 	Cases        map[string][]string
 	PayloadTypes map[string]Type
@@ -149,15 +150,18 @@ func payloadField(u *Union, ti *typeInfo, values []string) (*fieldInfo, error) {
 }
 
 // typedPayload is raw as a field of registered type pt: the same wire name
-// and presence, with pt's shape.
+// and omit options, with pt's shape, one more pointer level and RawNull.
 func (e *astEngine) typedPayload(raw *fieldInfo, pt Type) *fieldInfo {
 	f := *raw
 	f.Kind, f.TSType, f.GoTypeName = kindStruct, e.gen.tsName(pt.Name), pt.Name
 	f.Elem, f.Bounds, f.Mapping, f.Refusals, f.InRefusals = nil, nil, nil, nil, nil
-	// A json.RawMessage is a byte slice: its own nil writes null and null
-	// decodes to it. As a struct that nil is one more pointer level, so the
-	// presence rules derive null and absence as they do for any pointer.
+	// A json.RawMessage can be null twice over: encoding/json writes its nil
+	// as null, which an omit option drops, and writes bytes holding null, such
+	// as a request null decoded into it, which no omit option sees. The nil is
+	// one more pointer level and the bytes are RawNull, so presence.go derives
+	// null and absence as for any pointer, and null out whatever the options.
 	f.Ptrs++
+	f.RawNull = true
 	return &f
 }
 

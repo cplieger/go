@@ -110,21 +110,21 @@ func (g *generator) validateSecurity() error {
 }
 
 // validateRequirement checks one security requirement: each scheme
-// declared, and its scope list free of empty and repeated scopes.
+// declared, and its role list free of empty and repeated roles.
 func (g *generator) validateRequirement(req SecurityRequirement) error {
 	for _, name := range slices.Sorted(maps.Keys(req)) {
 		if _, ok := g.OpenAPI.SecuritySchemes[name]; !ok {
 			return fmt.Errorf("names security scheme %q, which OpenAPI.SecuritySchemes does not declare", name)
 		}
 		seen := map[string]bool{}
-		for _, scope := range req[name] {
+		for _, role := range req[name] {
 			switch {
-			case scope == "":
-				return fmt.Errorf("security scheme %q lists an empty scope", name)
-			case seen[scope]:
-				return fmt.Errorf("security scheme %q lists scope %q twice", name, scope)
+			case role == "":
+				return fmt.Errorf("security scheme %q lists an empty role", name)
+			case seen[role]:
+				return fmt.Errorf("security scheme %q lists role %q twice", name, role)
 			}
-			seen[scope] = true
+			seen[role] = true
 		}
 	}
 	return nil
@@ -627,13 +627,13 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 }
 
 // securityValue renders an operation's security: one requirement object per
-// alternative, in order, a nil scope list as [].
+// alternative, in order, a nil role list as [].
 func securityValue(reqs []SecurityRequirement) []any {
 	out := make([]any, 0, len(reqs))
 	for _, req := range reqs {
 		alt := make(map[string]any, len(req))
-		for name, scopes := range req {
-			alt[name] = append([]string{}, scopes...)
+		for name, roles := range req {
+			alt[name] = append([]string{}, roles...)
 		}
 		out = append(out, alt)
 	}

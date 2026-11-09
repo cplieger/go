@@ -95,6 +95,27 @@ type RequiredPayload struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// OmitZeroPayload has a payload omitzero drops when nil.
+type OmitZeroPayload struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitzero"`
+}
+
+// PtrPayload has a payload behind a pointer, which omitempty drops only
+// when the pointer is nil.
+type PtrPayload struct {
+	Type    string           `json:"type"`
+	Payload *json.RawMessage `json:"payload,omitempty"`
+}
+
+// Custom is a struct encoding/json writes through its own MarshalJSON.
+type Custom struct {
+	Name string `json:"name"`
+}
+
+// MarshalJSON writes the name alone.
+func (c Custom) MarshalJSON() ([]byte, error) { return json.Marshal(c.Name) }
+
 // NotRaw has a payload field that is no json.RawMessage.
 type NotRaw struct {
 	Type    string `json:"type"`

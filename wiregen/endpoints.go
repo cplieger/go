@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -377,13 +378,20 @@ func validateServer(sv *Server) error {
 }
 
 // serverPlaceholders returns the {name} placeholders of sv's URL, refusing an
-// unbalanced brace, an empty or nested placeholder, one used twice, and one
-// Variables does not define. OAS's server URL grammar allows each variable
-// once, named by one or more characters other than braces.
+// unbalanced brace, an empty or nested placeholder, one used twice, one
+// Variables does not define, and a literal character no server URL holds.
+// OAS 3.1.1 says a server URL has no query or fragment; the rest follows OAS
+// 3.2.0's server URL grammar
+// (https://spec.openapis.org/oas/v3.2.0#server-variable-object), which 3.1
+// leaves unstated: each variable once, named by one or more characters other
+// than braces, and literals with no space, control character or "<>\^`|.
 func serverPlaceholders(sv *Server) (map[string]bool, error) {
 	used := map[string]bool{}
 	for rest := sv.URL; ; {
 		i := strings.IndexAny(rest, "{}")
+		if err := serverLiteral(sv.URL, rest, i); err != nil {
+			return nil, err
+		}
 		if i < 0 {
 			return used, nil
 		}
@@ -406,6 +414,21 @@ func serverPlaceholders(sv *Server) (map[string]bool, error) {
 		used[name] = true
 		rest = rest[i+1+end+1:]
 	}
+}
+
+// serverLiteral refuses a character of rest before end (all of rest when end
+// is negative) that a server URL's literal text cannot hold.
+func serverLiteral(url, rest string, end int) error {
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	if j := strings.IndexFunc(rest, func(r rune) bool {
+		return r == ' ' || unicode.IsControl(r) || strings.ContainsRune("?#\"<>\\^`|", r)
+	}); j >= 0 {
+		r, _ := utf8.DecodeRuneInString(rest[j:])
+		return fmt.Errorf("server %q holds %q outside a placeholder: a server URL has no query, fragment, space, control character or any of \"<>\\^`|", url, r)
+	}
+	return nil
 }
 
 // validateExtensions rejects an extension key outside OpenAPI's x- space

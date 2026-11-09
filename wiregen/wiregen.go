@@ -457,7 +457,14 @@ func (g *generator) registerTypes() (map[string]string, error) {
 		g.typeNames[wt.Name] = wt.PkgPath
 	}
 	for _, ref := range g.referencedTypes() {
-		if pkg, ok := g.typeNames[ref.wt.Name]; ref.wt == (Type{}) || (ok && pkg == ref.wt.PkgPath) {
+		if ref.wt == (Type{}) {
+			continue
+		}
+		if pkg, ok := g.typeNames[ref.wt.Name]; ok && pkg == ref.wt.PkgPath {
+			// Listed in Types too: the first role still names it in a refusal.
+			if _, has := g.typeRoles[ref.wt.Name]; !has {
+				g.typeRoles[ref.wt.Name] = ref.role
+			}
 			continue
 		}
 		if err := registerName(seen, ref.role, ref.wt); err != nil {

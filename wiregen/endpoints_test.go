@@ -101,7 +101,7 @@ func TestEndpoints_Validation(t *testing.T) {
 		{"two names collide on their types", []wiregen.Endpoint{get("x", "/api/x"), get("xEndpoint", "/api/y")}, "already uses"},
 		{"unregistered response", []wiregen.Endpoint{with(get("x", "/api/x"), func(e *wiregen.Endpoint) {
 			e.Response = wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/v2/testdata/client", Name: "Nope"}
-		})}, "Nope not found"},
+		})}, "endpoint x Response type github.com/cplieger/go/wiregen/v2/testdata/client.Nope is not found in its package"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
