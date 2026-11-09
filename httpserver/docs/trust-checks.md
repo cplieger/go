@@ -25,7 +25,7 @@ The answer is a `ClientResolution`:
 | Field | Meaning |
 | --- | --- |
 | `IP` | The client address |
-| `Peer` | The socket peer, unmapped, or the zero address when `r.RemoteAddr` is not an IP |
+| `Peer` | The socket peer, unmapped unless it carries a zone, or the zero address when `r.RemoteAddr` is not an IP |
 | `PeerTrusted` | The peer is inside the trusted set, whether or not it forwarded a client. `Forwarded` implies it and `UntrustedForwarding` excludes it |
 | `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
 | `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |

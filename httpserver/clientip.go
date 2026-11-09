@@ -14,8 +14,8 @@ type ClientResolution struct {
 	// IP is the client: the X-Forwarded-For entry the walk chose when
 	// Forwarded, otherwise Peer.
 	IP netip.Addr
-	// Peer is the host of r.RemoteAddr, unmapped; the zero Addr when it is
-	// not an IP address.
+	// Peer is the host of r.RemoteAddr, unmapped unless zoned; the zero Addr
+	// when it is not an IP address.
 	Peer netip.Addr
 	// PeerTrusted reports that Peer is inside the trusted set, whether or not
 	// it forwarded a client, so a caller that reads a trusted proxy's other
@@ -44,7 +44,9 @@ type ClientResolution struct {
 // Addresses compare unmapped, so a dual-stack IPv4 peer matches; a zone never does.
 func ResolveClient(r *http.Request, trusted ...netip.Prefix) ClientResolution {
 	peer, err := netip.ParseAddr(peerHost(r.RemoteAddr))
-	if err == nil {
+	if err == nil && peer.Zone() == "" {
+		// Unmap drops a zone, so a zoned peer stays mapped and, as a zone
+		// never matches, untrusted.
 		peer = peer.Unmap()
 	}
 	res := ClientResolution{IP: peer, Peer: peer, PeerTrusted: inTrusted(peer, trusted)}
@@ -76,9 +78,6 @@ func peerHost(remoteAddr string) string {
 // inTrusted reports whether ip, unmapped, is inside a prefix. The second
 // Contains matches an IPv4-mapped prefix such as ::ffff:10.0.0.0/104.
 func inTrusted(ip netip.Addr, trusted []netip.Prefix) bool {
-	if !ip.IsValid() {
-		return false
-	}
 	mapped := netip.AddrFrom16(ip.As16())
 	for _, p := range trusted {
 		if p.Contains(ip) || (ip.Is4() && p.Contains(mapped)) {

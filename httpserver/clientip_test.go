@@ -30,6 +30,10 @@ type provenanceCase struct {
 
 var provenanceCases = []provenanceCase{
 	{
+		name: "a zoned IPv4-mapped peer is never trusted", remote: "[::ffff:10.0.0.1%eth0]:4000", xff: "192.168.1.20",
+		ip: "::ffff:10.0.0.1%eth0", peer: "::ffff:10.0.0.1%eth0", untrusted: true,
+	},
+	{
 		name: "trusted peer with no header answers the peer", remote: "10.0.0.1:4000",
 		ip: "10.0.0.1", peer: "10.0.0.1",
 	},
@@ -361,10 +365,10 @@ func TestResolveClientWithNoTrustedSetIgnoresEveryHeader(t *testing.T) {
 	}
 }
 
-// inPrefixes is the trust rule the tests hold ResolveClient to: a valid
-// address inside a prefix, an IPv4 one also inside an IPv4-mapped prefix.
+// inPrefixes is the trust rule the tests hold ResolveClient to: an address
+// inside a prefix, an IPv4 one also inside an IPv4-mapped prefix.
 func inPrefixes(a netip.Addr, trusted []netip.Prefix) bool {
-	return a.IsValid() && slices.ContainsFunc(trusted, func(p netip.Prefix) bool {
+	return slices.ContainsFunc(trusted, func(p netip.Prefix) bool {
 		return p.Contains(a) || (a.Is4() && p.Contains(netip.AddrFrom16(a.As16())))
 	})
 }
@@ -385,6 +389,7 @@ func TestResolveClientReportsPeerTrusted(t *testing.T) {
 		{"an IPv4-mapped peer inside an IPv4 prefix", "[::ffff:10.0.0.1]:4000", "", true, false},
 		{"an untrusted peer", "192.168.1.50:4000", "203.0.113.9", false, false},
 		{"a peer that is no address", "pipe", "203.0.113.9", false, false},
+		{"a zoned IPv4-mapped peer", "[::ffff:10.0.0.1%eth0]:4000", "192.168.1.20", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -410,7 +415,7 @@ func derivedResolution(remote string, f httpserver.ForwardingFields, trusted []n
 		host = remote
 	}
 	peer, err := netip.ParseAddr(host)
-	if err == nil {
+	if err == nil && peer.Zone() == "" {
 		peer = peer.Unmap()
 	}
 	isTrusted := func(a netip.Addr) bool { return inPrefixes(a, trusted) }
