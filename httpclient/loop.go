@@ -33,8 +33,8 @@ type GetOption interface {
 }
 
 // Option is a retry option accepted by BOTH loop doors, Do and GetBytes:
-// WithMaxAttempts, WithBaseDelay, WithLogger and WithExhaustedLevel construct
-// Option values.
+// WithMaxAttempts, WithBaseDelay, WithLogger, WithExhaustedLevel and
+// WithObserver construct Option values.
 type Option interface {
 	DoOption
 	GetOption
@@ -52,6 +52,7 @@ const (
 // loopConfig holds the retry-loop settings shared by Do and GetBytes, plus
 // the Do-only fields.
 type loopConfig struct {
+	observer       Observer
 	logger         *slog.Logger
 	label          string
 	baseDelay      time.Duration
@@ -296,23 +297,29 @@ var ErrMaxElapsed = errors.New("max elapsed time exceeded")
 // calls pause with the 1-based retry number and that wait, then sleeps. It
 // stops early with ErrMaxElapsed, or with the sleep's error once ctx ends.
 // pause runs before either early stop, so a door's pause hook can release the
-// failed attempt's resources however the loop ends.
-func (s schedule) run(ctx context.Context, attempt func(n int) (done bool, wait time.Duration), pause func(retry int, wait time.Duration)) (exhausted bool, err error) {
+// failed attempt's resources however the loop ends. settle runs once per
+// attempt, after pause and before the sleep, with the wait that follows the
+// attempt: zero when the loop ends there.
+func (s schedule) run(ctx context.Context, attempt func(n int) (done bool, wait time.Duration), pause func(retry int, wait time.Duration), settle func(wait time.Duration)) (exhausted bool, err error) {
 	start := time.Now()
 	backoff := s.baseDelay
 	for n := range s.attempts {
 		done, explicit := attempt(n)
 		if done {
+			settle(0)
 			return false, nil
 		}
 		if n == s.attempts-1 {
+			settle(0)
 			break
 		}
 		wait := resolveWait(explicit, backoff)
 		pause(n+1, wait)
 		if s.elapsedExceeded(wait, start) {
+			settle(0)
 			return false, ErrMaxElapsed
 		}
+		settle(wait)
 		if err := SleepCtx(ctx, wait); err != nil {
 			return false, err
 		}
@@ -470,14 +477,18 @@ func (c *loopConfig) exhaustedLevel() slog.Level {
 // failed attempt a canceled context returns ctx.Err(), except under
 // WithRateLimitOnly, where the final attempt's error wins. Retries log at
 // Debug to WithLogger; exhaustion logs at Warn, or Debug for a single-attempt
-// budget (see exhaustedLevel).
+// budget (see exhaustedLevel). WithObserver reports each attempt and the
+// outcome.
 func Do[T any](ctx context.Context, fn func(ctx context.Context) (T, error), opts ...DoOption) (T, error) {
 	var zero T
 	cfg := newLoopConfig(opts)
+	obs := newObservation(cfg.observer)
 	var result T
 	var err error
 	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
+		obs.begin(n)
 		result, err = cfg.runAttempt(ctx, fn)
+		obs.endErr(err)
 		if err == nil {
 			cfg.logRetrySuccess(n)
 			return true, 0
@@ -492,17 +503,17 @@ func Do[T any](ctx context.Context, fn func(ctx context.Context) (T, error), opt
 		cfg.logger.Debug(cfg.label+" failed, retrying",
 			"attempt", retry, "max", cfg.maxAttempts,
 			"delay", wait.String(), "error", LogSafeError(err))
-	})
+	}, obs.settle)
 	switch {
 	case stopErr != nil:
-		return zero, stopErr
+		return zero, obs.finish(stopErr)
 	case err == nil:
-		return result, nil
+		return result, obs.finish(nil)
 	case exhausted:
 		cfg.logger.Log(ctx, cfg.exhaustedLevel(), cfg.exhaustedMsg(),
 			"attempts", cfg.maxAttempts, "error", LogSafeError(err))
 	}
-	return zero, err
+	return zero, obs.finish(err)
 }
 
 // --- Door 2: GetBytes ---
@@ -515,33 +526,36 @@ func Do[T any](ctx context.Context, fn func(ctx context.Context) (T, error), opt
 // is judged as the RetryRoundTripper's default policy judges a round trip.
 // client must not be nil: pass New(timeout) or a client of your own, never
 // http.DefaultClient, whose nil CheckRedirect follows a redirect to any host.
+// WithObserver reports each attempt and the outcome.
 func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...GetOption) ([]byte, error) {
 	cfg := newGetConfig(opts)
 	log := cfg.logger
 
+	obs := newObservation(cfg.observer)
 	start := time.Now()
 	var body []byte
 	var err error
 	var retryAfter time.Duration
-	exhausted, stopErr := cfg.schedule().run(ctx, func(int) (bool, time.Duration) {
-		attemptStart := time.Now()
-		var retry bool
-		body, retry, retryAfter, err = getAttempt(ctx, client, reqURL, &cfg)
+	exhausted, stopErr := cfg.schedule().run(ctx, func(n int) (bool, time.Duration) {
+		obs.begin(n)
+		r := getAttempt(ctx, client, reqURL, &cfg, &obs)
+		body, err, retryAfter = r.body, r.err, r.wait
+		obs.endHeader(err, r.status, r.header)
 		if err == nil {
-			logSlowUpstream(log, reqURL, attemptStart)
+			logSlowUpstream(log, reqURL, r.sent)
 		}
-		return !retry, retryAfter
+		return !r.retry, retryAfter
 	}, func(retry int, _ time.Duration) {
 		log.Debug("http request failed, will retry",
 			"url", redactURL(reqURL), "attempt", retry, "max", cfg.maxAttempts, "error", LogSafeError(err))
-	})
+	}, obs.settle)
 	switch {
 	case stopErr != nil:
-		return nil, stopErr
+		return nil, obs.finish(stopErr)
 	case err == nil:
-		return body, nil
+		return body, obs.finish(nil)
 	case !exhausted:
-		return nil, LogSafeError(err)
+		return nil, obs.finish(LogSafeError(err))
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Log(ctx, cfg.exhaustedLevel(), "http retries exhausted",
@@ -551,9 +565,9 @@ func GetBytes(ctx context.Context, client *http.Client, reqURL string, opts ...G
 	// this door as one attempt (WithMaxAttempts(1)) inside its own loop can
 	// still honor it; ParseRetryAfter capped it, as RetryAfterHint requires.
 	if retryAfter > 0 {
-		return nil, &retryAfterError{err: exhaustedErr, hint: retryAfter}
+		return nil, obs.finish(&retryAfterError{err: exhaustedErr, hint: retryAfter})
 	}
-	return nil, exhaustedErr
+	return nil, obs.finish(exhaustedErr)
 }
 
 // retryAfterError carries a capped Retry-After hint on GetBytes's exhaustion
@@ -571,52 +585,75 @@ func (e *retryAfterError) Unwrap() error { return e.err }
 
 func (e *retryAfterError) RetryAfterHint() time.Duration { return e.hint }
 
-// logSlowUpstream warns when a successful attempt took longer than 10s. Timed
-// per-attempt so the library's own backoff sleeps are not mislabeled as
-// upstream latency.
-func logSlowUpstream(log *slog.Logger, reqURL string, attemptStart time.Time) {
-	if elapsed := time.Since(attemptStart); elapsed > 10*time.Second {
+// logSlowUpstream warns when a successful attempt took longer than 10s from
+// its send, so backoff sleeps and WithHeaders are not mislabeled as upstream
+// latency.
+func logSlowUpstream(log *slog.Logger, reqURL string, sent time.Time) {
+	if elapsed := time.Since(sent); elapsed > 10*time.Second {
 		log.Warn("slow upstream response", "url", redactURL(reqURL), "duration", elapsed.Round(time.Millisecond))
 	}
 }
 
-// getAttempt performs a single HTTP GET attempt and returns the body on
-// success, or the failure with whether to retry it and the response's capped
-// Retry-After.
-func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *getConfig) (body []byte, retry bool, retryAfter time.Duration, err error) {
+// getResult is one GetBytes attempt: the body on success, else the failure
+// and whether to retry it, with the explicit wait a retried status asks for.
+// A response that arrived, with or without an error, also gives its status
+// and header.
+type getResult struct {
+	sent   time.Time // when the request went out; zero if it was never built
+	err    error
+	header http.Header
+	body   []byte
+	status int
+	wait   time.Duration
+	retry  bool
+}
+
+// getAttempt performs a single HTTP GET attempt, telling obs when it sends.
+func getAttempt(ctx context.Context, client *http.Client, reqURL string, cfg *getConfig, obs *observation) getResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
 	if err != nil {
-		return nil, false, 0, err
+		return getResult{err: err}
 	}
 	if cfg.setHeaders != nil {
 		cfg.setHeaders(req)
 	}
-	resp, err := client.Do(req) //nolint:bodyclose // resp.Body is closed on every path: DrainClose (429/5xx, non-2xx) or ReadLimitedBody's deferred close (2xx); bodyclose can't trace the close through the helper.
-	retry = retryableRoundTrip(resp, err)
-	if err != nil {
-		return nil, retry, 0, err
+	obs.sending()
+	sent := time.Now()
+	resp, err := client.Do(req) //nolint:bodyclose // resp.Body is closed on every path: DrainClose (429/5xx, non-2xx), ReadLimitedBody's deferred close (2xx), or Client.Do itself when it returns a response with an error (a CheckRedirect refusal); bodyclose can't trace the close through the helpers.
+	r := getResult{sent: sent, retry: retryableRoundTrip(resp, err)}
+	if resp != nil {
+		// Client.Do returns a response WITH an error when CheckRedirect refuses a
+		// hop, having closed its body: the status still arrived.
+		r.status, r.header = resp.StatusCode, resp.Header
 	}
-	if retry {
+	if err != nil {
+		r.err = err
+		return r
+	}
+	if r.retry {
 		DrainClose(resp.Body)
-		return nil, true, retryAfterOf(resp), newStatusError(resp, reqURL)
+		r.wait, r.err = retryAfterOf(resp), newStatusError(resp, reqURL)
+		return r
 	}
 	// Any other non-2xx is permanent for this door: a redirect stub or an error
-	// page is not the requested resource. CheckStatus owns the success band;
-	// this door's error adds the request URL.
-	if CheckStatus(resp) != nil {
+	// page is not the requested resource. succeeded owns the success band,
+	// which CheckStatus shares; this door's error adds the request URL.
+	if !succeeded(resp.StatusCode) {
 		DrainClose(resp.Body)
-		return nil, false, 0, newStatusError(resp, reqURL)
+		r.err = newStatusError(resp, reqURL)
+		return r
 	}
 	// Read the body with overflow detection: an over-limit body fails loud with
 	// *ResponseTooLargeError rather than being silently truncated (a truncated
 	// payload that looks complete is a corruption hazard). ReadLimitedBody owns
 	// the cap+1 probe, its int64-overflow guard, and closing the body.
-	body, err = ReadLimitedBody(resp.Body, cfg.maxBodyBytes)
+	r.body, err = ReadLimitedBody(resp.Body, cfg.maxBodyBytes)
 	if err != nil {
 		if _, ok := errors.AsType[*ResponseTooLargeError](err); ok {
-			return nil, false, 0, err
+			r.err = err
+			return r
 		}
-		return nil, false, 0, fmt.Errorf("read response: %w", err)
+		r.err = fmt.Errorf("read response: %w", err)
 	}
-	return body, false, 0, nil
+	return r
 }

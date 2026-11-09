@@ -75,7 +75,7 @@ func TestStatusError_entry_points(t *testing.T) {
 			defer resp.Body.Close()
 			return httpclient.CheckStatus(resp)
 		}},
-		{name: "GetBytes", wantURL: reqURL, call: func(code int, retryAfter string) error {
+		{name: "GetBytes", wantURL: "http://example.com/items?key=REDACTED", call: func(code int, retryAfter string) error {
 			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return newResp(code, retryAfter), nil
 			})}

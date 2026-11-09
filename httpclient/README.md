@@ -71,6 +71,7 @@ if err := httpclient.CheckStatus(resp); err != nil {
 ## API
 
 - Retry: `Do[T]`, `GetBytes`, `NewRetryRoundTripper` (the `RetryRoundTripper`), `NewRetry` and `New`, with their options (`Option`, `DoOption`, `GetOption`), `TransportConfig` with its `CheckRetry`, `OnRetry` and `PrepareRetry` hooks, `ErrMaxElapsed` and `ContextWithDefaultTimeout`.
+- Observing calls: `Observer` with its `Attempt` and `Outcome` records, set through `WithObserver` or `TransportConfig.Observer`.
 - Backoff and Retry-After: `JitteredBackoff`, `SafeDouble`, `SleepCtx`, `ParseRetryAfter` with its 60-second `RetryAfterCap`, and `ParseRetryAfterResponse`, which keeps the raw value.
 - Classification: `IsTransient`, `Permanent` and `IsPermanent`, `MarkTransient`, `AttemptTimeout` and `IsAttemptTimeout`, `IsRetryableStatus`, `CauseOf` with its `Cause` names, the `Transient` and `RetryAfterHint` interfaces.
 - Status and errors: `CheckStatus`, the `StatusError` type with its `ErrUnauthorized`, `ErrForbidden`, `ErrRateLimited` and `ErrServerError` sentinels, and the `ResponseTooLargeError` type.

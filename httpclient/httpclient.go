@@ -71,11 +71,12 @@ var (
 // response. Match a status class with errors.Is against [ErrUnauthorized],
 // [ErrForbidden], [ErrRateLimited] or [ErrServerError], or read Code.
 type StatusError struct {
-	// rawURL is the URL GetBytes was given, unredacted; Error() renders it
-	// redacted. CheckStatus leaves it empty. It is unexported so encoding/json
-	// cannot carry its credentials into a log.
-	rawURL string
-	Code   int
+	// redacted is the URL GetBytes was given, its userinfo and query values
+	// masked at construction, so no rendering of the error, reflection and
+	// value copies included, can reach the raw one. CheckStatus leaves it
+	// empty.
+	redacted string
+	Code     int
 	// RetryAfter is the response's Retry-After, raw and uncapped, zero when
 	// absent or malformed. The server controls it (CWE-400): bound it before
 	// sleeping on it, as Do's rate-limit options do.
@@ -85,10 +86,10 @@ type StatusError struct {
 var _ Transient = (*StatusError)(nil)
 
 func (e *StatusError) Error() string {
-	if e.rawURL == "" {
+	if e.redacted == "" {
 		return fmt.Sprintf("HTTP %d", e.Code)
 	}
-	return fmt.Sprintf("HTTP %d from %s", e.Code, redactURL(e.rawURL))
+	return fmt.Sprintf("HTTP %d from %s", e.Code, e.redacted)
 }
 
 // Is matches the sentinel for e's Code.
@@ -115,7 +116,11 @@ func (e *StatusError) IsTransient() bool {
 // newStatusError builds the *StatusError for resp, a non-2xx response to a
 // request for reqURL.
 func newStatusError(resp *http.Response, reqURL string) *StatusError {
-	return &StatusError{rawURL: reqURL, Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
+	se := &StatusError{Code: resp.StatusCode, RetryAfter: ParseRetryAfterResponse(resp)}
+	if reqURL != "" {
+		se.redacted = redactURL(reqURL)
+	}
+	return se
 }
 
 // ResponseTooLargeError is returned by GetBytes when the response body exceeds
@@ -449,11 +454,14 @@ func ParseRetryAfterResponse(resp *http.Response) time.Duration {
 // a client that does not follow redirects (see [RefuseAllRedirects]) and is
 // reported as a failure, not a completed request.
 func CheckStatus(resp *http.Response) error {
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	if succeeded(resp.StatusCode) {
 		return nil
 	}
 	return newStatusError(resp, "")
 }
+
+// succeeded reports whether code is in the 2xx success band.
+func succeeded(code int) bool { return code >= 200 && code < 300 }
 
 // IsRetryableStatus is the one status rule every retry door applies: true for
 // 408, 429 and 500 to 599 less the codes whose answer repeats, false for every
@@ -1403,18 +1411,14 @@ func redactURL(rawURL string) string {
 	return u.Redacted()
 }
 
-// LogSafeError returns an error whose message is safe to log. Every *url.Error
-// in err's chain, which renders the raw request URL, is replaced by its cause.
-// The marks this package renders on the fly ([Permanent], [MarkTransient],
-// [AttemptTimeout]) and each branch of an errors.Join are kept around the
-// reduced cause, so [IsPermanent], [IsTransient] and every sibling survive.
-// Any other wrapper above a *url.Error is dropped, because its message was
-// rendered with the URL in it: reduce a transport error before you wrap it with
-// your own context. An error with no *url.Error is returned unchanged, a chain
-// nested more than eight *url.Error deep reduces to a contentless "request
-// failed", nil returns nil, and a non-nil error never reduces to nil. It
-// equals RedactTransportError(err, "", ""), the empty-secret case, which is the
-// reduction httpclient applies to every transport error it logs or wraps.
+// LogSafeError returns err with each *url.Error in its chain, which renders the
+// raw request URL, replaced by its cause. It keeps [Permanent], [MarkTransient],
+// [AttemptTimeout], the RetryRoundTripper's retry steps and each branch of an
+// errors.Join or multi-%w fmt.Errorf (rejoined with errors.Join), and drops any
+// other wrapper above a *url.Error: reduce before you wrap. An error with no
+// *url.Error is returned unchanged, nil stays nil, a non-nil error never becomes
+// nil, and a chain over eight *url.Error deep becomes "request failed". It is
+// RedactTransportError(err, "", ""), which httpclient applies before it logs.
 func LogSafeError(err error) error {
 	if err == nil {
 		return nil
@@ -1444,7 +1448,8 @@ func reduceURLErrors(err error) error {
 var errURLDepth = errors.New("url error depth exceeded")
 
 // reduceURL rebuilds err with each *url.Error replaced by its cause, keeping
-// this package's marks and every errors.Join branch, and dropping any other
+// this package's marks, the transport's stageError steps and every branch of
+// an Unwrap() []error (rejoined with errors.Join), and dropping any other
 // wrapper above a *url.Error. budget counts the replacements left; the result
 // is errURLDepth once a *url.Error remains when it runs out.
 func reduceURL(err error, budget int) error {
@@ -1463,6 +1468,8 @@ func reduceURL(err error, budget int) error {
 		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &transientError{Err: inner} })
 	case *attemptTimeoutError:
 		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &attemptTimeoutError{Err: inner} })
+	case *stageError:
+		return rewrap(reduceURL(e.err, budget), func(inner error) error { return &stageError{stage: e.stage, err: inner} })
 	case interface{ Unwrap() []error }:
 		branches := e.Unwrap()
 		kept := make([]error, 0, len(branches))
@@ -1473,7 +1480,12 @@ func reduceURL(err error, budget int) error {
 			}
 			kept = append(kept, r)
 		}
-		return errors.Join(kept...)
+		// A join whose branches all reduce to nothing keeps the placeholder, so
+		// no mark wraps nil and a non-nil error never reduces to nil.
+		if joined := errors.Join(kept...); joined != nil {
+			return joined
+		}
+		return errRequestFailed
 	default:
 		inner := errors.Unwrap(err)
 		if inner == nil {
@@ -1493,10 +1505,11 @@ func rewrap(inner error, mark func(error) error) error {
 	return mark(inner)
 }
 
-// errRequestFailed stands in for the cause of a *url.Error that has none. It
-// is deliberately contentless: an error with no cause has nothing else to
-// report, and the one field such a *url.Error does carry is the URL this
-// package exists to keep out of logs.
+// errRequestFailed is the placeholder for a reduction with nothing left to
+// report: a *url.Error with no cause, one an As method surfaced with no chain,
+// an Unwrap() []error whose branches rejoin to nothing, or a chain past
+// maxURLErrorDepth. It is deliberately contentless: the one field such an
+// error carries is the URL this package exists to keep out of logs.
 var errRequestFailed = errors.New("request failed")
 
 // urlErrorCause returns the cause a *url.Error reduces to: urlErr.Err through
