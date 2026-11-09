@@ -20,7 +20,10 @@ import (
 
 // typeInfo holds resolved type data extracted from AST.
 type typeInfo struct {
-	Union  *unionInfo // set when Registry.Unions declares this type
+	Union *unionInfo // set when Registry.Unions declares this type
+	// Map is set when the type is a named map (type X map[K]V): the plan of
+	// its value as a map field would be planned, and the type has no Fields.
+	Map    *fieldInfo
 	Name   string
 	Doc    string
 	Fields []fieldInfo
@@ -143,6 +146,9 @@ func newASTEngine(ctx context.Context, g *generator) (*astEngine, error) {
 	if err := e.resolveUnions(); err != nil {
 		return nil, err
 	}
+	if err := e.checkURLArguments(); err != nil {
+		return nil, err
+	}
 	e.refuseUndecodable()
 	if len(e.refusals) > 0 {
 		slices.Sort(e.refusals)
@@ -169,16 +175,28 @@ func (e *astEngine) refuseUndecodable() {
 		}
 	}
 	for _, ti := range e.types {
-		if !used[ti.Name][dirRequest] {
-			continue
-		}
-		for i := range ti.Fields {
-			f := &ti.Fields[i]
-			for _, why := range f.InRefusals {
-				e.refusals = append(e.refusals, e.gen.typeNames[ti.Name]+"."+ti.Name+"."+f.GoName+": "+why+", and a request carries it")
-			}
+		if used[ti.Name][dirRequest] {
+			e.refusals = append(e.refusals, ti.inRefusals(e.gen.typeNames[ti.Name]+"."+ti.Name)...)
 		}
 	}
+}
+
+// inRefusals lists why encoding/json cannot decode ti, each prefixed with
+// the field's path under name, or name alone for a named map's value.
+func (ti *typeInfo) inRefusals(name string) []string {
+	var out []string
+	for i := range ti.Fields {
+		f := &ti.Fields[i]
+		for _, why := range f.InRefusals {
+			out = append(out, name+"."+f.GoName+": "+why+", and a request carries it")
+		}
+	}
+	if ti.Map != nil {
+		for _, why := range ti.Map.InRefusals {
+			out = append(out, name+": "+why+", and a request carries it")
+		}
+	}
+	return out
 }
 
 // reach records in used that wt, and every registered type its fields reach,
@@ -398,33 +416,35 @@ func wireName(ref EnumRef, c *types.Const) (name string, member bool, err error)
 	return name, werr == nil, nil
 }
 
-// lookupStruct finds wt's struct in pkg. A type an endpoint, event, union or
-// ErrorEnvelope names is refused under that role, with no hint a role cannot
-// use.
-func (e *astEngine) lookupStruct(pkg *packages.Package, wt Type) (*types.TypeName, *types.Struct, error) {
+// lookupType finds wt's struct or map in pkg, setting exactly one of st and
+// mp. A type an endpoint, event, union or ErrorEnvelope names is refused
+// under that role, with no hint a role cannot use.
+func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (tn *types.TypeName, st *types.Struct, mp *types.Map, err error) {
 	role, named := e.gen.typeRoles[wt.Name]
 	obj := pkg.Types.Scope().Lookup(wt.Name)
 	switch {
 	case obj == nil && named:
-		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
 	case obj == nil:
-		return nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
+		return nil, nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
 	}
 	tn, ok := obj.(*types.TypeName)
 	switch {
 	case !ok && named:
-		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
 	case !ok:
-		return nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
+		return nil, nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
 	}
-	st, ok := tn.Type().Underlying().(*types.Struct)
-	switch {
-	case !ok && named:
-		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a struct", role, wt.PkgPath, wt.Name)
-	case !ok:
-		return nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
+	switch u := tn.Type().Underlying().(type) {
+	case *types.Struct:
+		return tn, u, nil, nil
+	case *types.Map:
+		return tn, nil, u, nil
 	}
-	return tn, st, nil
+	if named {
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a struct or a map", role, wt.PkgPath, wt.Name)
+	}
+	return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
 }
 
 func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (*typeInfo, error) {
@@ -433,7 +453,7 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 		return nil, fmt.Errorf("wiregen: package %q not loaded, and type %s needs it", wt.PkgPath, wt.Name)
 	}
 
-	tn, st, err := e.lookupStruct(pkg, wt)
+	tn, st, mp, err := e.lookupType(pkg, wt)
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +468,10 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 	case c != codecPlain:
 		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
 	}
+	if mp != nil {
+		e.resolveMapTypeInfo(ti, tn, wt)
+		return ti, nil
+	}
 	ti.Fields = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
 	for i := range ti.Fields {
 		for _, why := range ti.Fields[i].Refusals {
@@ -456,6 +480,51 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 	}
 
 	return ti, nil
+}
+
+// roleParams and roleQuery name an endpoint's URL-argument types in errors.
+const (
+	roleParams = "Params"
+	roleQuery  = "Query"
+)
+
+// checkURLArguments refuses an endpoint whose Params or Query type is a union
+// or a map: URL arguments are a plain struct's fields, which the client's
+// arguments and the document's parameters both read.
+func (e *astEngine) checkURLArguments() error {
+	for i := range e.gen.Endpoints {
+		ep := &e.gen.Endpoints[i]
+		for _, a := range []struct {
+			role string
+			wt   Type
+		}{{roleParams, ep.Params}, {roleQuery, ep.Query}} {
+			if a.wt == (Type{}) {
+				continue
+			}
+			switch ti := e.byName[a.wt.Name]; {
+			case ti.Union != nil:
+				return fmt.Errorf("wiregen: endpoint %s %s type %s is a union; URL arguments are a plain struct's fields", ep.Name, a.role, a.wt.Name)
+			case ti.Map != nil:
+				return fmt.Errorf("wiregen: endpoint %s %s type %s is a map; URL arguments are a plain struct's fields", ep.Name, a.role, a.wt.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// resolveMapTypeInfo plans a named map type's value as a map field of that
+// type would be planned, its bounds included, and lists its refusals.
+func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, tn *types.TypeName, wt Type) {
+	named, _ := tn.Type().(*types.Named)
+	fi := fieldInfo{}
+	e.resolveInto(named.Underlying(), &fi)
+	if named != nil {
+		e.applyBounds(named, wt.PkgPath+"."+wt.Name, &fi)
+	}
+	for _, why := range fi.Refusals {
+		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": "+why)
+	}
+	ti.Map = &fi
 }
 
 func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package, allPkgs map[string]*packages.Package, depth int, visited map[*types.Struct]bool) []fieldInfo {
@@ -770,7 +839,10 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 		return
 	}
 	codec := marshalCodec(ut)
-	if pkg, ok := e.gen.typeNames[name]; ok && pkg == pkgPath {
+	// A registered named map is a type of its own only as a whole body; as a
+	// field it keeps the inline map shape and its null rule.
+	_, isMap := ut.Underlying().(*types.Map)
+	if pkg, ok := e.gen.typeNames[name]; ok && pkg == pkgPath && !isMap {
 		if codec != codecPlain {
 			fi.refuse(fullName + " is registered, but " + codec.why())
 			return

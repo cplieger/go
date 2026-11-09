@@ -78,6 +78,10 @@ func (g *generator) emitStructInterfaces(w *strings.Builder, engine *astEngine) 
 		if ti.Doc != "" {
 			w.WriteString(ti.Doc)
 		}
+		if ti.Map != nil {
+			w.WriteString("export type " + g.tsName(ti.Name) + " = " + ti.Map.TSType + ";\n\n")
+			continue
+		}
 		w.WriteString("export interface " + g.tsName(ti.Name) + " {\n")
 		for i := range ti.Fields {
 			emitInterfaceField(w, &ti.Fields[i])
@@ -248,9 +252,19 @@ func (g *generator) emitEnumConsts(w *strings.Builder, used *usedIdents) {
 func (g *generator) emitDecoder(w *strings.Builder, ti *typeInfo, used *usedIdents) {
 	tn := g.tsName(ti.Name)
 	path := "$." + g.pathName(ti.Name, tn)
+	if ti.Map != nil {
+		g.emitMapDecoder(w, ti, tn, path, used)
+		return
+	}
 	used.helper("asObject")
 	used.typeRef(tn)
 	w.WriteString("export const " + g.decoderName(ti.Name) + ": Decoder<" + tn + "> = (v) => {\n")
+	if len(ti.Fields) == 0 {
+		// No field reads o, so bind none: a consumer's noUnusedLocals refuses
+		// an unread local.
+		w.WriteString("  asObject(v, \"" + path + "\");\n  return {};\n};\n\n")
+		return
+	}
 	w.WriteString("  const o = asObject(v, \"" + path + "\");\n")
 	fields := make([]*fieldInfo, 0, len(ti.Fields))
 	for i := range ti.Fields {
@@ -258,6 +272,21 @@ func (g *generator) emitDecoder(w *strings.Builder, ti *typeInfo, used *usedIden
 	}
 	g.emitFieldDecodes(w, tn, "", fields, path, used)
 	w.WriteString("};\n\n")
+}
+
+// emitMapDecoder writes a named map type's decoder: the body decoded as a map
+// field of that type is, null read as empty as encoding/json writes a nil
+// map, unless a Count bound refuses it.
+func (g *generator) emitMapDecoder(w *strings.Builder, ti *typeInfo, tn, path string, used *usedIdents) {
+	used.helper(helperDecodeRecord)
+	used.typeRef(tn)
+	f := ti.Map
+	decode := helperDecodeRecord + "(v, " + g.elemDecoderExpr(f.Elem, "", path, used) + ", \"" + path + "\")"
+	decode = f.Bounds.validatorCheck(decode, "\""+path+"\"", used)
+	if !f.refusesNull() {
+		decode = "v === null ? {} : " + decode
+	}
+	w.WriteString("export const " + g.decoderName(ti.Name) + ": Decoder<" + tn + "> = (v) => " + decode + ";\n\n")
 }
 
 // emitFieldDecodes writes the statements that decode fields from o into an
@@ -305,38 +334,39 @@ func ownRead(wn string, used *usedIdents) string {
 // collection or []byte, which reads as empty.
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
-	read := ownRead(wn, used)
+	// own is imported only when a branch reads through it.
+	read := func() string { return ownRead(wn, used) }
 	at := ", \"" + path + "\")"
 	switch f.Kind {
 	case kindRaw:
-		return read + " as unknown"
+		return read() + " as unknown"
 	case kindBytes:
 		used.helper(helperReqStr)
-		return read + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
+		return read() + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
 	case kindSlice, kindMap:
 		helper, empty := helperDecodeArray, "[]"
 		if f.Kind == kindMap {
 			helper, empty = helperDecodeRecord, "{}"
 		}
 		used.helper(helper)
-		decode := helper + "(" + read + ", " + g.elemDecoderExpr(f.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
+		decode := helper + "(" + read() + ", " + g.elemDecoderExpr(f.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
 		if f.refusesNull() {
 			return decode
 		}
-		return read + " === null ? " + empty + " : " + decode
+		return read() + " === null ? " + empty + " : " + decode
 	case kindMapped:
 		if f.Mapping.Decoder != "" {
 			used.opaqueExpr(f.Mapping.Decoder)
 			return f.Mapping.Decoder + "(o, \"" + wn + "\"" + at
 		}
 		used.opaqueExpr(f.TSType)
-		return read + " as " + f.TSType
+		return read() + " as " + f.TSType
 	case kindEnum:
 		used.helper("reqOneOf")
 		used.enumUse(f.GoTypeName)
 		return "reqOneOf(o, \"" + wn + "\", " + g.enumConstName(f.GoTypeName) + at
 	case kindStruct:
-		return g.decoderName(f.GoTypeName) + "(" + read + ")"
+		return g.decoderName(f.GoTypeName) + "(" + read() + ")"
 	}
 	helper := primHelpers[f.Kind]
 	used.helper(helper)

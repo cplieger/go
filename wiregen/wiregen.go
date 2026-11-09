@@ -434,7 +434,7 @@ func (g *generator) registerNames() error {
 	g.enums = make(map[string]enumDef, len(g.Enums))
 	for _, ref := range g.Enums {
 		if role, ok := g.typeRoles[ref.Type.Name]; ok && g.typeNames[ref.Type.Name] == ref.Type.PkgPath {
-			return fmt.Errorf("wiregen: %s %s.%s is an enum; it must be a struct", role, ref.Type.PkgPath, ref.Type.Name)
+			return fmt.Errorf("wiregen: %s %s.%s is an enum; it must be a struct or a map", role, ref.Type.PkgPath, ref.Type.Name)
 		}
 		if err := registerName(seen, "enum", ref.Type); err != nil {
 			return err
@@ -495,7 +495,7 @@ func (g *generator) referencedTypes() []typeReference {
 		for _, f := range []struct {
 			role string
 			wt   Type
-		}{{"Params", e.Params}, {"Query", e.Query}, {"Request", e.Request}, {"Response", e.Response}} {
+		}{{roleParams, e.Params}, {roleQuery, e.Query}, {"Request", e.Request}, {"Response", e.Response}} {
 			refs = append(refs, typeReference{role: "endpoint " + e.Name + " " + f.role + " type", wt: f.wt})
 		}
 	}

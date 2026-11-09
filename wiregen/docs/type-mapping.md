@@ -130,6 +130,17 @@ The payload field is listed in no case. It belongs to each case with a payload t
 - The decoder decodes `payload` with that case's decoder, reads `null` as absent, and refuses a present payload in a case that has none.
 - In each case's component, `payload` is that type's `$ref` or `null`, or absent.
 
+## Named maps
+
+A registered named map type, `type Settings map[string]json.RawMessage`, is a body of its own: an open JSON object whose keys are not known in advance. It can be listed in `Types`, or named as an endpoint's `Request` or `Response`, an event's data, a union case's payload or the `ErrorEnvelope`. Its key and value follow the rules of a map field, so the value is any type wiregen reads, `json.RawMessage` included, and the key is a string, an integer or an `encoding.TextMarshaler`.
+
+- The types file carries `export type Settings = { [key: string]: unknown };`, with the type's doc comment.
+- The decoder refuses a body that is not an object and decodes each value with the value's decoder. `null` reads as `{}`, because encoding/json writes a nil map as `null`, unless a `Count` lower bound on the type refuses it.
+- The OpenAPI component is `{"type": ["object", "null"], "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction.
+- A field whose type is a registered named map keeps the inline map shape of any map field.
+
+A union or an endpoint's `Params` or `Query` cannot be a named map, because both need a struct's fields.
+
 ## Mappings
 
 `Registry.Mappings` gives a Go type the consumer's own wire form, in place of wiregen's reading of it. It is keyed by full `importpath.Type`, such as `".../uuid.UUID"`:

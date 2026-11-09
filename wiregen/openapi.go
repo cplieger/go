@@ -482,6 +482,11 @@ func (b *docBuilder) ref(goName string, d direction) map[string]any {
 
 func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 	name := b.componentName(ti.Name, d)
+	if ti.Map != nil {
+		// A named map's body is its value as a map field's: an object of
+		// the value's schema, null where a nil map can be.
+		return map[string]any{name: b.fieldSchema(ti.Map, d)}
+	}
 	if ti.Union == nil {
 		fields := make([]*fieldInfo, 0, len(ti.Fields))
 		for i := range ti.Fields {

@@ -41,8 +41,9 @@ func TestEmptyStructDecoder(t *testing.T) {
 	if !strings.Contains(dec, "decodeEmptyStruct") {
 		t.Errorf("empty struct should still get a decoder, got:\n%s", dec)
 	}
-	if !strings.Contains(dec, "return out;") {
-		t.Errorf("decoder should return out, got:\n%s", dec)
+	// It checks the value is an object and binds nothing it would not read.
+	if !strings.Contains(dec, "  asObject(v, \"$.empty_struct\");\n  return {};") || strings.Contains(dec, "const o =") {
+		t.Errorf("decoder should check for an object and return {}, got:\n%s", dec)
 	}
 }
 

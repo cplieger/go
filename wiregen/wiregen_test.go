@@ -124,8 +124,8 @@ func TestGenerateEvents_DataTypeResolvedAsIfInTypes(t *testing.T) {
 		name, typeName, wantErr string
 	}{
 		{"missing from its package", "Missing", `event "e" data type ` + pkg + ".Missing is not found in its package"},
-		{"a registered enum's name", "Status", `event "e" data type ` + pkg + ".Status is an enum; it must be a struct"},
-		{"a string type", "Priority", `event "e" data type ` + pkg + ".Priority is not a struct"},
+		{"a registered enum's name", "Status", `event "e" data type ` + pkg + ".Status is an enum; it must be a struct or a map"},
+		{"a string type", "Priority", `event "e" data type ` + pkg + ".Priority is not a struct or a map"},
 		{"a constant", "StatusActive", `event "e" data type ` + pkg + ".StatusActive is not a type"},
 		{"no name", "", "names no package-level type"},
 	}
@@ -784,7 +784,7 @@ func TestGenerate_UnknownTypeErrors(t *testing.T) {
 	for _, tc := range []struct{ name, typeName, want string }{
 		{"missing", "NonExistentType", "wiregen: type NonExistentType not found in package " + pkg},
 		{"a constant", "StatusActive", "wiregen: StatusActive in " + pkg + " is not a type"},
-		{"a string type", "Priority", "wiregen: registered type " + pkg + ".Priority is not a struct; register an enum with StringEnum or TextEnum, or map the type"},
+		{"a string type", "Priority", "wiregen: registered type " + pkg + ".Priority is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newTestRegistry(wiregen.WithValidatorsImport("./v.js"))

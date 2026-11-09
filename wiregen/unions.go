@@ -55,6 +55,10 @@ func (e *astEngine) resolveUnions() error {
 	var errs []error
 	for _, u := range e.gen.Unions {
 		ti := e.byName[u.Type.Name]
+		if ti.Map != nil {
+			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: a union type is a struct, not a map", u.Type.PkgPath, u.Type.Name))
+			continue
+		}
 		if ti.Union != nil {
 			errs = append(errs, fmt.Errorf("wiregen: union %s.%s is declared twice", u.Type.PkgPath, u.Type.Name))
 			continue
@@ -266,9 +270,12 @@ func (ti *typeInfo) caseFields(uc *unionCase) []*fieldInfo {
 // graphFields returns every field a walk of the type graph follows from ti:
 // its own, then each case's typed payload, whose type its raw field hides.
 func (ti *typeInfo) graphFields() []*fieldInfo {
-	out := make([]*fieldInfo, 0, len(ti.Fields))
+	out := make([]*fieldInfo, 0, len(ti.Fields)+1)
 	for i := range ti.Fields {
 		out = append(out, &ti.Fields[i])
+	}
+	if ti.Map != nil {
+		out = append(out, ti.Map)
 	}
 	if ti.Union != nil {
 		for i := range ti.Union.cases {

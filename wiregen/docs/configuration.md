@@ -30,7 +30,7 @@ The generated files import each other by their paths relative to one another, so
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `Types` | `[]Type` | Structs to generate interfaces, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
+| `Types` | `[]Type` | Structs, and named maps (see [Type mapping](type-mapping.md#named-maps)), to generate types, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
 | `Enums` | `[]EnumRef` | Enums, each registered with `StringEnum[T]()` or `TextEnum[T]()`. See [Type mapping](type-mapping.md#enums). |
 | `Unions` | `[]Union` | Registered structs tagged by one field. See [Type mapping](type-mapping.md#unions). |
 | `Mappings` | `map[string]Mapping` | The consumer's own TypeScript type, decoder and schema for a Go type, keyed by full `importpath.Type`. See [Type mapping](type-mapping.md#mappings). |

@@ -89,7 +89,8 @@ func TestGenerated_namesGlobalsThroughGlobalThis(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		out, err := tool(t, dir, "tsc", "-p", "tsconfig.json", "--noEmit")
+		// The shadows are declared to be unused, so this run allows that.
+		out, err := tool(t, dir, "tsc", "-p", "tsconfig.json", "--noEmit", "--noUnusedLocals", "false")
 		if err == nil {
 			return
 		}
