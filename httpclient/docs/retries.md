@@ -1,6 +1,6 @@
 # Retries
 
-This page is for a developer choosing between the three ways httpclient retries a call and tuning one of them. It covers the options, which failures each one retries, how waits are computed, what happens when attempts run out, and what gets logged.
+This page is for a developer choosing between the three ways httpclient retries a call and tuning one of them. It covers the options, which failures each one retries, how waits are computed, what happens when attempts run out, what gets logged, and how to observe each attempt.
 
 ## Three ways to retry
 
@@ -28,6 +28,7 @@ Each has a different owner for the request, the body and the response. All three
 | `WithBaseDelay(d)` | both | 1s | First backoff delay. A value of zero or less takes the default |
 | `WithLogger(l)` | both | `slog.Default()` | Logger for the retry lines. A nil logger takes the default |
 | `WithExhaustedLevel(level)` | both | see [Logging](#logging) | Level of the final "retries exhausted" line |
+| `WithObserver(o)` | both | none | Reports each attempt and the call's outcome, see [Observing calls](#observing-calls) |
 | `WithLabel(s)` | `Do` | `operation` | Name used in `Do`'s log lines |
 | `WithAttemptTimeout(d)` | `Do` | none | Bounds each attempt and makes its expiry retryable |
 | `WithRateLimitRetry(maxWait)` | `Do` | off | Retries a 429 `*StatusError` as well as transient errors |
@@ -46,7 +47,8 @@ Each has a different owner for the request, the body and the response. All three
 | `MaxAttempts` | Total attempts. Zero means 3, and a negative value means exactly one attempt |
 | `BaseDelay` | First backoff delay. Zero or less means 1s |
 | `CheckRetry` | Replaces the retry policy, `func(ctx, resp, err) (bool, error)`. A returned error stops the loop |
-| `OnRetry` | Called before each retry, with a 1-based attempt number. The transport logs nothing, so this is where to observe it |
+| `Observer` | Reports each attempt and the call's outcome, see [Observing calls](#observing-calls) |
+| `OnRetry` | Called before each retry, with a 1-based attempt number, the request and the failed attempt's response or error |
 | `PrepareRetry` | Changes the cloned request before each retry, for example to set a fresh token |
 | `MaxElapsedTime` | Ceiling on total time across retries, honored `Retry-After` waits included. Checked between attempts; a stop returns `ErrMaxElapsed`. Zero means none |
 | `RetryNonIdempotent` | Also retries every other request, POST, PUT, PATCH and DELETE among them, with or without an `Idempotency-Key` |
@@ -148,7 +150,27 @@ body, err := httpclient.Do(ctx, func(ctx context.Context) ([]byte, error) {
 
 With a single attempt nothing was retried, so the loop around the call owns the warning. `WithExhaustedLevel(level)` sets the level of the final line for any attempt count, and it is the only way to raise it above Warn. Use it to demote the line when your own failure log carries more context, without losing the Debug lines a discard logger would also drop.
 
-The slow-response timer runs per attempt, so backoff sleeps never count as upstream latency. The transport logs nothing, so observe its retries through `OnRetry`, where redacting the URL is up to you. Every URL these lines carry is redacted as [Redirects, TLS and redaction](security-model.md) describes.
+The slow-response timer runs per attempt, so backoff sleeps never count as upstream latency. The transport logs nothing, so observe it through `Observer` or `OnRetry`; `OnRetry` hands you the request, so redacting its URL is up to you. Every URL these lines carry is redacted as [Redirects, TLS and redaction](security-model.md) describes.
+
+## Observing calls
+
+An `Observer` receives one `Attempt` per try and then one `Outcome` per call, from all three doors: `WithObserver(o)` for `Do` and `GetBytes`, `TransportConfig.Observer` for the transport, where a request it sends only once is observed too. Use it to count calls, time them and record why they failed, per upstream.
+
+| `Attempt` field | Meaning |
+| --- | --- |
+| `Number` | 1 for the first try |
+| `Start`, `Duration` | When the try began, and the time to its answer or error. `GetBytes` includes the body read; the transport stops at the response headers |
+| `Err` | The try's error, nil when it succeeded. `Do` passes your function's error unchanged, `GetBytes` passes it redacted as it returns errors, and the transport passes the base transport's. For the transport, a response of any status is a success |
+| `Status` | The HTTP status, 0 when no response arrived. `Do` reads it from a `*StatusError` in `Err` |
+| `RetryAfter` | The response's `Retry-After`, capped at 60 seconds, 0 when none. `Do` reads it from `Err` |
+| `Wait` | The sleep before the next try, 0 when none follows |
+| `Cause` | `CauseOf(Err)` |
+
+`Outcome` holds the error the door returned (nil for a transport call that returned a response of any status), the time from the first send to the return with every wait included, and the number of attempts. A context that ends during a wait stops the call: that attempt keeps its `Wait`, no attempt follows, and the outcome carries the context's error. When a `CheckRetry` error or the end of the context stops the call, the attempt keeps its own result and the outcome carries the stop.
+
+Neither record holds a URL, a host or a failure class. Give each upstream its own observer, and derive a class from `Err` with `IsTransient`, `IsPermanent`, the `*StatusError` code and `Cause`.
+
+The observer runs on the calling goroutine, outside any lock, so concurrent calls on one door, or on one shared `RetryRoundTripper`, call it concurrently. Its functions must return quickly and must not call back into the door. A nil function is skipped, so a caller that only counts calls sets `Outcome` alone.
 
 ## Backoff building blocks
 

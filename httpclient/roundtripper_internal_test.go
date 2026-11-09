@@ -20,7 +20,7 @@ func TestSchedule_run_surfaces_sleep_error(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	var attempts, pauses int
+	var attempts, pauses, settles int
 	exhausted, err := schedule{attempts: 3, baseDelay: time.Second}.run(ctx,
 		func(int) (bool, time.Duration) { attempts++; return false, 0 },
 		func(retry int, _ time.Duration) {
@@ -28,15 +28,16 @@ func TestSchedule_run_surfaces_sleep_error(t *testing.T) {
 			if retry != 1 {
 				t.Errorf("pause retry = %d, want 1", retry)
 			}
-		})
+		},
+		func(time.Duration) { settles++ })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("run(canceled ctx) err = %v, want errors.Is(err, context.Canceled)", err)
 	}
 	if exhausted {
 		t.Error("run(canceled ctx) exhausted = true, want false")
 	}
-	if attempts != 1 || pauses != 1 {
-		t.Errorf("attempts, pauses = %d, %d, want 1, 1", attempts, pauses)
+	if attempts != 1 || pauses != 1 || settles != 1 {
+		t.Errorf("attempts, pauses, settles = %d, %d, %d, want 1, 1, 1", attempts, pauses, settles)
 	}
 }
 

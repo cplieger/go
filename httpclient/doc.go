@@ -17,7 +17,9 @@
 //   - [NewRetryRoundTripper] retries transparently beneath any client, under a
 //     [TransportConfig].
 //
-// [New] and [NewRetry] build clients with a redirect policy in place.
+// [New] and [NewRetry] build clients with a redirect policy in place. An
+// [Observer], set with [WithObserver] or TransportConfig.Observer, receives
+// each door's attempts and outcome.
 //
 // # Errors
 //
