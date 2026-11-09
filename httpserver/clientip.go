@@ -75,8 +75,9 @@ func peerHost(remoteAddr string) string {
 	return remoteAddr
 }
 
-// inTrusted reports whether ip, unmapped, is inside a prefix. The second
-// Contains matches an IPv4-mapped prefix such as ::ffff:10.0.0.0/104.
+// inTrusted reports whether ip is inside a prefix. The second Contains
+// matches an IPv4-mapped prefix such as ::ffff:10.0.0.0/104; a zoned ip
+// matches none.
 func inTrusted(ip netip.Addr, trusted []netip.Prefix) bool {
 	mapped := netip.AddrFrom16(ip.As16())
 	for _, p := range trusted {

@@ -35,14 +35,14 @@ Use it to decide whether a request is local. A trusted proxy that forwarded noth
 
 For `IgnoredPublic`, an `X-Forwarded-For` or `X-Real-IP` entry names an address even when quoted, bracketed or followed by a port. A `Forwarded` element counts only when it follows RFC 7239 exactly. Its `name=value` pairs are joined by `;` with no spaces, and each name appears once. A `for` value with a port or an IPv6 address must be in quotes.
 
-`ClientIP(r, trusted...)` returns `ResolveClient`'s `IP` as text, for a log line or a rate-limit key. An IPv4-mapped peer reads as its IPv4 address, and a `RemoteAddr` that is not an IP reads as `invalid IP`.
+`ClientIP(r, trusted...)` returns `ResolveClient`'s `IP` as text, for a log line or a rate-limit key. An IPv4-mapped peer reads as its IPv4 address unless it carries a zone, which it keeps, and a `RemoteAddr` that is not an IP reads as `invalid IP`.
 
 `ParseCIDRs(entries)` turns an operator list of CIDRs or bare IPs into that trusted set. A bare IP becomes a `/32` or `/128` prefix, a CIDR is masked to its network, and an IPv4-mapped entry becomes its IPv4 prefix. Blank entries are skipped. Malformed entries, zoned addresses included, come back in a separate list in input order, so a strict caller can reject them and a lenient one can log them and use the rest.
 
 ### Moving from v3
 
 - `ParseCIDRs` returns `[]netip.Prefix`, and `ClientIP` and `WithClientIP` take `netip.Prefix` values.
-- `ClientIP` falls back to the unmapped peer address: `::ffff:10.0.0.1` reads `10.0.0.1`, and an unparseable `RemoteAddr` reads `invalid IP` instead of coming back as written.
+- `ClientIP` falls back to the unmapped peer address: `::ffff:10.0.0.1` reads `10.0.0.1`, a zoned `::ffff:10.0.0.1%eth0` keeps its form, and an unparseable `RemoteAddr` reads `invalid IP` instead of coming back as written.
 - `ClientIP` skips empty `X-Forwarded-For` entries, so `203.0.113.9,` and `203.0.113.9,,10.0.0.2` answer `203.0.113.9` where v3 answered the peer. It trims only spaces and tabs, so an entry padded with other whitespace now answers the peer.
 - `ClientIP` reads at most 64 `X-Forwarded-For` entries. A longer header answers the peer, where v3 walked it whole.
 
