@@ -648,7 +648,7 @@ func TestParseRetryAfterAllocationsOnWellFormedValues(t *testing.T) {
 			}); got != 0 {
 				t.Errorf("ParseRetryAfter(%s) allocated %v times per run, want 0: "+
 					"a delta-seconds header and an absent one are what a real "+
-					"upstream sends, and this parse runs on every retryable "+
+					"upstream sends, and this parse runs on every non-2xx "+
 					"response", abbrev(h), got)
 			}
 		})
@@ -693,7 +693,8 @@ func TestParseRetryAfterAllocationsAreBounded(t *testing.T) {
 // benchmark tracker cannot see, and the reason this section exists.
 //
 // Retry-After is an attacker-or-upstream-controlled header string, parsed on
-// every retryable response, before any policy has decided the peer is
+// every non-2xx response, and on every response while an Observer is set,
+// before any policy has decided the peer is
 // misbehaving. An upstream that can make the parse a thousand times more
 // expensive by sending a thousand times more header has an amplification vector
 // inside the mechanism that is supposed to bound the damage a failing upstream
@@ -1183,8 +1184,9 @@ func TestLogSafeErrorAllocations(t *testing.T) {
 	}
 }
 
-// mallocsOver returns the exact number of heap allocations n runs of f make,
-// after one warm-up run, with one P so no other goroutine's count lands in it.
+// mallocsOver returns the heap allocations n runs of f make, after one
+// warm-up, with GOMAXPROCS set to 1 for the call. Mallocs is process-wide, so
+// f must not yield to other goroutines that allocate.
 func mallocsOver(n int, f func()) uint64 {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	f()

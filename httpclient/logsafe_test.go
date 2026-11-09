@@ -99,6 +99,26 @@ func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) 
 	}
 }
 
+// formattedCause renders one text through Error and another through fmt's %v.
+type formattedCause struct{}
+
+func (formattedCause) Error() string { return "plain" }
+func (formattedCause) Format(f fmt.State, verb rune) {
+	if verb == 'v' {
+		_, _ = f.Write([]byte("formatted-v"))
+	}
+}
+
+// A retry step renders its cause as fmt.Errorf's %w does, so a cause that
+// implements fmt.Formatter reads the same through the step.
+func TestStageError_renders_the_cause_as_w_does(t *testing.T) {
+	t.Parallel()
+	got := (&stageError{stage: "prepare retry", err: formattedCause{}}).Error()
+	if want := fmt.Errorf("prepare retry: %w", formattedCause{}).Error(); got != want || got != "prepare retry: formatted-v" {
+		t.Errorf("stageError.Error() = %q, want %q as fmt.Errorf renders it", got, want)
+	}
+}
+
 // emptyJoinURL surfaces a *url.Error through an As method and unwraps to no
 // branches, so its reduction is an empty errors.Join: nil.
 type emptyJoinURL struct{}
