@@ -626,9 +626,9 @@ func TestDoorAllocationsWithoutObserver(t *testing.T) {
 // TestParseRetryAfterAllocationsOnWellFormedValues pins the two input classes a
 // cooperating upstream actually sends: delta-seconds, the form rate-limiters
 // emit, and an absent header, what most responses carry. Both are free and on
-// the per-response path: GetBytes parses Retry-After on every retryable
-// status, and every door parses it on every response while an Observer is
-// set. The date forms measure 2 to 8 allocations, so they are NOT in this
+// the per-response path: GetBytes parses Retry-After on every non-2xx, twice
+// on a retried one, and every door parses it on every response while an
+// Observer is set. The date forms measure 2 to 8 allocations, so they are NOT in this
 // table; their contract is the bounded one below.
 func TestParseRetryAfterAllocationsOnWellFormedValues(t *testing.T) {
 	headers := map[string]string{
@@ -1062,10 +1062,10 @@ func TestRedactTransportErrorAllocations(t *testing.T) {
 	// ERROR, not of the helper: to decide whether the secret is present at all,
 	// RedactTransportError must call Error() and search the result, so an error
 	// whose Error() BUILDS its message pays for that message even when nothing
-	// is replaced. *StatusError is exactly that shape — its Error() runs the URL
-	// through redactURL, which parses and re-serializes — so a caller redacting
-	// a known secret out of one of this package's own status errors pays 5
-	// allocations on the no-op path.
+	// is replaced. *StatusError is exactly that shape: its Error() formats the
+	// code and the stored, already redacted URL with fmt.Sprintf, so a caller
+	// redacting a known secret out of one of this package's own status errors
+	// pays for that formatting on the no-op path.
 	//
 	// The direction is asserted so a future change makes itself visible: if this
 	// ever becomes free (a cached message, a cheaper rendering), the test names
@@ -1183,11 +1183,6 @@ func TestLogSafeErrorAllocations(t *testing.T) {
 	}
 }
 
-// allocBytesPerRun is the bytes twin of [testing.AllocsPerRun]. It exists
-// because a parse that clones its input moves BYTES while leaving the
-// allocation count untouched, so a contract written only on the count cannot
-// see that class at all. Same shape as AllocsPerRun: one settling run, then the
-// delta over n runs measured from a known GC point.
 // mallocsOver returns the exact number of heap allocations n runs of f make,
 // after one warm-up run, with one P so no other goroutine's count lands in it.
 func mallocsOver(n int, f func()) uint64 {
@@ -1202,6 +1197,11 @@ func mallocsOver(n int, f func()) uint64 {
 	return after.Mallocs - before.Mallocs
 }
 
+// allocBytesPerRun is the bytes twin of [testing.AllocsPerRun]. It exists
+// because a parse that clones its input moves BYTES while leaving the
+// allocation count untouched, so a contract written only on the count cannot
+// see that class at all. Same shape as AllocsPerRun: one settling run, then the
+// delta over n runs measured from a known GC point.
 func allocBytesPerRun(n int, f func()) uint64 {
 	f()
 	runtime.GC()

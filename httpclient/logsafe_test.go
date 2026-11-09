@@ -68,6 +68,21 @@ func TestLogSafeError_KeepsMarksAndJoinBranchesDropsOtherWrappers(t *testing.T) 
 				t.Errorf("got %q, want the step over the placeholder", got)
 			}
 		}},
+		{"a cause that reduces to nothing", emptyJoinURL{}, func(t *testing.T, got error) {
+			if got.Error() != "request failed" {
+				t.Errorf("got %q, want the placeholder", got)
+			}
+		}},
+		{"Permanent over a cause that reduces to nothing", Permanent(emptyJoinURL{}), func(t *testing.T, got error) {
+			if got.Error() != "request failed" || !IsPermanent(got) {
+				t.Errorf("got %q, want the mark over the placeholder", got)
+			}
+		}},
+		{"MarkTransient over a cause that reduces to nothing", MarkTransient(emptyJoinURL{}), func(t *testing.T, got error) {
+			if got.Error() != "request failed" || !IsTransient(got) {
+				t.Errorf("got %q, want the mark over the placeholder", got)
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

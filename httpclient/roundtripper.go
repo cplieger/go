@@ -298,14 +298,9 @@ type stageError struct {
 	stage string
 }
 
-// Error renders the cause as fmt.Errorf's %w would, so a cause that formats
-// itself reads as it did before the step had a type.
-func (e *stageError) Error() string {
-	if e.err == nil {
-		return e.stage
-	}
-	return fmt.Sprintf("%s: %v", e.stage, e.err)
-}
+// Error renders the cause with %v, as fmt.Errorf's %w does, so a cause that
+// implements fmt.Formatter renders the same through the step.
+func (e *stageError) Error() string { return fmt.Sprintf("%s: %v", e.stage, e.err) }
 
 func (e *stageError) Unwrap() error { return e.err }
 

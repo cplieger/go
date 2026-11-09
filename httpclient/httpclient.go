@@ -1411,20 +1411,14 @@ func redactURL(rawURL string) string {
 	return u.Redacted()
 }
 
-// LogSafeError returns an error whose message is safe to log. Every *url.Error
-// in err's chain, which renders the raw request URL, is replaced by its cause.
-// The marks this package renders on the fly ([Permanent], [MarkTransient],
-// [AttemptTimeout], and the RetryRoundTripper's "rewind request body" and
-// "prepare retry" steps) are kept around the reduced cause, and so is each
-// branch of an errors.Join or a multi-%w fmt.Errorf, rejoined with errors.Join,
-// which drops a multi-%w wrapper's own text.
-// Any other wrapper above a *url.Error is dropped, because its message was
-// rendered with the URL in it: reduce a transport error before you wrap it with
-// your own context. An error with no *url.Error is returned unchanged, a chain
-// nested more than eight *url.Error deep reduces to a contentless "request
-// failed", nil returns nil, and a non-nil error never reduces to nil. It
-// equals RedactTransportError(err, "", ""), the empty-secret case, which is the
-// reduction httpclient applies to every transport error it logs or wraps.
+// LogSafeError returns err with each *url.Error in its chain, which renders the
+// raw request URL, replaced by its cause. It keeps [Permanent], [MarkTransient],
+// [AttemptTimeout], the RetryRoundTripper's retry steps and each branch of an
+// errors.Join or multi-%w fmt.Errorf (rejoined with errors.Join), and drops any
+// other wrapper above a *url.Error: reduce before you wrap. An error with no
+// *url.Error is returned unchanged, nil stays nil, a non-nil error never becomes
+// nil, and a chain over eight *url.Error deep becomes "request failed". It is
+// RedactTransportError(err, "", ""), which httpclient applies before it logs.
 func LogSafeError(err error) error {
 	if err == nil {
 		return nil
@@ -1475,13 +1469,7 @@ func reduceURL(err error, budget int) error {
 	case *attemptTimeoutError:
 		return rewrap(reduceURL(e.Err, budget), func(inner error) error { return &attemptTimeoutError{Err: inner} })
 	case *stageError:
-		inner := reduceURL(e.err, budget)
-		if inner == nil {
-			// A cause whose only content was a URL reduces to nothing; the step
-			// keeps a placeholder, so it still renders.
-			inner = errRequestFailed
-		}
-		return rewrap(inner, func(inner error) error { return &stageError{stage: e.stage, err: inner} })
+		return rewrap(reduceURL(e.err, budget), func(inner error) error { return &stageError{stage: e.stage, err: inner} })
 	case interface{ Unwrap() []error }:
 		branches := e.Unwrap()
 		kept := make([]error, 0, len(branches))
@@ -1492,7 +1480,12 @@ func reduceURL(err error, budget int) error {
 			}
 			kept = append(kept, r)
 		}
-		return errors.Join(kept...)
+		// A join whose branches all reduce to nothing keeps the placeholder, so
+		// no mark wraps nil and a non-nil error never reduces to nil.
+		if joined := errors.Join(kept...); joined != nil {
+			return joined
+		}
+		return errRequestFailed
 	default:
 		inner := errors.Unwrap(err)
 		if inner == nil {

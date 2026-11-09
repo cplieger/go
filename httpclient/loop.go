@@ -585,11 +585,11 @@ func (e *retryAfterError) Unwrap() error { return e.err }
 
 func (e *retryAfterError) RetryAfterHint() time.Duration { return e.hint }
 
-// logSlowUpstream warns when a successful attempt took longer than 10s. Timed
-// per-attempt so the library's own backoff sleeps are not mislabeled as
-// upstream latency.
-func logSlowUpstream(log *slog.Logger, reqURL string, attemptStart time.Time) {
-	if elapsed := time.Since(attemptStart); elapsed > 10*time.Second {
+// logSlowUpstream warns when a successful attempt took longer than 10s from
+// its send, so backoff sleeps and WithHeaders are not mislabeled as upstream
+// latency.
+func logSlowUpstream(log *slog.Logger, reqURL string, sent time.Time) {
+	if elapsed := time.Since(sent); elapsed > 10*time.Second {
 		log.Warn("slow upstream response", "url", redactURL(reqURL), "duration", elapsed.Round(time.Millisecond))
 	}
 }

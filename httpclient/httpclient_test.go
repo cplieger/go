@@ -1123,7 +1123,7 @@ func TestDoRateLimitOnly_exhaustion_warn_message(t *testing.T) {
 func TestLogSlowUpstream_warns_and_redacts_on_slow_response(t *testing.T) {
 	t.Parallel()
 	// The >10s branch (Warn + redactURL) is otherwise unexercised; only the
-	// fast-path negative is tested. An attemptStart 11s in the past forces it.
+	// fast-path negative is tested. A send 11s in the past forces it.
 	var buf bytes.Buffer
 	logSlowUpstream(bufLogger(&buf), "https://h.example/api?apikey=supersecret", time.Now().Add(-11*time.Second))
 	logged := buf.String()
