@@ -3,6 +3,7 @@ package health
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
@@ -61,7 +62,7 @@ func TestHealthMarker_DegradedMode(t *testing.T) {
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
 
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Skip("test environment bypasses directory mode; skipping") // root/Windows may allow writes through 0500
 	}
 
@@ -353,7 +354,7 @@ func TestHealthMarker_HealthyDegraded(t *testing.T) {
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
 
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
 
@@ -383,7 +384,7 @@ func TestHealthMarker_DegradedWithALeftoverMarker(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	m := NewMarker(path)
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
 	inProcessUnhealthy := func(age string) {
@@ -431,7 +432,7 @@ func TestHealthMarker_SetWriteFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction: a marker NewMarker cannot write is
@@ -455,7 +456,7 @@ func TestHealthMarker_SetRemoveFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction: a marker NewMarker cannot write is
@@ -528,7 +529,7 @@ func TestHealthMarker_SetWriteFailure_warnsOncePerStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction: a marker NewMarker cannot write is
@@ -556,7 +557,7 @@ func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction: a marker NewMarker cannot write is
@@ -594,7 +595,7 @@ func TestHealthMarker_SetRemoveFailureWarnDedup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction: a marker NewMarker cannot write is
@@ -622,7 +623,7 @@ func TestHealthMarker_CleanupRemoveFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction: a marker NewMarker cannot write is
@@ -739,7 +740,7 @@ func TestRunProbe_unhealthy_emitsDiagnostic(t *testing.T) {
 func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -782,7 +783,7 @@ func TestHealthMarker_Set_inheritedMarkerFalseWarns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	writeExternalMarker(t, path)
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	if !m.Healthy() {
@@ -809,7 +810,7 @@ func TestHealthMarker_Set_inheritedMarkerTrueIsSilent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	writeExternalMarker(t, path)
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -830,7 +831,7 @@ func TestHealthMarker_Cleanup_thenSetTrueLogsChange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	writeExternalMarker(t, path)
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -854,7 +855,7 @@ func TestHealthMarker_Cleanup_thenSetTrueLogsChange(t *testing.T) {
 func TestHealthMarker_Set_firstSetFalseIsSilent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -878,7 +879,7 @@ func TestHealthMarker_Set_firstSetFalseIsSilent(t *testing.T) {
 func TestHealthMarker_Set_bootSequenceWarnsNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -905,7 +906,7 @@ func TestHealthMarker_Set_bootSequenceWarnsNothing(t *testing.T) {
 func TestHealthMarker_Set_externallyCreatedMarkerFalseWarns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	writeExternalMarker(t, path)
@@ -933,7 +934,7 @@ func TestHealthMarker_Set_externallyRemovedMarkerTrueLogsChange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	writeExternalMarker(t, path)
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	if err := os.Remove(path); err != nil {
@@ -963,7 +964,7 @@ func TestHealthMarker_Set_externallyRemovedMarkerTrueLogsChange(t *testing.T) {
 func TestHealthMarker_SetChecked_unreadableMarkerIsAFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	if err := os.Symlink(path, path); err != nil {
@@ -1020,7 +1021,7 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	buf := captureLogs(t)
 
 	m := NewMarker(filepath.Join(dir, ".healthy"))
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
 
@@ -1036,6 +1037,115 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 	if !strings.Contains(logged, "hint=") || !strings.Contains(logged, "tmpfs") {
 		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", logged)
+	}
+}
+
+// TestSet_leavesDegradedModeOnceTheMarkerPathClears: degraded mode lasts only
+// while Set cannot write, because the probe decides it from the filesystem on
+// every run. Once what blocked the marker path is gone, the next Set writes
+// the marker and logs one Info, and Healthy, Within (a signal built while
+// degraded included) and Inspect all read the marker. A directory at the
+// marker path blocks it for any user, root included.
+func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	m := NewMarker(path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	if !m.degraded.Load() {
+		t.Fatal("a directory at the marker path: want degraded mode")
+	}
+	within := m.Within(time.Hour)
+	m.Set(true)
+	if !m.degraded.Load() || m.Healthy() || within.Healthy() {
+		t.Fatal("Set while the directory is still there: want degraded, and Healthy and Within unhealthy")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetChecked(true); err != nil {
+		t.Fatalf("SetChecked(true) once the path cleared = %v, want nil", err)
+	}
+	if m.degraded.Load() {
+		t.Error("once the path cleared: want degraded mode left")
+	}
+	if !m.Healthy() || !within.Healthy() {
+		t.Error("once the path cleared: want Healthy and the Within signal built while degraded both healthy")
+	}
+	if got := Inspect(path, WithMaxAge(time.Hour)); got.State != MarkerFresh {
+		t.Errorf("once the path cleared: Inspect = %+v, want MarkerFresh", got)
+	}
+	m.Set(true)
+	if got := strings.Count(buf.String(), `msg="health marker writable again, leaving degraded mode"`); got != 1 {
+		t.Errorf("leaving degraded mode logged %d times, want 1\nlog:\n%s", got, buf.String())
+	}
+}
+
+// TestSet_leavesDegradedModeOnceTheFolderIsWritable is the folder branch of
+// the same rule: a folder the user cannot write turns writable (a tmpfs that
+// had filled up, a mode fixed by hand), and the next Set writes the marker.
+// It runs only as a non-root user, since root writes into a 0500 folder.
+func TestSet_leavesDegradedModeOnceTheFolderIsWritable(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+	if !m.degraded.Load() {
+		t.Skip("test environment bypasses directory mode; skipping")
+	}
+	m.Set(true)
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Set in an unwritable folder: stat = %v, want no marker", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m.Set(true)
+	if m.degraded.Load() || !m.Healthy() {
+		t.Error("once the folder is writable: want degraded mode left and the marker written")
+	}
+	if got := Inspect(path); got.State != MarkerFresh {
+		t.Errorf("once the folder is writable: Inspect = %+v, want MarkerFresh", got)
+	}
+}
+
+// TestSet_leavingDegradedModeRacesNoReader: Healthy and a Within signal read
+// degraded mode without the lock while Set clears it, so the race detector
+// must see no data race between them.
+func TestSet_leavingDegradedModeRacesNoReader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+	within := m.Within(0)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					_ = m.Healthy()
+					_ = within.Healthy()
+				}
+			}
+		})
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	m.Set(true)
+	close(done)
+	wg.Wait()
+	if !m.Healthy() {
+		t.Error("after leaving degraded mode: want Healthy")
 	}
 }
 
@@ -1079,7 +1189,7 @@ func TestNewMarker_degradedOnAnUnwritableMarker(t *testing.T) {
 	}
 	buf := captureLogs(t)
 	m := NewMarker(path)
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Fatal("a marker this process cannot open for writing: want degraded mode")
 	}
 	logged := buf.String()
@@ -1130,7 +1240,7 @@ func TestMarkerWritableLeavesTheMarkerAlone(t *testing.T) {
 	if err := os.Mkdir(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if markerWritable(blocked) == nil || !NewMarker(blocked).degraded {
+	if markerWritable(blocked) == nil || !NewMarker(blocked).degraded.Load() {
 		t.Error("a directory at the marker path: want an error and a degraded marker, for root too")
 	}
 }
@@ -1149,7 +1259,7 @@ func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Fatal("a marker this process can write: want no degraded mode")
 	}
 	if err := m.SetChecked(true); err != nil {
@@ -1181,11 +1291,11 @@ func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 			_ = os.Chtimes(path, old, old) // fails on the loop, which stat cannot read
 			m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
 			f := Inspect(path, WithMaxAge(time.Hour))
-			if m.degraded && !f.Healthy() {
+			if m.degraded.Load() && !f.Healthy() {
 				t.Errorf("NewMarker is degraded but Inspect = %+v, so the probe would restart the container", f)
 			}
-			if name == "symlink loop" && (m.degraded || f.State != MarkerUnreadable) {
-				t.Errorf("symlink loop: degraded %v, Inspect %v; want not degraded and MarkerUnreadable, as the probe sees it", m.degraded, f.State)
+			if name == "symlink loop" && (m.degraded.Load() || f.State != MarkerUnreadable) {
+				t.Errorf("symlink loop: degraded %v, Inspect %v; want not degraded and MarkerUnreadable, as the probe sees it", m.degraded.Load(), f.State)
 			}
 		})
 	}
@@ -1201,7 +1311,7 @@ func TestHealthMarker_Set_recoveryOnFalseBranchIsNotAStateChange(t *testing.T) {
 	path := filepath.Join(dir, ".healthy")
 
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -1243,7 +1353,7 @@ func TestHealthMarker_SetFailureWarnDedupAlternatingBranches(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction (see TestHealthMarker_SetWriteFailure).
@@ -1278,7 +1388,7 @@ func TestHealthMarker_SetChecked(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
@@ -1316,7 +1426,7 @@ func TestHealthMarker_SetChecked_removeFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if m.degraded {
+	if m.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	// Block the path after construction (see TestHealthMarker_SetWriteFailure).
@@ -1343,7 +1453,7 @@ func TestHealthMarker_SetChecked_degradedReturnsNil(t *testing.T) {
 	}
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path)
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
 
