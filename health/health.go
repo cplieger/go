@@ -11,10 +11,9 @@
 // constructor enters degraded mode: Set and Cleanup become no-ops, and
 // the probe reports healthy rather than restart-looping a container
 // whose only broken piece is the signaling channel. Healthy, Within and
-// Handler report unhealthy in degraded mode, because Set cannot change the
-// marker. A marker path
-// os.Stat cannot read at all, such as a symlink loop, is not degraded
-// mode: the probe reports it unhealthy.
+// Handler report unhealthy in degraded mode, because Set cannot change
+// the marker. A marker path os.Stat cannot read at all, such as a
+// symlink loop, is not degraded mode: the probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -69,9 +68,9 @@ type Marker struct {
 // NewMarker constructs a marker for path and checks that Set can change
 // it: the parent directory must be writable, and a marker already there
 // must be a regular file Set can refresh. On failure it logs a single Warn
-// naming what each check reports and a fix hint, and returns a marker in
-// degraded mode; callers need not
-// branch on the result.
+// naming which calls report healthy and which unhealthy, and a fix hint,
+// and returns a marker in degraded mode; callers need not branch on the
+// result.
 func NewMarker(path string, opts ...MarkerOption) *Marker {
 	m := &Marker{path: path}
 	for _, o := range opts {

@@ -30,7 +30,7 @@ When the marker cannot be read, written or removed, `Set` logs the failure once 
 
 ## Degraded mode
 
-`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that anything already at the marker path is a regular file `Set` can refresh, without changing it. When either fails, the marker enters degraded mode and logs one warning with the folder or the marker path, the error, which checks report healthy and which unhealthy, and the fix: a tmpfs mount for the folder, or removing what is at the marker path, such as a marker an earlier run as another user left behind, a directory or a FIFO. A path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the probe reports it unhealthy and names the stat error. Callers do not need to branch on the result.
+`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that anything already at the marker path is a regular file `Set` can refresh, without changing it. When either fails, the marker enters degraded mode and logs one warning with the folder or the marker path, the error, which calls report healthy and which unhealthy, and the fix: a tmpfs mount for the folder, or removing what is at the marker path, such as a marker an earlier run as another user left behind, a directory or a FIFO. A path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the probe reports it unhealthy and names the stat error. Callers do not need to branch on the result.
 
 In degraded mode:
 
@@ -105,4 +105,4 @@ Write each reason where you wire the check, never from an error's text: the endp
 
 Both take any `Signal`, the one-method interface `*Marker` satisfies, so an in-memory flag works too. With a `*Marker`, each request does one `os.Stat`, so serve it at your platform's probe interval rather than on a busy path. To make the endpoint follow the probe's deadline, pass `m.Within(lease.Duration())` instead of `m`, as [Freshness deadline](freshness.md) describes.
 
-In degraded mode `Handler` always answers 503, even for a marker left in the folder, because `Set` cannot change it, while the `health` subcommand reports healthy. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.
+In degraded mode `Handler` always answers 503, even for a marker left in the folder, because `Set` cannot change it, while `RunProbe` and `Inspect` report healthy. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.

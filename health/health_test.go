@@ -1025,7 +1025,7 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 
 	logged := buf.String()
-	if got := strings.Count(logged, "health marker directory not writable"); got != 1 {
+	if got := strings.Count(logged, `msg="health marker directory not writable, marker in degraded mode"`); got != 1 {
 		t.Errorf("degraded-construction WARN count = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
 	if !strings.Contains(logged, "level=WARN") {
