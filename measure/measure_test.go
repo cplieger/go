@@ -584,12 +584,13 @@ func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 // at least minAllocSpan, which also makes it a linearity check: a per-metric
 // re-scan breaches at 100->1000.
 func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
-	// minAllocSpan is the smallest interval whose slope is gated. Under -race,
-	// sync.Pool drops a quarter of its Puts at random, so fmt's printer pool
-	// misses on some of the encoder's Fprintf calls and a scrape's total varies
-	// by tens of allocations (about 45 at 100 histogram families, 90 at 1000):
-	// up to 0.45 per metric over a 99-metric span, about 0.1 over 900.
-	const minAllocSpan = 900
+	// minAllocSpan is the smallest interval whose slope is gated. The scrape's
+	// fixed cost moves once per binary, by about ten allocations, when the
+	// first GC turns zero-valued runtime and process samples into fractional
+	// floats that FormatFloat allocates. Over a 9-metric span that move reads
+	// up to half an allocation per metric; over 90 or more it stays under
+	// 0.15, with or without -race, and under 0.02 once it has happened.
+	const minAllocSpan = 90
 
 	// The 1000-label-set shape crosses cardinalityWarnThreshold as it is
 	// built; capture the warning so it stays out of the test output. The
@@ -600,7 +601,9 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 	// so each family emits eight bucket samples plus +Inf, _sum and _count —
 	// eleven lines. It is spelled out rather than taken from DefaultBuckets so
 	// an edit to the shipped defaults cannot silently move the per-family
-	// number this contract pins.
+	// number this contract pins. The histogram names are longer than 32 bytes
+	// on purpose: a series-name concatenation, which the compiler keeps on the
+	// stack only up to 32 bytes, shows up here as 11 allocations per family.
 	histBounds := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}
 
 	shapes := []struct {
@@ -609,15 +612,13 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 		units string // its plural, for the sizes
 		sizes []int
 		build func(n int) *Registry
-		// max is the per-unit ceiling for a plain build, maxRace for a -race
-		// build (the detector defeats some escape analysis and costs 10 to 30%
-		// more). Each is the highest gated rate over six runs plus half an
-		// allocation, rounded to a tenth: one added allocation per unit breaches
-		// it, while drift under half an allocation, such as a toolchain bump
-		// moving fmt's internals, does not. Such a red is a re-measurement, and
-		// every rate the sweep computes is logged.
-		max     float64
-		maxRace float64
+		// max is the per-unit ceiling, the same with or without -race: the
+		// highest gated rate over three runs in each mode plus half an
+		// allocation, rounded to a tenth. One added allocation per unit breaches
+		// it, while drift under half an allocation, such as a toolchain bump,
+		// does not. Such a red is a re-measurement, and every rate the sweep
+		// computes is logged.
+		max float64
 	}{
 		{
 			name:  "counters",
@@ -633,8 +634,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				}
 				return r
 			},
-			max:     7.5,
-			maxRace: 9.7,
+			max: 1.6,
 		},
 		{
 			name:  "label_sets_on_one_labeled_counter",
@@ -650,8 +650,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				}
 				return r
 			},
-			max:     7.5,
-			maxRace: 8.3,
+			max: 4.5,
 		},
 		{
 			name:  "histograms_of_8_bounds",
@@ -661,14 +660,13 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				for i := range n {
-					h := NewHistogram("scrape_h"+strconv.Itoa(i), "allocation contract", WithBuckets(histBounds))
+					h := NewHistogram("scrape_histogram_"+strconv.Itoa(i)+"_seconds", "allocation contract", WithBuckets(histBounds))
 					r.MustRegister(h)
 					h.Observe(0.02)
 				}
 				return r
 			},
-			max:     65.5,
-			maxRace: 75.8,
+			max: 19.6,
 		},
 		{
 			name:  "label_sets_on_one_labeled_histogram",
@@ -677,15 +675,14 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
-				lh := NewLabeledHistogram("scrape_lh", "allocation contract", []string{"a"}, WithBuckets(histBounds))
+				lh := NewLabeledHistogram("scrape_labeled_histogram_seconds", "allocation contract", []string{"a"}, WithBuckets(histBounds))
 				r.MustRegister(lh)
 				for i := range n {
 					lh.Observe(0.02, "v"+strconv.Itoa(i))
 				}
 				return r
 			},
-			max:     65.5,
-			maxRace: 73.8,
+			max: 21.6,
 		},
 	}
 
@@ -702,7 +699,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 				totals[i] = testing.AllocsPerRun(scrapeAllocRuns, func() { h.ServeHTTP(w, req) })
 			}
 
-			want := allocCeiling(sh.max, sh.maxRace)
+			want := sh.max
 			gated := 0
 			for i := range sh.sizes {
 				for j := i + 1; j < len(sh.sizes); j++ {
