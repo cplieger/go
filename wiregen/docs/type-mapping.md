@@ -39,8 +39,9 @@ In a type an endpoint's `Request`, `Params` or `Query` carries, or one those rea
 
 - a field promoted through an embedded pointer to an unexported struct, which `encoding/json` cannot allocate.
 - a type implementing `json.Marshaler` without `json.Unmarshaler`, or `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, mapped or not. A `TextEnum` in a request needs `UnmarshalText` on its pointer.
-- a map key implementing `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, unless it is a string, which is written and read as its string either way, or one written in one form and read back in another: an integer key with `MarshalText` and no `UnmarshalText`, an integer key with only a pointer `UnmarshalText`, and a string key with both, which is written as its string but read through `UnmarshalText`.
-- a type whose pointer has `UnmarshalText` and no `UnmarshalJSON`, unless its underlying type is a string or a mapping replaces its wire form: `encoding/json` reads it only from a JSON string, through `UnmarshalText`, which need not read what it writes, whether an object, array, number, boolean, a `[]byte`'s base64 or a `,string` field's text.
+- a map key implementing `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, unless it is a string, which is written and read as its string either way.
+- a map key written in one form and read back in another: an integer key with `MarshalText` and no `UnmarshalText`, an integer key with only a pointer `UnmarshalText`, and a string key with both, which is written as its string but read through `UnmarshalText`.
+- a type with no `MarshalJSON` or `MarshalText` whose pointer has `UnmarshalText` and no `UnmarshalJSON`, unless its underlying type is a string or a mapping replaces its wire form: `encoding/json` reads it only from a JSON string, through `UnmarshalText`, which need not read what it writes, whether an object, array, number, boolean, a `[]byte`'s base64 or a `,string` field's text.
 
 The rules apply at any depth of slices and maps.
 

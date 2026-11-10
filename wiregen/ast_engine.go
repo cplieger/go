@@ -952,8 +952,9 @@ func (e *astEngine) applyBounds(t *types.Named, fullName string, fi *fieldInfo) 
 }
 
 // needDecoder records an InRefusal when encoding/json cannot decode what
-// it encodes for t through a marshaler: decoding looks for the matching
-// unmarshaler on *t (json.Unmarshaler, or encoding.TextUnmarshaler for text).
+// it encodes for t: a marshaler's output needs the matching unmarshaler on
+// *t (json.Unmarshaler, or encoding.TextUnmarshaler for text), and a plain
+// shape needs a decoder that is not text-only (textOnlyDecoder).
 func (fi *fieldInfo) needDecoder(t types.Type) {
 	ptr := types.NewPointer(t)
 	switch marshalCodec(t) {

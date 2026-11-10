@@ -398,3 +398,23 @@ func TestMapType_PtrIDFixture(t *testing.T) {
 		t.Errorf("a prefixed key decoded to %v, %v", got, err)
 	}
 }
+
+// A registered type with a marshaler is refused for it, not also as
+// text-only.
+func TestMapType_MarshalerOneReason(t *testing.T) {
+	r := mapReg()
+	r.Endpoints[0].Request = wiregen.TypeRef[maps.Coin]()
+	err := r.generate(t.Context(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "implements encoding.TextMarshaler") || strings.Contains(err.Error(), "has a pointer UnmarshalText") {
+		t.Errorf("Generate() = %v, want the marshaler refusal alone", err)
+	}
+}
+
+// A registered type's own refusal is reported once, by the type, however a
+// request reaches it.
+func TestMapType_RegisteredRefusalOnce(t *testing.T) {
+	r := mapReg()
+	r.Types = append(r.Types, wiregen.TypeRef[maps.TextMap]())
+	r.Endpoints[0].Request = wiregen.TypeRef[maps.HasTextMap]()
+	requireGenerateError(t, r, "wiregen: 1 field(s)", "maps.TextMap: ")
+}

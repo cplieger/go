@@ -247,3 +247,24 @@ func (b *Blob) UnmarshalText(t []byte) error { *b = append((*b)[:0], t...); retu
 type HasBlob struct {
 	Blob Blob `json:"blob"`
 }
+
+// Coin is written through MarshalText and read through its pointer
+// UnmarshalText, so it is refused for its marshaler alone.
+type Coin struct {
+	Cents int `json:"cents"`
+}
+
+// MarshalText writes the cents.
+func (c Coin) MarshalText() ([]byte, error) { return []byte(strconv.Itoa(c.Cents)), nil }
+
+// UnmarshalText reads the cents.
+func (c *Coin) UnmarshalText(b []byte) error {
+	n, err := strconv.Atoi(string(b))
+	c.Cents = n
+	return err
+}
+
+// HasTextMap carries a registered TextMap.
+type HasTextMap struct {
+	M TextMap `json:"m"`
+}
