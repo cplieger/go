@@ -2,7 +2,6 @@ package measure
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -263,7 +262,15 @@ func encodePrometheus(fams []metricFamily) string {
 func appendPrometheus(b *strings.Builder, fams []metricFamily) {
 	for i := range fams {
 		f := &fams[i]
-		fmt.Fprintf(b, "# HELP %s %s\n# TYPE %s %s\n", f.name, helpEscaper.Replace(f.help), f.name, f.typ)
+		b.WriteString("# HELP ")
+		b.WriteString(f.name)
+		b.WriteByte(' ')
+		b.WriteString(helpEscaper.Replace(f.help))
+		b.WriteString("\n# TYPE ")
+		b.WriteString(f.name)
+		b.WriteByte(' ')
+		b.WriteString(f.typ)
+		b.WriteByte('\n')
 		for j := range f.samples {
 			s := &f.samples[j]
 			writeSample(b, f.name+s.nameSuffix, s.labels, s.value)
@@ -274,9 +281,13 @@ func appendPrometheus(b *strings.Builder, fams []metricFamily) {
 // writeSample writes one exposition line, omitting the brace group when the
 // sample carries no labels.
 func writeSample(b *strings.Builder, name, labels, value string) {
-	if labels == "" {
-		fmt.Fprintf(b, "%s %s\n", name, value)
-		return
+	b.WriteString(name)
+	if labels != "" {
+		b.WriteByte('{')
+		b.WriteString(labels)
+		b.WriteByte('}')
 	}
-	fmt.Fprintf(b, "%s{%s} %s\n", name, labels, value)
+	b.WriteByte(' ')
+	b.WriteString(value)
+	b.WriteByte('\n')
 }

@@ -311,9 +311,7 @@ func TestHelpEscaping_Prometheus(t *testing.T) {
 // this is on the record path where a cardinality warning would fire.
 //
 // Measured at 100 series: the escaped path costs about 3 allocations more per
-// series at 32 bytes and 11 at 2048 (3.3 and 11.1 under -race — the surcharge
-// is a difference between two counts, so the detector's overhead very nearly
-// cancels). Sixty-four times the bytes for under four times the surcharge is
+// series at 32 bytes and 11 at 2048, the same under -race. Sixty-four times the bytes for under four times the surcharge is
 // the escaper's output buffer doubling, which is the shape a correct
 // implementation has; a per-byte one would have cost 64 times as much.
 func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
