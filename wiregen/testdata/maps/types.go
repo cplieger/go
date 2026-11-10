@@ -208,3 +208,42 @@ func (l *Level) UnmarshalText(b []byte) error {
 type HasLevel struct {
 	Level Level `json:"level"`
 }
+
+// Tag is a string read through its pointer UnmarshalText.
+type Tag string
+
+// UnmarshalText reads the tag as written.
+func (t *Tag) UnmarshalText(b []byte) error { *t = Tag(b); return nil }
+
+// Coded is an int read through its pointer UnmarshalJSON, which wins over
+// UnmarshalText.
+type Coded int
+
+// UnmarshalText is never called: UnmarshalJSON wins.
+func (c *Coded) UnmarshalText([]byte) error { return errors.New("not text") }
+
+// UnmarshalJSON reads the decimal encoding/json writes.
+func (c *Coded) UnmarshalJSON(b []byte) error {
+	n, err := strconv.Atoi(string(b))
+	*c = Coded(n)
+	return err
+}
+
+// Accepted carries the text decoders a request accepts.
+type Accepted struct {
+	Tag   Tag            `json:"tag"`
+	Coded Coded          `json:"coded"`
+	ByTag map[Tag]string `json:"byTag"`
+}
+
+// Blob is written as base64 text and read through its pointer UnmarshalText,
+// which need not read base64.
+type Blob []byte
+
+// UnmarshalText keeps the text as written.
+func (b *Blob) UnmarshalText(t []byte) error { *b = append((*b)[:0], t...); return nil }
+
+// HasBlob carries a Blob.
+type HasBlob struct {
+	Blob Blob `json:"blob"`
+}

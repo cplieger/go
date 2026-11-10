@@ -29,7 +29,7 @@ type typeInfo struct {
 	Doc    string
 	Fields []fieldInfo
 	// InRefusals are why encoding/json cannot decode the type itself, which
-	// refuse it only as a body a request carries.
+	// refuse it wherever a request reaches it.
 	InRefusals []string
 }
 
@@ -192,7 +192,8 @@ func (e *astEngine) refuseUndecodable() {
 }
 
 // inRefusals lists why encoding/json cannot decode ti, each prefixed with
-// the field's path under name, or name alone for a named map's value.
+// the field's path under name, or name alone for the type itself or a named
+// map's value.
 func (ti *typeInfo) inRefusals(name string) []string {
 	out := make([]string, 0, len(ti.InRefusals))
 	for _, why := range ti.InRefusals {
@@ -482,7 +483,9 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 	ti := &typeInfo{Name: wt.Name}
 
 	ti.Doc = commentToJSDoc(typeDoc(pkg, wt.Name))
-	if why := textOnlyDecoder(tn.Type()); why != "" {
+	// A type with a marshaler is refused for it below, and is written as
+	// its marshaler's output, so only a plain one is checked here.
+	if why := textOnlyDecoder(tn.Type()); why != "" && marshalCodec(tn.Type()) == codecPlain {
 		ti.InRefusals = append(ti.InRefusals, why)
 	}
 
@@ -930,9 +933,6 @@ func (e *astEngine) referenceRegistered(ut *types.Named, name, fullName string, 
 	default:
 		fi.Kind, fi.TSType, fi.GoTypeName = kindStruct, e.gen.tsName(name), name
 	}
-	// The type's own refusal is reported where it is a body, through
-	// typeInfo.InRefusals; a field of it in a request is refused here too.
-	fi.needDecoder(ut)
 }
 
 // applyBounds gives fi the bounds named type t declares, refusing any it
@@ -966,7 +966,9 @@ func (fi *fieldInfo) needDecoder(t types.Type) {
 			fi.InRefusals = append(fi.InRefusals, t.String()+" implements encoding.TextMarshaler but not encoding.TextUnmarshaler, so encoding/json cannot decode it")
 		}
 	case codecPlain:
-		if why := textOnlyDecoder(t); why != "" {
+		// A mapping replaces wiregen's reading of the wire form, so its
+		// claim stands unchecked, as every mapping's does.
+		if why := textOnlyDecoder(t); why != "" && fi.Kind != kindMapped {
 			fi.InRefusals = append(fi.InRefusals, why)
 		}
 	}
@@ -974,15 +976,16 @@ func (fi *fieldInfo) needDecoder(t types.Type) {
 
 // textOnlyDecoder explains why encoding/json cannot read back a type it
 // writes in its plain shape, or returns "": a pointer UnmarshalText with no
-// UnmarshalJSON is called only for a JSON string, and refuses the object,
-// array or number written for a non-string type.
+// UnmarshalJSON is called only for a JSON string, and for a type that is not
+// a string that string, if any, holds base64 or decimal text the method need
+// not read.
 func textOnlyDecoder(t types.Type) string {
 	ptr := types.NewPointer(t)
 	b, basic := t.Underlying().(*types.Basic)
 	if !types.Implements(ptr, textUnmarshaler) || types.Implements(ptr, jsonUnmarshaler) || (basic && b.Info()&types.IsString != 0) {
 		return ""
 	}
-	return t.String() + " has a pointer UnmarshalText, which encoding/json calls only for a JSON string, so it cannot decode the value it writes"
+	return t.String() + " has a pointer UnmarshalText and no UnmarshalJSON, so encoding/json reads it only from a JSON string, through a method that need not read the form it writes"
 }
 
 // stdlibWireType resolves the standard-library types encoding/json encodes
@@ -1113,7 +1116,7 @@ func planMapKey(key types.Type, fi *fieldInfo) {
 	marshals := types.Implements(key, textMarshaler)
 	unmarshals := types.Implements(types.NewPointer(key), textUnmarshaler)
 	switch {
-	case isString && unmarshals && (marshals || types.Implements(types.NewPointer(key), textMarshaler)):
+	case isString && unmarshals && types.Implements(types.NewPointer(key), textMarshaler):
 		// encoding/json writes a string key as is, but reads it back through
 		// UnmarshalText, which reads MarshalText's form. A key with only
 		// UnmarshalText is read as a string field of its type is.

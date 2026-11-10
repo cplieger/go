@@ -1,6 +1,7 @@
 package wiregen_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -219,10 +220,13 @@ func TestMapType_Refusals(t *testing.T) {
 		}, pkg + ".ByPrefixed: map key " + pkg + ".Prefixed is written as its string but read through UnmarshalText, which reads MarshalText's form, and a request carries it"},
 		{"a field read only from a JSON string", func(r *testRegistry) {
 			r.Endpoints[0].Request = wiregen.TypeRef[maps.HasLevel]()
-		}, pkg + ".HasLevel.Level: " + pkg + ".Level has a pointer UnmarshalText, which encoding/json calls only for a JSON string, so it cannot decode the value it writes, and a request carries it"},
+		}, pkg + ".HasLevel.Level: " + pkg + ".Level has a pointer UnmarshalText and no UnmarshalJSON, so encoding/json reads it only from a JSON string, through a method that need not read the form it writes, and a request carries it"},
+		{"a base64 field read through UnmarshalText", func(r *testRegistry) {
+			r.Endpoints[0].Request = wiregen.TypeRef[maps.HasBlob]()
+		}, pkg + ".HasBlob.Blob: " + pkg + ".Blob has a pointer UnmarshalText and no UnmarshalJSON"},
 		{"a map body read only from a JSON string", func(r *testRegistry) {
 			r.Endpoints[0].Request = wiregen.TypeRef[maps.TextMap]()
-		}, pkg + ".TextMap: " + pkg + ".TextMap has a pointer UnmarshalText, which encoding/json calls only for a JSON string, so it cannot decode the value it writes, and a request carries it"},
+		}, pkg + ".TextMap: " + pkg + ".TextMap has a pointer UnmarshalText and no UnmarshalJSON, so encoding/json reads it only from a JSON string, through a method that need not read the form it writes, and a request carries it"},
 		{"a decimal key read through a pointer UnmarshalText", func(r *testRegistry) {
 			r.Endpoints[0].Request = wiregen.TypeRef[maps.ByPtrID]()
 		}, pkg + ".ByPtrID: map key " + pkg + ".PtrID is written as a decimal integer but read through UnmarshalText, which need not accept it, and a request carries it"},
@@ -362,5 +366,35 @@ func TestMapType_NullByUse(t *testing.T) {
 	}
 	if got := mustJSON(t, operation(t, doc, "get", "/api/stream")["responses"]); !strings.Contains(got, `"labels":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}`) {
 		t.Errorf("event stream = %s, want a nullable labels event", got)
+	}
+}
+
+// A string type or key read through UnmarshalText, and a type with
+// UnmarshalJSON beside UnmarshalText, are decodable request shapes.
+func TestMapType_TextDecodersAccepted(t *testing.T) {
+	r := mapReg()
+	r.Endpoints[0].Request = wiregen.TypeRef[maps.Accepted]()
+	mustGen(t, r.decodersFile)
+}
+
+// A mapping replaces wiregen's reading of a type's wire form, so a request of
+// a text-only type that a mapping gives its own shape generates.
+func TestMapType_MappedTextDecoderAccepted(t *testing.T) {
+	const pkg = "github.com/cplieger/go/wiregen/v2/testdata/maps"
+	r := mapReg()
+	r.Endpoints[0].Request = wiregen.TypeRef[maps.HasLevel]()
+	r.Mappings = map[string]wiregen.Mapping{pkg + ".Level": {TS: "string", Schema: map[string]any{"type": "string"}}}
+	mustGen(t, r.decodersFile)
+}
+
+// The PtrID fixture reads back only its prefixed form, so encoding/json's
+// decimal key is the refusal TestMapType_Refusals pins.
+func TestMapType_PtrIDFixture(t *testing.T) {
+	var got maps.ByPtrID
+	if err := json.Unmarshal([]byte(`{"1":"x"}`), &got); err == nil {
+		t.Error("an unprefixed key decoded")
+	}
+	if err := json.Unmarshal([]byte(`{"id1":"x"}`), &got); err != nil || got[1] != "x" {
+		t.Errorf("a prefixed key decoded to %v, %v", got, err)
 	}
 }
