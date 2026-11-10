@@ -4,12 +4,13 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 
 ## Field rules
 
-- A registered type is a struct. Register an enum with `StringEnum` or `TextEnum`, and a type wiregen cannot read with a mapping.
+- A registered type is a struct or a named map (see [Named maps](#named-maps)). Register an enum with `StringEnum` or `TextEnum`, and a type wiregen cannot read with a mapping.
 - Doc comments on registered structs and their fields become `/** ... */` JSDoc on the generated interfaces.
 - Unexported fields are skipped, as `encoding/json` skips them. An embedded struct, exported or not, is flattened with the promotion rules of `encoding/json`: the shallowest field wins, a tagged field beats an untagged one at the same depth, and a field reached through two sibling embeds at the same depth is dropped as ambiguous.
 - A field with no `json` tag takes the name `encoding/json` gives it, its Go name. With `WithRequireJSONTags(true)` such a field is a generation error naming its path. A tag name may hold letters, digits, spaces and the punctuation `!#$%&()*+-./:;<=>?@[]^_{|}~`.
 - A field `encoding/json` may leave out, or send as `null` for a nil pointer, is optional in TypeScript, `key?: T`: a pointer, a field tagged `omitzero`, a field tagged `omitempty` whose type `omitempty` can find empty (never a struct), and a field promoted through an embedded pointer, which is skipped when nil. Every other field is required.
 - A pointer element of a slice or map is `T | null`, as `encoding/json` writes a nil one as `null`.
+- A map key is typed `string`. An integer key, one that is not an `encoding.TextMarshaler`, is decimal text on the wire, so the schema gives it `propertyNames` with a decimal pattern, which does not carry the key kind's range.
 - `time.Time` maps to `string`, and `json.Number` to `number`. A slice of `byte`, or of any other `uint8` type without a marshaler, maps to `string`, because JSON encodes it as base64.
 - `json.RawMessage` (and `jsontext.Value`, which it aliases from Go 1.27) maps to `unknown`. It is the one opaque type wiregen lets cross the wire.
 - A type implementing `encoding.TextMarshaler` with a value receiver maps to `string`, a fixed-size array included. Marshalers are found by their method signatures, promoted methods included, as `encoding/json` finds them.
@@ -38,7 +39,9 @@ In a type an endpoint's `Request`, `Params` or `Query` carries, or one those rea
 
 - a field promoted through an embedded pointer to an unexported struct, which `encoding/json` cannot allocate.
 - a type implementing `json.Marshaler` without `json.Unmarshaler`, or `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, mapped or not. A `TextEnum` in a request needs `UnmarshalText` on its pointer.
-- a map key implementing `encoding.TextMarshaler` without `encoding.TextUnmarshaler`.
+- a map key implementing `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, unless it is a string, which is written and read as its string either way.
+- a map key written in one form and read back in another: an integer key with `MarshalText` and no `UnmarshalText`, an integer key with only a pointer `UnmarshalText`, and a string key with both, which is written as its string but read through `UnmarshalText`.
+- a type with no `MarshalJSON` or `MarshalText` whose pointer has `UnmarshalText` and no `UnmarshalJSON`, unless its underlying type is a string or a mapping replaces its wire form: `encoding/json` reads it only from a JSON string, through `UnmarshalText`, which need not read what it writes, whether an object, array, number, boolean, a `[]byte`'s base64 or a `,string` field's text.
 
 The rules apply at any depth of slices and maps.
 
@@ -124,11 +127,22 @@ wiregen.Union{
 }
 ```
 
-The payload field is listed in no case. It belongs to each case with a payload type, with its own omit options, and is refused in the others. A `json.RawMessage` can be `null` on the wire in two ways: encoding/json writes a nil one as `null` unless an omit option drops it, and writes one holding the bytes `null`, such as a request `null` decoded into it, whatever the options. So the payload is optional, and `null` reads as absent. Each payload type is a struct, as every registered type is, and joins the registry's types. `Generate` refuses a `Payload` that names no field, a payload field that is not a `json.RawMessage`, `PayloadTypes` set without `Payload`, `PayloadTypes` keys that are not exactly the case values, a case that lists the payload field, and a union where no case has a payload type.
+The payload field is listed in no case. It belongs to each case with a payload type, with its own omit options, and is refused in the others. A `json.RawMessage` can be `null` on the wire in two ways: encoding/json writes a nil one as `null` unless an omit option drops it, and writes one holding the bytes `null`, such as a request `null` decoded into it, whatever the options. So the payload is optional, and `null` reads as absent. Each payload type is a struct or a named map, as every registered type is, and joins the registry's types. `Generate` refuses a `Payload` that names no field, a payload field that is not a `json.RawMessage`, `PayloadTypes` set without `Payload`, `PayloadTypes` keys that are not exactly the case values, a case that lists the payload field, and a union where no case has a payload type.
 
 - The types file carries `| { type: "create"; payload?: CreateChat } | ...`.
 - The decoder decodes `payload` with that case's decoder, reads `null` as absent, and refuses a present payload in a case that has none.
 - In each case's component, `payload` is that type's `$ref` or `null`, or absent.
+
+## Named maps
+
+A registered named map type, `type Settings map[string]json.RawMessage`, is a body of its own: an open JSON object whose keys are not known in advance. It can be listed in `Types`, or named as an endpoint's `Request` or `Response`, an event's data, a union case's payload or the `ErrorEnvelope`. Its key and value follow the rules of a map field, so the value is any type wiregen reads, `json.RawMessage` included, and the key is a string, an integer or an `encoding.TextMarshaler`.
+
+- The types file carries `export type Settings = { [key: string]: unknown };`, with the type's doc comment.
+- The decoder refuses a body that is not an object and decodes each value with the value's decoder. `null` reads as `{}`, as for a map field, because encoding/json writes a nil map as `null`.
+- The OpenAPI component is `{"type": "object", "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction. A body, field or element of the map admits `null` where encoding/json writes or reads a nil map as `null`. An `omitempty` field of the map admits it only in a request form, since encoding/json never writes it as `null`; an `omitempty` pointer to the map admits it in a response too, because a non-nil pointer to a nil map is written as `null`.
+- A field whose type is a registered named map references it by name, as a field of a registered struct does: its TypeScript alias, its decoder, its `$ref` and its arbitrary, with a map field's null rule. That is also how a named map reaches itself, `type Tree map[string]Tree`. An unregistered named map or slice that reaches itself is refused, since it would be planned inline without end: register the map, or route a slice's cycle through a registered struct or named map. Two nested instances of one generic type, such as `G[G[int]]`, are two types and plan inline.
+
+A union or an endpoint's `Params` or `Query` cannot be a named map, because both need a struct's fields.
 
 ## Mappings
 

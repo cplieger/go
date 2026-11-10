@@ -17,6 +17,8 @@ const tsconfig = `{
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmitOnError": true,
     "skipLibCheck": true,
     "outDir": "out"

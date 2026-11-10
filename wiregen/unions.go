@@ -22,8 +22,8 @@ import (
 // type, keeps its own omit options there, and is refused in the others. A
 // json.RawMessage can always be null on the wire, so the typed payload's
 // TypeScript member is optional, its schemas are nullable, and a decoder
-// reads null as absent. Each payload type is a struct, as every registered
-// type is, and joins the registry's types.
+// reads null as absent. Each payload type is a struct or a named map, as
+// every registered type is, and joins the registry's types.
 type Union struct {
 	Cases        map[string][]string
 	PayloadTypes map[string]Type
@@ -55,6 +55,10 @@ func (e *astEngine) resolveUnions() error {
 	var errs []error
 	for _, u := range e.gen.Unions {
 		ti := e.byName[u.Type.Name]
+		if ti.Map != nil {
+			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: a union type is a struct, not a map", u.Type.PkgPath, u.Type.Name))
+			continue
+		}
 		if ti.Union != nil {
 			errs = append(errs, fmt.Errorf("wiregen: union %s.%s is declared twice", u.Type.PkgPath, u.Type.Name))
 			continue
@@ -155,6 +159,10 @@ func payloadField(u *Union, ti *typeInfo, values []string) (*fieldInfo, error) {
 func (e *astEngine) typedPayload(raw *fieldInfo, pt Type) *fieldInfo {
 	f := *raw
 	f.Kind, f.TSType, f.GoTypeName = kindStruct, e.gen.tsName(pt.Name), pt.Name
+	if ti := e.byName[pt.Name]; ti != nil && ti.Map != nil {
+		// A registered named map is referenced as one, its Elem nil.
+		f.Kind = kindMap
+	}
 	f.Elem, f.Bounds, f.Mapping, f.Refusals, f.InRefusals = nil, nil, nil, nil, nil
 	// A json.RawMessage can be null twice over: encoding/json writes its nil
 	// as null, which an omit option drops, and writes bytes holding null, such
@@ -266,9 +274,12 @@ func (ti *typeInfo) caseFields(uc *unionCase) []*fieldInfo {
 // graphFields returns every field a walk of the type graph follows from ti:
 // its own, then each case's typed payload, whose type its raw field hides.
 func (ti *typeInfo) graphFields() []*fieldInfo {
-	out := make([]*fieldInfo, 0, len(ti.Fields))
+	out := make([]*fieldInfo, 0, len(ti.Fields)+1)
 	for i := range ti.Fields {
 		out = append(out, &ti.Fields[i])
+	}
+	if ti.Map != nil {
+		out = append(out, ti.Map)
 	}
 	if ti.Union != nil {
 		for i := range ti.Union.cases {

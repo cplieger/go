@@ -721,17 +721,17 @@ func (g *generator) resolveArgs(e *Endpoint, engine *astEngine) (*endpointArgs, 
 		}
 	}
 	if e.Query != (Type{}) {
-		if args.query, err = scalarFields(e, "Query", e.Query, engine); err != nil {
+		if args.query, err = scalarFields(e, roleQuery, e.Query, engine); err != nil {
 			return nil, err
 		}
 	}
 	type member struct{ name, role string }
 	var members []member
 	for _, f := range args.params {
-		members = append(members, member{f.name, "Params"})
+		members = append(members, member{f.name, roleParams})
 	}
 	for _, f := range args.query {
-		members = append(members, member{f.name, "Query"})
+		members = append(members, member{f.name, roleQuery})
 	}
 	if e.Request != (Type{}) {
 		args.body = g.tsName(e.Request.Name)
@@ -753,7 +753,7 @@ func (g *generator) resolveArgs(e *Endpoint, engine *astEngine) (*endpointArgs, 
 // paramsFields returns e's Params fields, which must be required and name
 // exactly the path's placeholders.
 func paramsFields(e *Endpoint, engine *astEngine) ([]argField, error) {
-	fields, err := scalarFields(e, "Params", e.Params, engine)
+	fields, err := scalarFields(e, roleParams, e.Params, engine)
 	if err != nil {
 		return nil, err
 	}
@@ -774,10 +774,7 @@ func paramsFields(e *Endpoint, engine *astEngine) ([]argField, error) {
 // scalarFields returns wt's fields as arguments, refusing any that is not a
 // string, number, boolean or enum.
 func scalarFields(e *Endpoint, role string, wt Type, engine *astEngine) ([]argField, error) {
-	ti := engine.byName[wt.Name]
-	if ti.Union != nil {
-		return nil, fmt.Errorf("wiregen: endpoint %s %s type %s is a union; URL arguments are a plain struct's fields", e.Name, role, wt.Name)
-	}
+	ti := engine.byName[wt.Name] // a plain struct: checkURLArguments refused the rest
 	fields := make([]argField, 0, len(ti.Fields))
 	for i := range ti.Fields {
 		f := &ti.Fields[i]

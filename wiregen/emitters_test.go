@@ -55,7 +55,7 @@ func TestEmitDecoder_structLiteralShape(t *testing.T) {
 	}
 	out := mustGen(t, r.decodersFile)
 
-	checkContains(t, "empty-struct", out, "const out: EmptyStruct = {};")
+	checkContains(t, "empty-struct", out, "export const decodeEmptyStruct: Decoder<EmptyStruct> = (v) => {\n  asObject(v, \"$.empty_struct\");\n  return {};\n};")
 	checkContains(t, "all-optional", out, "const out: AllOptional = {\n  };")
 }
 

@@ -20,10 +20,17 @@ import (
 
 // typeInfo holds resolved type data extracted from AST.
 type typeInfo struct {
-	Union  *unionInfo // set when Registry.Unions declares this type
+	Union *unionInfo // set when Registry.Unions declares this type
+	// Map is set for a named map type (type X map[K]V): the plan of
+	// map[K]V as an inline map field, its Elem the plan of V. Such a type has
+	// no Fields; a field of type X references it by name (fieldInfo.mapRef).
+	Map    *fieldInfo
 	Name   string
 	Doc    string
 	Fields []fieldInfo
+	// InRefusals are why encoding/json cannot decode the type itself, which
+	// refuse it wherever a request reaches it.
+	InRefusals []string
 }
 
 // fieldInfo is one field's wire plan, decided once from encoding/json's
@@ -33,6 +40,9 @@ type fieldInfo struct {
 	Elem    *fieldInfo
 	Bounds  *bounds  // from the field type's bound methods; nil: none
 	Mapping *Mapping // the Registry.Mappings entry of a kindMapped value
+	// KeyRange is an integer map key's range, which encoding/json writes and
+	// reads as decimal text; nil for a string or encoding.TextMarshaler key.
+	KeyRange *[2]int64
 	// Refusals are why this field cannot cross the wire; Generate fails
 	// listing every one.
 	Refusals []string
@@ -96,13 +106,16 @@ type astEngine struct {
 	byName       map[string]*typeInfo
 	pkgs         map[string]*packages.Package
 	usedMappings map[string]bool // the Mappings keys a resolved field reached
-	gen          *generator
-	types        []*typeInfo
-	refusals     []string
+	// expanding holds the unregistered named types being planned inline, so
+	// one that reaches itself is refused rather than expanded without end.
+	expanding map[string]bool
+	gen       *generator
+	types     []*typeInfo
+	refusals  []string
 }
 
 func newASTEngine(ctx context.Context, g *generator) (*astEngine, error) {
-	e := &astEngine{gen: g, byName: make(map[string]*typeInfo), usedMappings: make(map[string]bool)}
+	e := &astEngine{gen: g, byName: make(map[string]*typeInfo), usedMappings: make(map[string]bool), expanding: make(map[string]bool)}
 
 	pkgPaths := g.rootPackages()
 	if len(pkgPaths) == 0 {
@@ -143,6 +156,9 @@ func newASTEngine(ctx context.Context, g *generator) (*astEngine, error) {
 	if err := e.resolveUnions(); err != nil {
 		return nil, err
 	}
+	if err := e.checkURLArguments(); err != nil {
+		return nil, err
+	}
 	e.refuseUndecodable()
 	if len(e.refusals) > 0 {
 		slices.Sort(e.refusals)
@@ -169,16 +185,32 @@ func (e *astEngine) refuseUndecodable() {
 		}
 	}
 	for _, ti := range e.types {
-		if !used[ti.Name][dirRequest] {
-			continue
-		}
-		for i := range ti.Fields {
-			f := &ti.Fields[i]
-			for _, why := range f.InRefusals {
-				e.refusals = append(e.refusals, e.gen.typeNames[ti.Name]+"."+ti.Name+"."+f.GoName+": "+why+", and a request carries it")
-			}
+		if used[ti.Name][dirRequest] {
+			e.refusals = append(e.refusals, ti.inRefusals(e.gen.typeNames[ti.Name]+"."+ti.Name)...)
 		}
 	}
+}
+
+// inRefusals lists why encoding/json cannot decode ti, each prefixed with
+// the field's path under name, or name alone for the type itself or a named
+// map's value.
+func (ti *typeInfo) inRefusals(name string) []string {
+	out := make([]string, 0, len(ti.InRefusals))
+	for _, why := range ti.InRefusals {
+		out = append(out, name+": "+why+", and a request carries it")
+	}
+	for i := range ti.Fields {
+		f := &ti.Fields[i]
+		for _, why := range f.InRefusals {
+			out = append(out, name+"."+f.GoName+": "+why+", and a request carries it")
+		}
+	}
+	if ti.Map != nil {
+		for _, why := range ti.Map.InRefusals {
+			out = append(out, name+": "+why+", and a request carries it")
+		}
+	}
+	return out
 }
 
 // reach records in used that wt, and every registered type its fields reach,
@@ -194,7 +226,7 @@ func (e *astEngine) reach(used map[string]map[direction]bool, wt Type, d directi
 	ti := e.byName[wt.Name]
 	for _, top := range ti.graphFields() {
 		for f := top; f != nil; f = f.Elem {
-			if f.Kind == kindStruct {
+			if f.Kind == kindStruct || f.mapRef() {
 				e.reach(used, Type{PkgPath: e.gen.typeNames[f.GoTypeName], Name: f.GoTypeName}, d)
 			}
 		}
@@ -398,33 +430,43 @@ func wireName(ref EnumRef, c *types.Const) (name string, member bool, err error)
 	return name, werr == nil, nil
 }
 
-// lookupStruct finds wt's struct in pkg. A type an endpoint, event, union or
-// ErrorEnvelope names is refused under that role, with no hint a role cannot
-// use.
-func (e *astEngine) lookupStruct(pkg *packages.Package, wt Type) (*types.TypeName, *types.Struct, error) {
+// lookupType finds wt's struct or named map in pkg, setting exactly one of
+// st and mp. A type an endpoint, event, union or ErrorEnvelope names is refused
+// under that role, with no hint a role cannot use.
+func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (tn *types.TypeName, st *types.Struct, mp *types.Named, err error) {
 	role, named := e.gen.typeRoles[wt.Name]
 	obj := pkg.Types.Scope().Lookup(wt.Name)
 	switch {
 	case obj == nil && named:
-		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
 	case obj == nil:
-		return nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
+		return nil, nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
 	}
 	tn, ok := obj.(*types.TypeName)
 	switch {
 	case !ok && named:
-		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
 	case !ok:
-		return nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
+		return nil, nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
 	}
-	st, ok := tn.Type().Underlying().(*types.Struct)
-	switch {
-	case !ok && named:
-		return nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a struct", role, wt.PkgPath, wt.Name)
-	case !ok:
-		return nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
+	// TypeRef resolves an alias to the type it names, so only a hand-written
+	// Type names one; registering it would emit the named type twice.
+	if tn.IsAlias() {
+		if named {
+			return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is an alias; name the type it stands for", role, wt.PkgPath, wt.Name)
+		}
+		return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is an alias; register the type it stands for", wt.PkgPath, wt.Name)
 	}
-	return tn, st, nil
+	switch u := tn.Type().Underlying().(type) {
+	case *types.Struct:
+		return tn, u, nil, nil
+	case *types.Map:
+		return tn, nil, tn.Type().(*types.Named), nil //nolint:errcheck // the alias refusal above leaves a defined type, which go/types gives as a *types.Named
+	}
+	if named {
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not %s", role, wt.PkgPath, wt.Name, roleShape(role))
+	}
+	return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
 }
 
 func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (*typeInfo, error) {
@@ -433,7 +475,7 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 		return nil, fmt.Errorf("wiregen: package %q not loaded, and type %s needs it", wt.PkgPath, wt.Name)
 	}
 
-	tn, st, err := e.lookupStruct(pkg, wt)
+	tn, st, mp, err := e.lookupType(pkg, wt)
 	if err != nil {
 		return nil, err
 	}
@@ -441,12 +483,21 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 	ti := &typeInfo{Name: wt.Name}
 
 	ti.Doc = commentToJSDoc(typeDoc(pkg, wt.Name))
+	// A type with a marshaler is refused for it below, and is written as
+	// its marshaler's output, so only a plain one is checked here.
+	if why := textOnlyDecoder(tn.Type()); why != "" && marshalCodec(tn.Type()) == codecPlain {
+		ti.InRefusals = append(ti.InRefusals, why)
+	}
 
 	switch c, role := marshalCodec(tn.Type()), e.gen.typeRoles[wt.Name]; {
 	case c != codecPlain && role != "":
 		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is the "+role+", but "+c.why()+"; drop the method")
 	case c != codecPlain:
 		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
+	}
+	if mp != nil {
+		e.resolveMapTypeInfo(ti, mp, wt)
+		return ti, nil
 	}
 	ti.Fields = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
 	for i := range ti.Fields {
@@ -456,6 +507,60 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 	}
 
 	return ti, nil
+}
+
+// roleShape is what a type named by role must be: a struct for URL
+// arguments and a union, which need fields, else a struct or a map.
+func roleShape(role string) string {
+	if role == "union type" || strings.HasSuffix(role, " "+roleParams+" type") || strings.HasSuffix(role, " "+roleQuery+" type") {
+		return "a struct"
+	}
+	return "a struct or a map"
+}
+
+// roleParams and roleQuery name an endpoint's URL-argument types in errors.
+const (
+	roleParams = "Params"
+	roleQuery  = "Query"
+)
+
+// checkURLArguments refuses an endpoint whose Params or Query type is a union
+// or a map: URL arguments are a plain struct's fields, which the client's
+// arguments and the document's parameters both read.
+func (e *astEngine) checkURLArguments() error {
+	for i := range e.gen.Endpoints {
+		ep := &e.gen.Endpoints[i]
+		for _, a := range []struct {
+			role string
+			wt   Type
+		}{{roleParams, ep.Params}, {roleQuery, ep.Query}} {
+			if a.wt == (Type{}) {
+				continue
+			}
+			switch ti := e.byName[a.wt.Name]; {
+			case ti.Union != nil:
+				return fmt.Errorf("wiregen: endpoint %s %s type %s is a union; URL arguments are a plain struct's fields", ep.Name, a.role, a.wt.Name)
+			case ti.Map != nil:
+				return fmt.Errorf("wiregen: endpoint %s %s type %s is a map; URL arguments are a plain struct's fields", ep.Name, a.role, a.wt.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// resolveMapTypeInfo plans a named map type as an inline field of its
+// underlying map would be planned, its Elem the plan of the value, and lists
+// its refusals; a bound it declares is refused, as none applies to a map.
+func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, wt Type) {
+	full := wt.PkgPath + "." + wt.Name
+	fi := fieldInfo{}
+	e.resolveInto(named.Underlying(), &fi)
+	e.applyBounds(named, full, &fi)
+	for _, why := range fi.Refusals {
+		// applyBounds names the type in its own refusals; name it once.
+		e.refusals = append(e.refusals, full+": "+strings.TrimPrefix(why, full+" "))
+	}
+	ti.Map = &fi
 }
 
 func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package, allPkgs map[string]*packages.Package, depth int, visited map[*types.Struct]bool) []fieldInfo {
@@ -771,11 +876,7 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 	}
 	codec := marshalCodec(ut)
 	if pkg, ok := e.gen.typeNames[name]; ok && pkg == pkgPath {
-		if codec != codecPlain {
-			fi.refuse(fullName + " is registered, but " + codec.why())
-			return
-		}
-		fi.Kind, fi.TSType, fi.GoTypeName = kindStruct, e.gen.tsName(name), name
+		e.referenceRegistered(ut, name, fullName, codec, fi)
 		return
 	}
 	switch codec {
@@ -787,12 +888,51 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 			fi.refuse("struct " + fullName + " is neither registered nor mapped")
 			return
 		}
-		e.resolveInto(ut.Underlying(), fi)
+		if !e.resolveInline(ut, fullName, fi) {
+			return
+		}
+		fi.needDecoder(ut)
 	default:
 		fi.refuse(fullName + " " + codec.why() + "; map it with Mappings")
 		return
 	}
 	e.applyBounds(ut, fullName, fi)
+}
+
+// resolveInline plans an unregistered named type's underlying type into fi,
+// refusing one that reaches itself, which would expand without end: a
+// registered one is a reference. The key is the instance, so G[G[int]] is two
+// types, not a cycle; the checker refuses an instantiation cycle, so a
+// recursive generic repeats one instance. It reports whether fi was planned.
+func (e *astEngine) resolveInline(ut *types.Named, fullName string, fi *fieldInfo) bool {
+	key := types.TypeString(ut, nil)
+	if e.expanding[key] {
+		if _, isMap := ut.Underlying().(*types.Map); isMap {
+			fi.refuse(fullName + " reaches itself; register it, so it is referenced by name")
+		} else {
+			fi.refuse(fullName + " reaches itself, which no inline shape can hold; route the cycle through a registered struct or named map")
+		}
+		return false
+	}
+	e.expanding[key] = true
+	e.resolveInto(ut.Underlying(), fi)
+	delete(e.expanding, key)
+	return true
+}
+
+// referenceRegistered makes fi a reference to the registered type ut names.
+// A registered named map is referenced by name, as a registered struct is,
+// and keeps a map's null rules: Elem stays nil and the value's plan lives on
+// the registered type.
+func (e *astEngine) referenceRegistered(ut *types.Named, name, fullName string, codec codec, fi *fieldInfo) {
+	switch _, isMap := ut.Underlying().(*types.Map); {
+	case codec != codecPlain:
+		fi.refuse(fullName + " is registered, but " + codec.why())
+	case isMap:
+		fi.Kind, fi.TSType, fi.GoTypeName = kindMap, e.gen.tsName(name), name
+	default:
+		fi.Kind, fi.TSType, fi.GoTypeName = kindStruct, e.gen.tsName(name), name
+	}
 }
 
 // applyBounds gives fi the bounds named type t declares, refusing any it
@@ -812,8 +952,9 @@ func (e *astEngine) applyBounds(t *types.Named, fullName string, fi *fieldInfo) 
 }
 
 // needDecoder records an InRefusal when encoding/json cannot decode what
-// it encodes for t through a marshaler: decoding looks for the matching
-// unmarshaler on *t (json.Unmarshaler, or encoding.TextUnmarshaler for text).
+// it encodes for t: a marshaler's output needs the matching unmarshaler on
+// *t (json.Unmarshaler, or encoding.TextUnmarshaler for text), and a plain
+// shape needs a decoder that is not text-only (textOnlyDecoder).
 func (fi *fieldInfo) needDecoder(t types.Type) {
 	ptr := types.NewPointer(t)
 	switch marshalCodec(t) {
@@ -825,7 +966,27 @@ func (fi *fieldInfo) needDecoder(t types.Type) {
 		if !types.Implements(ptr, jsonUnmarshaler) && !types.Implements(ptr, textUnmarshaler) {
 			fi.InRefusals = append(fi.InRefusals, t.String()+" implements encoding.TextMarshaler but not encoding.TextUnmarshaler, so encoding/json cannot decode it")
 		}
+	case codecPlain:
+		// A mapping replaces wiregen's reading of the wire form, so its
+		// claim stands unchecked, as every mapping's does.
+		if why := textOnlyDecoder(t); why != "" && fi.Kind != kindMapped {
+			fi.InRefusals = append(fi.InRefusals, why)
+		}
 	}
+}
+
+// textOnlyDecoder explains why encoding/json cannot read back a type it
+// writes in its plain shape, or returns "": a pointer UnmarshalText with no
+// UnmarshalJSON is called only for a JSON string, and for a type that is not
+// a string that string, if any, holds base64 or decimal text the method need
+// not read.
+func textOnlyDecoder(t types.Type) string {
+	ptr := types.NewPointer(t)
+	b, basic := t.Underlying().(*types.Basic)
+	if !types.Implements(ptr, textUnmarshaler) || types.Implements(ptr, jsonUnmarshaler) || (basic && b.Info()&types.IsString != 0) {
+		return ""
+	}
+	return t.String() + " has a pointer UnmarshalText and no UnmarshalJSON, so encoding/json reads it only from a JSON string, through a method that need not read the form it writes"
 }
 
 // stdlibWireType resolves the standard-library types encoding/json encodes
@@ -943,18 +1104,70 @@ func (e *astEngine) resolveMapType(ut *types.Map, fi *fieldInfo) {
 	valFI := e.resolveFieldType(ut.Elem(), 0)
 	fi.Kind, fi.TSType, fi.Elem = kindMap, "{ [key: string]: "+valFI.elemTS()+" }", &valFI
 	fi.inheritRefusals("map value", &valFI)
-	key := ut.Key()
+	planMapKey(ut.Key(), fi)
+}
+
+// planMapKey applies encoding/json's map key rules to fi: a string key is used
+// as is, then MarshalText, then an integer's decimal text, and a key is read
+// back through UnmarshalText when it has one, else by the same rules.
+func planMapKey(key types.Type, fi *fieldInfo) {
 	b, basic := key.Underlying().(*types.Basic)
+	isString := basic && b.Info()&types.IsString != 0
+	isInt := basic && b.Info()&types.IsInteger != 0
+	marshals := types.Implements(key, textMarshaler)
+	unmarshals := types.Implements(types.NewPointer(key), textUnmarshaler)
 	switch {
-	case basic && b.Info()&types.IsString != 0:
-	case !types.Implements(key, textMarshaler) && (!basic || b.Info()&types.IsInteger == 0):
+	case isString && unmarshals && types.Implements(types.NewPointer(key), textMarshaler):
+		// encoding/json writes a string key as is, but reads it back through
+		// UnmarshalText, which reads MarshalText's form. A key with only
+		// UnmarshalText is read as a string field of its type is.
+		fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" is written as its string but read through UnmarshalText, which reads MarshalText's form")
+	case isString:
+	case isInt && !marshals:
+		// A map key is not addressable, so a pointer receiver's MarshalText
+		// is never called, but its UnmarshalText reads the key back, and need
+		// not accept the decimal written.
+		fi.KeyRange = integerRange(b.Kind())
+		if unmarshals {
+			fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" is written as a decimal integer but read through UnmarshalText, which need not accept it")
+		}
+	case !marshals:
 		fi.Refusals = append(fi.Refusals, "map key "+key.String()+" is not a string, an integer or an encoding.TextMarshaler")
-	case types.Implements(key, textMarshaler) && !types.Implements(types.NewPointer(key), textUnmarshaler):
-		// encoding/json writes a non-string key through MarshalText and reads
-		// one back only through UnmarshalText.
+	case unmarshals:
+	case isInt:
+		// With no UnmarshalText, encoding/json reads it back as a decimal.
+		fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" writes through MarshalText but has no UnmarshalText, so encoding/json reads it back as a decimal integer, which MarshalText need not write")
+	default:
 		fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" implements encoding.TextMarshaler but not encoding.TextUnmarshaler, so encoding/json cannot decode it")
 	}
 }
+
+// integerRange is the range of an integer kind, clipped to JavaScript's safe
+// integers, the widest range fc.integer draws.
+func integerRange(k types.BasicKind) *[2]int64 {
+	const safe = maxSafeInteger
+	switch k {
+	case types.Int8:
+		return &[2]int64{-1 << 7, 1<<7 - 1}
+	case types.Int16:
+		return &[2]int64{-1 << 15, 1<<15 - 1}
+	case types.Int32:
+		return &[2]int64{-1 << 31, 1<<31 - 1}
+	case types.Uint8:
+		return &[2]int64{0, 1<<8 - 1}
+	case types.Uint16:
+		return &[2]int64{0, 1<<16 - 1}
+	case types.Uint32:
+		return &[2]int64{0, 1<<32 - 1}
+	case types.Uint, types.Uint64, types.Uintptr:
+		return &[2]int64{0, safe}
+	}
+	return &[2]int64{-safe, safe}
+}
+
+// mapRef reports that f references a registered named map by name, its value
+// planned on that type.
+func (fi *fieldInfo) mapRef() bool { return fi.Kind == kindMap && fi.Elem == nil }
 
 // inheritRefusals carries a collection element's refusals onto its field.
 func (fi *fieldInfo) inheritRefusals(role string, elem *fieldInfo) {

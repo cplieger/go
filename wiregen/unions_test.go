@@ -373,11 +373,11 @@ func TestUnion_PayloadTypeNotAStruct(t *testing.T) {
 		both  bool // rename names it too, after create
 		want  string
 	}{
-		{"an unregistered non-struct", nil, nil, false, role + " is not a struct"},
-		{"a non-struct also in Types", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, false, role + " is not a struct"},
-		{"a non-struct two roles name, under the first", nil, nil, true, role + " is not a struct"},
-		{"a non-struct in Types two roles name, under the first", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, true, role + " is not a struct"},
-		{"a registered enum", []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}, nil, false, role + " is an enum; it must be a struct"},
+		{"an unregistered non-struct", nil, nil, false, role + " is not a struct or a map"},
+		{"a non-struct also in Types", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, false, role + " is not a struct or a map"},
+		{"a non-struct two roles name, under the first", nil, nil, true, role + " is not a struct or a map"},
+		{"a non-struct in Types two roles name, under the first", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, true, role + " is not a struct or a map"},
+		{"a registered enum", []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}, nil, false, role + " is an enum; it must be a struct or a map"},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := newTestRegistry()
