@@ -3,6 +3,7 @@
 package health
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -96,8 +97,10 @@ func TestTransient(t *testing.T) {
 		&os.PathError{Op: "open", Err: errNotRegular}:  false,
 		nil: false,
 	} {
-		if got := transient(err); got != want {
-			t.Errorf("transient(%v) = %v, want %v", err, got, want)
-		}
+		t.Run(fmt.Sprint(err), func(t *testing.T) {
+			if got := transient(err); got != want {
+				t.Errorf("transient(%v) = %v, want %v", err, got, want)
+			}
+		})
 	}
 }
