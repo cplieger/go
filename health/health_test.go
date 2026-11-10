@@ -1008,9 +1008,9 @@ func TestHealthMarker_SetChecked_unreadableMarkerIsAFailure(t *testing.T) {
 	}
 }
 
-// TestNewMarker_degraded_logsHintOnce pins the degraded-construction WARN:
-// NewMarker on an unwritable dir emits exactly one, carrying the compose-fix
-// hint. Other degraded tests assert only no-op file behavior.
+// TestNewMarker_degraded_logsHintOnce pins the folder branch's WARN: NewMarker
+// on an unwritable dir emits exactly one, with its full message, the effect
+// and the compose-fix hint. It runs only as a non-root user.
 func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ro")
 	if err := os.Mkdir(dir, 0o500); err != nil {

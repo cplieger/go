@@ -12,8 +12,9 @@
 // the probe reports healthy rather than restart-looping a container
 // whose only broken piece is the signaling channel. Healthy, Within and
 // Handler report unhealthy in degraded mode, because Set cannot change
-// the marker. A marker path os.Stat cannot read at all, such as a
-// symlink loop, is not degraded mode: the probe reports it unhealthy.
+// the marker. In a directory that can be written, a marker path os.Stat
+// cannot read at all, such as a symlink loop, is not degraded mode: the
+// probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -93,7 +94,8 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 			"error", err,
 			"effect", degradedEffect,
 			"hint", "remove what is at the marker path, such as a marker an "+
-				"earlier run as another user left, a directory or a FIFO")
+				"earlier run as another user left, a directory or a FIFO, "+
+				"then restart the service")
 	}
 	return m
 }
