@@ -1,6 +1,6 @@
 module github.com/cplieger/go/sse/v2
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/cplieger/go/httpserver v1.1.0
