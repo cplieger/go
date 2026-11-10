@@ -96,9 +96,11 @@ func TestMarkerWithin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for d, want := range map[time.Duration]bool{time.Hour: false, 3 * time.Hour: true, 0: true, -time.Second: true} {
-		if got := m.Within(d).Healthy(); got != want {
-			t.Errorf("Within(%v) on a two-hour-old marker = %v, want %v", d, got, want)
-		}
+		t.Run(d.String(), func(t *testing.T) {
+			if got := m.Within(d).Healthy(); got != want {
+				t.Errorf("Within(%v) on a two-hour-old marker = %v, want %v", d, got, want)
+			}
+		})
 	}
 	if (*Marker)(nil).Within(time.Hour).Healthy() {
 		t.Error("nil marker reported healthy")
@@ -161,10 +163,12 @@ func TestCheckHandler_onTheMuxRoute(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", Handler(stubSignal{healthy: true}))
 	for method, want := range map[string]int{http.MethodGet: 200, http.MethodHead: 200, http.MethodPost: 405, http.MethodPut: 405} {
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(method, "/healthz", nil))
-		if rec.Code != want {
-			t.Errorf("%s /healthz = %d, want %d", method, rec.Code, want)
-		}
+		t.Run(method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(method, "/healthz", nil))
+			if rec.Code != want {
+				t.Errorf("%s /healthz = %d, want %d", method, rec.Code, want)
+			}
+		})
 	}
 }

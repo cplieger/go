@@ -1502,9 +1502,11 @@ func TestMarkerStateString(t *testing.T) {
 		MarkerState(99):      "unknown",
 	}
 	for state, str := range want {
-		if got := state.String(); got != str {
-			t.Errorf("MarkerState(%d).String() = %q, want %q", int(state), got, str)
-		}
+		t.Run(str, func(t *testing.T) {
+			if got := state.String(); got != str {
+				t.Errorf("MarkerState(%d).String() = %q, want %q", int(state), got, str)
+			}
+		})
 	}
 }
 
@@ -1557,4 +1559,32 @@ func TestNewMarker_WithLogger(t *testing.T) {
 func probeCode(path string, opts ...ProbeOption) int {
 	code, _ := probeCheck(path, opts...)
 	return code
+}
+
+// A stale reading's reason prints the age rounded up to the millisecond and
+// the max-age as armed, so a stale marker never reads as two equal durations
+// failing.
+func TestFreshness_ReasonStaleShowsAgeAboveMaxAge(t *testing.T) {
+	for name, tc := range map[string]struct {
+		age, maxAge time.Duration
+		want        string
+	}{
+		"sub-second":                  {1700 * time.Millisecond, 1500 * time.Millisecond, "unhealthy: marker stale: 1.7s old exceeds max-age 1.5s"},
+		"sub-second over whole hours": {13*time.Hour + 400*time.Millisecond, 13 * time.Hour, "unhealthy: marker stale: 13h0m0.4s old exceeds max-age 13h0m0s"},
+		"one nanosecond over":         {13*time.Hour + time.Nanosecond, 13 * time.Hour, "unhealthy: marker stale: 13h0m0.001s old exceeds max-age 13h0m0s"},
+		"rounds up, not to nearest":   {2*time.Hour + 30*time.Minute + 1234321*time.Microsecond, 2 * time.Hour, "unhealthy: marker stale: 2h30m1.235s old exceeds max-age 2h0m0s"},
+		"sub-millisecond max-age":     {700 * time.Microsecond, 500 * time.Microsecond, "unhealthy: marker stale: 1ms old exceeds max-age 500\u00b5s"},
+		// time.Since clamps a marker older than about 292 years to
+		// maxDuration, whose last partial millisecond has no whole one above it.
+		"saturated age does not wrap":      {maxDuration, time.Hour, "unhealthy: marker stale: 2562047h47m16.854775807s old exceeds max-age 1h0m0s"},
+		"last partial millisecond":         {maxDuration - maxDuration%time.Millisecond + 1, time.Hour, "unhealthy: marker stale: 2562047h47m16.854775807s old exceeds max-age 1h0m0s"},
+		"saturated age, saturated max-age": {maxDuration, maxDuration - 1, "unhealthy: marker stale: 2562047h47m16.854775807s old exceeds max-age 2562047h47m16.854775806s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := Freshness{State: MarkerStale, Age: tc.age, MaxAge: tc.maxAge}.Reason()
+			if got != tc.want {
+				t.Errorf("Reason(age %s, max-age %s) = %q, want %q", tc.age, tc.maxAge, got, tc.want)
+			}
+		})
+	}
 }
