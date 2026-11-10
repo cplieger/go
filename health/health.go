@@ -10,7 +10,9 @@
 // at the marker path is not a regular file the process can write, the
 // constructor enters degraded mode: Set and Cleanup become no-ops, and
 // the probe reports healthy rather than restart-looping a container
-// whose only broken piece is the signaling channel. A marker path
+// whose only broken piece is the signaling channel. Healthy, Within and
+// Handler report unhealthy in degraded mode, because Set cannot change the
+// marker. A marker path
 // os.Stat cannot read at all, such as a symlink loop, is not degraded
 // mode: the probe reports it unhealthy.
 //
@@ -67,7 +69,8 @@ type Marker struct {
 // NewMarker constructs a marker for path and checks that Set can change
 // it: the parent directory must be writable, and a marker already there
 // must be a regular file Set can refresh. On failure it logs a single Warn
-// with a fix hint and returns a marker in degraded mode; callers need not
+// naming what each check reports and a fix hint, and returns a marker in
+// degraded mode; callers need not
 // branch on the result.
 func NewMarker(path string, opts ...MarkerOption) *Marker {
 	m := &Marker{path: path}
@@ -98,8 +101,9 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 
 // degradedEffect is what NewMarker's degraded-mode warning tells the
 // operator: which verdict the container gets depends on whether its
-// healthcheck runs the file probe or asks an HTTP Handler.
-const degradedEffect = "the health subcommand reports healthy; Handler, Healthy and Within report unhealthy"
+// healthcheck reads the marker through RunProbe or asks an HTTP endpoint
+// over it.
+const degradedEffect = "RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"
 
 // MarkerOption configures NewMarker.
 type MarkerOption func(*Marker)

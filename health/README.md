@@ -78,7 +78,7 @@ Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write i
 
 The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/go/health) and [health/probe](https://pkg.go.dev/github.com/cplieger/go/health/probe). Its `Example` functions are runnable, and `go test` keeps them true.
 
-## Degraded mode keeps the container healthy
+## Degraded mode
 
 `NewMarker` checks that the marker's folder is writable, and that anything already at the marker path is a regular file `Set` can refresh. When either fails, the marker enters degraded mode. The folder fails under compose's `read_only: true` with no tmpfs at `/tmp`; the marker fails when an earlier run as another user left one in a shared `/tmp` that this user cannot write, or when the path holds a directory or a FIFO. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the fix. A marker path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the `health` subcommand reports it unhealthy and names the error.
 

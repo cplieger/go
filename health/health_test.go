@@ -1039,6 +1039,29 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 }
 
+// TestNewMarker_degradedWarningNamesBothVerdicts pins that the warning states
+// what degraded mode reports through each path, since the container's verdict
+// depends on which one its healthcheck uses: RunProbe reports healthy, and an
+// HTTP endpoint over the marker reports unhealthy.
+func TestNewMarker_degradedWarningNamesBothVerdicts(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	_ = NewMarker(path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	logged := buf.String()
+	for _, want := range []string{
+		`msg="health marker not writable, marker in degraded mode"`,
+		`effect="RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("degraded-mode warning = %q, want it to carry %s", logged, want)
+		}
+	}
+}
+
 // TestNewMarker_degradedOnAnUnwritableMarker: a marker Set cannot write, here a
 // read-only one in a writable directory (in production, one left in a shared
 // /tmp by an earlier run as another user), is degraded mode like an
@@ -1139,7 +1162,7 @@ func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
 
 // TestDegradedMarkerMeansAHealthyProbe: whatever is at the marker path, a
 // marker NewMarker calls degraded is one the probe reports healthy, even
-// past its lease, so the warning's effect ("the health subcommand reports
+// past its lease, so the warning's effect ("RunProbe and Inspect report
 // healthy") is true.
 func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 	old := time.Now().Add(-2 * time.Hour)
@@ -1156,7 +1179,7 @@ func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 				t.Skip(err)
 			}
 			_ = os.Chtimes(path, old, old) // fails on the loop, which stat cannot read
-			m := NewMarker(path)
+			m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
 			f := Inspect(path, WithMaxAge(time.Hour))
 			if m.degraded && !f.Healthy() {
 				t.Errorf("NewMarker is degraded but Inspect = %+v, so the probe would restart the container", f)
