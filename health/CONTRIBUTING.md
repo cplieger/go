@@ -4,7 +4,7 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 ## Rules
 
-- A change to what degraded mode reports updates the package comment, the `Healthy`, `Within`, `Inspect`, `RunProbe` and `Handler` comments, the `MarkerState` and `Freshness` comments, the README's degraded-mode section, `docs/file-marker.md` and `docs/freshness.md` together. A missed one tells callers the opposite of what the code does.
+- A change to what degraded mode reports updates the package comment, the `Healthy`, `Within`, `Inspect`, `RunProbe` and `Handler` comments, `NewMarker`'s warning text (`degradedEffect`), the `MarkerState` and `Freshness` comments, the README's "Why use it" bullet and degraded-mode section, `docs/file-marker.md` and `docs/freshness.md` together. A missed one tells callers the opposite of what the code does.
 
 ## Checks
 

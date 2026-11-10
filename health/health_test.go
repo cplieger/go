@@ -1008,9 +1008,9 @@ func TestHealthMarker_SetChecked_unreadableMarkerIsAFailure(t *testing.T) {
 	}
 }
 
-// TestNewMarker_degraded_logsHintOnce pins the degraded-construction WARN:
-// NewMarker on an unwritable dir emits exactly one, carrying the compose-fix
-// hint. Other degraded tests assert only no-op file behavior.
+// TestNewMarker_degraded_logsHintOnce pins the folder branch's WARN: NewMarker
+// on an unwritable dir emits exactly one, with its full message, the effect
+// and the compose-fix hint. It runs only as a non-root user.
 func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ro")
 	if err := os.Mkdir(dir, 0o500); err != nil {
@@ -1025,14 +1025,40 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 
 	logged := buf.String()
-	if got := strings.Count(logged, "health marker directory not writable"); got != 1 {
+	if got := strings.Count(logged, `msg="health marker directory not writable, marker in degraded mode"`); got != 1 {
 		t.Errorf("degraded-construction WARN count = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
 	if !strings.Contains(logged, "level=WARN") {
 		t.Errorf("degraded construction must log at WARN; log:\n%s", logged)
 	}
+	if !strings.Contains(logged, degradedEffect) {
+		t.Errorf("degraded WARN must name both verdicts; log:\n%s", logged)
+	}
 	if !strings.Contains(logged, "hint=") || !strings.Contains(logged, "tmpfs") {
 		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", logged)
+	}
+}
+
+// TestNewMarker_degradedWarningNamesBothVerdicts pins that the warning states
+// what degraded mode reports through each path, since the container's verdict
+// depends on which one its healthcheck uses: RunProbe reports healthy, and an
+// HTTP endpoint over the marker reports unhealthy.
+func TestNewMarker_degradedWarningNamesBothVerdicts(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	_ = NewMarker(path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	logged := buf.String()
+	for _, want := range []string{
+		`msg="health marker not writable, marker in degraded mode"`,
+		`effect="RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("degraded-mode warning = %q, want it to carry %s", logged, want)
+		}
 	}
 }
 
@@ -1136,7 +1162,8 @@ func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
 
 // TestDegradedMarkerMeansAHealthyProbe: whatever is at the marker path, a
 // marker NewMarker calls degraded is one the probe reports healthy, even
-// past its lease, so the app's warning ("will report healthy") is true.
+// past its lease, so the warning's effect ("RunProbe and Inspect report
+// healthy") is true.
 func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 	old := time.Now().Add(-2 * time.Hour)
 	for name, setup := range map[string]func(path string) error{
@@ -1152,7 +1179,7 @@ func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 				t.Skip(err)
 			}
 			_ = os.Chtimes(path, old, old) // fails on the loop, which stat cannot read
-			m := NewMarker(path)
+			m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
 			f := Inspect(path, WithMaxAge(time.Hour))
 			if m.degraded && !f.Healthy() {
 				t.Errorf("NewMarker is degraded but Inspect = %+v, so the probe would restart the container", f)

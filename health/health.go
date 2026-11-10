@@ -10,9 +10,11 @@
 // at the marker path is not a regular file the process can write, the
 // constructor enters degraded mode: Set and Cleanup become no-ops, and
 // the probe reports healthy rather than restart-looping a container
-// whose only broken piece is the signaling channel. A marker path
-// os.Stat cannot read at all, such as a symlink loop, is not degraded
-// mode: the probe reports it unhealthy.
+// whose only broken piece is the signaling channel. Healthy, Within and
+// Handler report unhealthy in degraded mode, because Set cannot change
+// the marker. In a directory that can be written, a marker path os.Stat
+// cannot read at all, such as a symlink loop, is not degraded mode: the
+// probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -67,8 +69,9 @@ type Marker struct {
 // NewMarker constructs a marker for path and checks that Set can change
 // it: the parent directory must be writable, and a marker already there
 // must be a regular file Set can refresh. On failure it logs a single Warn
-// with a fix hint and returns a marker in degraded mode; callers need not
-// branch on the result.
+// naming which calls report healthy and which unhealthy, and a fix hint,
+// and returns a marker in degraded mode; callers need not branch on the
+// result.
 func NewMarker(path string, opts ...MarkerOption) *Marker {
 	m := &Marker{path: path}
 	for _, o := range opts {
@@ -78,23 +81,30 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 	}
 	if err := probeHealthDir(path); err != nil {
 		m.degraded = true
-		m.log().Warn("health marker directory not writable, "+
-			"container will report healthy in degraded mode",
+		m.log().Warn("health marker directory not writable, marker in degraded mode",
 			"dir", filepath.Dir(path),
 			"error", err,
+			"effect", degradedEffect,
 			"hint", "compose.yaml with read_only:true requires "+
 				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`")
 	} else if err := markerWritable(path); err != nil {
 		m.degraded = true
-		m.log().Warn("health marker not writable, "+
-			"container will report healthy in degraded mode",
+		m.log().Warn("health marker not writable, marker in degraded mode",
 			"path", path,
 			"error", err,
+			"effect", degradedEffect,
 			"hint", "remove what is at the marker path, such as a marker an "+
-				"earlier run as another user left, a directory or a FIFO")
+				"earlier run as another user left, a directory or a FIFO, "+
+				"then restart the service")
 	}
 	return m
 }
+
+// degradedEffect is what NewMarker's degraded-mode warning tells the
+// operator: which verdict the container gets depends on whether its
+// healthcheck reads the marker through RunProbe or asks an HTTP endpoint
+// over it.
+const degradedEffect = "RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"
 
 // MarkerOption configures NewMarker.
 type MarkerOption func(*Marker)
