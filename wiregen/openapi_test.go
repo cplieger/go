@@ -244,6 +244,15 @@ func TestNullabilityByDirection(t *testing.T) {
 			}
 		}
 	})
+	t.Run("an array response admits the null a nil slice is written as", func(t *testing.T) {
+		list := compiled(t, doc, "#/paths/~1api~1items/get/responses/200/content/application~1json/schema")
+		var none []openapi.Item
+		for _, v := range [][]openapi.Item{none, {}, {{Name: "n", ID: 1}}} {
+			if err := validates(t, list, mustJSON(t, v)); err != nil {
+				t.Errorf("%s fails the listItems response: %v", mustJSON(t, v), err)
+			}
+		}
+	})
 	t.Run("a request slice with a lower Count bound refuses null", func(t *testing.T) {
 		if err := validates(t, create, with("files", nil)); err == nil {
 			t.Error(`{"files": null} validates`)
@@ -456,7 +465,7 @@ func TestOpenAPIOperations(t *testing.T) {
 		{"request body", "post", "/api/items", "requestBody", `{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateInput"}}},"required":true}`},
 		{"declared success status", "post", "/api/items", "responses", `{"202":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}},"description":"Accepted"},"400":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Problem"}}},"description":"Bad Request: body_invalid","x-error-codes":{"body_invalid":{}}},"500":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Problem"}}},"description":"Internal Server Error: internal_error","x-error-codes":{"internal_error":{}}}}`},
 		{"errors grouped by status", "get", "/api/items/{id}", "responses", `{"200":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Detail"}}},"description":"OK"},"404":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Problem"}}},"description":"Not Found: not_found, gone","x-error-codes":{"gone":{},"not_found":{"x-no-effect":true}}},"500":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Problem"}}},"description":"Internal Server Error: internal_error","x-error-codes":{"internal_error":{}}}}`},
-		{"array response", "get", "/api/items", "responses", `{"200":{"content":{"application/json":{"schema":{"items":{"$ref":"#/components/schemas/Item"},"type":"array"}}},"description":"OK"}}`},
+		{"array response", "get", "/api/items", "responses", `{"200":{"content":{"application/json":{"schema":{"items":{"$ref":"#/components/schemas/Item"},"type":["array","null"]}}},"description":"OK"}}`},
 		{"no body is 204", "delete", "/api/items/{id}", "responses", `{"204":{"description":"No Content"}}`},
 		{"raw", "get", "/api/items/{id}/poster", "responses", `{"200":{"content":{"image/jpeg":{}},"description":"OK"}}`},
 		{"event stream", "get", "/api/events", "responses", `{"200":{"content":{"text/event-stream":{"schema":{"type":"string"},"x-events":{"tick":{"$ref":"#/components/schemas/Tick"}}}},"description":"OK"}}`},

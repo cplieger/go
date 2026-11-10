@@ -1012,8 +1012,10 @@ func (g *generator) endpointResult(e *Endpoint, st *clientState) (tsType, decode
 	st.used.typeRef(tn)
 	st.used.decoderRef(dec)
 	if e.Array {
+		// encoding/json writes a nil slice as null, so an array body reads it
+		// as [], as a required slice field does.
 		st.used.helper(helperDecodeArray)
-		return tn + "[]", "(v: unknown): " + tn + "[] => decodeArray(v, " + dec + ", \"$\")"
+		return tn + "[]", "(v: unknown): " + tn + "[] => v === null ? [] : decodeArray(v, " + dec + ", \"$\")"
 	}
 	return tn, dec
 }

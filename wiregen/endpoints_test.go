@@ -323,7 +323,7 @@ func TestKindsEmit(t *testing.T) {
 	for _, want := range []string{
 		"  decode: decodeItem,\n",
 		"export function getItem(opts?: ClientOpts): globalThis.Promise<ApiResult<Item, GetItemError>> {\n  return clientRequest<Item, GetItemError>(getItemEndpoint.request(), getItemEndpoint.decode, opts);\n}",
-		`  decode: (v: unknown): Item[] => decodeArray(v, decodeItem, "$"),`,
+		`  decode: (v: unknown): Item[] => v === null ? [] : decodeArray(v, decodeItem, "$"),`,
 		"import { decodeArray } from \"./validators.gen.js\";",
 		"  decode: (): void => undefined,\n",
 		"globalThis.Promise<ApiResult<void, DeleteItemError>>",
