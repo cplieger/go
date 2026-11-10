@@ -79,6 +79,7 @@ The decoders follow what `encoding/json` writes:
 
 - An optional field reads an absent key or `null` as absent. A mapped decoder is never called on either.
 - A required slice or map reads `null` as `[]` or `{}`, and a required `[]byte` reads it as `""`, unless a `Count` lower bound refuses it.
+- An array response, an endpoint with `Array` set, reads a `null` body as `[]`, as `encoding/json` writes a handler's nil slice.
 - A pointer element of a slice or map reads `null` as `null`. Any other nil element reads as empty, as a required field does.
 - A `json.RawMessage` field passes `null` through as data.
 - A decoder reads only the object's own properties: a key such as `constructor` that every JavaScript object inherits is absent unless the JSON sends it, and a `__proto__` key, in a map or as a field, is kept as an own property.
@@ -87,6 +88,7 @@ The OpenAPI schemas say the same thing in each direction:
 
 - A response field is required unless `encoding/json` can leave it out: `omitzero`, `omitempty` on a type it can find empty, or a field promoted through an embedded pointer. A request field is also optional when it is a pointer, as the decoder leaves it nil.
 - A response field is nullable, `{"type": [T, "null"]}` or an `anyOf` with `null` around a `$ref`, when `encoding/json` can write `null` for it: a nil pointer or collection no omit option drops, or anything nil under a non-nil pointer, such as a `*[]string` holding a nil slice or a `**T` holding a nil `*T`. A request field is nullable when it is a pointer, slice, map or `[]byte`, since `null` decodes to nil. A `Count` lower bound of 1 or more makes a collection with no pointer above it never nullable.
+- An array response's schema admits `null` beside the array, for the same nil slice.
 - A type whose two schemas differ gets two components, the request one suffixed `Input`, and the document references each in its own direction. A registered type no endpoint reaches is documented in its response form, and so is every type its fields name.
 
 ## Unions

@@ -361,7 +361,7 @@ func TestMapType_NullByUse(t *testing.T) {
 	})
 	r.Events = []wiregen.Event{{Name: "labels", Data: wiregen.TypeRef[maps.Labels]()}}
 	doc := mustGen(t, r.openapiFile)
-	if got := mustJSON(t, operation(t, doc, "get", "/api/labels")["responses"]); !strings.Contains(got, `"schema":{"items":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]},"type":"array"}`) {
+	if got := mustJSON(t, operation(t, doc, "get", "/api/labels")["responses"]); !strings.Contains(got, `"schema":{"items":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]},"type":["array","null"]}`) {
 		t.Errorf("array response = %s, want nullable Labels items", got)
 	}
 	if got := mustJSON(t, operation(t, doc, "get", "/api/stream")["responses"]); !strings.Contains(got, `"labels":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}`) {

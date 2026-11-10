@@ -733,7 +733,8 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 		}
 		schema := b.bodyRef(e.Response.Name, dirResponse)
 		if e.Array {
-			schema = map[string]any{kwType: schemaArray, "items": schema}
+			// encoding/json writes a nil slice as null.
+			schema = nullable(map[string]any{kwType: schemaArray, "items": schema})
 		}
 		resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: schema}}
 	case KindRaw:
