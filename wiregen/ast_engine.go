@@ -21,9 +21,9 @@ import (
 // typeInfo holds resolved type data extracted from AST.
 type typeInfo struct {
 	Union *unionInfo // set when Registry.Unions declares this type
-	// Map is set for a named map type (type X map[K]V): the type planned as
-	// a field of type X would be, its Elem the plan of V. Such a type has no
-	// Fields.
+	// Map is set for a named map type (type X map[K]V): the plan of
+	// map[K]V as an inline map field, its Elem the plan of V. Such a type has
+	// no Fields; a field of type X references it by name (fieldInfo.mapRef).
 	Map    *fieldInfo
 	Name   string
 	Doc    string
@@ -454,9 +454,9 @@ func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (tn *types.TypeNa
 	case *types.Struct:
 		return tn, u, nil, nil
 	case *types.Map:
-		if named, ok := tn.Type().(*types.Named); ok {
-			return tn, nil, named, nil
-		}
+		// The alias refusal above leaves a defined type, whose type go/types
+		// always gives as a *types.Named.
+		return tn, nil, tn.Type().(*types.Named), nil //nolint:errcheck,forcetypeassert // a non-alias package-scope TypeName is a *types.Named
 	}
 	if named {
 		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not %s", role, wt.PkgPath, wt.Name, roleShape(role))
@@ -538,9 +538,9 @@ func (e *astEngine) checkURLArguments() error {
 	return nil
 }
 
-// resolveMapTypeInfo plans a named map type as a field of that type would be
-// planned, its Elem the plan of the value, and lists its refusals; a bound it
-// declares is refused, as none applies to a map.
+// resolveMapTypeInfo plans a named map type as an inline field of its
+// underlying map would be planned, its Elem the plan of the value, and lists
+// its refusals; a bound it declares is refused, as none applies to a map.
 func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, wt Type) {
 	full := wt.PkgPath + "." + wt.Name
 	fi := fieldInfo{}
@@ -878,20 +878,35 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 			fi.refuse("struct " + fullName + " is neither registered nor mapped")
 			return
 		}
-		// An unregistered named type is planned inline, so one that reaches
-		// itself would expand without end: a registered one is a reference.
-		if e.expanding[fullName] {
-			fi.refuse(fullName + " reaches itself; register it, so it is referenced by name")
+		if !e.resolveInline(ut, fullName, fi) {
 			return
 		}
-		e.expanding[fullName] = true
-		e.resolveInto(ut.Underlying(), fi)
-		delete(e.expanding, fullName)
 	default:
 		fi.refuse(fullName + " " + codec.why() + "; map it with Mappings")
 		return
 	}
 	e.applyBounds(ut, fullName, fi)
+}
+
+// resolveInline plans an unregistered named type's underlying type into fi,
+// refusing one that reaches itself, which would expand without end: a
+// registered one is a reference. The key is the instance, so G[G[int]] is two
+// types, not a cycle; the checker refuses an instantiation cycle, so a
+// recursive generic repeats one instance. It reports whether fi was planned.
+func (e *astEngine) resolveInline(ut *types.Named, fullName string, fi *fieldInfo) bool {
+	key := types.TypeString(ut, nil)
+	if e.expanding[key] {
+		if _, isMap := ut.Underlying().(*types.Map); isMap {
+			fi.refuse(fullName + " reaches itself; register it, so it is referenced by name")
+		} else {
+			fi.refuse(fullName + " reaches itself, which no inline shape can hold; route the cycle through a registered struct or named map")
+		}
+		return false
+	}
+	e.expanding[key] = true
+	e.resolveInto(ut.Underlying(), fi)
+	delete(e.expanding, key)
+	return true
 }
 
 // referenceRegistered makes fi a reference to the registered type ut names.
@@ -1057,27 +1072,43 @@ func (e *astEngine) resolveMapType(ut *types.Map, fi *fieldInfo) {
 	valFI := e.resolveFieldType(ut.Elem(), 0)
 	fi.Kind, fi.TSType, fi.Elem = kindMap, "{ [key: string]: "+valFI.elemTS()+" }", &valFI
 	fi.inheritRefusals("map value", &valFI)
-	key := ut.Key()
+	planMapKey(ut.Key(), fi)
+}
+
+// planMapKey applies encoding/json's map key rules to fi: a string key is used
+// as is, then MarshalText, then an integer's decimal text, and a key is read
+// back through UnmarshalText when it has one, else by the same rules.
+func planMapKey(key types.Type, fi *fieldInfo) {
 	b, basic := key.Underlying().(*types.Basic)
+	isString := basic && b.Info()&types.IsString != 0
+	isInt := basic && b.Info()&types.IsInteger != 0
+	marshals := types.Implements(key, textMarshaler)
+	unmarshals := types.Implements(types.NewPointer(key), textUnmarshaler)
 	switch {
-	case basic && b.Info()&types.IsString != 0:
-	case basic && b.Info()&types.IsInteger != 0 && !types.Implements(key, textMarshaler):
-		// encoding/json uses a string key as is, then MarshalText, then an
-		// integer's decimal text.
+	case isString:
+	case isInt && !marshals:
+		// A map key is not addressable, so a pointer receiver's MarshalText
+		// is never called, but its UnmarshalText reads the key back, and need
+		// not accept the decimal written.
 		fi.KeyRange = integerRange(b.Kind())
-	case !types.Implements(key, textMarshaler) && (!basic || b.Info()&types.IsInteger == 0):
+		if unmarshals {
+			fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" is written as a decimal integer but read through UnmarshalText, which need not accept it")
+		}
+	case !marshals:
 		fi.Refusals = append(fi.Refusals, "map key "+key.String()+" is not a string, an integer or an encoding.TextMarshaler")
-	case types.Implements(key, textMarshaler) && !types.Implements(types.NewPointer(key), textUnmarshaler):
-		// encoding/json writes a non-string key through MarshalText and reads
-		// one back only through UnmarshalText.
+	case unmarshals:
+	case isInt:
+		// With no UnmarshalText, encoding/json reads it back as a decimal.
+		fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" writes through MarshalText but has no UnmarshalText, so encoding/json reads it back as a decimal integer, which MarshalText need not write")
+	default:
 		fi.InRefusals = append(fi.InRefusals, "map key "+key.String()+" implements encoding.TextMarshaler but not encoding.TextUnmarshaler, so encoding/json cannot decode it")
 	}
 }
 
 // integerRange is the range of an integer kind, clipped to JavaScript's safe
-// integers, which a decimal key in a TS client stays within.
+// integers, the widest range fc.integer draws.
 func integerRange(k types.BasicKind) *[2]int64 {
-	const safe = 1<<53 - 1
+	const safe = maxSafeInteger
 	switch k {
 	case types.Int8:
 		return &[2]int64{-1 << 7, 1<<7 - 1}

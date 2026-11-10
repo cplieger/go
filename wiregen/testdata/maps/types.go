@@ -4,6 +4,7 @@ package maps
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 )
 
 // Settings is an open settings patch: any key, each value raw JSON.
@@ -17,9 +18,11 @@ type Item struct {
 	Name string `json:"name"`
 }
 
-// Holder carries a registered map type as a field.
+// Holder carries a registered map type as a field, written always and
+// omitted when empty.
 type Holder struct {
 	Labels Labels `json:"labels"`
+	Extra  Labels `json:"extra,omitempty"`
 }
 
 // Ranked is keyed by an integer, which encoding/json writes as its decimal
@@ -79,12 +82,12 @@ type ItemAlias = Item
 // Word is a string type, neither a struct nor a map.
 type Word string
 
-// Key is an integer written through MarshalText, which encoding/json cannot
-// read back without UnmarshalText.
+// Key writes non-decimal text, which encoding/json cannot read back without
+// UnmarshalText.
 type Key int
 
-// MarshalText writes the key's decimal text.
-func (k Key) MarshalText() ([]byte, error) { return []byte(strconv.Itoa(int(k))), nil }
+// MarshalText writes the key as k and its digits.
+func (k Key) MarshalText() ([]byte, error) { return []byte("k" + strconv.Itoa(int(k))), nil }
 
 // Keyed is keyed by Key.
 type Keyed map[Key]string
@@ -96,3 +99,57 @@ type Opt struct {
 
 // Opts maps a name to an Opt.
 type Opts map[string]Opt
+
+// G is a generic map; G[G[int]] nests two instances, not a cycle.
+type G[T any] map[string]T
+
+// GL is a generic slice; GL[GL[string]] nests two instances.
+type GL[T any] []T
+
+// Nested carries the nested instances.
+type Nested struct {
+	Maps   G[G[int]]      `json:"maps"`
+	Slices GL[GL[string]] `json:"slices"`
+}
+
+// GLoop is a generic map that reaches its own instance.
+type GLoop[T any] map[string]GLoop[T]
+
+// HasGLoop carries a GLoop.
+type HasGLoop struct {
+	Loop GLoop[int] `json:"loop"`
+}
+
+// SL is a slice that reaches itself.
+type SL []SL
+
+// HasSL carries an SL.
+type HasSL struct {
+	SL SL `json:"sl"`
+}
+
+// Slug is a lowercase word.
+type Slug string
+
+// Pattern bounds a slug to lowercase letters.
+func (Slug) Pattern() string { return "^[a-z]+$" }
+
+// Slugs maps a name to a slug.
+type Slugs map[string]Slug
+
+// PtrID has its text methods on the pointer, so encoding/json writes a map
+// key of it as a decimal and reads it back through UnmarshalText.
+type PtrID int
+
+// MarshalText writes the ID with a prefix; a map key never calls it.
+func (p *PtrID) MarshalText() ([]byte, error) { return []byte("id" + strconv.Itoa(int(*p))), nil }
+
+// UnmarshalText reads the prefixed form only.
+func (p *PtrID) UnmarshalText(b []byte) error {
+	n, err := strconv.Atoi(strings.TrimPrefix(string(b), "id"))
+	*p = PtrID(n)
+	return err
+}
+
+// ByPtrID is keyed by PtrID.
+type ByPtrID map[PtrID]string

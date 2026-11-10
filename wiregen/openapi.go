@@ -482,12 +482,24 @@ func (b *docBuilder) ref(goName string, d direction) map[string]any {
 	return map[string]any{kwRef: componentsRef + b.componentName(goName, d)}
 }
 
+// bodyRef is the schema of a body of type goName: its ref, admitting null
+// for a named map, which encoding/json writes as null when nil. A struct body
+// is never null, and a field or element of a map type gets its null from
+// fieldSchema and elemSchema.
+func (b *docBuilder) bodyRef(goName string, d direction) map[string]any {
+	if ti := b.engine.byName[goName]; ti != nil && ti.Map != nil {
+		return nullable(b.ref(goName, d))
+	}
+	return b.ref(goName, d)
+}
+
 func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 	name := b.componentName(ti.Name, d)
 	if ti.Map != nil {
-		// A named map's body is its value as a map field's: an object of
-		// the value's schema, null where a nil map can be.
-		return map[string]any{name: b.fieldSchema(ti.Map, d)}
+		// A named map's component is an object of the value's schema. It
+		// admits no null, as a struct's does not: a body, field or element of
+		// it adds null where encoding/json writes a nil map.
+		return map[string]any{name: b.valueSchema(ti.Map, d)}
 	}
 	if ti.Union == nil {
 		fields := make([]*fieldInfo, 0, len(ti.Fields))
@@ -633,7 +645,7 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 	if e.Request != (Type{}) {
 		op["requestBody"] = map[string]any{
 			kwRequired: true,
-			kwContent:  map[string]any{mediaJSON: map[string]any{kwSchema: b.ref(e.Request.Name, dirRequest)}},
+			kwContent:  map[string]any{mediaJSON: map[string]any{kwSchema: b.bodyRef(e.Request.Name, dirRequest)}},
 		}
 	}
 	responses := map[string]any{strconv.Itoa(e.successStatus()): b.successResponse(e)}
@@ -719,7 +731,7 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 		if e.Response == (Type{}) {
 			return resp
 		}
-		schema := b.ref(e.Response.Name, dirResponse)
+		schema := b.bodyRef(e.Response.Name, dirResponse)
 		if e.Array {
 			schema = map[string]any{kwType: schemaArray, "items": schema}
 		}
@@ -731,7 +743,7 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 		if len(b.g.Events) > 0 {
 			events := map[string]any{}
 			for _, ev := range b.g.Events {
-				events[ev.Name] = b.ref(ev.Data.Name, dirResponse)
+				events[ev.Name] = b.bodyRef(ev.Data.Name, dirResponse)
 			}
 			media["x-events"] = events
 		}
@@ -764,7 +776,7 @@ func (b *docBuilder) errorResponses(e *Endpoint) map[string]any {
 			"x-error-codes": codes,
 		}
 		if b.g.ErrorEnvelope != (Type{}) {
-			resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: b.ref(b.g.ErrorEnvelope.Name, dirResponse)}}
+			resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: b.bodyRef(b.g.ErrorEnvelope.Name, dirResponse)}}
 		}
 		out[strconv.Itoa(status)] = resp
 	}

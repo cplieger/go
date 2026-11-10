@@ -57,17 +57,30 @@ func TestMapType_Decoder(t *testing.T) {
 // schema, nullable in both directions because a nil map is null on the wire.
 func TestMapType_OpenAPI(t *testing.T) {
 	doc := mustGen(t, mapReg().openapiFile)
-	if got := mustJSON(t, component(t, doc, "Labels")); got != `{"additionalProperties":{"$ref":"#/components/schemas/Item"},"type":["object","null"]}` {
+	if got := mustJSON(t, component(t, doc, "Labels")); got != `{"additionalProperties":{"$ref":"#/components/schemas/Item"},"type":"object"}` {
 		t.Errorf("Labels component = %s", got)
 	}
 	// Raw values read alike both ways, so the request body shares one form.
-	if got := mustJSON(t, component(t, doc, "Settings")); got != `{"additionalProperties":{},"type":["object","null"]}` {
-		t.Errorf("Settings component = %s, want an open object that may be null", got)
+	if got := mustJSON(t, component(t, doc, "Settings")); got != `{"additionalProperties":{},"type":"object"}` {
+		t.Errorf("Settings component = %s, want an open object", got)
+	}
+	// A body adds the null a nil map is written as; so does a field that is
+	// always written, and an omitempty one, never null, does not.
+	op := operation(t, doc, "patch", "/api/settings")
+	if got := mustJSON(t, op["responses"]); !strings.Contains(got, `"schema":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}`) {
+		t.Errorf("response = %s, want a nullable Labels body", got)
+	}
+	holder := component(t, doc, "Holder")
+	if got := prop(t, holder, "labels"); got != `{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}` {
+		t.Errorf("Holder.labels = %s, want a nullable ref", got)
+	}
+	if got := prop(t, holder, "extra"); got != `{"$ref":"#/components/schemas/Labels"}` {
+		t.Errorf("Holder.extra = %s, want a plain ref", got)
 	}
 	for body, ok := range map[string]bool{
 		`{"a":{"name":"x"}}`: true,
 		`{}`:                 true,
-		`null`:               true,
+		`null`:               false,
 		`{"a":{"nom":"x"}}`:  false,
 		`[]`:                 false,
 	} {
@@ -156,7 +169,7 @@ func TestMapType_ErrorEnvelope(t *testing.T) {
 	r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
 	doc := mustGen(t, r.openapiFile)
 	op := operation(t, doc, "get", "/api/item")
-	if got := mustJSON(t, op["responses"]); !strings.Contains(got, `"404":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Settings"}}}`) {
+	if got := mustJSON(t, op["responses"]); !strings.Contains(got, `"404":{"content":{"application/json":{"schema":{"anyOf":[{"$ref":"#/components/schemas/Settings"},{"type":"null"}]}}}`) {
 		t.Errorf("404 response = %s, want the Settings envelope", got)
 	}
 	if dec := mustGen(t, r.decodersFile); !strings.Contains(dec, "export const decodeSettings: Decoder<Settings>") {
@@ -194,12 +207,12 @@ func TestMapType_Refusals(t *testing.T) {
 		{"a Count bound on a map", func(r *testRegistry) {
 			r.Types = append(r.Types, wiregen.TypeRef[maps.Counted]())
 		}, pkg + ".Counted: declares Count, which bounds a slice type"},
-		{"a string type as URL arguments", func(r *testRegistry) {
-			r.Endpoints[0].Query = wiregen.TypeRef[maps.Word]()
-		}, "endpoint patchSettings Query type " + pkg + ".Word is not a struct"},
 		{"a key a request cannot decode", func(r *testRegistry) {
 			r.Endpoints[0].Request = wiregen.TypeRef[maps.Keyed]()
-		}, pkg + ".Keyed: map key " + pkg + ".Key implements encoding.TextMarshaler but not encoding.TextUnmarshaler, so encoding/json cannot decode it, and a request carries it"},
+		}, pkg + ".Keyed: map key " + pkg + ".Key writes through MarshalText but has no UnmarshalText, so encoding/json reads it back as a decimal integer, which MarshalText need not write, and a request carries it"},
+		{"a decimal key read through a pointer UnmarshalText", func(r *testRegistry) {
+			r.Endpoints[0].Request = wiregen.TypeRef[maps.ByPtrID]()
+		}, pkg + ".ByPtrID: map key " + pkg + ".PtrID is written as a decimal integer but read through UnmarshalText, which need not accept it, and a request carries it"},
 	} {
 		t.Run(tc.name+" is refused", func(t *testing.T) {
 			r := mapReg()
@@ -258,5 +271,56 @@ func TestMapType_IntegerKeys(t *testing.T) {
 	}
 	if arbs := mustGen(t, r.arbitrariesFile); !strings.Contains(arbs, "Ranked: fc.dictionary(fc.integer({ min: -9007199254740991, max: 9007199254740991 }).map(globalThis.String), ") {
 		t.Errorf("Ranked arbitrary does not draw integer keys:\n%s", arbs)
+	}
+}
+
+// A role that needs fields names only a struct; one that takes a whole body
+// names a struct or a map.
+func TestMapType_RoleShape(t *testing.T) {
+	const pkg = "github.com/cplieger/go/wiregen/v2/testdata/maps"
+	query := mapReg()
+	query.Endpoints[0].Query = wiregen.TypeRef[maps.Word]()
+	event := mapReg()
+	event.Events = []wiregen.Event{{Name: "w", Data: wiregen.TypeRef[maps.Word]()}}
+	for name, tc := range map[string]struct {
+		r    *testRegistry
+		want string
+	}{
+		"Query":      {query, "wiregen: endpoint patchSettings Query type " + pkg + ".Word is not a struct"},
+		"event data": {event, `wiregen: event "w" data type ` + pkg + ".Word is not a struct or a map"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := tc.r.generate(t.Context(), t.TempDir()); err == nil || err.Error() != tc.want {
+				t.Errorf("Generate() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// Nested instances of one generic map or slice are two types, not a cycle;
+// an instance that reaches itself, or a slice that does, is refused with the
+// fix its shape takes.
+func TestMapType_GenericsAndSelfSlices(t *testing.T) {
+	const pkg = "github.com/cplieger/go/wiregen/v2/testdata/maps"
+	ok := newTestRegistry()
+	ok.Types = []wiregen.Type{wiregen.TypeRef[maps.Nested]()}
+	if types := mustGen(t, ok.typesFile); !strings.Contains(types, "maps: { [key: string]: { [key: string]: number } };") {
+		t.Errorf("nested generic map not planned:\n%s", types)
+	}
+	loop := newTestRegistry()
+	loop.Types = []wiregen.Type{wiregen.TypeRef[maps.HasGLoop]()}
+	requireGenerateError(t, loop, pkg+".GLoop reaches itself; register it, so it is referenced by name")
+	sl := newTestRegistry()
+	sl.Types = []wiregen.Type{wiregen.TypeRef[maps.HasSL]()}
+	requireGenerateError(t, sl, pkg+".SL reaches itself, which no inline shape can hold; route the cycle through a registered struct or named map")
+}
+
+// A bounded map value is checked at the body's path, with no trailing dot.
+func TestMapType_BoundedValuePath(t *testing.T) {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{wiregen.TypeRef[maps.Slugs]()}
+	dec := mustGen(t, r.decodersFile)
+	if !strings.Contains(dec, `"$.slugs"`) || strings.Contains(dec, `"$.slugs."`) {
+		t.Errorf("Slugs decoder does not check values at $.slugs:\n%s", dec)
 	}
 }

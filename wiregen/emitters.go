@@ -274,13 +274,16 @@ func (g *generator) emitDecoder(w *strings.Builder, ti *typeInfo, used *usedIden
 	w.WriteString("};\n\n")
 }
 
-// emitMapDecoder writes a named map type's decoder: the body decoded as a map
-// field of that type is, null read as empty, as encoding/json writes a nil
-// map. No bound applies to a map (bounds.misfit), so none is checked.
+// emitMapDecoder writes a named map type's decoder: each value decoded with
+// the value's decoder, null read as {}, as encoding/json writes a nil map. No
+// bound applies to a map (bounds.misfit), so none is checked.
 func (g *generator) emitMapDecoder(w *strings.Builder, ti *typeInfo, tn, path string, used *usedIdents) {
 	used.helper(helperDecodeRecord)
 	used.typeRef(tn)
-	decode := helperDecodeRecord + "(v, " + g.elemDecoderExpr(ti.Map.Elem, "", path, used) + ", \"" + path + "\")"
+	// The body's path, "$.x", is passed as the segment x under "$", so every
+	// nested path, a mapped decoder's included, names the body as a field's
+	// value would.
+	decode := helperDecodeRecord + "(v, " + g.elemDecoderExpr(ti.Map.Elem, strings.TrimPrefix(path, "$."), "$", used) + ", \"" + path + "\")"
 	w.WriteString("export const " + g.decoderName(ti.Name) + ": Decoder<" + tn + "> = (v) => v === null ? {} : " + decode + ";\n\n")
 }
 
@@ -398,11 +401,7 @@ func (g *generator) emitOptionalField(w *strings.Builder, f *fieldInfo, path str
 func (g *generator) elemDecoderExpr(elem *fieldInfo, wn, path string, used *usedIdents) string {
 	dec := g.elemDecode(elem, wn, path, used)
 	if elem.Bounds != nil {
-		at := path
-		if wn != "" {
-			at = path + "." + wn
-		}
-		dec = "(v) => " + elem.Bounds.validatorCheck("("+dec+")(v)", "\""+at+"\"", used)
+		dec = "(v) => " + elem.Bounds.validatorCheck("("+dec+")(v)", "\""+path+"."+wn+"\"", used)
 	}
 	if elem.nullElem() {
 		dec = "(v) => v === null ? null : (" + dec + ")(v)"
@@ -414,10 +413,6 @@ func (g *generator) elemDecoderExpr(elem *fieldInfo, wn, path string, used *used
 // collection level accepts null as empty, as encoding/json writes a nil one,
 // unless a Count lower bound refuses it.
 func (g *generator) elemDecode(elem *fieldInfo, wn, path string, used *usedIdents) string {
-	at := path
-	if wn != "" {
-		at = path + "." + wn
-	}
 	switch elem.Kind {
 	case kindSlice, kindMap:
 		if elem.mapRef() {
@@ -428,7 +423,7 @@ func (g *generator) elemDecode(elem *fieldInfo, wn, path string, used *usedIdent
 			helper, empty = helperDecodeRecord, "{}"
 		}
 		used.helper(helper)
-		decode := helper + "(v, " + g.elemDecoderExpr(elem.Elem, wn, path, used) + ", \"" + at + "\")"
+		decode := helper + "(v, " + g.elemDecoderExpr(elem.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
 		if elem.refusesNull() {
 			return "(v) => " + decode
 		}
@@ -560,12 +555,13 @@ func (g *generator) emitTypeArbitraries(w *strings.Builder, engine *astEngine) {
 		tn := g.tsName(ti.Name)
 		w.WriteString("  " + tn + ": " + tn + ";\n")
 	}
-	reaches := g.arbReachability(engine)
+	edges := g.arbEdges(engine)
+	reaches := arbReachability(engine, edges)
 	var model strings.Builder
 	tied := false
 	for _, ti := range engine.types {
 		model.WriteString("  " + g.tsName(ti.Name) + ": " + g.arbForType(ti, reaches) + ",\n")
-		tied = tied || g.arbTies(ti)
+		tied = tied || len(edges[ti.Name]) > 0
 	}
 	// The callback names tie only when an arbitrary calls it, so a consumer's
 	// noUnusedParameters accepts a registry with no reference between types.
@@ -683,21 +679,9 @@ func (g *generator) arbForMap(ti *typeInfo, recursive bool) string {
 	return "fc.oneof(\n    " + arbRecursionCap + ",\n    fc.constant({}),\n    " + dict + ",\n  )"
 }
 
-// arbTies reports whether ti's arbitrary calls tie: some field, element or
-// payload of it references a registered type.
-func (g *generator) arbTies(ti *typeInfo) bool {
-	for _, f := range ti.graphFields() {
-		if len(g.arbRefs(f)) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // arbReachability answers, for every registered type, which registered types
 // its arbitrary can reach through ties, unions included.
-func (g *generator) arbReachability(engine *astEngine) map[string]map[string]bool {
-	edges := g.arbEdges(engine)
+func arbReachability(engine *astEngine, edges map[string][]string) map[string]map[string]bool {
 	reaches := make(map[string]map[string]bool, len(edges))
 	for _, ti := range engine.types {
 		reaches[ti.Name] = reachableFrom(edges[ti.Name], edges)

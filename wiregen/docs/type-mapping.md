@@ -10,6 +10,7 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 - A field with no `json` tag takes the name `encoding/json` gives it, its Go name. With `WithRequireJSONTags(true)` such a field is a generation error naming its path. A tag name may hold letters, digits, spaces and the punctuation `!#$%&()*+-./:;<=>?@[]^_{|}~`.
 - A field `encoding/json` may leave out, or send as `null` for a nil pointer, is optional in TypeScript, `key?: T`: a pointer, a field tagged `omitzero`, a field tagged `omitempty` whose type `omitempty` can find empty (never a struct), and a field promoted through an embedded pointer, which is skipped when nil. Every other field is required.
 - A pointer element of a slice or map is `T | null`, as `encoding/json` writes a nil one as `null`.
+- A map key is typed `string`. An integer key, one that is not an `encoding.TextMarshaler`, is decimal text on the wire, so the schema gives it `propertyNames` with a decimal pattern, which does not carry the key kind's range.
 - `time.Time` maps to `string`, and `json.Number` to `number`. A slice of `byte`, or of any other `uint8` type without a marshaler, maps to `string`, because JSON encodes it as base64.
 - `json.RawMessage` (and `jsontext.Value`, which it aliases from Go 1.27) maps to `unknown`. It is the one opaque type wiregen lets cross the wire.
 - A type implementing `encoding.TextMarshaler` with a value receiver maps to `string`, a fixed-size array included. Marshalers are found by their method signatures, promoted methods included, as `encoding/json` finds them.
@@ -136,8 +137,8 @@ A registered named map type, `type Settings map[string]json.RawMessage`, is a bo
 
 - The types file carries `export type Settings = { [key: string]: unknown };`, with the type's doc comment.
 - The decoder refuses a body that is not an object and decodes each value with the value's decoder. `null` reads as `{}`, as for a map field, because encoding/json writes a nil map as `null`.
-- The OpenAPI component is `{"type": ["object", "null"], "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction.
-- A field whose type is a registered named map references it by name, as a field of a registered struct does: its TypeScript alias, its decoder, its `$ref` and its arbitrary, with a map field's null rule. That is also how a named map reaches itself, `type Tree map[string]Tree`. An unregistered named map that reaches itself is refused, since it would be planned inline without end.
+- The OpenAPI component is `{"type": "object", "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction. A body, field or element of the map adds `null` wherever encoding/json writes a nil map as `null`; an `omitempty` field never does.
+- A field whose type is a registered named map references it by name, as a field of a registered struct does: its TypeScript alias, its decoder, its `$ref` and its arbitrary, with a map field's null rule. That is also how a named map reaches itself, `type Tree map[string]Tree`. An unregistered named map or slice that reaches itself is refused, since it would be planned inline without end: register the map, or route a slice's cycle through a registered struct or named map. Two nested instances of one generic type, such as `G[G[int]]`, are two types and plan inline.
 
 A union or an endpoint's `Params` or `Query` cannot be a named map, because both need a struct's fields.
 

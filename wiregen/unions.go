@@ -159,6 +159,10 @@ func payloadField(u *Union, ti *typeInfo, values []string) (*fieldInfo, error) {
 func (e *astEngine) typedPayload(raw *fieldInfo, pt Type) *fieldInfo {
 	f := *raw
 	f.Kind, f.TSType, f.GoTypeName = kindStruct, e.gen.tsName(pt.Name), pt.Name
+	if ti := e.byName[pt.Name]; ti != nil && ti.Map != nil {
+		// A registered named map is referenced as one, its Elem nil.
+		f.Kind = kindMap
+	}
 	f.Elem, f.Bounds, f.Mapping, f.Refusals, f.InRefusals = nil, nil, nil, nil, nil
 	// A json.RawMessage can be null twice over: encoding/json writes its nil
 	// as null, which an omit option drops, and writes bytes holding null, such
