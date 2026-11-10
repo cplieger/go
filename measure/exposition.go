@@ -13,8 +13,8 @@ import (
 // The scrape pipeline is: collect the registry's metrics into a flat
 // []metricFamily once (Registry.collect), then hand that slice to
 // encodePrometheus (text format 0.0.4). Every value and label string in the IR
-// is pre-rendered in its canonical form (formatValue for floats, %d for
-// integers, buildLabelString for labels), so the encoder only assembles lines.
+// is pre-rendered in its canonical form (formatValue for floats, strconv base
+// 10 for integers, buildLabelString for labels), so the encoder only assembles lines.
 
 // Metric type discriminators used in the "# TYPE" line.
 const (
@@ -273,15 +273,18 @@ func appendPrometheus(b *strings.Builder, fams []metricFamily) {
 		b.WriteByte('\n')
 		for j := range f.samples {
 			s := &f.samples[j]
-			writeSample(b, f.name+s.nameSuffix, s.labels, s.value)
+			writeSample(b, f.name, s.nameSuffix, s.labels, s.value)
 		}
 	}
 }
 
 // writeSample writes one exposition line, omitting the brace group when the
-// sample carries no labels.
-func writeSample(b *strings.Builder, name, labels, value string) {
+// sample carries no labels. The series name is written as name then suffix:
+// concatenating them would allocate once per sample whenever the result
+// outgrows the compiler's 32-byte stack buffer.
+func writeSample(b *strings.Builder, name, suffix, labels, value string) {
 	b.WriteString(name)
+	b.WriteString(suffix)
 	if labels != "" {
 		b.WriteByte('{')
 		b.WriteString(labels)
