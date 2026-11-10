@@ -1558,3 +1558,23 @@ func probeCode(path string, opts ...ProbeOption) int {
 	code, _ := probeCheck(path, opts...)
 	return code
 }
+
+// A stale reading's reason prints the age and the max-age at one precision,
+// with the age above the max-age, so a stale marker never reads as two equal
+// durations failing.
+func TestFreshness_ReasonStaleShowsAgeAboveMaxAge(t *testing.T) {
+	for _, tc := range []struct {
+		age, maxAge time.Duration
+		want        string
+	}{
+		{1700 * time.Millisecond, 1500 * time.Millisecond, "unhealthy: marker stale: 1.7s old exceeds max-age 1.5s"},
+		{13*time.Hour + 400*time.Millisecond, 13 * time.Hour, "unhealthy: marker stale: 13h0m0.4s old exceeds max-age 13h0m0s"},
+		{13*time.Hour + time.Nanosecond, 13 * time.Hour, "unhealthy: marker stale: 13h0m0.001s old exceeds max-age 13h0m0s"},
+		{2*time.Hour + 30*time.Minute + 1234567*time.Microsecond, 2 * time.Hour, "unhealthy: marker stale: 2h30m1.235s old exceeds max-age 2h0m0s"},
+	} {
+		got := Freshness{State: MarkerStale, Age: tc.age, MaxAge: tc.maxAge}.Reason()
+		if got != tc.want {
+			t.Errorf("Reason(age %s, max-age %s) = %q, want %q", tc.age, tc.maxAge, got, tc.want)
+		}
+	}
+}

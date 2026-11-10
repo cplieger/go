@@ -449,13 +449,23 @@ func (f Freshness) Healthy() bool {
 	return f.State == MarkerFresh || f.State == MarkerDirUnavailable
 }
 
+// ceilMillisecond rounds d up to a whole millisecond.
+func ceilMillisecond(d time.Duration) time.Duration {
+	if r := d % time.Millisecond; r > 0 {
+		return d - r + time.Millisecond
+	}
+	return d
+}
+
 // Reason is the operator-facing diagnostic for an unhealthy reading, and the
 // empty string for a healthy one. It is the text RunProbe writes to stderr.
 func (f Freshness) Reason() string {
 	switch f.State {
 	case MarkerStale:
+		// Both to the millisecond, the age rounded up, so a stale age, which
+		// is above the max-age, never prints as equal to it.
 		return fmt.Sprintf("unhealthy: marker stale: %s old exceeds max-age %s",
-			f.Age.Truncate(time.Second), f.MaxAge)
+			ceilMillisecond(f.Age), f.MaxAge.Truncate(time.Millisecond))
 	case MarkerAbsent:
 		return "unhealthy: marker absent"
 	case MarkerUnreadable:
