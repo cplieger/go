@@ -12,8 +12,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/oracle"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/oracle"
 )
 
 // The oracle is encoding/json itself: for values drawn over the fixture
@@ -21,7 +21,7 @@ import (
 // same value and validate against the emitted schema of its direction, and a
 // request body it writes must decode back into the Go type unchanged.
 
-const oraclePkg = "github.com/cplieger/go/wiregen/testdata/oracle"
+const oraclePkg = "github.com/cplieger/go/wiregen/v2/testdata/oracle"
 
 var oracleMappings = map[string]wiregen.Mapping{
 	oraclePkg + ".Stamp":  {TS: "number", Decoder: "reqNum", Schema: map[string]any{"type": "integer"}},

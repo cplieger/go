@@ -30,7 +30,7 @@ The generated files import each other by their paths relative to one another, so
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `Types` | `[]Type` | Structs to generate interfaces, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
+| `Types` | `[]Type` | Structs, and named maps (see [Type mapping](type-mapping.md#named-maps)), to generate types, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
 | `Enums` | `[]EnumRef` | Enums, each registered with `StringEnum[T]()` or `TextEnum[T]()`. See [Type mapping](type-mapping.md#enums). |
 | `Unions` | `[]Union` | Registered structs tagged by one field. See [Type mapping](type-mapping.md#unions). |
 | `Mappings` | `map[string]Mapping` | The consumer's own TypeScript type, decoder and schema for a Go type, keyed by full `importpath.Type`. See [Type mapping](type-mapping.md#mappings). |
@@ -68,11 +68,14 @@ func StringEnum[T ~string]() EnumRef
 func TextEnum[T interface{ ~uint8; encoding.TextMarshaler }]() EnumRef
 
 // Union tags Type by its Tag field; each Cases key is a tag value listing the
-// other fields that case allows, all by wire name.
+// other fields that case allows, all by wire name. Payload names a
+// json.RawMessage field whose type PayloadTypes gives per case.
 type Union struct {
-    Cases map[string][]string
-    Type  Type
-    Tag   string
+    Cases        map[string][]string
+    PayloadTypes map[string]Type // every Cases key; the zero Type: no payload
+    Type         Type
+    Tag          string
+    Payload      string // "": no typed payload
 }
 
 // Mapping is a Go type's wire form, written by the consumer.

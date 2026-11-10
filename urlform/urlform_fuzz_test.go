@@ -329,6 +329,10 @@ func FuzzEqualASCIIFold(f *testing.F) {
 	f.Add("ny\xffaa.si", "ny\uFFFDaa.si")
 	f.Add("NY\xffAA.SI", "ny\xffaa.si")
 	f.Add("\u00c9.nyaa.si", "\u00e9.nyaa.si")
+	// The three pairs whose SimpleFold changed in Unicode 17 (Go 1.27).
+	f.Add("\u0390", "\u1FD3")
+	f.Add("\u03B0", "\u1FE3")
+	f.Add("\uFB05", "\uFB06")
 
 	f.Fuzz(func(t *testing.T, a, b string) {
 		got := EqualASCIIFold(a, b)

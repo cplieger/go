@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/strict"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/strict"
 )
 
-const strictPkg = "github.com/cplieger/go/wiregen/testdata/strict"
+const strictPkg = "github.com/cplieger/go/wiregen/v2/testdata/strict"
 
 func strictReg(opts []wiregen.Option, types ...wiregen.Type) *testRegistry {
 	r := newTestRegistry(opts...)

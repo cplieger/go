@@ -697,6 +697,25 @@ func TestGetBytes_logs_slow_successful_attempt(t *testing.T) {
 	})
 }
 
+// A slow WithHeaders is the caller's time, not the upstream's, so it logs no
+// slow-upstream warning.
+func TestGetBytes_slow_headers_are_not_upstream_latency(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		}))
+		var buf bytes.Buffer
+		body, err := httpclient.GetBytes(t.Context(), srv.Client(), srv.URL, httpclient.WithLogger(bufLogger(&buf)),
+			httpclient.WithHeaders(func(*http.Request) { time.Sleep(11 * time.Second) }))
+		if err != nil || string(body) != "ok" {
+			t.Fatalf("GetBytes = %q, %v, want \"ok\", nil", body, err)
+		}
+		if strings.Contains(buf.String(), "slow upstream response") {
+			t.Errorf("log = %q, want no slow-upstream line for a slow WithHeaders", buf.String())
+		}
+	})
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

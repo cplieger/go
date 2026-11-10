@@ -1,11 +1,12 @@
 package wiregen_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/unions"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/unions"
 )
 
 // timingUnion is the enum-tagged Timing fixture's Union.
@@ -213,5 +214,257 @@ func TestGenerate_NilRegistryOrContext(t *testing.T) {
 	//lint:ignore SA1012 the nil context is the case under test
 	if err := (&wiregen.Registry{}).Generate(nil, wiregen.WithTSDir(t.TempDir())); err == nil { //nolint:staticcheck // the nil context is the case under test
 		t.Error("Generate with a nil context returned nil")
+	}
+}
+
+// commandUnion is the Command fixture's payload-typed Union: create and
+// rename carry a payload, close carries none.
+func commandUnion() wiregen.Union {
+	return wiregen.Union{
+		Type: wiregen.TypeRef[unions.Command](),
+		Tag:  "type",
+		Cases: map[string][]string{
+			"create": {},
+			"rename": {"chat_id"},
+			"close":  {"chat_id"},
+		},
+		Payload: "payload",
+		PayloadTypes: map[string]wiregen.Type{
+			"create": wiregen.TypeRef[unions.CreateChat](),
+			"rename": wiregen.TypeRef[unions.Rename](),
+			"close":  {},
+		},
+	}
+}
+
+// commandReg registers Command alone: its payload types join the registry
+// through the Union.
+func commandReg() *testRegistry {
+	r := newTestRegistry()
+	r.Unions = []wiregen.Union{commandUnion()}
+	return r
+}
+
+func TestUnion_PayloadTypes(t *testing.T) {
+	types := mustGen(t, commandReg().typesFile)
+	for _, want := range []string{
+		"export type Command =\n" +
+			"  | { type: \"close\"; chat_id?: string }\n" +
+			"  | { type: \"create\"; payload?: CreateChat }\n" +
+			"  | { type: \"rename\"; chat_id?: string; payload?: Rename };",
+		"export interface CreateChat {",
+		"export interface Rename {",
+	} {
+		if !strings.Contains(types, want) {
+			t.Errorf("types missing %q, got:\n%s", want, types)
+		}
+	}
+	decoders := mustGen(t, commandReg().decodersFile)
+	for _, want := range []string{
+		`    case "close": {`,
+		`      refuseKeys(o, ["payload"], "$.command");`,
+		`      refuseKeys(o, ["chat_id"], "$.command");`,
+		"decodeCreateChat(",
+		"decodeRename(",
+	} {
+		if !strings.Contains(decoders, want) {
+			t.Errorf("decoders missing %q, got:\n%s", want, decoders)
+		}
+	}
+}
+
+func TestUnion_PayloadOpenAPI(t *testing.T) {
+	r := commandReg()
+	r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
+	doc := mustGen(t, r.openapiFile)
+	// omitempty drops a nil payload, but a payload holding the bytes null is
+	// still written as null, so even the response component is nullable.
+	if got := prop(t, component(t, doc, "Command.create"), "payload"); got != `{"anyOf":[{"$ref":"#/components/schemas/CreateChat"},{"type":"null"}]}` {
+		t.Errorf("create's payload = %s, want a nullable CreateChat $ref", got)
+	}
+	if got := prop(t, component(t, doc, "Command.rename"), "payload"); got != `{"anyOf":[{"$ref":"#/components/schemas/Rename"},{"type":"null"}]}` {
+		t.Errorf("rename's payload = %s, want a nullable Rename $ref", got)
+	}
+	if strings.Contains(mustJSON(t, component(t, doc, "Command.close")), `"payload"`) {
+		t.Errorf("close admits a payload: %s", mustJSON(t, component(t, doc, "Command.close")))
+	}
+	s := compiled(t, doc, "#/components/schemas/Command")
+	for body, ok := range map[string]bool{
+		`{"type":"create","payload":{"title":"a"}}`:              true,
+		`{"type":"rename","chat_id":"c","payload":{"name":"n"}}`: true,
+		`{"type":"close","chat_id":"c"}`:                         true,
+		`{"type":"create","payload":{"name":"n"}}`:               false,
+		`{"type":"close","payload":{"name":"n"}}`:                false,
+	} {
+		if err := validates(t, s, body); (err == nil) != ok {
+			t.Errorf("%s: validates = %v, want ok %v", body, err, ok)
+		}
+	}
+}
+
+func TestUnion_PayloadTypeReachedOnlyThroughPayload(t *testing.T) {
+	r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
+	u := commandUnion()
+	u.PayloadTypes["rename"] = wiregen.TypeRef[unions.Nested]()
+	r.Types = []wiregen.Type{wiregen.TypeRef[unions.Rename]()}
+	r.Unions = []wiregen.Union{u}
+	r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
+	r.Endpoints = []wiregen.Endpoint{{
+		Name: "send", Method: "POST", Path: "/api/command", Kind: wiregen.KindJSON,
+		Request: wiregen.TypeRef[unions.Command](),
+	}}
+	doc := mustGen(t, r.openapiFile)
+	// Nested is reached only through the rename payload of a request body, so
+	// its request form exists and the request case references it.
+	component(t, doc, "NestedInput")
+	if got := prop(t, component(t, doc, "CommandInput.rename"), "payload"); got != `{"anyOf":[{"$ref":"#/components/schemas/NestedInput"},{"type":"null"}]}` {
+		t.Errorf("the request rename payload = %s, want a nullable NestedInput $ref", got)
+	}
+	if _, err := r.arbitrariesFile(t.Context()); err != nil {
+		t.Fatalf("arbitraries: %v", err)
+	}
+}
+
+func TestUnion_PayloadRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*wiregen.Union)
+		want string
+	}{
+		{"a payload field that is not a field", func(u *wiregen.Union) { u.Payload = "body" }, `payload "body" is no field of the type`},
+		{"a payload field that is not raw JSON", func(u *wiregen.Union) {
+			u.Type = wiregen.TypeRef[unions.NotRaw]()
+			delete(u.Cases, "rename")
+			delete(u.Cases, "close")
+			u.Cases["create"] = []string{}
+			u.PayloadTypes = map[string]wiregen.Type{"create": wiregen.TypeRef[unions.CreateChat]()}
+		}, `payload "payload" must be a json.RawMessage field`},
+		{"payload types keyed differently from the cases", func(u *wiregen.Union) { delete(u.PayloadTypes, "close") }, `PayloadTypes keys [create rename] must be exactly the Cases keys [close create rename]`},
+		{"a case that lists the payload field", func(u *wiregen.Union) { u.Cases["create"] = []string{"payload"} }, `case "create" lists the payload "payload"`},
+		{"payload types without a payload field", func(u *wiregen.Union) { u.Payload = "" }, "sets PayloadTypes without Payload"},
+		{"a payload no case types", func(u *wiregen.Union) {
+			u.PayloadTypes = map[string]wiregen.Type{"create": {}, "rename": {}, "close": {}}
+		}, `no case has a payload type, so payload "payload" can never be sent`},
+		{"a payload encoding/json writes in every case", func(u *wiregen.Union) {
+			u.Type = wiregen.TypeRef[unions.RequiredPayload]()
+			u.Cases = map[string][]string{"create": {}, "close": {}}
+			u.PayloadTypes = map[string]wiregen.Type{"create": wiregen.TypeRef[unions.CreateChat](), "close": {}}
+		}, `field "payload" is not in every case`},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := newTestRegistry()
+			u := commandUnion()
+			tc.edit(&u)
+			r.Unions = []wiregen.Union{u}
+			requireGenerateError(t, r, tc.want)
+		})
+	}
+}
+
+// A payload type that is no struct is refused under its role, with no hint
+// to register it as an enum, whether or not it is registered as one or
+// listed in Types too.
+func TestUnion_PayloadTypeNotAStruct(t *testing.T) {
+	const role = `union case "create" payload type github.com/cplieger/go/wiregen/v2/testdata/unions.Kind`
+	for _, tc := range []struct {
+		name  string
+		enums []wiregen.EnumRef
+		types []wiregen.Type
+		both  bool // rename names it too, after create
+		want  string
+	}{
+		{"an unregistered non-struct", nil, nil, false, role + " is not a struct or a map"},
+		{"a non-struct also in Types", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, false, role + " is not a struct or a map"},
+		{"a non-struct two roles name, under the first", nil, nil, true, role + " is not a struct or a map"},
+		{"a non-struct in Types two roles name, under the first", nil, []wiregen.Type{wiregen.TypeRef[unions.Kind]()}, true, role + " is not a struct or a map"},
+		{"a registered enum", []wiregen.EnumRef{wiregen.TextEnum[unions.Kind]()}, nil, false, role + " is an enum; it must be a struct or a map"},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			r := newTestRegistry()
+			r.Enums, r.Types = tc.enums, tc.types
+			u := commandUnion()
+			u.PayloadTypes["create"] = wiregen.TypeRef[unions.Kind]()
+			if tc.both {
+				u.PayloadTypes["rename"] = wiregen.TypeRef[unions.Kind]()
+			}
+			r.Unions = []wiregen.Union{u}
+			err := r.generate(t.Context(), t.TempDir())
+			if err == nil || err.Error() != "wiregen: "+tc.want {
+				t.Errorf("Generate() error = %v, want %q", err, "wiregen: "+tc.want)
+			}
+		})
+	}
+}
+
+// A payload type with its own MarshalJSON is refused under its role, with
+// the one fix a role can take: Mappings cannot stand in for a payload type.
+func TestUnion_PayloadTypeWithAMarshaler(t *testing.T) {
+	r := newTestRegistry()
+	u := commandUnion()
+	u.PayloadTypes["create"] = wiregen.TypeRef[unions.Custom]()
+	r.Unions = []wiregen.Union{u}
+	err := r.generate(t.Context(), t.TempDir())
+	want := `github.com/cplieger/go/wiregen/v2/testdata/unions.Custom: is the union case "create" payload type, but implements json.Marshaler`
+	if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "Mappings") {
+		t.Errorf("Generate() error = %v, want %q and no Mappings hint", err, want)
+	}
+}
+
+// A union that reaches itself only through a payload type is depth-capped
+// like any recursive type, or its arbitrary would draw without end.
+func TestUnion_PayloadRecursionCapped(t *testing.T) {
+	r := newTestRegistry()
+	u := commandUnion()
+	u.PayloadTypes["create"] = wiregen.TypeRef[unions.Batch]()
+	r.Types = []wiregen.Type{wiregen.TypeRef[unions.CreateChat]()}
+	r.Unions = []wiregen.Union{u}
+	out := mustGen(t, r.arbitrariesFile)
+	if entry := letrecEntry(t, out, "Command"); !strings.HasPrefix(entry, "fc.oneof(\n    { maxDepth: 5") {
+		t.Fatalf("Command arbitrary is not depth-capped:\n%s", entry)
+	}
+}
+
+// Each way encoding/json writes a typed payload as null (a nil RawMessage with
+// no omit option, the bytes null under omitempty or omitzero, and a pointer to
+// a nil RawMessage) validates against the response component, and the TS
+// member stays optional.
+func TestUnion_PayloadNilWritesNull(t *testing.T) {
+	null := json.RawMessage("null")
+	nilRaw := json.RawMessage(nil)
+	for _, tc := range []struct {
+		name   string
+		typ    wiregen.Type
+		fields []string
+		value  any
+	}{
+		{"a nil payload with no omit option", wiregen.TypeRef[unions.RequiredPayload](), nil, unions.RequiredPayload{Type: "create"}},
+		{"omitempty over the bytes null", wiregen.TypeRef[unions.Command](), []string{"chat_id"}, unions.Command{Type: "create", Payload: null}},
+		{"omitzero over the bytes null", wiregen.TypeRef[unions.OmitZeroPayload](), nil, unions.OmitZeroPayload{Type: "create", Payload: null}},
+		{"a pointer to a nil payload", wiregen.TypeRef[unions.PtrPayload](), nil, unions.PtrPayload{Type: "create", Payload: &nilRaw}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry()
+			r.Unions = []wiregen.Union{{
+				Type: tc.typ, Tag: "type",
+				Cases:        map[string][]string{"create": tc.fields},
+				Payload:      "payload",
+				PayloadTypes: map[string]wiregen.Type{"create": wiregen.TypeRef[unions.CreateChat]()},
+			}}
+			r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
+			doc := mustGen(t, r.openapiFile)
+			body, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != `{"type":"create","payload":null}` {
+				t.Fatalf("encoding/json wrote %s", body)
+			}
+			if err := validates(t, compiled(t, doc, "#/components/schemas/"+tc.typ.Name), string(body)); err != nil {
+				t.Errorf("the encoding fails its response schema: %v", err)
+			}
+			if types := mustGen(t, r.typesFile); !strings.Contains(types, `; payload?: CreateChat }`) {
+				t.Errorf("a payload that can be null is not optional:\n%s", types)
+			}
+		})
 	}
 }

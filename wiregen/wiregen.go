@@ -298,6 +298,10 @@ type generator struct {
 	// enums also holds the members the engine discovered.
 	typeNames map[string]string
 	enums     map[string]enumDef
+	// typeRoles names the first role an endpoint, event, union or
+	// ErrorEnvelope gives each type, listed in Types or not, for the errors
+	// that refuse it.
+	typeRoles map[string]string
 	files     []genFile // every output, content unrendered
 	Registry
 	o options
@@ -429,6 +433,9 @@ func (g *generator) registerNames() error {
 	}
 	g.enums = make(map[string]enumDef, len(g.Enums))
 	for _, ref := range g.Enums {
+		if role, ok := g.typeRoles[ref.Type.Name]; ok && g.typeNames[ref.Type.Name] == ref.Type.PkgPath {
+			return fmt.Errorf("wiregen: %s %s.%s is an enum; it must be %s", role, ref.Type.PkgPath, ref.Type.Name, roleShape(role))
+		}
 		if err := registerName(seen, "enum", ref.Type); err != nil {
 			return err
 		}
@@ -438,10 +445,12 @@ func (g *generator) registerNames() error {
 }
 
 // registerTypes fills typeNames from Types, then appends each type the
-// endpoints, events, unions and ErrorEnvelope name that Types lacks. It returns the
-// bare names taken, for the enums to share.
+// endpoints, events, unions and ErrorEnvelope name that Types lacks, and
+// records each referenced type's first role. It returns the bare names taken,
+// for the enums to share.
 func (g *generator) registerTypes() (map[string]string, error) {
 	g.typeNames = make(map[string]string, len(g.Types))
+	g.typeRoles = map[string]string{}
 	seen := make(map[string]string, len(g.Types)+len(g.Enums))
 	for _, wt := range g.Types {
 		if err := registerName(seen, "type", wt); err != nil {
@@ -450,13 +459,21 @@ func (g *generator) registerTypes() (map[string]string, error) {
 		g.typeNames[wt.Name] = wt.PkgPath
 	}
 	for _, ref := range g.referencedTypes() {
-		if pkg, ok := g.typeNames[ref.wt.Name]; ref.wt == (Type{}) || (ok && pkg == ref.wt.PkgPath) {
+		if ref.wt == (Type{}) {
+			continue
+		}
+		if pkg, ok := g.typeNames[ref.wt.Name]; ok && pkg == ref.wt.PkgPath {
+			// Listed in Types too: the first role still names it in a refusal.
+			if _, has := g.typeRoles[ref.wt.Name]; !has {
+				g.typeRoles[ref.wt.Name] = ref.role
+			}
 			continue
 		}
 		if err := registerName(seen, ref.role, ref.wt); err != nil {
 			return nil, err
 		}
 		g.typeNames[ref.wt.Name] = ref.wt.PkgPath
+		g.typeRoles[ref.wt.Name] = ref.role
 		g.Types = append(g.Types, ref.wt)
 	}
 	return seen, nil
@@ -478,7 +495,7 @@ func (g *generator) referencedTypes() []typeReference {
 		for _, f := range []struct {
 			role string
 			wt   Type
-		}{{"Params", e.Params}, {"Query", e.Query}, {"Request", e.Request}, {"Response", e.Response}} {
+		}{{roleParams, e.Params}, {roleQuery, e.Query}, {"Request", e.Request}, {"Response", e.Response}} {
 			refs = append(refs, typeReference{role: "endpoint " + e.Name + " " + f.role + " type", wt: f.wt})
 		}
 	}
@@ -487,6 +504,9 @@ func (g *generator) referencedTypes() []typeReference {
 	}
 	for _, u := range g.Unions {
 		refs = append(refs, typeReference{role: "union type", wt: u.Type})
+		for _, c := range slices.Sorted(maps.Keys(u.PayloadTypes)) {
+			refs = append(refs, typeReference{role: fmt.Sprintf("union case %q payload type", c), wt: u.PayloadTypes[c]})
+		}
 	}
 	return append(refs, typeReference{role: "ErrorEnvelope type", wt: g.ErrorEnvelope})
 }

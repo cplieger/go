@@ -77,7 +77,7 @@ A form with a host but no path reads `/`, which is how a browser resolves `https
 `Form.Host`, `FoldHostASCII`, `EqualASCIIFold` and `Domain.Matches` all fold only the bytes A to Z. A caller folding a host, a path and a query name therefore works from one idea of ASCII case. The four helpers do these jobs:
 
 - `FoldHostASCII(host)` returns that fold, for host evidence you hold from elsewhere, such as a configured domain, a request header or a host you parsed yourself.
-- `EqualASCIIFold(a, b)` compares under that fold, for ASCII tokens that are not hosts, such as a path token or a query parameter name.
+- `EqualASCIIFold(a, b)` compares under that fold, for a string matched against a fixed ASCII token, such as a path token, a query parameter name or a host against `localhost`.
 - `IsASCIIHost(host)` reports whether every byte is ASCII. Run it first, so a Cyrillic lookalike or a U+0130 or U+212A spelling never matches a real domain. To accept international hosts, convert punycode yourself instead of relaxing this check.
 - `Domain(domain).Matches(host)` reports whether the host equals the domain or is a real subdomain of it. The domain has its own type, so the call site names which value is the domain.
 

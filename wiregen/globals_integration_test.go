@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/basic"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/basic"
 )
 
 // fastCheckStub types the fast-check import loosely enough to compile the
@@ -89,7 +89,8 @@ func TestGenerated_namesGlobalsThroughGlobalThis(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		out, err := tool(t, dir, "tsc", "-p", "tsconfig.json", "--noEmit")
+		// The shadows are declared to be unused, so this run allows that.
+		out, err := tool(t, dir, "tsc", "-p", "tsconfig.json", "--noEmit", "--noUnusedLocals", "false")
 		if err == nil {
 			return
 		}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/wiregen"
-	"github.com/cplieger/go/wiregen/testdata/client"
+	"github.com/cplieger/go/wiregen/v2"
+	"github.com/cplieger/go/wiregen/v2/testdata/client"
 )
 
 // transportTS is the recording transport the generated client imports.
@@ -41,6 +41,8 @@ log("listItems", await listItems({ kind: "movie", limit: 5 }));
 log("listItems.spec", last());
 await listItems();
 log("listItems.bare", last().path);
+respondWith(() => ({ status: 200, body: null }));
+log("listItems.null", await listItems());
 
 respondWith(() => ({ status: 202, body: { id: "job-1" } }));
 log("startJob", await startJob({ body: { item: "a" }, idempotencyKey: "k" }));
@@ -138,6 +140,7 @@ func TestClientAgainstTransport(t *testing.T) {
 		`listItems {"ok":true,"data":[{"id":"1","name":"x"}]}`,
 		`listItems.spec {"method":"GET","path":"/api/items?kind=movie&limit=5","codes":["internal_error"]}`,
 		`listItems.bare "/api/items"`,
+		`listItems.null {"ok":true,"data":[]}`,
 		`startJob {"ok":true,"data":{"id":"job-1"}}`,
 		`startJob.spec {"method":"POST","path":"/api/jobs","body":{"item":"a"},"headers":{"Idempotency-Key":"k"},"codes":["job_capacity","internal_error"]}`,
 		`startJob.nokey {}`,

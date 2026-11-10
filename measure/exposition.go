@@ -2,7 +2,6 @@ package measure
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -14,8 +13,8 @@ import (
 // The scrape pipeline is: collect the registry's metrics into a flat
 // []metricFamily once (Registry.collect), then hand that slice to
 // encodePrometheus (text format 0.0.4). Every value and label string in the IR
-// is pre-rendered in its canonical form (formatValue for floats, %d for
-// integers, buildLabelString for labels), so the encoder only assembles lines.
+// is pre-rendered in its canonical form (formatValue for floats, strconv base
+// 10 for integers, buildLabelString for labels), so the encoder only assembles lines.
 
 // Metric type discriminators used in the "# TYPE" line.
 const (
@@ -263,20 +262,35 @@ func encodePrometheus(fams []metricFamily) string {
 func appendPrometheus(b *strings.Builder, fams []metricFamily) {
 	for i := range fams {
 		f := &fams[i]
-		fmt.Fprintf(b, "# HELP %s %s\n# TYPE %s %s\n", f.name, helpEscaper.Replace(f.help), f.name, f.typ)
+		b.WriteString("# HELP ")
+		b.WriteString(f.name)
+		b.WriteByte(' ')
+		b.WriteString(helpEscaper.Replace(f.help))
+		b.WriteString("\n# TYPE ")
+		b.WriteString(f.name)
+		b.WriteByte(' ')
+		b.WriteString(f.typ)
+		b.WriteByte('\n')
 		for j := range f.samples {
 			s := &f.samples[j]
-			writeSample(b, f.name+s.nameSuffix, s.labels, s.value)
+			writeSample(b, f.name, s.nameSuffix, s.labels, s.value)
 		}
 	}
 }
 
 // writeSample writes one exposition line, omitting the brace group when the
-// sample carries no labels.
-func writeSample(b *strings.Builder, name, labels, value string) {
-	if labels == "" {
-		fmt.Fprintf(b, "%s %s\n", name, value)
-		return
+// sample carries no labels. The series name is written as name then suffix:
+// concatenating them would allocate once per sample whenever the result
+// outgrows the compiler's 32-byte stack buffer.
+func writeSample(b *strings.Builder, name, suffix, labels, value string) {
+	b.WriteString(name)
+	b.WriteString(suffix)
+	if labels != "" {
+		b.WriteByte('{')
+		b.WriteString(labels)
+		b.WriteByte('}')
 	}
-	fmt.Fprintf(b, "%s{%s} %s\n", name, labels, value)
+	b.WriteByte(' ')
+	b.WriteString(value)
+	b.WriteByte('\n')
 }

@@ -13,10 +13,13 @@ func (f *fieldInfo) optional() bool { return f.Ptrs > 0 || f.absentOut() }
 func (f *fieldInfo) absentOut() bool { return f.Omittable || f.ViaEmbedPtr }
 
 // nullOut reports whether encoding/json can write null for the key: a nil
-// pointer or collection no omit option drops, or anything nil under a
-// non-nil outer pointer, which the option does not look through.
+// pointer or collection no omit option drops, anything nil under a non-nil
+// outer pointer, which the option does not look through, or raw bytes that
+// hold null.
 func (f *fieldInfo) nullOut() bool {
 	switch {
+	case f.RawNull:
+		return true
 	case f.Kind == kindRaw:
 		return false
 	case f.Ptrs > 1:

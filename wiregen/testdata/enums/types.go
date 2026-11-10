@@ -4,7 +4,7 @@ package enums
 import (
 	"errors"
 
-	"github.com/cplieger/go/wiregen/testdata/enums/owner"
+	"github.com/cplieger/go/wiregen/v2/testdata/enums/owner"
 )
 
 // Level is a closed uint8 enum whose zero value has no wire name.

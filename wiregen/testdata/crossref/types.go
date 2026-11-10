@@ -2,7 +2,7 @@
 // cross-reference resolution and recurring field-name doc scoping.
 package crossref
 
-import "github.com/cplieger/go/wiregen/testdata/crossref/dep"
+import "github.com/cplieger/go/wiregen/v2/testdata/crossref/dep"
 
 // _ forces dep into the loaded package graph as a transitive dependency, so
 // the enum-discovery scoping test has a same-named (dep.Color) type to ignore.

@@ -1,4 +1,4 @@
-module github.com/cplieger/go/wiregen
+module github.com/cplieger/go/wiregen/v2
 
 go 1.27.3
 
@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/mod v0.43.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -208,38 +207,6 @@ const allocRuns = 100
 // the average is already stable at this count, and because a sweep pays it once
 // per registry size at every shape it measures.
 const scrapeAllocRuns = 15
-
-// raceDetectorEnabled reports whether this test binary was built with -race.
-// The build settings carry it: `go test -race` records `-race=true`, and a
-// plain build records no such setting at all.
-func raceDetectorEnabled() bool {
-	bi, ok := debug.ReadBuildInfo()
-	if !ok {
-		return false
-	}
-	for _, s := range bi.Settings {
-		if s.Key == "-race" {
-			return s.Value == "true"
-		}
-	}
-	return false
-}
-
-// allocCeiling returns the allocation bound for the mode this binary was built
-// in. The two numbers are not a fudge factor: the race detector's
-// instrumentation defeats some of the compiler's escape analysis, so the
-// exposition path measures about a third more allocations per metric under
-// -race (7.0 plain against 9.4 per counter family, measured) while the record
-// paths stay at exactly 0 in both modes. CI runs the suite with -race, so a
-// contract carrying only the plain number would have to be loosened until it
-// passed there, which is the same as not gating the plain number; and skipping
-// it under -race would leave the contract gating nothing where CI runs it.
-func allocCeiling(plain, withRace float64) float64 {
-	if raceDetectorEnabled() {
-		return withRace
-	}
-	return plain
-}
 
 // discardResponseWriter is an http.ResponseWriter that keeps nothing, so a
 // scrape measurement is charged for the exposition and not for a recorder's

@@ -28,11 +28,15 @@ type PrepareRetry func(req *http.Request) error
 // one-second base delay, the default retry policy, no hooks, no elapsed ceiling, and
 // replay of the safe methods and keyed requests only.
 type TransportConfig struct {
+	// Observer receives one Attempt per try and one Outcome per RoundTrip, a
+	// request the transport sends once included. The transport logs nothing
+	// itself, so Observer and OnRetry are where to watch it.
+	Observer Observer
 	// CheckRetry overrides the retry policy. nil means the default policy:
 	// an error [IsTransient] accepts, or a status [IsRetryableStatus] accepts.
 	CheckRetry CheckRetry
-	// OnRetry is a hook called before each retry attempt, the transport's only
-	// observability seam (it logs nothing itself).
+	// OnRetry is a hook called before each retry attempt, with the request
+	// and the failed attempt's response or error.
 	OnRetry OnRetry
 	// PrepareRetry is called before each retry to mutate the cloned request
 	// (e.g. refresh an auth token).
@@ -71,6 +75,7 @@ type TransportConfig struct {
 // The zero value retries over http.DefaultTransport with the TransportConfig{}
 // defaults; NewRetryRoundTripper sets the rest.
 type RetryRoundTripper struct {
+	observer           Observer
 	next               http.RoundTripper
 	checkRetry         CheckRetry
 	onRetry            OnRetry
@@ -89,6 +94,7 @@ func NewRetryRoundTripper(next http.RoundTripper, cfg TransportConfig) *RetryRou
 		next = http.DefaultTransport
 	}
 	return &RetryRoundTripper{
+		observer:           cfg.Observer,
 		next:               next,
 		checkRetry:         cfg.CheckRetry,
 		onRetry:            cfg.OnRetry,
@@ -184,20 +190,29 @@ func (rt *RetryRoundTripper) getCheckRetry() CheckRetry {
 // When retries run out the last response comes back with a nil error, even a
 // retryable 503: the caller must close its body and check resp.StatusCode.
 func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	obs := newObservation(rt.observer)
 	if !rt.canRetry(req) {
-		return rt.roundTripOnce(req)
+		if !obs.on {
+			return rt.roundTripOnce(req)
+		}
+		obs.begin(0)
+		resp, err := rt.observedTrip(&obs, req)
+		obs.settle(0)
+		return resp, obs.finish(err)
 	}
 	ctx := req.Context()
 	check := rt.getCheckRetry()
 	var resp *http.Response
 	var err error
 	_, stopErr := rt.schedule().run(ctx, func(n int) (bool, time.Duration) {
+		obs.begin(n)
 		tryReq, buildErr := rt.buildAttemptRequest(ctx, req, n)
 		if buildErr != nil {
 			resp, err = nil, buildErr
+			obs.endResponse(nil, err)
 			return true, 0
 		}
-		resp, err = rt.roundTripOnce(tryReq) //nolint:bodyclose // the body goes back to the caller, or drainResp closes it in pause or on a stop
+		resp, err = rt.observedTrip(&obs, tryReq) //nolint:bodyclose // the body goes back to the caller, or drainResp closes it in pause or on a stop
 		retry, checkErr := check(ctx, resp, err)
 		switch {
 		case checkErr != nil:
@@ -217,15 +232,30 @@ func (rt *RetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 			rt.onRetry(retry, req, resp, err)
 		}
 		drainResp(resp)
-	})
+	}, obs.settle)
 	switch {
 	case errors.Is(stopErr, ErrMaxElapsed) && err != nil:
-		return nil, fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err)
+		ret := fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, err)
+		if !obs.on {
+			return nil, ret
+		}
+		// The observer gets the cause reduced inside the wrap, so its record
+		// keeps the ceiling and the format.
+		return nil, obs.finishAs(ret, fmt.Errorf("%w (%s): %w", ErrMaxElapsed, rt.maxElapsedTime, LogSafeError(err)))
 	case errors.Is(stopErr, ErrMaxElapsed):
-		return nil, fmt.Errorf("%w (%s)", ErrMaxElapsed, rt.maxElapsedTime)
+		return nil, obs.finish(fmt.Errorf("%w (%s)", ErrMaxElapsed, rt.maxElapsedTime))
 	case stopErr != nil:
-		return nil, stopErr
+		return nil, obs.finish(stopErr)
 	}
+	return resp, obs.finish(err)
+}
+
+// observedTrip sends one attempt, timed from its send, and closes the
+// observation's open attempt with its result.
+func (rt *RetryRoundTripper) observedTrip(obs *observation, req *http.Request) (*http.Response, error) {
+	obs.sending()
+	resp, err := rt.roundTripOnce(req)
+	obs.endResponse(resp, err)
 	return resp, err
 }
 
@@ -247,17 +277,32 @@ func (rt *RetryRoundTripper) buildAttemptRequest(ctx context.Context, req *http.
 	if req.GetBody != nil {
 		body, bodyErr := req.GetBody()
 		if bodyErr != nil {
-			return nil, fmt.Errorf("rewind request body: %w", bodyErr)
+			return nil, &stageError{stage: "rewind request body", err: bodyErr}
 		}
 		tryReq.Body = body
 	}
 	if rt.prepareRetry != nil {
 		if prepErr := rt.prepareRetry(tryReq); prepErr != nil {
-			return nil, fmt.Errorf("prepare retry: %w", prepErr)
+			return nil, &stageError{stage: "prepare retry", err: prepErr}
 		}
 	}
 	return tryReq, nil
 }
+
+// stageError names the step of a retry that failed before its send: the body
+// rewind or PrepareRetry. LogSafeError keeps it around the reduced cause, as it
+// keeps this package's marks, so a redacted error still says which step
+// failed rather than reading as the upstream's.
+type stageError struct {
+	err   error
+	stage string
+}
+
+// Error renders the cause with %v, as fmt.Errorf's %w does, so a cause that
+// implements fmt.Formatter renders the same through the step.
+func (e *stageError) Error() string { return fmt.Sprintf("%s: %v", e.stage, e.err) }
+
+func (e *stageError) Unwrap() error { return e.err }
 
 // CloseIdleConnections closes the base transport's idle connections where it
 // can, so [http.Client.CloseIdleConnections] reaches them.

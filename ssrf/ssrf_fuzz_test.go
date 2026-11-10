@@ -3,6 +3,7 @@ package ssrf
 import (
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -367,7 +368,7 @@ func FuzzIsPublicHost(f *testing.F) {
 	f.Add("8.8.8.8")        // public canonical IPv4
 	f.Add("2606:4700::1")   // public canonical IPv6
 	// Case-folding launderings. The host comparison folds over ASCII
-	// (equalASCIIFold), so none of these may reach a verdict a plain byte
+	// (urlform.EqualASCIIFold), so none of these may reach a verdict a plain byte
 	// comparison would not. The committed corpus carried none of them.
 	f.Add("localho\u017ft")   // U+017F folds with 's' under strings.EqualFold
 	f.Add("LOCALHO\u017fT")   // ...in the uppercase spelling too
@@ -470,29 +471,28 @@ func FuzzValidateURLWithSchemes(f *testing.F) {
 	f.Add("https://[2002:c0a8:0101::]/x", "https")
 
 	f.Fuzz(func(t *testing.T, rawURL, schemesCSV string) {
-		parts := strings.Split(schemesCSV, ",")
-		schemes := make(map[string]struct{}, len(parts))
-		for _, s := range parts {
-			s = strings.TrimSpace(strings.ToLower(s))
-			if s != "" {
-				schemes[s] = struct{}{}
+		var schemes []string
+		for s := range strings.SplitSeq(schemesCSV, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				schemes = append(schemes, s)
 			}
 		}
 		if len(schemes) == 0 {
 			return
 		}
 
-		err := validateURLWithSchemes(rawURL, schemes)
+		err := NewURLPolicy(schemes...).Validate(rawURL)
 
-		// If accepted, scheme must be in allowed list AND host must be public
+		// If accepted, scheme must be in allowed list AND host must be public.
+		// Every ASCII-fold match is also a strings.EqualFold match, so this
+		// oracle holds for the stricter fold Validate uses.
 		if err == nil {
 			u, parseErr := url.Parse(rawURL)
 			if parseErr != nil {
-				t.Fatalf("validateURLWithSchemes accepted unparseable URL: %s", rawURL)
+				t.Fatalf("Validate accepted unparseable URL: %s", rawURL)
 			}
-			scheme := strings.ToLower(u.Scheme)
-			if _, ok := schemes[scheme]; !ok {
-				t.Fatalf("validateURLWithSchemes accepted scheme %q not in allowed set %v", scheme, schemes)
+			if !slices.ContainsFunc(schemes, func(s string) bool { return strings.EqualFold(s, u.Scheme) }) {
+				t.Fatalf("Validate accepted scheme %q not in allowed set %v", u.Scheme, schemes)
 			}
 			host := strings.TrimRight(u.Hostname(), ".")
 			if addr, addrErr := netip.ParseAddr(host); addrErr == nil {
@@ -502,11 +502,11 @@ func FuzzValidateURLWithSchemes(f *testing.F) {
 				if canonical.IsLoopback() || canonical.IsPrivate() ||
 					canonical.IsLinkLocalUnicast() || canonical.IsMulticast() ||
 					canonical.IsUnspecified() {
-					t.Fatalf("validateURLWithSchemes accepted stdlib-classified non-public IP %s in URL %s", addr, rawURL)
+					t.Fatalf("Validate accepted stdlib-classified non-public IP %s in URL %s", addr, rawURL)
 				}
 				for _, br := range independentBlockedRanges {
 					if br.prefix.Contains(canonical) {
-						t.Fatalf("validateURLWithSchemes accepted IP %s in blocked range %s (%s) in URL %s", addr, br.prefix, br.name, rawURL)
+						t.Fatalf("Validate accepted IP %s in blocked range %s (%s) in URL %s", addr, br.prefix, br.name, rawURL)
 					}
 				}
 			}
