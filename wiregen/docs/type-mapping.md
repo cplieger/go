@@ -39,7 +39,8 @@ In a type an endpoint's `Request`, `Params` or `Query` carries, or one those rea
 
 - a field promoted through an embedded pointer to an unexported struct, which `encoding/json` cannot allocate.
 - a type implementing `json.Marshaler` without `json.Unmarshaler`, or `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, mapped or not. A `TextEnum` in a request needs `UnmarshalText` on its pointer.
-- a map key implementing `encoding.TextMarshaler` without `encoding.TextUnmarshaler`.
+- a map key implementing `encoding.TextMarshaler` without `encoding.TextUnmarshaler`, or one written in one form and read back in another: an integer key with `MarshalText` and no `UnmarshalText`, an integer key with only a pointer `UnmarshalText`, and a string key with a text form, which is written as its string.
+- a type whose pointer has `UnmarshalText` and no `UnmarshalJSON` and that is written as something other than a string, since encoding/json calls `UnmarshalText` only for a JSON string.
 
 The rules apply at any depth of slices and maps.
 
@@ -137,7 +138,7 @@ A registered named map type, `type Settings map[string]json.RawMessage`, is a bo
 
 - The types file carries `export type Settings = { [key: string]: unknown };`, with the type's doc comment.
 - The decoder refuses a body that is not an object and decodes each value with the value's decoder. `null` reads as `{}`, as for a map field, because encoding/json writes a nil map as `null`.
-- The OpenAPI component is `{"type": "object", "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction. A body, field or element of the map adds `null` wherever encoding/json writes a nil map as `null`; an `omitempty` field never does.
+- The OpenAPI component is `{"type": "object", "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction. A body, field or element of the map admits `null` where encoding/json writes or reads a nil map as `null`. An `omitempty` field of the map admits it only in a request form, since encoding/json never writes it as `null`; an `omitempty` pointer to the map admits it in a response too, because a non-nil pointer to a nil map is written as `null`.
 - A field whose type is a registered named map references it by name, as a field of a registered struct does: its TypeScript alias, its decoder, its `$ref` and its arbitrary, with a map field's null rule. That is also how a named map reaches itself, `type Tree map[string]Tree`. An unregistered named map or slice that reaches itself is refused, since it would be planned inline without end: register the map, or route a slice's cycle through a registered struct or named map. Two nested instances of one generic type, such as `G[G[int]]`, are two types and plan inline.
 
 A union or an endpoint's `Params` or `Query` cannot be a named map, because both need a struct's fields.

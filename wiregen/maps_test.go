@@ -53,8 +53,9 @@ func TestMapType_Decoder(t *testing.T) {
 	}
 }
 
-// Each named map type is an object component whose values have the value's
-// schema, nullable in both directions because a nil map is null on the wire.
+// Each named map type is a non-null object component of the value's schema;
+// null is added on a body, and on a field or element encoding/json can write
+// as null, so an omitempty field is a plain ref.
 func TestMapType_OpenAPI(t *testing.T) {
 	doc := mustGen(t, mapReg().openapiFile)
 	if got := mustJSON(t, component(t, doc, "Labels")); got != `{"additionalProperties":{"$ref":"#/components/schemas/Item"},"type":"object"}` {
@@ -69,6 +70,9 @@ func TestMapType_OpenAPI(t *testing.T) {
 	op := operation(t, doc, "patch", "/api/settings")
 	if got := mustJSON(t, op["responses"]); !strings.Contains(got, `"schema":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}`) {
 		t.Errorf("response = %s, want a nullable Labels body", got)
+	}
+	if got := mustJSON(t, op["requestBody"]); !strings.Contains(got, `"schema":{"anyOf":[{"$ref":"#/components/schemas/Settings"},{"type":"null"}]}`) {
+		t.Errorf("request body = %s, want a nullable Settings body", got)
 	}
 	holder := component(t, doc, "Holder")
 	if got := prop(t, holder, "labels"); got != `{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}` {
@@ -210,6 +214,15 @@ func TestMapType_Refusals(t *testing.T) {
 		{"a key a request cannot decode", func(r *testRegistry) {
 			r.Endpoints[0].Request = wiregen.TypeRef[maps.Keyed]()
 		}, pkg + ".Keyed: map key " + pkg + ".Key writes through MarshalText but has no UnmarshalText, so encoding/json reads it back as a decimal integer, which MarshalText need not write, and a request carries it"},
+		{"a string key read through UnmarshalText", func(r *testRegistry) {
+			r.Endpoints[0].Request = wiregen.TypeRef[maps.ByPrefixed]()
+		}, pkg + ".ByPrefixed: map key " + pkg + ".Prefixed is written as its string but read through UnmarshalText, which reads MarshalText's form, and a request carries it"},
+		{"a field read only from a JSON string", func(r *testRegistry) {
+			r.Endpoints[0].Request = wiregen.TypeRef[maps.HasLevel]()
+		}, pkg + ".HasLevel.Level: " + pkg + ".Level has a pointer UnmarshalText, which encoding/json calls only for a JSON string, so it cannot decode the value it writes, and a request carries it"},
+		{"a map body read only from a JSON string", func(r *testRegistry) {
+			r.Endpoints[0].Request = wiregen.TypeRef[maps.TextMap]()
+		}, pkg + ".TextMap: " + pkg + ".TextMap has a pointer UnmarshalText, which encoding/json calls only for a JSON string, so it cannot decode the value it writes, and a request carries it"},
 		{"a decimal key read through a pointer UnmarshalText", func(r *testRegistry) {
 			r.Endpoints[0].Request = wiregen.TypeRef[maps.ByPtrID]()
 		}, pkg + ".ByPtrID: map key " + pkg + ".PtrID is written as a decimal integer but read through UnmarshalText, which need not accept it, and a request carries it"},
@@ -304,8 +317,11 @@ func TestMapType_GenericsAndSelfSlices(t *testing.T) {
 	const pkg = "github.com/cplieger/go/wiregen/v2/testdata/maps"
 	ok := newTestRegistry()
 	ok.Types = []wiregen.Type{wiregen.TypeRef[maps.Nested]()}
-	if types := mustGen(t, ok.typesFile); !strings.Contains(types, "maps: { [key: string]: { [key: string]: number } };") {
-		t.Errorf("nested generic map not planned:\n%s", types)
+	types := mustGen(t, ok.typesFile)
+	for _, want := range []string{"maps: { [key: string]: { [key: string]: number } };", "slices: string[][];"} {
+		if !strings.Contains(types, want) {
+			t.Errorf("types file missing %q:\n%s", want, types)
+		}
 	}
 	loop := newTestRegistry()
 	loop.Types = []wiregen.Type{wiregen.TypeRef[maps.HasGLoop]()}
@@ -322,5 +338,29 @@ func TestMapType_BoundedValuePath(t *testing.T) {
 	dec := mustGen(t, r.decodersFile)
 	if !strings.Contains(dec, `"$.slugs"`) || strings.Contains(dec, `"$.slugs."`) {
 		t.Errorf("Slugs decoder does not check values at $.slugs:\n%s", dec)
+	}
+}
+
+// An array response of named maps has nullable items, as a nil map element is
+// written as null, and an event of a named map is nullable; a response-only
+// map keyed through UnmarshalText generates.
+func TestMapType_NullByUse(t *testing.T) {
+	r := mapReg()
+	r.Endpoints = append(r.Endpoints, wiregen.Endpoint{
+		Name: "listLabels", Method: "GET", Path: "/api/labels", Kind: wiregen.KindJSON,
+		Response: wiregen.TypeRef[maps.Labels](), Array: true,
+	}, wiregen.Endpoint{
+		Name: "prefixed", Method: "GET", Path: "/api/prefixed", Kind: wiregen.KindJSON,
+		Response: wiregen.TypeRef[maps.ByPrefixed](),
+	}, wiregen.Endpoint{
+		Name: "stream", Method: "GET", Path: "/api/stream", Kind: wiregen.KindEventStream,
+	})
+	r.Events = []wiregen.Event{{Name: "labels", Data: wiregen.TypeRef[maps.Labels]()}}
+	doc := mustGen(t, r.openapiFile)
+	if got := mustJSON(t, operation(t, doc, "get", "/api/labels")["responses"]); !strings.Contains(got, `"schema":{"items":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]},"type":"array"}`) {
+		t.Errorf("array response = %s, want nullable Labels items", got)
+	}
+	if got := mustJSON(t, operation(t, doc, "get", "/api/stream")["responses"]); !strings.Contains(got, `"labels":{"anyOf":[{"$ref":"#/components/schemas/Labels"},{"type":"null"}]}`) {
+		t.Errorf("event stream = %s, want a nullable labels event", got)
 	}
 }

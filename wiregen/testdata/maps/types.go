@@ -3,6 +3,7 @@ package maps
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -146,10 +147,64 @@ func (p *PtrID) MarshalText() ([]byte, error) { return []byte("id" + strconv.Ito
 
 // UnmarshalText reads the prefixed form only.
 func (p *PtrID) UnmarshalText(b []byte) error {
-	n, err := strconv.Atoi(strings.TrimPrefix(string(b), "id"))
+	s, ok := strings.CutPrefix(string(b), "id")
+	if !ok {
+		return errors.New("want an id prefix")
+	}
+	n, err := strconv.Atoi(s)
 	*p = PtrID(n)
 	return err
 }
 
 // ByPtrID is keyed by PtrID.
 type ByPtrID map[PtrID]string
+
+// Prefixed is a string key with a text form: encoding/json writes the raw
+// string, not MarshalText's form, and reads it back through UnmarshalText.
+type Prefixed string
+
+// MarshalText writes the key with a p: prefix.
+func (p Prefixed) MarshalText() ([]byte, error) { return []byte("p:" + string(p)), nil }
+
+// UnmarshalText reads a key that starts with p:.
+func (p *Prefixed) UnmarshalText(b []byte) error {
+	s, ok := strings.CutPrefix(string(b), "p:")
+	if !ok {
+		return errors.New("no p: prefix")
+	}
+	*p = Prefixed(s)
+	return nil
+}
+
+// ByPrefixed is keyed by Prefixed.
+type ByPrefixed map[Prefixed]string
+
+// TextMap is written as an object but read only from a JSON string, through
+// its pointer UnmarshalText.
+type TextMap map[string]string
+
+// UnmarshalText reads a comma-separated k=v list.
+func (m *TextMap) UnmarshalText(b []byte) error {
+	*m = TextMap{}
+	for pair := range strings.SplitSeq(string(b), ",") {
+		k, v, _ := strings.Cut(pair, "=")
+		(*m)[k] = v
+	}
+	return nil
+}
+
+// Level is written as a number but read only from a JSON string, through
+// its pointer UnmarshalText.
+type Level int
+
+// UnmarshalText reads a level's decimal text.
+func (l *Level) UnmarshalText(b []byte) error {
+	n, err := strconv.Atoi(string(b))
+	*l = Level(n)
+	return err
+}
+
+// HasLevel carries a Level.
+type HasLevel struct {
+	Level Level `json:"level"`
+}
