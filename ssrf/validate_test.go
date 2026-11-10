@@ -331,8 +331,9 @@ func TestURLPolicyValidate_case_insensitive(t *testing.T) {
 	}
 }
 
-// NewURLPolicy lowercases constructor arguments, so an uppercase scheme
-// configures the same policy as its lowercase form. The fold covers the whole
+// NewURLPolicy stores each non-empty scheme as given, and classifyURL matches
+// it with urlform.EqualASCIIFold, so an uppercase scheme configures the same
+// policy as its lowercase form. The fold covers the whole
 // ASCII letter range, both ends included: a scheme spelled with the last letter
 // of the alphabet has to match as readily as one spelled with the first, and the
 // digits and separators of a registered scheme have to survive the fold
@@ -567,8 +568,8 @@ func TestIsPublicHost_rejects_noncanonical_ipv4_and_whitespace(t *testing.T) {
 }
 
 // The launderings the host and scheme tests use must actually launder, or
-// those cases are stale and assert nothing. Note the two relations are NOT interchangeable and
-// the guard therefore splits by relation: U+0130 lowercases to "i" but does not
+// those cases are stale and assert nothing. Note the two relations are NOT
+// interchangeable and the guard therefore splits by relation: U+0130 lowercases to "i" but does not
 // FOLD with it, while U+212A does both. Measured on go1.26.7 and go1.27.0,
 // U+0130 and U+212A are the only two non-ASCII runes whose strings.ToLower image
 // is pure ASCII. The three pairs began folding in Unicode 17 (Go 1.27), which is
@@ -605,11 +606,12 @@ func TestFoldLaunderings_stillLaunder(t *testing.T) {
 }
 
 // No single-rune substitution into "localhost" is ever accepted, whichever fold
-// relation is used. This is the invariant the ASCII-only fold
-// rests on: measured over all 1,114,112 code points at all nine positions, the
-// two relations disagree on exactly one input ("localho\u017ft") and the
-// accept/reject verdict does not move for it — only the Kind, from KindLocalhost
-// to the more accurate KindBareHostname.
+// relation is used. This is the invariant the ASCII-only fold rests on:
+// measured over all 1,114,112 code points at all nine positions, the two
+// relations disagree on exactly one input ("localho\u017ft") and the
+// accept/reject verdict does not move for it, only the Kind, from KindLocalhost
+// to KindInvalidHost, which the non-ASCII diagnostic names before the
+// bare-hostname arm.
 func TestHostValidation_noRuneSubstitutionIntoLocalhostIsAccepted(t *testing.T) {
 	t.Parallel()
 	const base = "localhost"
@@ -652,9 +654,8 @@ func TestHostValidation_localhostKinds(t *testing.T) {
 		// The root label is stripped in normalization, ahead of the localhost
 		// fold, precisely so this keeps its specific diagnostic.
 		{"localhost.", KindLocalhost},
-		// Under Unicode folding this was KindLocalhost. It is not localhost —
-		// no resolver maps it to loopback — and it is now refused one step
-		// earlier, as a non-ASCII host, rather than as a bare hostname.
+		// Unicode folding reads this as localhost, but no resolver maps it to
+		// loopback: it is refused as a non-ASCII host.
 		{"localho\u017ft", KindInvalidHost},
 	}
 	for _, tc := range cases {

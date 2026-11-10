@@ -1165,9 +1165,10 @@ func (rp *resolvedRedirect) targetAllowed(target, origURL *url.URL) bool {
 }
 
 // isSchemeDowngrade reports whether redirecting from scheme `from` to scheme
-// `to` drops transport security (https -> http). Comparison is ASCII
-// case-insensitive. A same-scheme redirect and an http->https upgrade are not
-// downgrades.
+// `to` drops transport security (https -> http). It compares with
+// strings.EqualFold, whose Unicode fold can only read more `from` schemes as
+// https, so it refuses more hops, never fewer. A same-scheme redirect and an
+// http->https upgrade are not downgrades.
 func isSchemeDowngrade(from, to string) bool {
 	return strings.EqualFold(from, "https") && strings.EqualFold(to, "http")
 }
