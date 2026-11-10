@@ -1,6 +1,6 @@
 module github.com/cplieger/go/ssrf
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/cplieger/go/textsafe v1.0.0

@@ -1,3 +1,3 @@
 module github.com/cplieger/go/slogx
 
-go 1.27.3
+go 1.27.4
