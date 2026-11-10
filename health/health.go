@@ -78,23 +78,28 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 	}
 	if err := probeHealthDir(path); err != nil {
 		m.degraded = true
-		m.log().Warn("health marker directory not writable, "+
-			"container will report healthy in degraded mode",
+		m.log().Warn("health marker directory not writable, marker in degraded mode",
 			"dir", filepath.Dir(path),
 			"error", err,
+			"effect", degradedEffect,
 			"hint", "compose.yaml with read_only:true requires "+
 				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`")
 	} else if err := markerWritable(path); err != nil {
 		m.degraded = true
-		m.log().Warn("health marker not writable, "+
-			"container will report healthy in degraded mode",
+		m.log().Warn("health marker not writable, marker in degraded mode",
 			"path", path,
 			"error", err,
+			"effect", degradedEffect,
 			"hint", "remove what is at the marker path, such as a marker an "+
 				"earlier run as another user left, a directory or a FIFO")
 	}
 	return m
 }
+
+// degradedEffect is what NewMarker's degraded-mode warning tells the
+// operator: which verdict the container gets depends on whether its
+// healthcheck runs the file probe or asks an HTTP Handler.
+const degradedEffect = "the health subcommand reports healthy; Handler, Healthy and Within report unhealthy"
 
 // MarkerOption configures NewMarker.
 type MarkerOption func(*Marker)

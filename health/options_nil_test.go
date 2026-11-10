@@ -30,3 +30,25 @@ func TestNewMarker_OptionsApplyBeforeTheMarkerProbe(t *testing.T) {
 		t.Errorf("Inspect(missing marker, nil option) = %+v, want unhealthy", f)
 	}
 }
+
+// TestNewMarker_degradedWarningNamesBothVerdicts pins that the warning states
+// what degraded mode reports through each path, since the container's verdict
+// depends on which one its healthcheck uses: the health subcommand reports
+// healthy, and an HTTP Handler reports unhealthy.
+func TestNewMarker_degradedWarningNamesBothVerdicts(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	_ = NewMarker(path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	logged := buf.String()
+	want := `effect="the health subcommand reports healthy; Handler, Healthy and Within report unhealthy"`
+	if !strings.Contains(logged, want) {
+		t.Errorf("degraded-mode warning = %q, want it to carry %s", logged, want)
+	}
+	if strings.Contains(logged, "container will report healthy") {
+		t.Errorf("degraded-mode warning = %q, still promises a healthy container", logged)
+	}
+}

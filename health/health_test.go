@@ -1031,6 +1031,9 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	if !strings.Contains(logged, "level=WARN") {
 		t.Errorf("degraded construction must log at WARN; log:\n%s", logged)
 	}
+	if !strings.Contains(logged, degradedEffect) {
+		t.Errorf("degraded WARN must name both verdicts; log:\n%s", logged)
+	}
 	if !strings.Contains(logged, "hint=") || !strings.Contains(logged, "tmpfs") {
 		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", logged)
 	}
@@ -1136,7 +1139,8 @@ func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
 
 // TestDegradedMarkerMeansAHealthyProbe: whatever is at the marker path, a
 // marker NewMarker calls degraded is one the probe reports healthy, even
-// past its lease, so the app's warning ("will report healthy") is true.
+// past its lease, so the warning's effect ("the health subcommand reports
+// healthy") is true.
 func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 	old := time.Now().Add(-2 * time.Hour)
 	for name, setup := range map[string]func(path string) error{
