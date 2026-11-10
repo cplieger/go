@@ -275,18 +275,13 @@ func (g *generator) emitDecoder(w *strings.Builder, ti *typeInfo, used *usedIden
 }
 
 // emitMapDecoder writes a named map type's decoder: the body decoded as a map
-// field of that type is, null read as empty as encoding/json writes a nil
-// map, unless a Count bound refuses it.
+// field of that type is, null read as empty, as encoding/json writes a nil
+// map. No bound applies to a map (bounds.misfit), so none is checked.
 func (g *generator) emitMapDecoder(w *strings.Builder, ti *typeInfo, tn, path string, used *usedIdents) {
 	used.helper(helperDecodeRecord)
 	used.typeRef(tn)
-	f := ti.Map
-	decode := helperDecodeRecord + "(v, " + g.elemDecoderExpr(f.Elem, "", path, used) + ", \"" + path + "\")"
-	decode = f.Bounds.validatorCheck(decode, "\""+path+"\"", used)
-	if !f.refusesNull() {
-		decode = "v === null ? {} : " + decode
-	}
-	w.WriteString("export const " + g.decoderName(ti.Name) + ": Decoder<" + tn + "> = (v) => " + decode + ";\n\n")
+	decode := helperDecodeRecord + "(v, " + g.elemDecoderExpr(ti.Map.Elem, "", path, used) + ", \"" + path + "\")"
+	w.WriteString("export const " + g.decoderName(ti.Name) + ": Decoder<" + tn + "> = (v) => v === null ? {} : " + decode + ";\n\n")
 }
 
 // emitFieldDecodes writes the statements that decode fields from o into an
@@ -344,6 +339,10 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 		used.helper(helperReqStr)
 		return read() + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
 	case kindSlice, kindMap:
+		if f.mapRef() {
+			// The named map's own decoder reads null as empty.
+			return g.decoderName(f.GoTypeName) + "(" + read() + ")"
+		}
 		helper, empty := helperDecodeArray, "[]"
 		if f.Kind == kindMap {
 			helper, empty = helperDecodeRecord, "{}"
@@ -399,7 +398,11 @@ func (g *generator) emitOptionalField(w *strings.Builder, f *fieldInfo, path str
 func (g *generator) elemDecoderExpr(elem *fieldInfo, wn, path string, used *usedIdents) string {
 	dec := g.elemDecode(elem, wn, path, used)
 	if elem.Bounds != nil {
-		dec = "(v) => " + elem.Bounds.validatorCheck("("+dec+")(v)", "\""+path+"."+wn+"\"", used)
+		at := path
+		if wn != "" {
+			at = path + "." + wn
+		}
+		dec = "(v) => " + elem.Bounds.validatorCheck("("+dec+")(v)", "\""+at+"\"", used)
 	}
 	if elem.nullElem() {
 		dec = "(v) => v === null ? null : (" + dec + ")(v)"
@@ -411,14 +414,21 @@ func (g *generator) elemDecoderExpr(elem *fieldInfo, wn, path string, used *used
 // collection level accepts null as empty, as encoding/json writes a nil one,
 // unless a Count lower bound refuses it.
 func (g *generator) elemDecode(elem *fieldInfo, wn, path string, used *usedIdents) string {
+	at := path
+	if wn != "" {
+		at = path + "." + wn
+	}
 	switch elem.Kind {
 	case kindSlice, kindMap:
+		if elem.mapRef() {
+			return g.decoderName(elem.GoTypeName)
+		}
 		helper, empty := helperDecodeArray, "[]"
 		if elem.Kind == kindMap {
 			helper, empty = helperDecodeRecord, "{}"
 		}
 		used.helper(helper)
-		decode := helper + "(v, " + g.elemDecoderExpr(elem.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
+		decode := helper + "(v, " + g.elemDecoderExpr(elem.Elem, wn, path, used) + ", \"" + at + "\")"
 		if elem.refusesNull() {
 			return "(v) => " + decode
 		}
@@ -550,11 +560,21 @@ func (g *generator) emitTypeArbitraries(w *strings.Builder, engine *astEngine) {
 		tn := g.tsName(ti.Name)
 		w.WriteString("  " + tn + ": " + tn + ";\n")
 	}
-	w.WriteString("}>((tie) => ({\n")
 	reaches := g.arbReachability(engine)
+	var model strings.Builder
+	tied := false
 	for _, ti := range engine.types {
-		w.WriteString("  " + g.tsName(ti.Name) + ": " + g.arbForType(ti, reaches) + ",\n")
+		model.WriteString("  " + g.tsName(ti.Name) + ": " + g.arbForType(ti, reaches) + ",\n")
+		tied = tied || g.arbTies(ti)
 	}
+	// The callback names tie only when an arbitrary calls it, so a consumer's
+	// noUnusedParameters accepts a registry with no reference between types.
+	if tied {
+		w.WriteString("}>((tie) => ({\n")
+	} else {
+		w.WriteString("}>(() => ({\n")
+	}
+	w.WriteString(model.String())
 	w.WriteString("}));\n\n")
 	for _, ti := range engine.types {
 		tn := g.tsName(ti.Name)
@@ -580,6 +600,9 @@ func (g *generator) arbForType(ti *typeInfo, reaches map[string]map[string]bool)
 	}
 	if ti.Union != nil {
 		return g.arbForUnion(ti, recursive)
+	}
+	if ti.Map != nil {
+		return g.arbForMap(ti, recursive != nil)
 	}
 	if len(ti.Fields) == 0 {
 		return "fc.record({})"
@@ -642,12 +665,33 @@ func (g *generator) arbRefs(f *fieldInfo) []string {
 	switch {
 	case f == nil:
 		return nil
+	case f.Kind == kindStruct || f.mapRef():
+		return []string{f.GoTypeName}
 	case f.Kind == kindSlice || f.Kind == kindMap:
 		return g.arbRefs(f.Elem)
-	case f.Kind == kindStruct:
-		return []string{f.GoTypeName}
 	}
 	return nil
+}
+
+// arbForMap is a named map's arbitrary: a dictionary of its value, capped
+// with the empty map, which ends it, when the map reaches itself.
+func (g *generator) arbForMap(ti *typeInfo, recursive bool) string {
+	dict := g.arbElemValue(ti.Map)
+	if !recursive {
+		return dict
+	}
+	return "fc.oneof(\n    " + arbRecursionCap + ",\n    fc.constant({}),\n    " + dict + ",\n  )"
+}
+
+// arbTies reports whether ti's arbitrary calls tie: some field, element or
+// payload of it references a registered type.
+func (g *generator) arbTies(ti *typeInfo) bool {
+	for _, f := range ti.graphFields() {
+		if len(g.arbRefs(f)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // arbReachability answers, for every registered type, which registered types
@@ -713,7 +757,15 @@ func (g *generator) arbElemValue(f *fieldInfo) string {
 	case kindSlice:
 		return "fc.array(" + g.arbElemExpr(f.Elem) + ", " + arbArrayConstraintsFor(f.Bounds) + ")"
 	case kindMap:
-		return "fc.dictionary(fc.string(), " + g.arbElemExpr(f.Elem) + ", " + arbRecordConstraints + ")"
+		if f.mapRef() {
+			return "tie(\"" + g.tsName(f.GoTypeName) + "\")"
+		}
+		keys := "fc.string()"
+		if r := f.KeyRange; r != nil {
+			// encoding/json writes an integer key as its decimal text.
+			keys = fmt.Sprintf("fc.integer({ min: %d, max: %d }).map(globalThis.String)", r[0], r[1])
+		}
+		return "fc.dictionary(" + keys + ", " + g.arbElemExpr(f.Elem) + ", " + arbRecordConstraints + ")"
 	case kindMapped:
 		expr, _ := arbMappedExpr(f.GoTypeName, f.TSType)
 		return expr

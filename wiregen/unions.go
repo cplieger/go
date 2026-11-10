@@ -22,8 +22,8 @@ import (
 // type, keeps its own omit options there, and is refused in the others. A
 // json.RawMessage can always be null on the wire, so the typed payload's
 // TypeScript member is optional, its schemas are nullable, and a decoder
-// reads null as absent. Each payload type is a struct, as every registered
-// type is, and joins the registry's types.
+// reads null as absent. Each payload type is a struct or a named map, as
+// every registered type is, and joins the registry's types.
 type Union struct {
 	Cases        map[string][]string
 	PayloadTypes map[string]Type

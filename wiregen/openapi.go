@@ -381,6 +381,8 @@ func refsAny(f *fieldInfo, set map[string]bool) bool {
 	switch {
 	case f == nil:
 		return false
+	case f.mapRef():
+		return set[f.GoTypeName]
 	case f.Kind == kindSlice || f.Kind == kindMap:
 		return refsAny(f.Elem, set)
 	case f.Kind == kindStruct:
@@ -583,7 +585,19 @@ func (b *docBuilder) valueSchema(f *fieldInfo, d direction) map[string]any {
 	case kindSlice:
 		s = map[string]any{kwType: schemaArray, "items": b.elemSchema(f.Elem, d)}
 	case kindMap:
+		if f.mapRef() {
+			return b.ref(f.GoTypeName, d)
+		}
 		s = map[string]any{kwType: schemaObject, "additionalProperties": b.elemSchema(f.Elem, d)}
+		if r := f.KeyRange; r != nil {
+			// encoding/json writes an integer key as its decimal text, and
+			// reads back only that.
+			pattern := "^(0|[1-9][0-9]*)$"
+			if r[0] < 0 {
+				pattern = "^-?(0|[1-9][0-9]*)$"
+			}
+			s["propertyNames"] = map[string]any{"pattern": pattern}
+		}
 	default:
 		s = map[string]any{kwType: scalarTypes[f.Kind]}
 		if f.Kind == kindUint {

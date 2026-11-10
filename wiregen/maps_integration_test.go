@@ -3,11 +3,14 @@
 package wiregen_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/cplieger/go/wiregen/v2"
 	"github.com/cplieger/go/wiregen/v2/testdata/edges"
+	"github.com/cplieger/go/wiregen/v2/testdata/maps"
 )
 
 // The named map decoders and the client that sends and reads them
@@ -65,5 +68,38 @@ for (const body of ['{}', '{"x":1}', '[]']) {
 	})
 	if want := "ok {}\nok {}\nrefused $.empty_struct: expected object, got array\n"; out != want {
 		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// The arbitraries of named maps type-check under the strict harness: a
+// registry whose maps reference nothing names no tie parameter, and recursive
+// maps tie to themselves.
+func TestMapType_ArbitrariesTypeCheck(t *testing.T) {
+	plain := newTestRegistry(wiregen.WithArbitrariesFile("arbitraries.gen.ts"))
+	plain.Types = []wiregen.Type{wiregen.TypeRef[maps.Settings](), wiregen.TypeRef[maps.Lists](), wiregen.TypeRef[maps.Ranked]()}
+	recursive := newTestRegistry(wiregen.WithArbitrariesFile("arbitraries.gen.ts"))
+	recursive.Types = []wiregen.Type{
+		wiregen.TypeRef[maps.Tree](), wiregen.TypeRef[maps.Left](), wiregen.TypeRef[maps.Right](),
+		wiregen.TypeRef[maps.Node](), wiregen.TypeRef[maps.Kids](),
+	}
+	for name, r := range map[string]*testRegistry{"no references": plain, "recursive": recursive} {
+		t.Run(name, func(t *testing.T) {
+			dir := tsProject(t, r, map[string]string{})
+			stub := filepath.Join(dir, "node_modules", "fast-check")
+			if err := os.MkdirAll(stub, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for file, body := range map[string]string{
+				"package.json": `{"name": "fast-check", "type": "module", "types": "index.d.ts"}`,
+				"index.d.ts":   fastCheckStub,
+			} {
+				if err := os.WriteFile(filepath.Join(stub, file), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if out, err := tool(t, dir, "tsc", "-p", "tsconfig.json", "--noEmit"); err != nil {
+				t.Fatalf("tsc: %v\n%s", err, out)
+			}
+		})
 	}
 }
