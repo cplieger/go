@@ -128,6 +128,9 @@ func FuzzResolveClient_ipFromPeerOrHeader(f *testing.F) {
 		}) {
 			t.Fatalf("forwarded IP %v is in no X-Forwarded-For entry (xff=%q)", got.IP, xff)
 		}
+		if got.Forwarded && !got.PeerTrusted || got.UntrustedForwarding && got.PeerTrusted {
+			t.Fatalf("ResolveClient = %+v: Forwarded needs a trusted peer and UntrustedForwarding an untrusted one", got)
+		}
 		if got.UntrustedForwarding && !slices.ContainsFunc([]string{xff, realIP, forwarded}, func(v string) bool {
 			return strings.Trim(v, " \t,\n") != ""
 		}) {

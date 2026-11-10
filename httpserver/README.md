@@ -10,7 +10,7 @@ It replaces the middleware, proxy-header parsing and shutdown sequence you would
 
 httpserver is built for a Go service on `http.ServeMux` that faces a browser or sits behind a proxy.
 
-- `ResolveClient` and `ClientIP` read `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ResolveClient` also reports whether an unlisted proxy sent a forwarding header.
+- `ResolveClient` and `ClientIP` read `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ResolveClient` also reports whether the peer is a proxy you trust, and whether an unlisted proxy sent a forwarding header.
 - A Host allowlist answers 403 to a `Host` you did not list, which stops DNS rebinding attacks.
 - The access log writes `log/slog` lines and caps the path at 512 bytes and the method at 24. Metric labels stay within ten method values and your registered routes.
 - `New` leaves the write timeout off, so SSE and WebSocket streams stay open. `Run` drains in-flight requests within a 5-second grace period by default.
