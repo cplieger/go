@@ -300,6 +300,41 @@ func TestURLPolicyRedirectPolicy_schemeDoesNotLaunderThroughCaseFolding(t *testi
 	}
 }
 
+// SafeRedirectPolicy's HTTPS-only default folds the scheme over ASCII only: a
+// caller-built URL can hold bytes url.Parse never emits, and U+017F folds
+// with 's' under strings.EqualFold.
+func TestSafeRedirectPolicy_defaultSchemeFoldsOverASCIIOnly(t *testing.T) {
+	t.Parallel()
+	policy := SafeRedirectPolicy(nil)
+	cases := []struct {
+		name, scheme string
+		allowed      bool
+	}{
+		{"exact", "https", true},
+		{"ASCII uppercase folds", "HTTPS", true},
+		{"ASCII mixed case folds", "HtTpS", true},
+		{"long s does not fold", "http\u017f", false},
+		{"long s uppercase spelling does not fold", "HTTP\u017f", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := &http.Request{URL: &url.URL{Scheme: tc.scheme, Host: "example.com", Path: "/x"}}
+			err := policy(req, nil)
+			if tc.allowed {
+				if err != nil {
+					t.Fatalf("scheme %q = %v, want allowed", tc.scheme, err)
+				}
+				return
+			}
+			se, ok := errors.AsType[*Error](err)
+			if !ok || se.Kind != KindBadScheme {
+				t.Fatalf("scheme %q error = %v, want KindBadScheme", tc.scheme, err)
+			}
+		})
+	}
+}
+
 // A caller-constructed URL is classified from its fields, so a non-public Host
 // is refused even when no round-trip through the URL's text takes place.
 func TestURLPolicyRedirectPolicy_classifiesCallerBuiltURLFields(t *testing.T) {

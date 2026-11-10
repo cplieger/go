@@ -94,7 +94,7 @@ if p := f.NormalizedPath(); p == "" || !strings.HasPrefix(p, "/beat/") {
 - `Classify` returns a `Form`, which holds the `Class` and the facts a browser sees: `Trimmed`, `Host`, `Scheme`, `Port`, `HasBackslash`, `HasTabOrNewline`, `HasUserInfo` and `HostUnrecoverable`.
 - `Class` is one of `ClassEmpty`, `ClassMalformed`, `ClassAbsolute`, `ClassHiddenHost`, `ClassProtocolRelative`, `ClassSchemelessHost` and `ClassRelative`.
 - `Form.NormalizedPath` returns the path a browser resolves, with dot segments removed.
-- `IsASCIIHost`, `FoldHostASCII` and `Domain` with its `Matches` method check host evidence. `EqualASCIIFold` compares ASCII tokens that are not hosts, such as a query parameter name.
+- `IsASCIIHost`, `FoldHostASCII` and `Domain` with its `Matches` method check host evidence. `EqualASCIIFold` compares a string with a fixed ASCII token, such as a query parameter name.
 - `RawQueryNames` and `RawQueryPairs` walk a raw query without the parsed map.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/urlform).

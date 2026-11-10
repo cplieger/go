@@ -443,11 +443,11 @@ func FoldHostASCII(host string) string {
 // EqualASCIIFold reports whether a and b are equal under ASCII-only case
 // folding: A-Z fold to a-z and nothing else does. It is FoldHostASCII's rule as
 // a comparison (both read the single byte rule, so the two can never disagree),
-// for the strings that are NOT hosts - a URL path token, a query parameter
-// name, any fixed ASCII protocol token an untrusted string is matched against.
-// A structural gate reading "/torrents.php" or "torrentid" out of an untrusted
-// URL is doing that comparison, and calling a host fold on a path would misname
-// the operation.
+// for comparing any string against a fixed ASCII token: a URL path token, a
+// query parameter name, a scheme, or a host against a literal such as
+// "localhost". A structural gate reading "/torrents.php" or "torrentid" out of
+// an untrusted URL is doing that comparison, and calling a host fold on a path
+// would misname the operation.
 //
 // The ASCII-only restriction is the whole point, and the reason not to reach
 // for strings.EqualFold: full Unicode simple folding has ASCII-PRODUCING
