@@ -449,10 +449,12 @@ func (f Freshness) Healthy() bool {
 	return f.State == MarkerFresh || f.State == MarkerDirUnavailable
 }
 
-// ceilMillisecond rounds d up to a whole millisecond.
+// ceilMillisecond rounds d up to a whole millisecond, saturating at
+// maxDuration: time.Since returns maxDuration for a marker older than about
+// 292 years, and its last partial millisecond has no whole one above it.
 func ceilMillisecond(d time.Duration) time.Duration {
 	if r := d % time.Millisecond; r > 0 {
-		return d - r + time.Millisecond
+		return addSaturating(d-r, time.Millisecond)
 	}
 	return d
 }
@@ -462,10 +464,11 @@ func ceilMillisecond(d time.Duration) time.Duration {
 func (f Freshness) Reason() string {
 	switch f.State {
 	case MarkerStale:
-		// Both to the millisecond, the age rounded up, so a stale age, which
-		// is above the max-age, never prints as equal to it.
+		// The age rounds up to the millisecond and the max-age prints as
+		// armed, so a stale age, which is above the max-age, never prints as
+		// equal to or below it.
 		return fmt.Sprintf("unhealthy: marker stale: %s old exceeds max-age %s",
-			ceilMillisecond(f.Age), f.MaxAge.Truncate(time.Millisecond))
+			ceilMillisecond(f.Age), f.MaxAge)
 	case MarkerAbsent:
 		return "unhealthy: marker absent"
 	case MarkerUnreadable:

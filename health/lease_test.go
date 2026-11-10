@@ -35,9 +35,11 @@ func TestLeaseDurationDisabledOnlyByInterval(t *testing.T) {
 		"negative interval":       {Interval: -time.Hour, Cycles: 3},
 		"negative interval+floor": {Interval: -time.Hour, Cycles: 3, Floor: 3 * time.Hour},
 	} {
-		if got := l.Duration(); got != 0 {
-			t.Errorf("%s: Lease%+v.Duration() = %s, want 0 (disabled)", name, l, got)
-		}
+		t.Run(name, func(t *testing.T) {
+			if got := l.Duration(); got != 0 {
+				t.Errorf("Lease%+v.Duration() = %s, want 0 (disabled)", l, got)
+			}
+		})
 	}
 }
 
@@ -74,9 +76,11 @@ func TestLeaseDurationReproducesEveryConsumerFormula(t *testing.T) {
 		},
 	}
 	for name, tc := range tests {
-		if got := tc.lease.Duration(); got != tc.want {
-			t.Errorf("%s: Lease%+v.Duration() = %s, want %s", name, tc.lease, got, tc.want)
-		}
+		t.Run(name, func(t *testing.T) {
+			if got := tc.lease.Duration(); got != tc.want {
+				t.Errorf("Lease%+v.Duration() = %s, want %s", tc.lease, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -91,22 +95,24 @@ func TestLeaseDurationSaturatesWhereInlineArithmeticWraps(t *testing.T) {
 		lease  Lease
 		cycles int
 	}{
-		"3x interval past maxDuration/3":             {Lease{Interval: maxDuration/3 + 1, Cycles: 3}, 3},
-		"2x interval past maxDuration/2":             {Lease{Interval: 1281024 * time.Hour, Cycles: 2, Timeout: time.Hour, Attempts: 1}, 2},
+		"3x interval past a third of maxDuration":    {Lease{Interval: maxDuration/3 + 1, Cycles: 3}, 3},
+		"2x interval past half of maxDuration":       {Lease{Interval: 1281024 * time.Hour, Cycles: 2, Timeout: time.Hour, Attempts: 1}, 2},
 		"timeout alone at the representable ceiling": {Lease{Interval: 6 * time.Hour, Cycles: 2, Timeout: 2562047 * time.Hour, Attempts: 1}, 2},
 		"interval and timeout both large":            {Lease{Interval: 1000000 * time.Hour, Cycles: 2, Timeout: 1000000 * time.Hour, Attempts: 1}, 2},
 		"3x interval at a 97-year cadence":           {Lease{Interval: 900000 * time.Hour, Cycles: 3}, 3},
 	}
 	for name, tc := range tests {
-		if got := tc.lease.Duration(); got != maxDuration {
-			t.Errorf("%s: Lease%+v.Duration() = %d, want maxDuration (%d)",
-				name, tc.lease, int64(got), int64(maxDuration))
-		}
-		iv, to := tc.lease.Interval, tc.lease.Timeout
-		wrapped := time.Duration(tc.cycles)*iv + time.Duration(tc.lease.Attempts)*to
-		if wrapped > 0 {
-			t.Errorf("%s: the inline arithmetic yielded %d (> 0), so this case does not"+
-				" reproduce the disarm and proves nothing", name, int64(wrapped))
-		}
+		t.Run(name, func(t *testing.T) {
+			if got := tc.lease.Duration(); got != maxDuration {
+				t.Errorf("Lease%+v.Duration() = %d, want maxDuration (%d)",
+					tc.lease, int64(got), int64(maxDuration))
+			}
+			iv, to := tc.lease.Interval, tc.lease.Timeout
+			wrapped := time.Duration(tc.cycles)*iv + time.Duration(tc.lease.Attempts)*to
+			if wrapped > 0 {
+				t.Errorf("the inline arithmetic yielded %d (> 0), so this case does not"+
+					" reproduce the disarm and proves nothing", int64(wrapped))
+			}
+		})
 	}
 }
