@@ -4,7 +4,8 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 ## Rules
 
-- A change to what degraded mode reports updates the package comment, the `Healthy`, `Within`, `Inspect`, `RunProbe` and `Handler` comments, `NewMarker`'s warning text (`degradedEffect`), the `MarkerState` and `Freshness` comments, the README's "Why use it" bullet and degraded-mode section, `docs/file-marker.md` and `docs/freshness.md` together. A missed one tells callers the opposite of what the code does.
+- A change to what degraded mode reports updates the package comment, the `NewStatus`, `WithMarker` and `RunProbe` comments, the warning's `effect` text (`degradedEffect`), the README's degraded-mode section and `docs/file-marker.md` together. A missed one tells callers the opposite of what the code does.
+- `/healthz` reads memory only. A change that makes `Healthy`, `Fresh` or `CheckHandler` read the marker file is declined, because an endpoint that depends on a file reports unhealthy whenever the file cannot be written.
 
 ## Checks
 

@@ -7,13 +7,13 @@ import (
 	"slices"
 )
 
-// The fleet health body's status values.
+// The health body's status values.
 const (
 	statusOK        = "ok"
 	statusUnhealthy = "unhealthy"
 )
 
-// reasonUnhealthy is the reason Handler gives for its one signal.
+// reasonUnhealthy is the reason an empty Check.Reason reads as.
 const reasonUnhealthy = "the app reports itself unhealthy"
 
 // Check is one condition a health endpoint reports.
@@ -60,15 +60,4 @@ func CheckHandler(checks ...Check) http.Handler {
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(b)
 	})
-}
-
-// Handler returns CheckHandler for one signal, s, with the reason "the app
-// reports itself unhealthy"; a nil s is unhealthy. With a *Marker it answers
-// 503 while the marker is absent, and for the whole of degraded mode (an
-// unwritable marker or marker directory at NewMarker, such as a read-only /tmp)
-// until a Set leaves it, where RunProbe reports healthy while the marker cannot
-// be written, to avoid a restart loop. So it must not be the only liveness
-// probe of a service that may run read-only.
-func Handler(s Signal) http.Handler {
-	return CheckHandler(Check{Signal: s, Reason: reasonUnhealthy})
 }

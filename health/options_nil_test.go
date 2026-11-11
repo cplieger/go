@@ -1,32 +1,40 @@
 package health
 
 import (
-	"bytes"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// TestNewMarker_OptionsApplyBeforeTheMarkerProbe pins that WithLogger is in
-// place before NewMarker probes the marker path, so the degraded-mode warning
-// reaches the caller's logger, and that a nil option is skipped here and in
-// Inspect alike. A directory at the marker path takes the degraded path for
-// any user, root included.
-func TestNewMarker_OptionsApplyBeforeTheMarkerProbe(t *testing.T) {
+// TestNewStatus_OptionsApplyBeforeTheMarkerCheck pins that every option is in
+// place before NewStatus checks the marker path, so the degraded-mode warning
+// reaches a logger given after WithMarker, and that a nil option is skipped
+// here and in inspect alike. A directory at the marker path takes the
+// degraded path for any user, root included.
+func TestNewStatus_OptionsApplyBeforeTheMarkerCheck(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), ".healthy")
-	if err := os.Mkdir(path, 0o700); err != nil {
+	p := filepath.Join(t.TempDir(), "app.healthy")
+	if err := os.Mkdir(p, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var buf bytes.Buffer
-	l := slog.New(slog.NewTextHandler(&buf, nil))
-	_ = NewMarker(path, nil, WithLogger(l))
-	if !strings.Contains(buf.String(), "health marker not writable") {
+	l, buf := jsonLog()
+	_ = NewStatus(WithMarker(p), nil, WithLogger(l))
+	if n := len(withMsg(t, buf, msgMarkerDegraded)); n != 1 {
 		t.Errorf("WithLogger got %q, want the degraded-mode warning", buf.String())
 	}
-	if f := Inspect(filepath.Join(t.TempDir(), "missing"), nil); f.Healthy() {
-		t.Errorf("Inspect(missing marker, nil option) = %+v, want unhealthy", f)
+	if f := inspect(filepath.Join(t.TempDir(), "missing"), nil); f.healthy() {
+		t.Errorf("inspect(missing marker, nil option) = %+v, want unhealthy", f)
+	}
+}
+
+// TestWithMarkerLastWins: of two WithMarker options the last decides the path.
+func TestWithMarkerLastWins(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	first, last := filepath.Join(dir, "first.healthy"), filepath.Join(dir, "last.healthy")
+	st := NewStatus(WithLogger(discard), WithMarker(first), WithMarker(last))
+	st.Set(true)
+	if exists(t, first) || !exists(t, last) {
+		t.Errorf("first present = %v, last present = %v; want only the last", exists(t, first), exists(t, last))
 	}
 }
