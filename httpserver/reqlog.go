@@ -567,26 +567,13 @@ func routeMetricLabels(r *http.Request) (method, path string) {
 	return routeMetricMethod(r.Method), routeMetricPath(r)
 }
 
-// WithLogLevel sets the LEVEL POLICY for the access-log line: fn is called
-// once per logged request with the request and the final status, and the line
-// is emitted at the returned level. The default without this option is
-// slog.LevelInfo, unchanged. The hook chooses the level only — the line's
-// attributes and emission rules (deferred emit, skip paths) are the logger's
-// fixed mechanism. WithProbeLogLevel is the named preset over this hook for the
-// routine-machine-probe case; reach for the raw hook only when a custom
-// policy is genuinely needed.
-//
-// The canonical use is scrape-noise control on a polled service: map 2xx/3xx
-// to slog.LevelDebug so a 15-second Prometheus scrape stays out of the log
-// stream at the default level while staying visible under LOG_LEVEL=debug,
-// and raise 4xx to Warn / 5xx to Error so failures surface. Because fn also
-// receives the request, a policy can key on the path instead (quiet only the
-// scrape route, keep everything else at Info).
-//
-// A request suppressed by WithSkipPaths or WithSkipFunc emits no line at all,
-// so fn is never called for it. A panicking fn is contained: the failure is
-// logged and the line falls back to Info, mirroring the package's other
-// callback guards. A nil fn is ignored (the skip-nil option convention).
+// WithLogLevel sets the access line's level: fn gets the request and the
+// final status, and the line is emitted at the level it returns (Info
+// without this option). WithProbeLogLevel is the preset for probe paths; a
+// split by status (2xx and 3xx at Debug, 4xx at Warn, 5xx at Error) suits
+// routes a person requests, where each 4xx or 5xx is one event. A skipped
+// request never calls fn, a panicking fn is logged and the line falls back
+// to Info, and a nil fn is ignored.
 func WithLogLevel(fn func(r *http.Request, status int) slog.Level) LogOption {
 	return func(c *logConfig) {
 		if fn != nil {
@@ -595,31 +582,23 @@ func WithLogLevel(fn func(r *http.Request, status int) slog.Level) LogOption {
 	}
 }
 
-// WithProbeLogLevel is the shared access-log level policy for machine-probe
-// endpoints (health checks, readiness probes, metrics scrapes). A request whose
-// r.URL.Path exactly matches one of paths logs at Debug on success (status <
-// 400), Warn on a 4xx and Error on a 5xx, so a healthy probe stays quiet and a
-// failing one surfaces; every other request stays at Info. It is a WithLogLevel
-// policy, so the two are mutually exclusive (last applied wins); a skipped path
-// never consults it, and a panicking policy falls back to Info. With no paths
-// every request logs at Info.
+// WithProbeLogLevel is the access-log level policy for machine-probe endpoints
+// (health checks, readiness probes, metrics scrapes). A request whose
+// r.URL.Path exactly matches one of paths logs at Debug whatever its status,
+// since a probe repeats one standing state; every other request stays at Info.
+// It is a WithLogLevel policy, so the last of the two applied wins. A skipped
+// path never consults it, a panicking policy falls back to Info, and with no
+// paths every request logs at Info.
 func WithProbeLogLevel(paths ...string) LogOption {
 	probe := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		probe[p] = struct{}{}
 	}
-	return WithLogLevel(func(r *http.Request, status int) slog.Level {
+	return WithLogLevel(func(r *http.Request, _ int) slog.Level {
 		if _, ok := probe[r.URL.Path]; !ok {
 			return slog.LevelInfo
 		}
-		switch {
-		case status >= 500:
-			return slog.LevelError
-		case status >= 400:
-			return slog.LevelWarn
-		default:
-			return slog.LevelDebug
-		}
+		return slog.LevelDebug
 	})
 }
 

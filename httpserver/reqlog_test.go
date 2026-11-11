@@ -858,7 +858,7 @@ func TestLogging_panickingClientIPResolverStillEmitsAccessLine(t *testing.T) {
 }
 
 func TestLogging_withLogLevelMapsStatus(t *testing.T) {
-	// The canonical scrape-quiet policy: 2xx/3xx at Debug, 4xx Warn, 5xx Error.
+	// A split-by-status policy: 2xx/3xx at Debug, 4xx Warn, 5xx Error.
 	policy := func(_ *http.Request, status int) slog.Level {
 		switch {
 		case status >= 500:
@@ -1179,25 +1179,50 @@ func probeLevelOf(t *testing.T, target string, status int, probePaths ...string)
 	return recs[0].Level
 }
 
-func TestWithProbeLogLevel_mapsProbeStatusesToLevels(t *testing.T) {
-	cases := []struct {
-		name   string
-		status int
-		want   slog.Level
-	}{
-		{"healthy probe at Debug", http.StatusOK, slog.LevelDebug},
-		{"redirect grouped with success", http.StatusNotModified, slog.LevelDebug},
-		{"first client error at Warn", http.StatusBadRequest, slog.LevelWarn},
-		{"client error at Warn", http.StatusNotFound, slog.LevelWarn},
-		{"first server error at Error", http.StatusInternalServerError, slog.LevelError},
-		{"server error at Error", http.StatusServiceUnavailable, slog.LevelError},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := probeLevelOf(t, "/api/health", tc.status, "/api/health"); got != tc.want {
-				t.Errorf("probe %d level = %v, want %v", tc.status, got, tc.want)
+func TestWithProbeLogLevel_logsEveryProbeStatusAtDebug(t *testing.T) {
+	for name, status := range map[string]int{
+		"healthy probe":     http.StatusOK,
+		"not modified":      http.StatusNotModified,
+		"forbidden":         http.StatusForbidden,
+		"client error":      http.StatusNotFound,
+		"server error":      http.StatusInternalServerError,
+		"unhealthy verdict": http.StatusServiceUnavailable,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := probeLevelOf(t, "/api/health", status, "/api/health"); got != slog.LevelDebug {
+				t.Errorf("probe %d level = %v, want Debug", status, got)
 			}
 		})
+	}
+}
+
+// TestWithProbeLogLevel_refusedHostStillWarns: a probe path's access line is
+// Debug, but HostPolicy logs its own Warn for the refusal, so a probe from the
+// wrong host still shows at the default level.
+func TestWithProbeLogLevel_refusedHostStillWarns(t *testing.T) {
+	logCap := &captureHandler{}
+	l := slog.New(logCap)
+	policy, invalid := httpserver.ParseHostList([]string{"allowed.example"}, httpserver.WithHostAllowlistLogger(l))
+	if len(invalid) != 0 {
+		t.Fatalf("invalid allowlist entries: %v", invalid)
+	}
+	h := httpserver.Chain(okHandler(), httpserver.Logging(httpserver.WithLogger(l), httpserver.WithProbeLogLevel("/healthz")), policy.Middleware())
+	if rec := serve(h, http.MethodGet, "/healthz", nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("a probe from a host outside the allowlist = %d, want 403", rec.Code)
+	}
+	var warns, debugs int
+	for _, r := range logCap.snapshot() {
+		switch {
+		case r.Level == slog.LevelWarn && r.Message == "httpserver: host not allowed":
+			warns++
+		case r.Level == slog.LevelDebug && r.Message == "http":
+			debugs++
+		default:
+			t.Errorf("unexpected record %q at %v", r.Message, r.Level)
+		}
+	}
+	if warns != 1 || debugs != 1 {
+		t.Errorf("records: %d refusal Warn and %d Debug access lines, want 1 and 1", warns, debugs)
 	}
 }
 
