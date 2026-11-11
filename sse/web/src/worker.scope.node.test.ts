@@ -315,6 +315,74 @@ describe("worker host scope", () => {
     expect(b.ofType("revalidate_run").map((m) => m.ctx.full)).toEqual([true, true]);
   });
 
+  it("a tab the stream is not assured of sits out a run started while offline", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h, { resumed: true });
+    const b = tab(h, "b");
+    b.attach({ scope: ["run:b"], scopeSeq: 1, hadWorker: true });
+    await settle();
+    a.send({ type: "network", online: false });
+    await settle();
+    a.send({ type: "visibility", ev: "pageshow" });
+    await settle();
+    const run = h.runs.at(-1)!;
+    expect(run.ctx.full).toBe(false);
+    void run.tabs.run(run.ctx);
+    await settle();
+    expect(b.ofType("revalidate_run")).toHaveLength(0);
+    expect(b.ofType("scope_set")).toHaveLength(0);
+  });
+
+  it("a scope call after a logout stopped the stream fails stopped at once", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h);
+    const b = tab(h, "b");
+    b.attach({ scope: ["run:a"] });
+    await settle();
+    b.send({ type: "detach", cause: "logout" });
+    await settle();
+    a.send({ type: "set_scope", seq: 4, topics: ["run:b"] });
+    await settle();
+    expect(a.ofType("scope_failed")).toEqual([{ type: "scope_failed", seq: 4, cause: "stopped" }]);
+  });
+
+  it("a stop drops the runs held for coverage", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h);
+    const b = tab(h, "b");
+    b.attach({ scope: ["run:b"], hadWorker: true });
+    await settle();
+    expect(b.ofType("revalidate_run")).toHaveLength(0);
+    a.send({ type: "detach", cause: "logout" });
+    await settle();
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    expect(b.ofType("revalidate_run")).toHaveLength(0);
+  });
+
+  it("a scope the host's grammar refuses draws everything, and its call still settles", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h);
+    a.send({ type: "set_scope", seq: 5, topics: ["run a"] });
+    await settle();
+    expect(h.posted.at(-1)?.body.topics).toBeNull();
+    h.posted.at(-1)!.answer(ok(9));
+    await settle();
+    expect(a.ofType("scope_set")).toEqual([{ type: "scope_set", seq: 5, epoch: A, offset: "9" }]);
+  });
+
   it("a stopped stream fails every pending scope call with stopped", async () => {
     const h = hostHarness();
     const a = tab(h, "a");

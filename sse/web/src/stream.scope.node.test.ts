@@ -290,6 +290,133 @@ describe("stream scope", () => {
     expect(h.last().request.headers["SSE-Topics"]).toBeUndefined();
   });
 
+  it("a malformed conn on a degraded stream, or with no scopeUrl, reconnects no more", async () => {
+    const h = scoped();
+    await h.open(helloWithConn({ conn: "x" }));
+    expect(h.sf.connections).toHaveLength(2);
+    h.last().push(helloFrame(helloWithConn({ conn: "y".repeat(32), head: "6" })));
+    await flush();
+    expect(h.sf.connections).toHaveLength(2);
+    expect(h.stream.state().kind).toBe("open");
+    h.last().end();
+    await flush();
+    vi.advanceTimersByTime(1_500);
+    await flush();
+    h.last().push(helloFrame(helloWithConn({ conn: "y".repeat(32), head: "7" })));
+    await flush();
+    expect(h.sf.connections).toHaveLength(3);
+    expect(h.stream.state().kind).toBe("open");
+    expect(h.ofKind("scope_refused")).toHaveLength(1);
+
+    const plain = harness();
+    await plain.open(helloWithConn({ conn: "y".repeat(32) }));
+    expect(plain.sf.connections).toHaveLength(1);
+    expect(plain.ofKind("scope_refused")).toHaveLength(0);
+  });
+
+  it("a 408 or a proxy's status is transient; only the named refusals degrade", async () => {
+    for (const answer of [
+      refusal(408, "timeout"),
+      refusal(421, "misdirected"),
+      refusal(400, "bad_gateway_form"),
+    ]) {
+      const h = scoped(["run:a", "run:b"]);
+      const posted = postQueue(h);
+      await h.open(helloWithConn());
+      track(h.stream.setScope(["run:a"]));
+      await flush();
+      posted[0]!.answer(answer);
+      await flush();
+      expect(h.ofKind("scope_refused")).toHaveLength(0);
+      expect(h.sf.connections).toHaveLength(1);
+    }
+  });
+
+  it("a redirected 200 or one from another epoch confirms nothing", async () => {
+    const redirected = ok(8);
+    Object.defineProperty(redirected, "redirected", { value: true });
+    for (const answer of [redirected, ok(8, "bbbbbbbbbbbbbbbb")]) {
+      const h = scoped([]);
+      const posted = postQueue(h);
+      await h.open(helloWithConn());
+      const widen = track(h.stream.setScope(["run:a"]));
+      await flush();
+      posted[0]!.answer(answer);
+      await flush();
+      expect(widen.value).toBeUndefined();
+      expect(h.sf.connections).toHaveLength(2);
+    }
+  });
+
+  it("a connection's end drops its coverage records, so the next hello starts from its own", async () => {
+    const h = scoped([]);
+    const posted = postQueue(h);
+    await h.open(helloWithConn());
+    const a = track(h.stream.setScope(["run:a"]));
+    await flush();
+    posted[0]!.answer(ok(9));
+    await flush();
+    expect(a.value).toEqual({ epoch: A, offset: "9" });
+    h.last().end();
+    await flush();
+    vi.advanceTimersByTime(1_500);
+    await flush();
+    expect(h.last().request.headers["SSE-Topics"]).toBe('["run:a"]');
+    // A hello with no conn is everything, which keeps no per-topic record of its own.
+    h.last().push(helloFrame({ resumed: true, verdict: "resumed", head: "9" }));
+    await flush();
+    const again = track(h.stream.setScope(["run:a"]));
+    await flush();
+    expect(again.value).toEqual({ epoch: A, offset: "5" });
+  });
+
+  it("between connections nothing is assured: a hidden close sends no POST and a widening waits for the backoff", async () => {
+    const h = scoped(["run:a", "run:b"]);
+    const posted = postQueue(h);
+    await h.open(helloWithConn());
+    h.visibility.emit("hidden");
+    vi.advanceTimersByTime(60_000);
+    await flush();
+    expect(h.stream.state().kind).toBe("hidden_closed");
+    const narrow = track(h.stream.setScope(["run:a"]));
+    vi.advanceTimersByTime(20 * 60_000);
+    await flush();
+    expect(posted).toHaveLength(0);
+    expect(narrow.value).toBeUndefined();
+
+    const g = scoped(["run:a"]);
+    const gPosted = postQueue(g);
+    await g.open(helloWithConn());
+    g.last().end();
+    await flush();
+    expect(g.stream.state().kind).toBe("backoff");
+    track(g.stream.setScope(["run:a", "run:b"]));
+    await flush();
+    expect(gPosted).toHaveLength(0);
+    expect(g.sf.connections).toHaveLength(1);
+  });
+
+  it("a call made while stopped rejects stopped, and the next start presents its scope", async () => {
+    const h = scoped([]);
+    await h.open(helloWithConn());
+    h.stream.stop();
+    const late = h.stream.setScope(["run:z"]);
+    await expect(late).rejects.toMatchObject({ failure: "stopped" });
+    h.stream.start();
+    await flush();
+    expect(h.last().request.headers["SSE-Topics"]).toBe('["run:z"]');
+  });
+
+  it("stop ends degraded mode, so the next start presents the scope again", async () => {
+    const h = scoped();
+    await h.open(helloWithConn({ conn: "x" }));
+    expect(h.ofKind("scope_refused")).toHaveLength(1);
+    h.stream.stop();
+    h.stream.start();
+    await flush();
+    expect(h.last().request.headers["SSE-Topics"]).toBe('["run:a"]');
+  });
+
   it("a scope over the header bound connects as everything, narrows by POST, and retries a 503 in place", async () => {
     const topics = Array.from({ length: 40 }, (_, i) => `run:${String(i).padStart(100, "x")}`);
     expect(JSON.stringify(normalizeScope(topics)).length).toBeGreaterThan(MAX_SCOPE_HEADER_BYTES);

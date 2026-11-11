@@ -93,7 +93,7 @@ The scope endpoint replaces a live connection's scope:
 | 413 | `scope_too_large` | the body exceeds 64 KiB |
 | 415 | `scope_content_type` | the body is not `application/json` |
 
-`@cplieger/sse` treats 409, 429, 5xx and a 404 `scope_conn` as transient and retries on the same connection or the next one. It treats any other refusal as a version mismatch: it stops sending scopes for the stream's life and reconnects without one, so the connection carries everything.
+`@cplieger/sse` treats a 400 `sse_scope` or `scope_invalid`, a 403, 405, 413 or 415, and a 404 other than `scope_conn` as a refusal, which a retry cannot change: it stops sending scopes until the stream is stopped and reconnects without one, so the connection carries everything. Every other answer, 404 `scope_conn`, 408, 409, 429 and 5xx among them, is transient and retried on the same connection or the next one.
 
 ## The digest
 

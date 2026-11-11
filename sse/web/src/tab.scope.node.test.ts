@@ -11,8 +11,10 @@ import {
 } from "./visibility.js";
 import type { Cursor } from "./wire.js";
 
-// Real timers: the ports deliver on the event loop, which faked timers would stop.
+// Real timers: the ports deliver on the event loop, which faked timers would stop. HB is short for
+// the tests that need the heartbeat watchdog to fire; STEADY_HB keeps it quiet under load in the rest.
 const HB = 30;
+const STEADY_HB = 5_000;
 const A = "aaaaaaaaaaaaaaaa";
 
 function tick(ms = 0): Promise<void> {
@@ -150,7 +152,7 @@ describe("tab scope", () => {
   it("attaches with its scope, waits for the first state, then sends set_scope and settles on scope_set", async () => {
     const workers: FakeWorker[] = [];
     const attachment = attachToWorker({
-      heartbeatMs: HB,
+      heartbeatMs: STEADY_HB,
       supported: true,
       scope: ["run:a"],
       spawn: () => {
@@ -179,10 +181,42 @@ describe("tab scope", () => {
     expect(call.value).toEqual({ epoch: A, offset: "9" });
   });
 
+  it("an answer settles every earlier call, and one its scope does not cover rejects superseded", async () => {
+    const workers: FakeWorker[] = [];
+    const attachment = attachToWorker({
+      heartbeatMs: STEADY_HB,
+      supported: true,
+      scope: [],
+      spawn: () => {
+        const w = fakeWorker();
+        workers.push(w);
+        return w;
+      },
+      fallback: () => ({ stream: fakeFallback(), versions: createVersionMap(), headers: {} }),
+      onFrame: () => undefined,
+    });
+    live.push(attachment);
+    await waitFor("attach", () => workers[0]!.sent.length > 0);
+    workers[0]!.host({ type: "state", state: STATE, scope: true });
+    await tick(10);
+    const wide = track(attachment.setScope(["run:a", "run:b"]));
+    const narrow = track(attachment.setScope(["run:a"]));
+    const sets = (): Extract<TabToWorker, { type: "set_scope" }>[] =>
+      workers[0]!.sent.filter((m) => m.type === "set_scope") as Extract<
+        TabToWorker,
+        { type: "set_scope" }
+      >[];
+    await waitFor("two set_scope", () => sets().length === 2);
+    workers[0]!.host({ type: "scope_set", seq: sets()[1]!.seq, epoch: A, offset: "7" });
+    await waitFor("settled", () => narrow.value !== undefined && wide.error !== undefined);
+    expect(narrow.value).toEqual({ epoch: A, offset: "7" });
+    expect((wide.error as ScopeError).failure).toBe("superseded");
+  });
+
   it("against an older host, a call resolves with the last frame's cursor, or null before any frame", async () => {
     const workers: FakeWorker[] = [];
     const attachment = attachToWorker({
-      heartbeatMs: HB,
+      heartbeatMs: STEADY_HB,
       supported: true,
       spawn: () => {
         const w = fakeWorker();
@@ -315,7 +349,7 @@ describe("tab scope", () => {
 
   it("detach rejects every pending call with link, and a bad set throws", async () => {
     const attachment = attachToWorker({
-      heartbeatMs: HB,
+      heartbeatMs: STEADY_HB,
       supported: true,
       spawn: () => fakeWorker(),
       fallback: () => ({ stream: fakeFallback(), versions: createVersionMap(), headers: {} }),

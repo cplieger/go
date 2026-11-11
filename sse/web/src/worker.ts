@@ -323,14 +323,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
    * assured of the port's scope: an attempt in flight presented the union as it stood then.
    */
   function covered(entry: PortEntry): boolean {
-    if (opts.scopeUrl === undefined) {
-      return true;
-    }
-    const kind = stream.state().kind;
-    if (kind !== "open" && kind !== "connecting") {
-      return true;
-    }
-    return coversScope(controls.assured(), entry.scope);
+    return opts.scopeUrl === undefined || coversScope(controls.assured(), entry.scope);
   }
 
   /** The union of the attached tabs' scopes, expired ones included; past the bound, everything. */
@@ -365,9 +358,6 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
 
   /** Answers the port's pending scope calls the stream now covers, and releases its owed run. */
   function settlePort(entry: PortEntry): void {
-    if (!covered(entry)) {
-      return;
-    }
     if (entry.owedRun) {
       entry.owedRun = false;
       perPortFull(entry);
@@ -399,23 +389,31 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     try {
       scope = normalizeScope(raw);
     } catch {
-      return;
+      // A tab whose grammar differs from this host's draws everything, which is always correct.
+      scope = null;
     }
     entry.scope = scope;
     entry.scopeSet = scope === null ? null : new Set(scope);
     if (seq !== undefined) {
-      entry.pendingScopes.push({ seq, scope });
+      if (stream.state().kind === "stopped") {
+        post(entry, { type: "scope_failed", seq, cause: "stopped" });
+      } else {
+        entry.pendingScopes.push({ seq, scope });
+      }
     }
     updateUnion();
     settlePort(entry);
   }
 
+  /** At stop: fails every pending scope call and drops the runs held for coverage. */
   function failPendingScopes(cause: "stopped"): void {
     for (const entry of entries.values()) {
       for (const call of entry.pendingScopes) {
         post(entry, { type: "scope_failed", seq: call.seq, cause });
       }
       entry.pendingScopes = [];
+      entry.owedRun = false;
+      entry.retryRun = false;
     }
   }
 
@@ -449,6 +447,9 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
    * non-full run on the shared map could certify a version this port never read.
    */
   function perPortFull(entry: PortEntry): void {
+    if (stream.state().kind === "stopped") {
+      return;
+    }
     if (!covered(entry)) {
       entry.owedRun = true;
       return;

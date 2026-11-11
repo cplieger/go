@@ -57,7 +57,8 @@ export interface StreamOptions {
   readonly revalidate: (ctx: RevalidateContext) => Promise<void>;
   /**
    * The server's scope endpoint (`ScopeHandler`). Without it the stream never sends a scope, so its
-   * connection carries everything and every `setScope` settles at once.
+   * connection carries everything and a `setScope` settles at once while connected, else at the
+   * next hello.
    */
   readonly scopeUrl?: string;
   /** The scope the first connect presents; `null`, the default, is everything. Needs `scopeUrl`. */
@@ -65,7 +66,7 @@ export interface StreamOptions {
 }
 
 /** Why a `setScope` promise rejected. */
-export type ScopeFailure = "stopped" | "superseded" | "link" | "unsupported";
+export type ScopeFailure = "stopped" | "superseded" | "link";
 
 /** The rejection of a `setScope` promise; `failure` names why. */
 export class ScopeError extends Error {
@@ -131,7 +132,8 @@ export interface Stream {
    * Throws a RangeError for a topic outside `validTopic` or more than MAX_SCOPE_TOPICS. Resolves
    * once the server is guaranteed to deliver the scope, with the offset after which it does: read
    * the topics' state after it resolves, including every frame at or below that offset. Rejects
-   * with a ScopeError on stop(), or `superseded` when a later call replaced it uncovered.
+   * with a ScopeError `stopped` on stop() or while stopped (the next start presents the scope),
+   * or `superseded` when a later call replaced it uncovered.
    */
   setScope(scope: readonly string[] | null): Promise<Cursor>;
 }
@@ -297,15 +299,20 @@ async function classifyScopeAnswer(response: Response, epoch: string): Promise<P
     }
     return { kind: "transient" };
   }
+  // Only an answer a retry cannot change is a refusal; anything else (408, 409, 429, 5xx, a
+  // proxy's status) is transient.
+  const code = record["code"];
   if (
-    status === 409 ||
-    status === 429 ||
-    status >= 500 ||
-    (status === 404 && record["code"] === "scope_conn")
+    (status === 400 && (code === "sse_scope" || code === "scope_invalid")) ||
+    status === 403 ||
+    status === 405 ||
+    status === 413 ||
+    status === 415 ||
+    (status === 404 && code !== "scope_conn")
   ) {
-    return { kind: "transient" };
+    return { kind: "refused" };
   }
-  return { kind: "refused" };
+  return { kind: "transient" };
 }
 
 const internals = new WeakMap<Stream, StreamInternals>();
@@ -390,7 +397,12 @@ export function createStream(opts: StreamOptions): Stream {
   let current: ScopeValue = initialScope;
   let degraded = false;
   let connScope: ConnScope | null = null;
-  const presented = new Map<number, { readonly header: boolean; readonly scope: ScopeValue }>();
+  /** What the current connect attempt presented; only that generation's hello reads it. */
+  let presented: {
+    readonly generation: number;
+    readonly header: boolean;
+    readonly scope: ScopeValue;
+  } | null = null;
   const records = new Map<string, Cursor>();
   let wildcard: Cursor | null = null;
   let pending: PendingScope[] = [];
@@ -526,7 +538,7 @@ export function createStream(opts: StreamOptions): Stream {
         presentedScope = current;
       }
     }
-    presented.set(generation, { header: presentedHeader, scope: presentedScope });
+    presented = { generation, header: presentedHeader, scope: presentedScope };
     const conn = connect({
       url: opts.url,
       fetch: doFetch,
@@ -551,7 +563,8 @@ export function createStream(opts: StreamOptions): Stream {
             if (
               reason.kind === "status" &&
               reason.status === 400 &&
-              presented.get(g)?.header === true
+              presented?.generation === g &&
+              presented.header
             ) {
               degrade();
             }
@@ -586,6 +599,8 @@ export function createStream(opts: StreamOptions): Stream {
     if (connection !== null && connection.generation === generation) {
       connection.conn.abort(reason);
       connection = null;
+      // A dead connection's conn takes no POST, and nothing is assured until the next hello.
+      leaveConnScope();
     }
     aliveScope?.abort();
     aliveScope = null;
@@ -1041,16 +1056,16 @@ export function createStream(opts: StreamOptions): Stream {
   }
 
   function enterConnScope(g: number, h: Hello): void {
-    const attempt = presented.get(g) ?? { header: false, scope: null };
-    presented.clear();
-    records.clear();
-    wildcard = null;
+    const attempt =
+      presented?.generation === g ? presented : { generation: g, header: false, scope: null };
+    presented = null;
     const resume = cursor ?? { epoch: h.epoch, offset: h.head };
     let confirmed: ScopeValue;
     if (h.conn === undefined) {
       confirmed = null;
     } else if (h.conn === null) {
-      confirmed = [];
+      // A malformed conn on an attempt that presented no header still got everything.
+      confirmed = attempt.header ? [] : null;
     } else {
       confirmed = attempt.scope;
     }
@@ -1071,7 +1086,7 @@ export function createStream(opts: StreamOptions): Stream {
       }
     }
     assuredChanged();
-    if (h.conn === null) {
+    if (h.conn === null && opts.scopeUrl !== undefined) {
       degrade();
       return;
     }
@@ -1261,6 +1276,7 @@ export function createStream(opts: StreamOptions): Stream {
     stop() {
       dispatch({ type: "stop" });
       leaveConnScope();
+      degraded = false;
       const rejected = pending;
       pending = [];
       for (const call of rejected) {
@@ -1291,6 +1307,9 @@ export function createStream(opts: StreamOptions): Stream {
     setScope(scope) {
       const next = normalizeScope(scope);
       current = next;
+      if (state.kind === "stopped") {
+        return Promise.reject(new ScopeError("stopped"));
+      }
       return new Promise<Cursor>((resolve, reject) => {
         pending.push({ scope: next, resolve, reject });
         settleScopes();
