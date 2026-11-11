@@ -26,7 +26,7 @@ The hub decides the hello, the replay and the start of live delivery under one l
 
 A keepalive is the named frame `event: sse:keepalive` with `data: {}`, every 15 seconds by default. It carries no id, so it moves no cursor. With `WithKeepaliveEvent("")` the hub writes the comment `: keepalive` instead, which an `EventSource` never dispatches.
 
-A connection whose scope is not everything also carries position marks: an id-only block, `id: <epoch>:<offset>` and a blank line, with no `event:` and no `data:`. A narrow cursor otherwise moves only on the frames it receives, so out-of-scope traffic would push the replay floor past it. The hub writes a mark at most once a second, and the first one right after the handshake. It writes one only when nothing for the connection is queued and the head has moved past the last id it wrote, so every frame the connection receives at or below the mark has already been sent. An `EventSource` records the id and dispatches nothing. A burst larger than the replay buffer within one second still ends as `gap_floor`.
+A connection whose scope is not everything also carries position marks: an id-only block, `id: <epoch>:<offset>` and a blank line, with no `event:` and no `data:`. A narrow cursor otherwise moves only on the frames it receives, so out-of-scope traffic would push the replay floor past it. The hub writes a mark at most once a second, and the first one right after the handshake. It writes one only when nothing for the connection is queued and the head has moved past the last id it wrote, so every frame the connection receives at or below the mark has already been sent. An `EventSource` records the id and dispatches nothing, and `@cplieger/sse` moves its cursor to the mark behind any frames it is holding. A burst larger than the replay buffer within one second still ends as `gap_floor`.
 
 The hub ends a stream with `event: sse:reset`. Its data is `{"reason":"slow"}` for a client whose buffer filled, written under a 250ms deadline, or `{"reason":"shutdown"}` when the hub shuts down.
 
@@ -92,6 +92,8 @@ The scope endpoint replaces a live connection's scope:
 | 409 | `scope_stale` | a request with this `seq` or a later one was already applied |
 | 413 | `scope_too_large` | the body exceeds 64 KiB |
 | 415 | `scope_content_type` | the body is not `application/json` |
+
+`@cplieger/sse` treats 409, 429, 5xx and a 404 `scope_conn` as transient and retries on the same connection or the next one. It treats any other refusal as a version mismatch: it stops sending scopes for the stream's life and reconnects without one, so the connection carries everything.
 
 ## The digest
 

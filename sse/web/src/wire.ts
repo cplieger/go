@@ -1,4 +1,4 @@
-import { MAX_OFFSET_STRING } from "./timing.js";
+import { MAX_OFFSET_STRING, MAX_TOPIC_BYTES } from "./timing.js";
 
 /** Event name of the handshake frame the server writes once per connection. */
 export const HELLO_EVENT = "sse:hello";
@@ -25,6 +25,32 @@ export interface Hello {
   readonly verdict: string;
   readonly keepalive_ms: number;
   readonly keepalive_event: string;
+  /**
+   * Names a connection the server lets the client rescope, absent otherwise. It is a capability:
+   * never log it. `null` means the hello carried one outside the 22-character grammar, which the
+   * stream treats as a scope refusal rather than a bad hello, so it cannot take the stream down.
+   */
+  readonly conn?: string | null;
+}
+
+const CONN_RE = /^[A-Za-z0-9_-]{22}$/;
+
+/**
+ * Whether `topic` may appear in a scope a client supplies: 1 to 128 bytes of printable ASCII
+ * (0x21 to 0x7E) other than `"` and `\`. The same grammar the server applies, so a header and its
+ * JSON form are the same bytes and fetch never refuses a header byte above 255.
+ */
+export function validTopic(topic: string): boolean {
+  if (topic.length === 0 || topic.length > MAX_TOPIC_BYTES) {
+    return false;
+  }
+  for (let i = 0; i < topic.length; i++) {
+    const c = topic.charCodeAt(i);
+    if (c < 0x21 || c > 0x7e || c === 0x22 || c === 0x5c) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -129,18 +155,23 @@ export function validateHello(
     return BAD_HELLO;
   }
   const verdict = record["verdict"];
+  const hello: Hello = {
+    wire,
+    epoch,
+    floor,
+    head,
+    resumed,
+    verdict: typeof verdict === "string" ? verdict : "",
+    keepalive_ms: keepaliveMs,
+    keepalive_event: keepaliveEvent,
+  };
+  if (!("conn" in record)) {
+    return { ok: true, hello };
+  }
+  const conn = record["conn"];
   return {
     ok: true,
-    hello: {
-      wire,
-      epoch,
-      floor,
-      head,
-      resumed,
-      verdict: typeof verdict === "string" ? verdict : "",
-      keepalive_ms: keepaliveMs,
-      keepalive_event: keepaliveEvent,
-    },
+    hello: { ...hello, conn: typeof conn === "string" && CONN_RE.test(conn) ? conn : null },
   };
 }
 

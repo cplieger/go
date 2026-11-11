@@ -7,9 +7,18 @@ import {
   isWorkerMessage,
 } from "./port-protocol.js";
 import type { StreamState } from "./state.js";
-import { type Frame, type Stream, statusOf } from "./stream.js";
+import {
+  type Frame,
+  ScopeError,
+  type ScopeFailure,
+  type Stream,
+  coversScope,
+  normalizeScope,
+  statusOf,
+} from "./stream.js";
 import { DEFAULT_TIMING } from "./timing.js";
 import type { Subject, VersionMap } from "./versions.js";
+import type { Cursor } from "./wire.js";
 import {
   type VisibilityInput,
   type VisibilityManager,
@@ -62,6 +71,8 @@ export interface AttachOptions {
   readonly supported?: boolean;
   /** Bound on a run routed to this tab; defaults to revalidateTimeoutMs. */
   readonly revalidateTimeoutMs?: number;
+  /** The scope this tab draws from its first attach; null, the default, is everything. */
+  readonly scope?: readonly string[] | null;
 }
 
 /**
@@ -83,6 +94,22 @@ export interface TabAttachment {
   reconnect(opts?: { readonly resetCursor?: boolean }): void;
   /** Presents `tag` as SSE-Client from the next connect, reconnecting once; "" is ignored. */
   setTag(tag: string): void;
+  /**
+   * Replaces the scope this tab draws, as `Stream.setScope` does: in worker mode through the host,
+   * whose union of every tab's scope is the stream's, and in fallback mode on the tab's own stream.
+   * Throws a RangeError for a set the server would refuse. Resolves once the tab is delivered the
+   * scope, with the offset after which it is; null only against an older host, which delivers
+   * everything, and means read in full. Rejects with a ScopeError on detach (`link`), when the
+   * stream stops, or `superseded`.
+   */
+  setScope(scope: readonly string[] | null): Promise<Cursor | null>;
+}
+
+interface PendingTabScope {
+  readonly seq: number;
+  readonly scope: readonly string[] | null;
+  readonly resolve: (offset: Cursor | null) => void;
+  readonly reject: (error: ScopeError) => void;
 }
 
 const WINDOW_BEATS = 3;
@@ -123,6 +150,14 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
   let triedThisVisible = false;
   let detached = false;
 
+  let scope = normalizeScope(opts.scope ?? null);
+  let scopeSeq = 0;
+  let pendingScopes: PendingTabScope[] = [];
+  /** Whether this link's host takes set_scope, learnt from its first state message. */
+  let capability: "unknown" | "yes" | "no" = "unknown";
+  let sentSeq = 0;
+  let lastFrameCursor: Cursor | null = null;
+
   const now = (): number => Date.now();
 
   function emit(event: LifecycleEvent): void {
@@ -156,6 +191,19 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
   }
 
   function attachMessage(hadWorker: boolean): TabToWorker {
+    capability = "unknown";
+    sentSeq = 0;
+    const carried =
+      pendingScopes.length > 0
+        ? pendingTabScope(
+            scope,
+            () => undefined,
+            () => undefined,
+          )
+        : null;
+    if (carried !== null) {
+      sentSeq = carried.seq;
+    }
     return {
       type: "attach",
       tabId,
@@ -163,7 +211,85 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
       online: online.isOnline(),
       hadWorker,
       tag,
+      scope,
+      ...(carried === null ? {} : { scopeSeq: carried.seq }),
     };
+  }
+
+  /** Records a call under a fresh seq; the newest pending call carries the tab's current scope. */
+  function pendingTabScope(
+    next: readonly string[] | null,
+    resolve: PendingTabScope["resolve"],
+    reject: PendingTabScope["reject"],
+  ): PendingTabScope {
+    const call: PendingTabScope = { seq: ++scopeSeq, scope: next, resolve, reject };
+    pendingScopes.push(call);
+    return call;
+  }
+
+  /** Settles every pending call up to `seq` by the answer to `seq`, superseding what it misses. */
+  function settleScopes(
+    seq: number,
+    answer: { readonly offset: Cursor | null } | ScopeFailure,
+  ): void {
+    const answered = pendingScopes.find((c) => c.seq === seq);
+    const settled = pendingScopes.filter((c) => c.seq <= seq);
+    pendingScopes = pendingScopes.filter((c) => c.seq > seq);
+    for (const call of settled) {
+      if (typeof answer === "string") {
+        call.reject(new ScopeError(call === answered ? answer : "superseded"));
+      } else if (answered === undefined || coversScope(answered.scope, call.scope)) {
+        call.resolve(answer.offset);
+      } else {
+        call.reject(new ScopeError("superseded"));
+      }
+    }
+  }
+
+  function failScopes(cause: ScopeFailure): void {
+    const rejected = pendingScopes;
+    pendingScopes = [];
+    for (const call of rejected) {
+      call.reject(new ScopeError(cause));
+    }
+  }
+
+  /** Sends the newest pending call to a host that takes it, or answers it the old-host way. */
+  function flushScopes(): void {
+    const latest = pendingScopes[pendingScopes.length - 1];
+    if (mode !== "worker" || link === null || latest === undefined) {
+      return;
+    }
+    if (capability === "no") {
+      // An older host never presents SSE-Topics, so its connection already carries everything.
+      settleScopes(latest.seq, { offset: lastFrameCursor });
+      return;
+    }
+    if (capability === "yes" && latest.seq > sentSeq) {
+      sentSeq = latest.seq;
+      post({ type: "set_scope", seq: latest.seq, topics: latest.scope });
+    }
+  }
+
+  /** Puts the tab's scope on its fallback stream, settling the pending calls from that stream. */
+  function scopeFallback(stream: Stream): void {
+    const latest = pendingScopes[pendingScopes.length - 1];
+    const seq = latest?.seq ?? 0;
+    stream.setScope(scope).then(
+      (offset) => {
+        if (fallback?.stream === stream && seq > 0) {
+          settleScopes(seq, { offset });
+        }
+      },
+      (e: unknown) => {
+        // A rejection arrives after the tab replaced or dropped the stream it stopped itself, so
+        // the calls move on to the next seat rather than failing `stopped`.
+        if (fallback?.stream !== stream || seq === 0) {
+          return;
+        }
+        settleScopes(seq, e instanceof ScopeError ? e.failure : "stopped");
+      },
+    );
   }
 
   function spawnLink(): Link | null {
@@ -262,6 +388,9 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
       case "stale":
         return;
       case "frame":
+        if (message.frame.id !== null) {
+          lastFrameCursor = message.frame.id;
+        }
         try {
           opts.onFrame(message.frame);
         } catch {
@@ -276,6 +405,16 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
         return;
       case "state":
         lastState = message.state;
+        if (capability === "unknown") {
+          capability = message.scope === true ? "yes" : "no";
+          flushScopes();
+        }
+        return;
+      case "scope_set":
+        settleScopes(message.seq, { offset: { epoch: message.epoch, offset: message.offset } });
+        return;
+      case "scope_failed":
+        settleScopes(message.seq, message.cause);
         return;
     }
   }
@@ -300,6 +439,10 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
     fallback = opts.fallback();
     if (tag !== "") {
       fallback.headers["SSE-Client"] = tag;
+    }
+    // The first connect presents the tab's scope, and the pending calls settle from it.
+    if (scope !== null || pendingScopes.length > 0) {
+      scopeFallback(fallback.stream);
     }
     fallback.stream.start();
   }
@@ -436,6 +579,7 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
         unsubscribe();
       }
       fallback?.stream.stop();
+      failScopes("link");
     },
     state: () => (mode === "fallback" ? (fallback?.stream.state() ?? null) : lastState),
     mode: () => mode,
@@ -471,6 +615,23 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
         return;
       }
       post({ type: "set_tag", tag: next });
+    },
+    setScope(next) {
+      const normalized = normalizeScope(next);
+      if (detached) {
+        return Promise.reject(new ScopeError("link"));
+      }
+      scope = normalized;
+      return new Promise<Cursor | null>((resolve, reject) => {
+        pendingTabScope(normalized, resolve, reject);
+        if (mode === "fallback") {
+          if (fallback !== null) {
+            scopeFallback(fallback.stream);
+          }
+          return;
+        }
+        flushScopes();
+      });
     },
   };
 }

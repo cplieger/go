@@ -9,13 +9,16 @@ import {
   isTabMessage,
 } from "./port-protocol.js";
 import {
+  type Frame,
   type RevalidateContext,
   type Stream,
   type StreamOptions,
+  coversScope,
   createStream,
+  normalizeScope,
   streamInternals,
 } from "./stream.js";
-import { DEFAULT_TIMING, resolveTiming } from "./timing.js";
+import { DEFAULT_TIMING, MAX_SCOPE_TOPICS, resolveTiming } from "./timing.js";
 import { createVisibilityManager } from "./visibility.js";
 
 /** The changed and removed sets of one host-side digest, fanned to the tabs with the run. */
@@ -45,7 +48,7 @@ export interface TabSet {
  */
 export interface WorkerHostOptions extends Omit<
   StreamOptions,
-  "visibility" | "online" | "onFrame" | "onLifecycle" | "revalidate"
+  "visibility" | "online" | "onFrame" | "onLifecycle" | "revalidate" | "initialScope"
 > {
   /** The application decides whether the body runs here or in the tabs it names. */
   readonly revalidate: (ctx: RevalidateContext, tabs: TabSet) => Promise<void>;
@@ -53,7 +56,16 @@ export interface WorkerHostOptions extends Omit<
   /** Seed for the profile's network reading; defaults to the worker's navigator.onLine. */
   readonly onlineSeed?: boolean;
   readonly heartbeatMs?: number;
+  /**
+   * Whether a port whose scope is `scope` draws `frame`; absent delivers every frame, and a port
+   * whose scope is everything is never asked. Frames carry no topic, so this reads the app's data,
+   * and it must pass a frame the app published as a broadcast. A throw delivers the frame.
+   */
+  readonly deliver?: (frame: Frame, scope: ReadonlySet<string>) => boolean;
 }
+
+/** The host's stream: the host owns its scope, the union of its tabs' scopes, so no setScope. */
+export type HostStream = Omit<Stream, "setScope">;
 
 /**
  * The profile's stream owner: one stream, one cursor and one version map behind however many tabs.
@@ -65,7 +77,7 @@ export interface WorkerHostOptions extends Omit<
 export interface WorkerHost {
   /** Called from the SharedWorker's onconnect with each new port. */
   attach(port: MessagePort): void;
-  stream(): Stream;
+  stream(): HostStream;
   /** Stops the stream and closes every port. */
   close(): void;
 }
@@ -78,6 +90,16 @@ interface PortEntry {
   lastAckAt: number;
   unacked: number;
   expired: boolean;
+  /** The tab's scope; null, the default, is everything. */
+  scope: readonly string[] | null;
+  /** The set `deliver` checks, rebuilt with the scope. */
+  scopeSet: ReadonlySet<string> | null;
+  /** The tab's scope calls awaiting coverage, oldest first. */
+  pendingScopes: { readonly seq: number; readonly scope: readonly string[] | null }[];
+  /** A full run this port is owed once the stream's assured scope covers it. */
+  owedRun: boolean;
+  /** A released run of this port failed; retried at the next hello or stream-level run. */
+  retryRun: boolean;
 }
 
 interface Quorum {
@@ -120,6 +142,9 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let tag: string | null = null;
   let lastFrameFailed = -1;
+  let lastDeliverFailed = -1;
+  let union: readonly string[] | null = null;
+  let helloGeneration = -1;
 
   const now = (): number => Date.now();
 
@@ -158,7 +183,20 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
 
   const tabs: TabSet = {
     run(ctx, verdict) {
-      const members = active();
+      // A port the stream does not yet cover sits the run out and is owed its own, released at
+      // coverage, so it never reads state the server is still filtering from it.
+      const members: PortEntry[] = [];
+      for (const entry of active()) {
+        if (covered(entry)) {
+          members.push(entry);
+          if (entry.retryRun) {
+            entry.retryRun = false;
+            perPortFull(entry);
+          }
+        } else {
+          entry.owedRun = true;
+        }
+      }
       if (members.length === 0) {
         return Promise.resolve();
       }
@@ -219,6 +257,9 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     onFrame(frame) {
       const message: WorkerToTab = { type: "frame", frame, generation: stream.state().generation };
       for (const entry of active()) {
+        if (!draws(entry, frame)) {
+          continue;
+        }
         if (entry.unacked >= cfg.heldMaxFrames) {
           expire(entry);
           continue;
@@ -229,13 +270,154 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     },
     onLifecycle(event) {
       if (event.kind === "state") {
-        broadcast({ type: "state", state: stream.state() });
+        broadcast({ type: "state", state: stream.state(), scope: true });
+        if (event.to === "stopped") {
+          failPendingScopes("stopped");
+        }
       }
       emit(event);
     },
     revalidate: (ctx) => opts.revalidate(ctx, tabs),
   });
   const controls = streamInternals(stream);
+  controls.onScope(() => {
+    const generation = stream.state().generation;
+    const hello = generation !== helloGeneration && stream.state().kind === "open";
+    if (hello) {
+      helloGeneration = generation;
+    }
+    for (const entry of entries.values()) {
+      settlePort(entry);
+      if (hello && entry.retryRun && covered(entry)) {
+        entry.retryRun = false;
+        perPortFull(entry);
+      }
+    }
+  });
+
+  /** Whether the port's scope draws the frame; a throwing predicate fails open, recorded once. */
+  function draws(entry: PortEntry, frame: Frame): boolean {
+    if (entry.scopeSet === null || opts.deliver === undefined) {
+      return true;
+    }
+    try {
+      return opts.deliver(frame, entry.scopeSet);
+    } catch (e: unknown) {
+      const generation = stream.state().generation;
+      if (lastDeliverFailed !== generation) {
+        lastDeliverFailed = generation;
+        emit({
+          kind: "deliver_failed",
+          type: frame.type,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return true;
+    }
+  }
+
+  /**
+   * Whether a run may read this port's state now. With no scope endpoint the connection carries
+   * everything. Between connections the next connect presents the union, this port included, and
+   * replays from the cursor, so a read now misses nothing. An open or connecting stream must be
+   * assured of the port's scope: an attempt in flight presented the union as it stood then.
+   */
+  function covered(entry: PortEntry): boolean {
+    if (opts.scopeUrl === undefined) {
+      return true;
+    }
+    const kind = stream.state().kind;
+    if (kind !== "open" && kind !== "connecting") {
+      return true;
+    }
+    return coversScope(controls.assured(), entry.scope);
+  }
+
+  /** The union of the attached tabs' scopes, expired ones included; past the bound, everything. */
+  function computeUnion(): readonly string[] | null {
+    const topics = new Set<string>();
+    for (const entry of entries.values()) {
+      if (entry.tabId === null) {
+        continue;
+      }
+      if (entry.scope === null) {
+        return null;
+      }
+      for (const topic of entry.scope) {
+        topics.add(topic);
+      }
+    }
+    return topics.size > MAX_SCOPE_TOPICS ? null : [...topics].sort();
+  }
+
+  function updateUnion(): void {
+    const next = computeUnion();
+    if (
+      next === union ||
+      (next !== null && union !== null && next.join("\n") === union.join("\n"))
+    ) {
+      return;
+    }
+    union = next;
+    // The host owns the stream's scope; a superseded call is expected and needs no handling.
+    stream.setScope(next).catch(() => undefined);
+  }
+
+  /** Answers the port's pending scope calls the stream now covers, and releases its owed run. */
+  function settlePort(entry: PortEntry): void {
+    if (!covered(entry)) {
+      return;
+    }
+    if (entry.owedRun) {
+      entry.owedRun = false;
+      perPortFull(entry);
+    }
+    // The offset needs the cursor, so a call made while it is null waits for the next hello.
+    const at = entry.pendingScopes.length > 0 ? controls.coveredSince(entry.scope) : null;
+    if (at === null) {
+      return;
+    }
+    const settled = entry.pendingScopes;
+    entry.pendingScopes = [];
+    const latest = settled[settled.length - 1];
+    for (const call of settled) {
+      if (call === latest || coversScope(controls.assured(), call.scope)) {
+        post(entry, { type: "scope_set", seq: call.seq, epoch: at.epoch, offset: at.offset });
+      } else {
+        post(entry, { type: "scope_failed", seq: call.seq, cause: "superseded" });
+      }
+    }
+  }
+
+  /** Sets a port's scope from its tab, recomputes the union and answers what is already covered. */
+  function setPortScope(
+    entry: PortEntry,
+    raw: readonly string[] | null,
+    seq: number | undefined,
+  ): void {
+    let scope: readonly string[] | null;
+    try {
+      scope = normalizeScope(raw);
+    } catch {
+      return;
+    }
+    entry.scope = scope;
+    entry.scopeSet = scope === null ? null : new Set(scope);
+    if (seq !== undefined) {
+      entry.pendingScopes.push({ seq, scope });
+    }
+    updateUnion();
+    settlePort(entry);
+  }
+
+  function failPendingScopes(cause: "stopped"): void {
+    for (const entry of entries.values()) {
+      for (const call of entry.pendingScopes) {
+        post(entry, { type: "scope_failed", seq: call.seq, cause });
+      }
+      entry.pendingScopes = [];
+    }
+  }
 
   function expire(entry: PortEntry): void {
     if (entry.expired || entry.tabId === null) {
@@ -261,10 +443,28 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     emit({ kind: "port_repaired" });
   }
 
+  /**
+   * Posts the port a full run of its own, a quorum of one, once the stream covers its scope; until
+   * then the run is owed. A failure is retried full at the next hello or stream-level run: a
+   * non-full run on the shared map could certify a version this port never read.
+   */
   function perPortFull(entry: PortEntry): void {
+    if (!covered(entry)) {
+      entry.owedRun = true;
+      return;
+    }
+    const runId = ++runSeq;
+    quorums.set(runId, {
+      pending: new Set([entry]),
+      failures: [],
+      resolve: () => undefined,
+      reject: () => {
+        entry.retryRun = true;
+      },
+    });
     post(entry, {
       type: "revalidate_run",
-      runId: ++runSeq,
+      runId,
       ctx: {
         cause: "hello",
         epoch: opts.versions.epoch(),
@@ -289,6 +489,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     }
     entry.port.onmessage = null;
     entry.port.close();
+    updateUnion();
     emit({ kind: "tab_detached", cause });
     if (entries.size === 0) {
       stopHeartbeat();
@@ -319,6 +520,8 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     entry.unacked = 0;
     entry.expired = false;
     byTab.set(message.tabId, entry);
+    // The union holds this tab's scope before the stream starts or a run is posted.
+    setPortScope(entry, message.scope ?? null, message.scopeSeq);
     const stopped = stream.state().kind === "stopped";
     if (stopped && message.hadWorker) {
       controls.queueFull();
@@ -331,7 +534,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       perPortFull(entry);
     }
     const state = stream.state();
-    post(entry, { type: "state", state });
+    post(entry, { type: "state", state, scope: true });
     emit({ kind: "tab_attached", replaced, state: state.kind });
   }
 
@@ -393,6 +596,9 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       case "set_tag":
         adoptTag(message.tag);
         return;
+      case "set_scope":
+        setPortScope(entry, message.topics, message.seq);
+        return;
       case "revalidate_done":
       case "revalidate_failed": {
         const quorum = quorums.get(message.runId);
@@ -453,6 +659,11 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         lastAckAt: now(),
         unacked: 0,
         expired: false,
+        scope: null,
+        scopeSet: null,
+        pendingScopes: [],
+        owedRun: false,
+        retryRun: false,
       };
       entries.set(port, entry);
       port.onmessage = (event: MessageEvent) => {

@@ -10,6 +10,9 @@ import {
   MAX_FRAME_BYTES,
   MAX_OFFSET,
   MAX_OFFSET_STRING,
+  MAX_SCOPE_HEADER_BYTES,
+  MAX_SCOPE_TOPICS,
+  MAX_TOPIC_BYTES,
   WIRE,
   resolveTiming,
   watchdogMs,
@@ -38,6 +41,9 @@ interface TimingContract {
   readonly digest_max_subjects: number;
   readonly max_offset: string;
   readonly keepalive_event: string;
+  readonly max_scope_topics: number;
+  readonly max_scope_header_bytes: number;
+  readonly max_topic_bytes: number;
 }
 
 const contractPath = join(import.meta.dirname, "..", "..", "timing.json");
@@ -53,6 +59,9 @@ describe("timing contract", () => {
     expect(DEFAULT_RETRY_MS).toBe(contract.retry_ms);
     expect(KEEPALIVE_EVENT).toBe(contract.keepalive_event);
     expect(DIGEST_MAX_SUBJECTS).toBe(contract.digest_max_subjects);
+    expect(MAX_SCOPE_TOPICS).toBe(contract.max_scope_topics);
+    expect(MAX_SCOPE_HEADER_BYTES).toBe(contract.max_scope_header_bytes);
+    expect(MAX_TOPIC_BYTES).toBe(contract.max_topic_bytes);
     expect(DEFAULT_TIMING).toEqual({
       connectTimeoutMs: contract.connect_timeout_ms,
       helloTimeoutMs: contract.hello_timeout_ms,

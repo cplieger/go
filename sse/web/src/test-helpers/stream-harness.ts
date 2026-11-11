@@ -126,6 +126,8 @@ export interface HarnessOptions {
   readonly onFrame?: (frame: Frame) => void;
   readonly minWire?: number;
   readonly maxWire?: number;
+  readonly scopeUrl?: string;
+  readonly initialScope?: readonly string[] | null;
 }
 
 /** Builds a stream over a scripted fetch, fake platform sources and hand-settled revalidations. */
@@ -148,6 +150,8 @@ export function harness(opts: HarnessOptions = {}): Harness {
     ...(opts.alive !== undefined ? { alive: opts.alive } : {}),
     ...(opts.minWire !== undefined ? { minWire: opts.minWire } : {}),
     ...(opts.maxWire !== undefined ? { maxWire: opts.maxWire } : {}),
+    ...(opts.scopeUrl !== undefined ? { scopeUrl: opts.scopeUrl } : {}),
+    ...(opts.initialScope !== undefined ? { initialScope: opts.initialScope } : {}),
     onFrame(frame) {
       frames.push(frame);
       opts.onFrame?.(frame);
