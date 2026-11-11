@@ -84,17 +84,28 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// methodLabel maps the client's method onto the standard ones, since
+// r.Method is whatever the client sent.
+func methodLabel(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace:
+		return m
+	}
+	return "other"
+}
+
 func instrument(route string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		measure.RecordHTTP(reqs, dur, time.Since(start), r.Method, route, strconv.Itoa(sw.status))
+		measure.RecordHTTP(reqs, dur, time.Since(start), methodLabel(r.Method), route, strconv.Itoa(sw.status))
 	})
 }
 ```
 
-Label by the route you registered, never by the raw request path, and name the labels `method`, `route` and `code`, as Prometheus's own Go handler names `method` and `code`. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
+Label by the route you registered, never by the raw request path, and name the labels `method`, `route` and `code`, as client_golang's promhttp middleware (`InstrumentHandlerCounter`) names `method` and `code`. `r.Method` is whatever the client sent, so map it onto the standard methods first, as httpserver's `RequestMetric` does. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
 
 To serve values read when Prometheus scrapes, declare their families and register a collector. Every scrape calls the function with the request's context:
 
@@ -114,7 +125,7 @@ func init() {
 
 The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a runnable example of each pattern except serving `Handler` alone, which a test checks, so `go test` keeps them true.
 
-- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup. The HTTP request counter is the exception: its method, route and code combinations are open, so a rule on it uses a threshold above 1 or the absolute value instead.
+- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup. The HTTP request counter is the exception: its status codes are not known at startup, so it stays unseeded. `increase()` misses the request that creates each of its series, so a rule on it fires on an increase above 1, or adds the series that appeared within the window (`c unless c offset 15m`).
 - Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
 - Serve `Handler` alone. Its page already includes the Go and process metrics.
 - Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.
