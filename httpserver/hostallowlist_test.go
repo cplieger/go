@@ -560,3 +560,65 @@ func TestHostPolicyMiddleware_LogsRefusal(t *testing.T) {
 		}
 	})
 }
+
+// TestHostPolicy_LogRefusal_isMiddlewaresLine: a caller with its own admit
+// rule writes the same refusal line Middleware writes, through the policy's
+// logger and with its hint, so a refused probe still shows at Warn.
+func TestHostPolicy_LogRefusal_isMiddlewaresLine(t *testing.T) {
+	logCap := &captureHandler{}
+	policy, _ := httpserver.ParseHostList([]string{"allowed.example"},
+		httpserver.WithHostAllowlistLogger(slog.New(logCap)),
+		httpserver.WithHostAllowlistError("host_not_allowed", "host not allowed; add it to APP_ALLOWED_HOSTS"))
+	for name, tc := range map[string]struct{ host, reason string }{
+		"not listed": {"evil.example", "host not in allowlist"},
+		"malformed":  {"bad host!", "malformed host"},
+		"missing":    {"", "missing host"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := len(logCap.snapshot())
+			r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			r.Host = tc.host
+			r.RemoteAddr = "203.0.113.9:5000"
+			policy.LogRefusal(r)
+			recs := logCap.snapshot()[before:]
+			if len(recs) != 1 {
+				t.Fatalf("LogRefusal wrote %d records, want 1", len(recs))
+			}
+			if recs[0].Level != slog.LevelWarn || recs[0].Message != "httpserver: host not allowed" {
+				t.Errorf("record = %v %q, want Warn %q", recs[0].Level, recs[0].Message, "httpserver: host not allowed")
+			}
+			want := map[string]any{
+				"reason": tc.reason,
+				"host":   tc.host,
+				"remote": "203.0.113.9:5000",
+				"hint":   "host not allowed; add it to APP_ALLOWED_HOSTS",
+			}
+			if got := attrsOf(recs[0]); !maps.Equal(got, want) {
+				t.Errorf("attrs = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestHostPolicy_LogRefusal_noBuiltPolicyLogsThroughDefault: a caller holding
+// a nil or zero-value policy still logs the refusal, through slog.Default
+// with the default hint, instead of panicking on a missing logger.
+func TestHostPolicy_LogRefusal_noBuiltPolicyLogsThroughDefault(t *testing.T) {
+	var zero httpserver.HostPolicy
+	for name, policy := range map[string]*httpserver.HostPolicy{"nil": nil, "zero value": &zero} {
+		t.Run(name, func(t *testing.T) {
+			logCap := &captureHandler{}
+			swapDefaultLogger(t, slog.New(logCap))
+			r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			r.Host = "evil.example"
+			policy.LogRefusal(r)
+			recs := logCap.snapshot()
+			if len(recs) != 1 || recs[0].Level != slog.LevelWarn || recs[0].Message != "httpserver: host not allowed" {
+				t.Fatalf("records = %+v, want one Warn %q", recs, "httpserver: host not allowed")
+			}
+			if got := attrsOf(recs[0]); got["hint"] != "host not allowed" || got["reason"] != "host not in allowlist" {
+				t.Errorf("attrs = %v, want the default hint and reason host not in allowlist", got)
+			}
+		})
+	}
+}
