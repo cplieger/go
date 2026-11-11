@@ -53,6 +53,7 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `ParseHostList(entries, opts...)` parses an operator allowlist, such as a config array or a comma-split environment variable, into an immutable `*HostPolicy`. Malformed entries come back separately, as with `ParseCIDRs`.
 - `(*HostPolicy).Middleware()` answers 403 with the code `host_not_allowed` for a request whose `Host` is not listed, and logs one Warn line, `httpserver: host not allowed`. An inactive policy returns the handler unwrapped.
 - `(*HostPolicy).Allows(r)` is the same decision for one request. `Active()` and `Size()` describe the policy, for startup logs.
+- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger and hint. A nil policy logs through `slog.Default`.
 - `WithHostAllowlistError(code, msg)` changes the 403's code and message, for example to name your configuration setting.
 - `WithLoopbackExempt(true)` admits a request when both the socket peer and the `Host` are loopback, described below.
 - `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.

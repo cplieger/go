@@ -349,7 +349,7 @@ func (p *HostPolicy) Middleware() Middleware {
 				next.ServeHTTP(w, r)
 				return
 			}
-			p.logRefusal(r)
+			p.LogRefusal(r)
 			WriteError(w, r, http.StatusForbidden, p.code, p.msg)
 		})
 	}
@@ -430,11 +430,20 @@ func isLoopbackPeer(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// logRefusal writes the refusal line. It carries no path, which can hold a
-// token; the access line, correlated by request_id, carries the routed path.
-// The Host is empty when the request named none: HTTP/1.0 without Host,
-// HTTP/1.1 with an empty Host header, or HTTP/2 without :authority or Host.
-func (p *HostPolicy) logRefusal(r *http.Request) {
+// LogRefusal writes the Warn line Middleware writes for a refused Host, for a
+// caller that admits by its own rule (with Allows among its checks) and writes
+// its own refusal: it reports through the policy's logger
+// (WithHostAllowlistLogger) with the reason (missing, malformed or not in the
+// allowlist), the host, the remote address, the hint (WithHostAllowlistError)
+// and request_id. A nil policy logs through slog.Default with the default
+// hint. The line carries no path, which can hold a token; the access line,
+// correlated by request_id, carries the routed path. The Host is empty when
+// the request named none: HTTP/1.0 without Host, HTTP/1.1 with an empty Host
+// header, or HTTP/2 without :authority or Host.
+func (p *HostPolicy) LogRefusal(r *http.Request) {
+	if p == nil {
+		p = &HostPolicy{logger: slog.Default(), msg: "host not allowed"}
+	}
 	reason := "host not in allowlist"
 	switch {
 	case r.Host == "":
