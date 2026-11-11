@@ -11,6 +11,7 @@ import (
 	"go/types"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -1249,50 +1250,51 @@ func typeDoc(pkg *packages.Package, name string) *ast.CommentGroup {
 	return nil
 }
 
-// commentText returns the human text of a single comment line/block, with ok
-// false for a Go pragma, which must not flow into JSDoc.
-func commentText(c *ast.Comment) (string, bool) {
-	text := c.Text
-	trimmed := strings.TrimSpace(strings.TrimPrefix(text, "//"))
-	if strings.HasPrefix(trimmed, "nolint") || strings.HasPrefix(trimmed, "go:") {
-		return "", false
-	}
-	if strings.HasPrefix(text, "//") {
-		return strings.TrimPrefix(text, "// "), true
-	}
-	if inner, ok := strings.CutPrefix(text, "/*"); ok {
-		return strings.TrimSpace(strings.TrimSuffix(inner, "*/")), true
-	}
-	return "", false
-}
+// spaceSuppression matches a linter suppression written with a space after the
+// slashes, which go/ast keeps as prose: golangci-lint's "// nolint" and gosec's
+// "// #nosec". Both read it from a doc comment, so it must not reach the JSDoc.
+var spaceSuppression = regexp.MustCompile(`^(nolint( |:|$)|#nosec)`)
 
+// commentToJSDoc renders a Go doc comment as JSDoc from go/ast's own text, so
+// tool directives drop by go/ast's rule (gofmt's "//" line before them with
+// them), a "//" paragraph break becomes a bare " *" line, and "*/" is escaped.
 func commentToJSDoc(cg *ast.CommentGroup) string {
 	if cg == nil {
 		return ""
 	}
-	var nonEmpty []string
+	kept := &ast.CommentGroup{}
 	for _, c := range cg.List {
-		line, ok := commentText(c)
-		if !ok {
-			continue
+		if !spaceSuppression.MatchString(strings.TrimLeft(c.Text, "/ ")) {
+			kept.List = append(kept.List, c)
 		}
-		// Drop empty (or slash-only) lines.
-		if strings.TrimPrefix(line, "/") == "" {
-			continue
-		}
-		// Replace */ with *\/ to prevent a premature JSDoc close.
-		nonEmpty = append(nonEmpty, strings.ReplaceAll(line, "*/", "*\\/"))
 	}
-	if len(nonEmpty) == 0 {
+	text := strings.TrimSuffix(kept.Text(), "\n")
+	if text == "" {
 		return ""
 	}
-	if len(nonEmpty) == 1 {
-		return "/** " + nonEmpty[0] + " */\n"
+	lines := strings.Split(text, "\n")
+	// Drop the indent every line shares, as go/doc's unindent does: Text keeps a block
+	// comment's inner space. The first line is never blank, since Text trims those.
+	indent := lines[0][:len(lines[0])-len(strings.TrimLeft(lines[0], " \t"))]
+	for _, l := range lines[1:] {
+		for l != "" && !strings.HasPrefix(l, indent) {
+			indent = indent[:len(indent)-1]
+		}
+	}
+	for i, l := range lines {
+		lines[i] = strings.ReplaceAll(strings.TrimPrefix(l, indent), "*/", "*\\/")
+	}
+	if len(lines) == 1 {
+		return "/** " + lines[0] + " */\n"
 	}
 	var b strings.Builder
 	b.WriteString("/**\n")
-	for _, l := range nonEmpty {
-		b.WriteString(" * " + l + "\n")
+	for _, l := range lines {
+		if l == "" {
+			b.WriteString(" *\n")
+		} else {
+			b.WriteString(" * " + l + "\n")
+		}
 	}
 	b.WriteString(" */\n")
 	return b.String()

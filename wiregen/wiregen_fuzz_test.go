@@ -21,6 +21,11 @@ func FuzzCommentToJSDoc(f *testing.F) {
 	f.Add("")
 
 	f.Fuzz(func(t *testing.T, input string) {
+		// CommentGroup.Text slices off the markers, so feed only what the parser yields.
+		if !strings.HasPrefix(input, "//") &&
+			(len(input) < 4 || !strings.HasPrefix(input, "/*") || !strings.HasSuffix(input, "*/")) {
+			t.Skip()
+		}
 		cg := &ast.CommentGroup{
 			List: []*ast.Comment{{Text: input}},
 		}

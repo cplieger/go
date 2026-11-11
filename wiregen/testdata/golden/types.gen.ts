@@ -23,6 +23,11 @@ export interface HasMap {
 
 /** HasTime has a time.Time field. */
 export interface HasTime {
+  /**
+   * Created is when the row was first written.
+   *
+   * It never changes after that.
+   */
   created: string;
   updated?: string;
 }

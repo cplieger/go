@@ -180,3 +180,62 @@ func fieldNamePos(t *testing.T, file *ast.File, name string) token.Pos {
 	}
 	return pos
 }
+
+// A tool directive in a Go doc comment never reaches the generated JSDoc,
+// whatever the tool, while a comment that only looks like one stays.
+func TestCommentToJSDoc_dropsToolDirectives(t *testing.T) {
+	group := func(lines ...string) *ast.CommentGroup {
+		cg := &ast.CommentGroup{}
+		for _, l := range lines {
+			cg.List = append(cg.List, &ast.Comment{Text: l})
+		}
+		return cg
+	}
+	// gofmt puts a "//" line between a type's doc text and its directive.
+	if got, want := commentToJSDoc(group("/* Foo is a block doc. */")), "/** Foo is a block doc. */\n"; got != want {
+		t.Errorf("block doc = %q, want %q", got, want)
+	}
+	if got, want := commentToJSDoc(group("/*\n * Foo is a starred block.\n * Second line.\n */")),
+		"/**\n * * Foo is a starred block.\n * * Second line.\n */\n"; got != want {
+		t.Errorf("starred block doc = %q, want %q", got, want)
+	}
+	if got, want := commentToJSDoc(group("// KiroDoc is one doc row.", "//", "//deadset:ignore DS1403 -- read by the template")),
+		"/** KiroDoc is one doc row. */\n"; got != want {
+		t.Errorf("gofmt-shaped doc = %q, want %q", got, want)
+	}
+	got := commentToJSDoc(group(
+		"// Name is the user's display name.",
+		"//",
+		"// It is shown in the header.",
+		"//nolint:unused // kept for the wire",
+		"// nolint:lll",
+		"// nolint",
+		"// #nosec G101 -- not a secret",
+		"//nolint",
+		"//#nosec",
+		"// #nosecG101",
+		"//go:generate stringer",
+		"//line foo.go:10",
+		"//export Name",
+		"//TODO:x stays, since capitals are not a directive",
+		"//note: lowercase prose stays, since a space follows the colon",
+		"//:x stays",
+		"//x: stays",
+		"// nolintable fields stay",
+		"// lint:ignore stays, staticcheck reads only //lint:",
+	))
+	want := "/**\n" +
+		" * Name is the user's display name.\n" +
+		" *\n" +
+		" * It is shown in the header.\n" +
+		" * TODO:x stays, since capitals are not a directive\n" +
+		" * note: lowercase prose stays, since a space follows the colon\n" +
+		" * :x stays\n" +
+		" * x: stays\n" +
+		" * nolintable fields stay\n" +
+		" * lint:ignore stays, staticcheck reads only //lint:\n" +
+		" */\n"
+	if got != want {
+		t.Errorf("commentToJSDoc =\n%s\nwant\n%s", got, want)
+	}
+}
