@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cplieger/go/health/probe"
+	"github.com/cplieger/go/health/v2/probe"
 )
 
 func main() {

@@ -2,7 +2,7 @@
 // distroless containers with no shell: the running process touches a
 // marker file at lifecycle points via Set, and a probe process (the
 // same binary re-invoked with a `health` subcommand) stats it via
-// RunProbe. Package probe (github.com/cplieger/go/health/probe) is the
+// RunProbe. Package probe (github.com/cplieger/go/health/v2/probe) is the
 // HTTP-based counterpart for containers wrapping a third-party server.
 //
 // If the marker directory is not writable (e.g. compose's `read_only: true`

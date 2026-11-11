@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 
-	"github.com/cplieger/go/health/probe"
+	"github.com/cplieger/go/health/v2/probe"
 )
 
 // ExampleCheck shows the multi-URL probe behind cmd/probe: all URLs

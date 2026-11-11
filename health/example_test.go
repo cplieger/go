@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/cplieger/go/health"
+	"github.com/cplieger/go/health/v2"
 )
 
 // Example demonstrates the two-process healthcheck pattern.

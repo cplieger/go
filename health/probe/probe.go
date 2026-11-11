@@ -1,6 +1,6 @@
 // Package probe implements an HTTP liveness probe for containers
 // without a shell: the HTTP counterpart of the file marker in the
-// health package (github.com/cplieger/go/health), for containers that wrap
+// health package (github.com/cplieger/go/health/v2), for containers that wrap
 // a third-party server which cannot cooperate with a Marker but already
 // exposes an HTTP endpoint whose reachability IS the health signal.
 //
