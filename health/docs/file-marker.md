@@ -34,7 +34,7 @@ When the marker cannot be read, written or removed, `Set` logs the failure once 
 
 In degraded mode:
 
-- `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts. Each `Set` checks again first: once the folder and the marker can be written, it leaves degraded mode, logs `health marker writable again, leaving degraded mode` and writes the marker, so fixing the cause needs no restart.
+- `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts. Each `Set` checks again first. Once the folder and the marker can be written, it leaves degraded mode, logs `health marker writable again, leaving degraded mode` and applies its value: `Set(true)` writes the marker and `Set(false)` leaves it absent. An app that keeps calling `Set` needs no restart once the cause is fixed. One that calls it only at startup stays degraded, and once the obstacle is gone its probe reads the marker absent until the app restarts. Leaving is one-way: a later write failure is logged like any other and does not re-enter degraded mode.
 - `RunProbe` and `Inspect` report healthy. The service is alive, and only its way of reporting health is broken, which a restart cannot fix.
 - `Healthy`, `Within` and `Handler` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it.
 

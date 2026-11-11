@@ -8,15 +8,15 @@
 // If the marker directory is not writable (e.g. compose's
 // `read_only: true` without a `tmpfs: /tmp` mount), or something already
 // at the marker path is not a regular file the process can write, the
-// constructor enters degraded mode: Set and Cleanup become no-ops until
-// the folder and the marker can be written again, when the next Set leaves
-// degraded mode, and the probe reports healthy rather than restart-looping
-// a container whose only broken piece is the signaling channel. Healthy,
-// Within and Handler report unhealthy in degraded mode, because Set cannot
-// change the marker.
-// In a directory that can be written, a marker path os.Stat cannot read at
-// all, such as a symlink loop, is not degraded mode: the probe reports it
-// unhealthy.
+// constructor enters degraded mode: Set and Cleanup become no-ops, and the
+// probe reports healthy rather than restart-looping a container whose only
+// broken piece is the signaling channel. Each later Set checks again and
+// leaves degraded mode once the folder and the marker can be written, so
+// an app that sets the marker only at startup stays degraded until it
+// restarts. Healthy, Within and Handler report unhealthy in degraded mode,
+// because Set cannot change the marker. In a directory that can be
+// written, a marker path os.Stat cannot read at all, such as a symlink
+// loop, is not degraded mode: the probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -99,7 +99,9 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 			"error", err,
 			"effect", degradedEffect,
 			"hint", "remove what is at the marker path, such as a marker an "+
-				"earlier run as another user left, a directory or a FIFO")
+				"earlier run as another user left, a directory or a FIFO; the "+
+				"next Set writes the marker, so restart a service that sets it "+
+				"only at startup")
 	}
 	return m
 }
@@ -167,7 +169,8 @@ func cannotSignal(path string) error {
 // successful write logs one Info. In degraded mode Set first checks whether
 // the folder and the marker can be written again: until they can it is a
 // no-op, and the first call that can leaves degraded mode, logs one Info and
-// writes.
+// applies ok, touching the marker for true and removing it for false.
+// Leaving is one-way: a later write failure is logged like any other.
 func (m *Marker) Set(ok bool) { _ = m.SetChecked(ok) }
 
 // SetChecked is Set with the filesystem outcome reported: it returns nil
@@ -182,10 +185,9 @@ func (m *Marker) SetChecked(ok bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.degraded.Load() {
-		// Degraded mode lasts only while the folder or the marker cannot be
-		// written: the probe decides it from the filesystem on every run, so
-		// a marker the app stopped writing once the obstacle cleared would
-		// read absent there.
+		// The probe decides degraded mode from the filesystem on every run,
+		// so a refusal latched at NewMarker would leave the marker unwritten
+		// once the obstacle cleared, and the probe would read it absent.
 		if cannotSignal(m.path) != nil {
 			return nil
 		}

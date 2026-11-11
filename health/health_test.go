@@ -1082,34 +1082,59 @@ func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
 	}
 }
 
-// TestSet_leavesDegradedModeOnceTheFolderIsWritable is the folder branch of
-// the same rule: a folder the user cannot write turns writable (a tmpfs that
-// had filled up, a mode fixed by hand), and the next Set writes the marker.
-// It runs only as a non-root user, since root writes into a 0500 folder.
-func TestSet_leavesDegradedModeOnceTheFolderIsWritable(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "ro")
-	if err := os.Mkdir(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+// TestSet_leavesDegradedModeOnceTheFolderExists is the folder branch of the
+// same rule: a folder that cannot be written at start (here, one that does
+// not exist yet; in production, a mode fixed by hand) becomes writable, and
+// the next Set writes the marker. A missing folder blocks it for any user,
+// root included.
+func TestSet_leavesDegradedModeOnceTheFolderExists(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "later")
 	path := filepath.Join(dir, ".healthy")
 	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
 	if !m.degraded.Load() {
-		t.Skip("test environment bypasses directory mode; skipping")
+		t.Fatal("a marker folder that does not exist: want degraded mode")
 	}
 	m.Set(true)
 	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("Set in an unwritable folder: stat = %v, want no marker", err)
+		t.Fatalf("Set with no folder: stat = %v, want no marker", err)
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	m.Set(true)
 	if m.degraded.Load() || !m.Healthy() {
-		t.Error("once the folder is writable: want degraded mode left and the marker written")
+		t.Error("once the folder exists: want degraded mode left and the marker written")
 	}
 	if got := Inspect(path); got.State != MarkerFresh {
-		t.Errorf("once the folder is writable: Inspect = %+v, want MarkerFresh", got)
+		t.Errorf("once the folder exists: Inspect = %+v, want MarkerFresh", got)
+	}
+}
+
+// TestSet_leavingDegradedModeIsOneWay: once a marker has left degraded mode,
+// a folder that cannot be written again is a write failure like any other,
+// returned, not a second entry into degraded mode. Removing the folder blocks
+// it for any user, root included.
+func TestSet_leavingDegradedModeIsOneWay(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "later")
+	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+	if !m.degraded.Load() {
+		t.Fatal("a marker folder that does not exist: want degraded mode")
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetChecked(true); err != nil || m.degraded.Load() {
+		t.Fatalf("once the folder exists: SetChecked(true) = %v, degraded %v; want nil and left", err, m.degraded.Load())
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetChecked(true); err == nil {
+		t.Error("SetChecked(true) with the folder gone = nil, want the write error")
+	}
+	if m.degraded.Load() {
+		t.Error("after the failed write: want degraded mode not re-entered")
 	}
 }
 
