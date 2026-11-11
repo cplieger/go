@@ -1185,12 +1185,12 @@ func TestWithProbeLogLevel_mapsProbeStatusesToLevels(t *testing.T) {
 		status int
 		want   slog.Level
 	}{
-		{"healthy probe at Debug", http.StatusOK, slog.LevelDebug},
-		{"redirect grouped with success", http.StatusNotModified, slog.LevelDebug},
-		{"first client error at Warn", http.StatusBadRequest, slog.LevelWarn},
-		{"client error at Warn", http.StatusNotFound, slog.LevelWarn},
-		{"first server error at Error", http.StatusInternalServerError, slog.LevelError},
-		{"server error at Error", http.StatusServiceUnavailable, slog.LevelError},
+		{"healthy probe", http.StatusOK, slog.LevelDebug},
+		{"redirect", http.StatusNotModified, slog.LevelDebug},
+		{"refused host", http.StatusForbidden, slog.LevelDebug},
+		{"client error", http.StatusNotFound, slog.LevelDebug},
+		{"server error", http.StatusInternalServerError, slog.LevelDebug},
+		{"unhealthy verdict", http.StatusServiceUnavailable, slog.LevelDebug},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

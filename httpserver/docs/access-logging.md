@@ -29,7 +29,7 @@ An option that adds an attribute or a hook changes nothing until you pass it.
 | `WithPathFunc(fn)` | Record your own value in place of the path |
 | `WithMaxLoggedPath(n)` | Cap the recorded path at `n` bytes instead of 512 |
 | `WithLogLevel(fn)` | Choose each line's level |
-| `WithProbeLogLevel(paths...)` | Log probe endpoints at Debug while they succeed |
+| `WithProbeLogLevel(paths...)` | Log probe endpoints at Debug |
 
 A skipped request still gets an id minted, echoed and threaded. It gets no access line and no metric hook, because a stream's open-to-close duration beside a synthetic status would mislead.
 
@@ -79,9 +79,9 @@ A panicking or empty-returning `fn` records `(path-redaction-failed)`, never the
 
 `WithLogLevel(fn)` chooses each access line's level from the request and the status. The default is `Info` for every line. A common policy for a polled service is `Debug` for 2xx and 3xx, `Warn` for 4xx and `Error` for 5xx. Skipped paths never call it, and a panicking policy falls back to `Info`.
 
-`WithProbeLogLevel(paths...)` is a preset over it for health, readiness and metrics endpoints. On those exact paths, a success logs at `Debug`, a 4xx at `Warn` and a 5xx at `Error`. Every other request stays at `Info`.
+`WithProbeLogLevel(paths...)` is a preset over it for health, readiness and metrics endpoints. On those exact paths, every request logs at `Debug`, whatever its status. Every other request stays at `Info`. A probe repeats every interval, so a line for each failing probe would repeat one standing state every 15 or 30 seconds. The failure shows elsewhere: a health signal's owner logs its transitions, a failed scrape is Prometheus's `up`, an outside prober reports the status it got, and a panic is still logged at `Error` by `Recoverer`.
 
-Prefer it over skipping probe paths, which also hides a failing probe. Keep skip rules for streams, where one open-to-close line misleads by its shape. The two level options exclude each other, and the last one applied wins.
+Prefer it over skipping probe paths, which removes the lines even under `LOG_LEVEL=debug`. Keep skip rules for streams, where one open-to-close line misleads by its shape. The two level options exclude each other, and the last one applied wins.
 
 ## The metric hook
 
