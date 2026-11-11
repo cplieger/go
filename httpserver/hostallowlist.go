@@ -391,10 +391,11 @@ func isLoopbackHost(canon string) bool {
 
 // peerAddr parses an http.Request.RemoteAddr, which the server sets from the
 // accepted connection ("host:port"), so it cannot be spoofed at this layer.
-// Anything that does not split as host:port, or carries a zone (net.ParseIP
-// refused one, and no Host can name one), fails closed: a lenient fallback
-// would let a hand-built RemoteAddr widen the carve-out. It stays unexported:
-// a peer-only gate admits a DNS-rebound page on this host (CWE-346).
+// Anything that does not split as host:port, or carries a zone, fails closed:
+// a zone marks a link-local peer, which no Host names (CanonicalHost refuses a
+// zoned literal), and a lenient fallback would let a hand-built RemoteAddr
+// widen the carve-out. It stays unexported: a peer-only gate admits a
+// DNS-rebound page on this host (CWE-346).
 func peerAddr(remoteAddr string) (netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
