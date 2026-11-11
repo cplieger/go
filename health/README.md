@@ -1,63 +1,122 @@
 # health
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/health.svg)](https://pkg.go.dev/github.com/cplieger/go/health) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=health%2Fgo.mod)](https://github.com/cplieger/go/blob/main/health/go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/health/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/health/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=health%2Fgo.mod)](https://github.com/cplieger/go/blob/main/health/go.mod)
 
-health gives distroless Go services a Docker healthcheck with no shell, curl or wget. Your service writes a marker file, and the same binary checks it when Docker asks.
+health gives a Go service one health verdict, kept in memory, served at `GET /healthz`, and checked by the same binary when Docker asks. It needs no shell, curl or wget in the image.
 
-It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks an HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks that server's HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
 health is built for container images with no shell, whether the main process is your own Go service or a server you did not write.
 
-- Your code decides what healthy means. `Set(true)` writes the marker and `Set(false)` removes it.
-- When `/tmp` cannot be written, `RunProbe` still reports healthy and the service logs one warning with the fix, so a read-only filesystem never fails a healthcheck that reads the marker. An HTTP endpoint over the marker reports unhealthy then.
-- An optional deadline fails the check when a work loop stops refreshing the marker.
-- `Latch` keeps the container unhealthy once shutdown begins, even when late work succeeds.
+- Your code decides what healthy means. `Set(true)` records a healthy verdict and `Set(false)` an unhealthy one.
+- `/healthz` reports the verdict your code recorded, because it reads memory and never a file.
+- Shutdown cannot be hidden by late work. After `BeginDrain`, a healthy `Set` is dropped.
+- A work loop that stops is caught. One lease, passed to `Fresh` and `WithMaxAge`, fails both `/healthz` and the healthcheck once the loop stops refreshing its verdict.
+- A read-only root filesystem needs no extra mount. A service with no port keeps its marker file in `/dev/shm`, which stays writable.
 - `CheckHandler` serves `GET /healthz`: 200 with `{"status":"ok"}`, or 503 listing one plain reason for each failing check.
-- The `probe` binary passes only when every URL answers 2xx within one shared timeout, and it writes each failure to stderr.
+- The `probe` binary checks a server you did not write: it passes only when every URL answers 2xx within one shared timeout, and it writes each failure to stderr.
 
 Consider [alexliesenfeld/health](https://github.com/alexliesenfeld/health) if you want an HTTP health endpoint that runs checks against your database and other dependencies, with caching, periodic checks and a status for each component.
 
 ## Install
 
 ```sh
-go get github.com/cplieger/go/health@latest
+go get github.com/cplieger/go/health/v2@latest
 ```
+
+## Choosing the pattern
+
+| Your image | Verdict | The `health` subcommand or `HEALTHCHECK` |
+| --- | --- | --- |
+| Your service always listens | `health.NewStatus()` | GETs `/healthz` with `probe.Run` at the URL `probe.LocalURL` derives from the listen address |
+| Your service opens no port by default | `health.NewStatus(health.WithMarker(health.MarkerPath("<name>")))` | Runs `health.RunProbe` on the same path, with the same lease |
+| The image runs a server you did not write | none | The `probe` binary against that server's own endpoint |
 
 ## Usage
 
-Handle the `health` subcommand first, then mark the service healthy once it is ready:
+### A service that always listens
+
+Handle the `health` subcommand first, before any other start-up work. Then record the verdict and serve it:
 
 ```go
+const listenAddr = ":8080"
+
 func main() {
     if len(os.Args) > 1 && os.Args[1] == "health" {
-        health.RunProbe(health.DefaultPath) // exits 0 or 1
+        u, err := probe.LocalURL(listenAddr, "/healthz")
+        if err != nil {
+            fmt.Fprintln(os.Stderr, "health:", err)
+            os.Exit(1)
+        }
+        probe.Run(probe.DefaultTimeout, u) // exits 0 or 1
     }
 
-    m := health.NewMarker(health.DefaultPath)
-    defer m.Cleanup()
-    m.Set(true)
+    st := health.NewStatus()
+    mux := http.NewServeMux()
+    mux.Handle("GET /healthz", health.CheckHandler(
+        health.Check{Signal: st, Reason: "the service is starting or shutting down"},
+    ))
 
-    // ... run the service, and call m.Set(false) when it cannot do its work ...
+    // ... start serving mux on listenAddr, then:
+    st.Set(true)
+
+    // ... when shutdown begins, before waiting for work in flight:
+    st.BeginDrain()
 }
 ```
 
-Point the image's healthcheck at the same binary:
+Point the image's healthcheck at the same binary by its absolute path:
 
 ```dockerfile
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/app", "health"]
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["/app", "health"]
 ```
 
-`RunProbe` exits 0 while the marker at `/tmp/.healthy` exists. It exits 1 when the marker is missing from a writable `/tmp`, and writes the reason to stderr.
+The probe asks the listener itself, so a listener that stopped answering fails it, whatever the verdict says. Keep the probe's budget, `probe.DefaultTimeout` here, below Docker's `--timeout`, so the probe can write its failure line before Docker stops the check.
 
-If a separate `docker exec` process writes the marker, run it as the main process's UID and use `SetChecked` so a failed write fails the job.
+### A service with no port
 
-For an image whose main process is a server you did not write, point the `probe` binary at an endpoint. No prebuilt binary is published, so build it with `go install` in a builder stage:
+A service that opens no port mirrors its verdict to a marker file, and the `health` subcommand reads that file:
+
+```go
+const name = "myservice"
+
+const interval = time.Minute
+
+func main() {
+    lease := health.Lease{Interval: interval, Cycles: 3}.Duration()
+    if len(os.Args) > 1 && os.Args[1] == "health" {
+        health.RunProbe(health.MarkerPath(name), health.WithMaxAge(lease)) // exits 0 or 1
+    }
+
+    st := health.NewStatus(health.WithMarker(health.MarkerPath(name)))
+    t := time.NewTicker(interval)
+    defer t.Stop()
+    for range t.C {
+        st.Set(runOnce() == nil)
+    }
+}
+```
+
+`MarkerPath(name)` is `/dev/shm/myservice.healthy`. Every `Set(true)` refreshes the file, so `RunProbe` with `WithMaxAge(lease)` reads the same age that `Fresh(lease)` reads in memory. The two ages match while the wall clock does not step. `Fresh` measures with the monotonic clock and `RunProbe` with the file's modification time, so a forward step larger than the lease fails the file probe while `Fresh` still passes.
+
+When the same service also serves `/healthz`, for example on an opt-in metrics listener, list the Status and its freshness as two checks:
+
+```go
+mux.Handle("GET /healthz", health.CheckHandler(
+    health.Check{Signal: st, Reason: "the last run failed"},
+    health.Check{Signal: st.Fresh(lease), Reason: "the work loop has stopped"},
+))
+```
+
+### A server you did not write
+
+Point the `probe` binary at the server's endpoint. No prebuilt binary is published, so build it with `go install` in a builder stage:
 
 ```dockerfile
 FROM golang:1.27-alpine AS probe
-RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/go/health/probe/cmd/probe@latest
+RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/go/health/v2/probe/cmd/probe@latest
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=probe /out/probe /probe
@@ -65,56 +124,41 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:2019/config/"]
 ```
 
-Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write its failure line before Docker stops the check. The [file marker](docs/file-marker.md) and [HTTP probe](docs/http-probe.md) pages cover shutdown, external triggers and several URLs.
+Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write its failure line before Docker stops the check.
 
 ## API
 
-- Marker: `NewMarker` with its `WithLogger` option (`MarkerOption`), `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `Healthy` and `Within` methods, with the `Signal` interface.
-- Probe side: `RunProbe` and the `WithMaxAge` option, with `Lease` to build its deadline.
-- Reading a marker in-process: `Inspect`, `Freshness` and the `MarkerState` values.
-- Shutdown: `Latch`, `NewLatch`, and the `Set` and `BeginDrain` methods.
-- HTTP endpoint: `CheckHandler` with `Check`, and `Handler` for one signal.
-- HTTP probe package: `probe.Check`, `probe.Run`, `probe.DefaultTimeout` and the `probe/cmd/probe` binary.
+- The verdict: `Status` from `NewStatus`, with the `WithLogger` and `WithMarker` options (`StatusOption`), and the `Set`, `BeginDrain`, `Healthy` and `Fresh` methods. `Signal` is the one-method interface a check reads, and `SignalFunc` adapts a function to it.
+- The endpoint: `CheckHandler` with `Check`.
+- The marker side: `MarkerPath`, `RunProbe` and its `WithMaxAge` option (`ProbeOption`), with `Lease` to build the deadline.
+- The HTTP probe package: `probe.Check`, `probe.Run`, `probe.DefaultTimeout`, `probe.LocalURL` and the `probe/cmd/probe` binary.
 
-The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/go/health) and [health/probe](https://pkg.go.dev/github.com/cplieger/go/health/probe). Its `Example` functions are runnable, and `go test` keeps them true.
+The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/go/health/v2) and [health/probe](https://pkg.go.dev/github.com/cplieger/go/health/v2/probe). Its `Example` functions are runnable, and `go test` keeps them true.
 
 ## Degraded mode
 
-`NewMarker` checks that the marker's folder is writable, and that anything already at the marker path is a regular file `Set` can refresh. When either fails, the marker enters degraded mode. The folder fails under compose's `read_only: true` with no tmpfs at `/tmp`; the marker fails when an earlier run as another user left one in a shared `/tmp` that this user cannot write, or when the path holds a directory or a FIFO. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the fix. Each `Set` checks again, and the first one that can write leaves degraded mode. So an app that keeps calling `Set` needs no restart once the cause is fixed, while one that calls it only at startup does. In a folder that can be written, a marker path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: `RunProbe` reports it unhealthy and names the error.
+When `NewStatus` cannot write the marker, the Status enters degraded mode and logs one warning that names the fix. `RunProbe` then reports healthy, because the service still works and only its marker is broken, which a restart would not fix. `Healthy`, `Fresh` and `/healthz` keep reporting the verdict your code recorded.
 
-While the folder or the marker cannot be written, `RunProbe` and `Inspect` report healthy, because the service still works and only its health reporting is broken. Once the obstacle is gone they read the path as it stands. A service still in degraded mode reads it absent until its next `Set(true)` when nothing is there, and reads the file when a regular file already is. `Handler`, `Healthy` and `Within` report unhealthy for the whole of degraded mode, until a `Set` leaves it, even when a marker was left in the folder. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
-
-To run read-only with a working signal, mount a tmpfs at `/tmp`:
-
-```yaml
-read_only: true
-tmpfs:
-  - /tmp:size=1m,mode=1777,noexec,nosuid,nodev
-```
-
-## The freshness deadline is opt-in
-
-By default the check passes for as long as the marker exists, and Docker's `--interval` decides how often it runs. `WithMaxAge` adds a deadline, and a marker older than it fails the check. Every `Set(true)` refreshes the marker's age, so a service that calls it once per work cycle needs no other change.
-
-Arm it only for a service that runs its own work loop at a known interval. Leave it off for a service that a separate `docker exec` triggers, because that service is healthy while it waits between triggers. Build the deadline with `Lease`, which saturates instead of overflowing. The [freshness deadline](docs/freshness.md) page has the details and `Inspect`.
+A service that keeps calling `Set` needs no restart once the cause is fixed: the first `Set` that can write leaves degraded mode. One that sets its verdict only at startup makes no later `Set`, so once the obstacle is gone its probe reads the path as it stands until the service restarts: absent when nothing is there, and present when a regular file already is. The [marker file](docs/file-marker.md) page lists the causes.
 
 ## Unsupported by design
 
 health leaves these out on purpose. The [non-goals](docs/non-goals.md) page gives the reason for each.
 
-- Running dependency checks on each request. `CheckHandler` reads signals your code keeps, and never calls a database or an upstream itself.
-- Separate liveness and readiness signals. Use two markers with different paths.
-- A `context.Context` or a shutdown hook. `Cleanup` is the shutdown action.
+- Running dependency checks on each request. The Status is a verdict your code records, and `CheckHandler` never calls a database or an upstream itself.
+- Separate liveness and readiness signals. Serve two `CheckHandler`s over two Status values.
+- A `context.Context` or a shutdown hook. `BeginDrain` is the shutdown action.
 - Status-change callbacks. Wrap `Set` to add your own.
-- A staleness check by default. The deadline is opt-in for each service.
+- A staleness check by default. `Fresh` and `WithMaxAge` are opt-in for each service.
 - Prometheus metrics. A gauge over `Healthy` adds one.
-- Content inside the marker file. The check is one `os.Stat`.
+- Health written by a second process. Only the long-running process writes its verdict.
 
 ## Documentation
 
-- [The file marker](docs/file-marker.md) covers wiring, degraded mode, external triggers, shutdown and the HTTP handler.
-- [Freshness deadline](docs/freshness.md) covers when to arm `WithMaxAge`, building it with `Lease`, and reading a marker in-process with `Inspect`.
-- [HTTP probe](docs/http-probe.md) covers the Dockerfile, timeouts, several URLs and exit codes.
+- [The health verdict](docs/status.md) covers recording the verdict, serving it, shutdown, a work loop that stops, several work loops and the log lines.
+- [The marker file](docs/file-marker.md) covers a service with no port: where the marker lives, a shared `/dev/shm`, one writer, degraded mode and write failures.
+- [Freshness deadline](docs/freshness.md) covers arming one lease for `Fresh` and `WithMaxAge`, building it with `Lease`, and when to leave it off.
+- [HTTP probe](docs/http-probe.md) covers your own service's `health` subcommand and the `probe` binary for a server you did not write.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 
 ## Contributing

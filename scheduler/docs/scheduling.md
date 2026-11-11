@@ -31,7 +31,7 @@ When a bool option is passed more than once, the last one wins. Pass `WithRedact
 
 `RunLoop` covers `ModeBuiltin`. For `ModeOnce`, call the job directly. For `ModeExternal`, wait on `ctx.Done()` while runs come from outside.
 
-`RunLoop` runs one job at a time, so two runs never overlap in one process. It returns once the context is cancelled and the running job has returned, so its return means the drain is complete. It returns at once when `Interval` is not positive. A panic in a job is not recovered and ends the process. A `Job` returns nothing, so it reports its own result, for example by setting a health marker or writing a log line.
+`RunLoop` runs one job at a time, so two runs never overlap in one process. It returns once the context is cancelled and the running job has returned, so its return means the drain is complete. It returns at once when `Interval` is not positive. A panic in a job is not recovered and ends the process. A `Job` returns nothing, so it reports its own result, for example by setting its health verdict or writing a log line.
 
 `LoopOptions` has four fields:
 

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/cplieger/go/health/v2"
@@ -80,6 +81,33 @@ func ExampleStatus_Fresh() {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	fmt.Print(rec.Code, " ", rec.Body.String())
 	// Output: 503 {"status":"unhealthy","reasons":["the work loop has stopped"]}
+}
+
+// A service with several work loops gives each loop its own deadline. One
+// owner sets the Status on every tick, healthy only while every loop holds
+// its deadline, and /healthz names the loop that stopped.
+func Example_severalWorkLoops() {
+	const lease = time.Minute
+	var syncBeat, importBeat atomic.Int64 // each loop stores the time of its last pass
+	syncBeat.Store(time.Now().UnixNano())
+	importBeat.Store(time.Now().Add(-time.Hour).UnixNano())
+	within := func(beat *atomic.Int64) health.Signal {
+		return health.SignalFunc(func() bool { return time.Since(time.Unix(0, beat.Load())) <= lease })
+	}
+	syncOK, importOK := within(&syncBeat), within(&importBeat)
+
+	st := health.NewStatus()
+	h := health.CheckHandler(
+		health.Check{Signal: st, Reason: "the service is not running all its work loops"},
+		health.Check{Signal: syncOK, Reason: "the sync loop has stopped"},
+		health.Check{Signal: importOK, Reason: "the import loop has stopped"},
+	)
+	st.Set(syncOK.Healthy() && importOK.Healthy()) // the owner's tick
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	fmt.Print(rec.Code, " ", rec.Body.String())
+	// Output: 503 {"status":"unhealthy","reasons":["the service is not running all its work loops","the import loop has stopped"]}
 }
 
 // SignalFunc turns any condition the service already tracks into a Check.
