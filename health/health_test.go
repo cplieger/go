@@ -1053,7 +1053,7 @@ func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	m := NewMarker(path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	m := NewMarker(path, withMarkerLogger(slog.New(slog.NewTextHandler(&buf, nil))))
 	if !m.degraded.Load() {
 		t.Fatal("a directory at the marker path: want degraded mode")
 	}
@@ -1091,7 +1091,7 @@ func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
 func TestSet_leavesDegradedModeOnceTheFolderExists(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "later")
 	path := filepath.Join(dir, ".healthy")
-	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+	m := NewMarker(path, withMarkerLogger(slog.New(slog.DiscardHandler)))
 	if !m.degraded.Load() {
 		t.Fatal("a marker folder that does not exist: want degraded mode")
 	}
@@ -1118,7 +1118,7 @@ func TestSet_leavesDegradedModeOnceTheFolderExists(t *testing.T) {
 func TestSet_leavingDegradedModeIsOneWay(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "later")
 	path := filepath.Join(dir, ".healthy")
-	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+	m := NewMarker(path, withMarkerLogger(slog.New(slog.DiscardHandler)))
 	if !m.degraded.Load() {
 		t.Fatal("a marker folder that does not exist: want degraded mode")
 	}
@@ -1147,7 +1147,7 @@ func TestSet_leavingDegradedModeRacesNoReader(t *testing.T) {
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+	m := NewMarker(path, withMarkerLogger(slog.New(slog.DiscardHandler)))
 	within := m.Within(0)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -1187,7 +1187,7 @@ func TestNewMarker_degradedWarningNamesBothVerdicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	_ = NewMarker(path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	_ = NewMarker(path, withMarkerLogger(slog.New(slog.NewTextHandler(&buf, nil))))
 	logged := buf.String()
 	for _, want := range []string{
 		`msg="health marker not writable, marker in degraded mode"`,
@@ -1316,7 +1316,7 @@ func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 				t.Skip(err)
 			}
 			_ = os.Chtimes(path, old, old) // fails on the loop, which stat cannot read
-			m := NewMarker(path, WithLogger(slog.New(slog.DiscardHandler)))
+			m := NewMarker(path, withMarkerLogger(slog.New(slog.DiscardHandler)))
 			f := Inspect(path, WithMaxAge(time.Hour))
 			if m.degraded.Load() && !f.Healthy() {
 				t.Errorf("NewMarker is degraded but Inspect = %+v, so the probe would restart the container", f)
@@ -1723,7 +1723,7 @@ func TestNewMarker_WithLogger(t *testing.T) {
 	var buf bytes.Buffer
 	l := slog.New(slog.NewTextHandler(&buf, nil)).With("svc", "x")
 	path := filepath.Join(t.TempDir(), "marker")
-	m := NewMarker(path, WithLogger(l))
+	m := NewMarker(path, withMarkerLogger(l))
 	m.Set(true)
 	if out := buf.String(); !strings.Contains(out, "health state changed") || !strings.Contains(out, "svc=x") {
 		t.Errorf("logger got %q, want the attributed state change", out)

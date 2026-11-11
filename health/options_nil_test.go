@@ -22,7 +22,7 @@ func TestNewMarker_OptionsApplyBeforeTheMarkerProbe(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	l := slog.New(slog.NewTextHandler(&buf, nil))
-	_ = NewMarker(path, nil, WithLogger(l))
+	_ = NewMarker(path, nil, withMarkerLogger(l))
 	if !strings.Contains(buf.String(), "health marker not writable") {
 		t.Errorf("WithLogger got %q, want the degraded-mode warning", buf.String())
 	}

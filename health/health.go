@@ -23,8 +23,8 @@
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
 //
-// A Marker logs to the logger WithLogger gives NewMarker, or to slog.Default
-// at the time of each line.
+// A Marker logs to the logger withMarkerLogger gives NewMarker, or to
+// slog.Default at the time of each line.
 //
 // Thread-safe; Set may be called from any goroutine.
 package health
@@ -42,13 +42,6 @@ import (
 	"sync/atomic"
 	"time"
 )
-
-// Signal is the interface satisfied by *Marker. Consumers (e.g.
-// HTTP handlers) can depend on this interface without importing the
-// concrete type.
-type Signal interface {
-	Healthy() bool
-}
 
 var _ Signal = (*Marker)(nil)
 
@@ -120,9 +113,9 @@ const degradedEffect = "RunProbe and Inspect report healthy while the marker can
 // MarkerOption configures NewMarker.
 type MarkerOption func(*Marker)
 
-// WithLogger sets the logger a Marker reports to. A nil logger, like none,
-// means slog.Default at the time of each line.
-func WithLogger(l *slog.Logger) MarkerOption {
+// withMarkerLogger sets the logger a Marker reports to. A nil logger, like
+// none, means slog.Default at the time of each line.
+func withMarkerLogger(l *slog.Logger) MarkerOption {
 	return func(m *Marker) { m.logger = l }
 }
 
