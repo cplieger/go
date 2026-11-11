@@ -640,10 +640,14 @@ export function createStream(opts: StreamOptions): Stream {
     if (state.kind === "open") {
       enterConnScope(g, h);
     }
-    // Whatever the state, a degrade's reconnect included, except a stop made inside the dispatch.
+    // Whatever the state, a degrade's reconnect included. A stop made inside the dispatch leaves
+    // the run owed, not started: the hello already adopted its head, so the next start reconciles.
     if (helloOwed) {
       helloOwed = false;
-      if (state.kind !== "stopped") {
+      if (state.kind === "stopped") {
+        unverified = true;
+        unverifiedFull ||= helloRun.full;
+      } else {
         schedule("hello", helloRun.full);
       }
     }
@@ -1102,11 +1106,12 @@ export function createStream(opts: StreamOptions): Stream {
         records.set(topic, resume);
       }
     }
-    assuredChanged();
+    // A connection about to degrade reports no coverage: degrade() tells the listeners itself.
     if (h.conn === null && opts.scopeUrl !== undefined) {
       degrade();
       return;
     }
+    assuredChanged();
     settleScopes();
     postOwed();
   }

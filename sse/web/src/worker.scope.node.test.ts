@@ -574,6 +574,66 @@ describe("worker host scope", () => {
     ).toEqual([true]);
   });
 
+  it("a call sent while reconnecting waits for the next hello", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: [] });
+    await settle();
+    await hello(h);
+    a.send({ type: "reconnect", resetCursor: false });
+    await settle();
+    expect(h.host.stream().state().kind).toBe("connecting");
+    a.send({ type: "set_scope", seq: 4, topics: [] });
+    await settle();
+    expect(a.ofType("scope_set").filter((m) => m.seq === 4)).toEqual([]);
+    await hello(h, { head: "9" });
+    expect(a.ofType("scope_set").filter((m) => m.seq === 4)).toEqual([
+      { type: "scope_set", seq: 4, epoch: A, offset: "9" },
+    ]);
+  });
+
+  it("a run owed when a stop lands is posted once after the restart", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    const b = tab(h, "b");
+    a.attach({ scope: ["run:a"] });
+    b.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h, { resumed: true });
+    await expire(h, a);
+    b.send({ type: "set_scope", seq: 1, topics: ["run:b"] });
+    await settle();
+    const before0 = b.ofType("revalidate_run").length;
+    b.send({ type: "heartbeat_ack", seq: b.ofType("heartbeat").at(-1)!.seq });
+    await settle();
+    expect(h.ofKind("port_repaired")).toHaveLength(1);
+    expect(b.ofType("revalidate_run")).toHaveLength(before0);
+    const z = tab(h, "z");
+    z.attach({ scope: ["run:a"] });
+    await settle();
+    z.send({ type: "detach", cause: "logout" });
+    await settle();
+    expect(h.host.stream().state().kind).toBe("stopped");
+    const before = b.ofType("revalidate_run").length;
+    tab(h, "c").attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h, { resumed: true });
+    const after = b.ofType("revalidate_run").slice(before);
+    expect(after.map((m) => [m.ctx.cause, m.ctx.full])).toEqual([["hello", true]]);
+  });
+
+  it("a call pending at a hello whose malformed conn degrades waits for the next hello", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: [], scopeSeq: 1 });
+    await settle();
+    await hello(h, { conn: null });
+    expect(a.ofType("scope_set")).toEqual([]);
+    h.sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "9" }));
+    await settle();
+    expect(a.ofType("scope_set")).toEqual([{ type: "scope_set", seq: 1, epoch: A, offset: "9" }]);
+  });
+
   it("a stopped stream fails every pending scope call with stopped", async () => {
     const h = hostHarness();
     const a = tab(h, "a");

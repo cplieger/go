@@ -439,8 +439,9 @@ describe("stream scope", () => {
     expect(h.runs.map((r) => r.ctx.cause)).toEqual(["hello"]);
   });
 
-  it("a stop made from a lifecycle listener on the hello leaves no hello run running", async () => {
-    for (const on of ["state", "hello"] as const) {
+  it("a stop made from a lifecycle listener on the hello leaves the hello run owed to the next start", async () => {
+    for (const first of ["state", "hello"] as const) {
+      let on: "state" | "hello" | "none" = first;
       const sf = scriptedFetch();
       const ctxs: RevalidateContext[] = [];
       const box: { s?: Stream } = {};
@@ -470,6 +471,17 @@ describe("stream scope", () => {
       await flush();
       expect(box.s.state().kind).toBe("stopped");
       expect(ctxs.every((c) => c.signal.aborted)).toBe(true);
+      // The hello adopted head 5, so the restart's resumed hello must still reconcile.
+      on = "none";
+      box.s.start();
+      await flush();
+      expect(sf.connections.at(-1)!.request.headers["Last-Event-ID"]).toBe(`${A}:5`);
+      sf.connections
+        .at(-1)!
+        .push(helloFrame({ epoch: A, head: "5", resumed: true, verdict: "resumed" }));
+      await flush();
+      const live = ctxs.filter((c) => !c.signal.aborted);
+      expect(live.map((c) => [c.cause, c.full])).toEqual([["hello", false]]);
     }
   });
 
