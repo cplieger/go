@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"pgregory.net/rapid"
@@ -1618,36 +1619,48 @@ func TestInspect_states(t *testing.T) {
 // verdict its own healthcheck disagrees with.
 func TestInspectAndProbeCannotDisagree(t *testing.T) {
 	loop := filepath.Join(t.TempDir(), "loop")
-	_ = os.Symlink(loop, loop)
+	loopErr := os.Symlink(loop, loop)
 
+	aged := func(age time.Duration) func(*testing.T) string {
+		return func(t *testing.T) string { return markerAged(t, age) }
+	}
 	cases := map[string]struct {
-		path string
-		opts []ProbeOption
+		marker func(*testing.T) string
+		opts   []ProbeOption
+		skip   error
 	}{
-		"fresh, unarmed":   {path: markerAged(t, time.Second)},
-		"fresh, armed":     {path: markerAged(t, time.Second), opts: []ProbeOption{WithMaxAge(time.Hour)}},
-		"stale":            {path: markerAged(t, 2*time.Hour), opts: []ProbeOption{WithMaxAge(time.Hour)}},
-		"aged but unarmed": {path: markerAged(t, 100*time.Hour)},
-		"absent":           {path: filepath.Join(t.TempDir(), ".healthy")},
-		"unreadable":       {path: loop},
+		"fresh, unarmed": {marker: aged(time.Second)},
+		"fresh, armed":   {marker: aged(time.Second), opts: []ProbeOption{WithMaxAge(time.Hour)}},
+		// Under half a millisecond over, so only rounding up prints 0.002s.
+		"stale":            {marker: aged(2*time.Hour + 1200*time.Microsecond), opts: []ProbeOption{WithMaxAge(time.Hour)}},
+		"aged but unarmed": {marker: aged(100 * time.Hour)},
+		"absent":           {marker: func(t *testing.T) string { return filepath.Join(t.TempDir(), ".healthy") }},
+		"unreadable":       {marker: func(*testing.T) string { return loop }, skip: loopErr},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			f := Inspect(tc.path, tc.opts...)
-			code, reason := probeCheck(tc.path, tc.opts...)
-			wantCode := 1
-			if f.Healthy() {
-				wantCode = 0
+			// A Skip inside the bubble reports the subtest as passed.
+			if tc.skip != nil {
+				t.Skipf("cannot create self-referencing symlink: %v", tc.skip)
 			}
-			if code != wantCode {
-				t.Errorf("probeCheck = %d but Inspect says Healthy()=%v (state %v)", code, f.Healthy(), f.State)
-			}
-			if reason != f.Reason() {
-				t.Errorf("probeCheck reason = %q, Inspect.Reason() = %q; the two presentations must carry the same text", reason, f.Reason())
-			}
-			if got := probeCode(tc.path, tc.opts...); got != code {
-				t.Errorf("probeCode = %d, probeCheck = %d", got, code)
-			}
+			// A stale reason prints the age, so the readings must share one
+			// instant: the bubble's clock stands still while nothing blocks,
+			// and the marker is backdated from that clock.
+			synctest.Test(t, func(t *testing.T) {
+				path := tc.marker(t)
+				f := Inspect(path, tc.opts...)
+				code, reason := probeCheck(path, tc.opts...)
+				wantCode := 1
+				if f.Healthy() {
+					wantCode = 0
+				}
+				if code != wantCode {
+					t.Errorf("probeCheck = %d but Inspect says Healthy()=%v (state %v)", code, f.Healthy(), f.State)
+				}
+				if reason != f.Reason() {
+					t.Errorf("probeCheck reason = %q, Inspect.Reason() = %q; the two presentations must carry the same text", reason, f.Reason())
+				}
+			})
 		})
 	}
 }
