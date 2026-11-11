@@ -24,7 +24,7 @@ func TestRing_evictsByAge(t *testing.T) {
 	if got := h.Position(); got.Floor != 0 || got.Head != 3 {
 		t.Errorf("Position() past the TTL without a Publish = %+v, want Floor 0 Head 3", got)
 	}
-	sub, err := h.subscribe("", "", Cursor{Epoch: h.epoch, Offset: 1}, true)
+	sub, err := h.subscribe(topicReq(""), Cursor{Epoch: h.epoch, Offset: 1}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestRing_evictsByBytes(t *testing.T) {
 		{offset: 1, wantVerdict: VerdictResumed, wantReplay: 4},
 		{offset: 2, wantVerdict: VerdictResumed, wantReplay: 3},
 	} {
-		sub, err := h.subscribe("", "", Cursor{Epoch: testEpoch, Offset: tt.offset}, true)
+		sub, err := h.subscribe(topicReq(""), Cursor{Epoch: testEpoch, Offset: tt.offset}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,21 +87,21 @@ func TestRing_sinceCopies(t *testing.T) {
 	for i := uint64(1); i <= 3; i++ {
 		r.append(&entry{offset: i, event: Event{Topic: "a"}})
 	}
-	got := r.since(0, "")
+	got := r.since(0, All())
 	if len(got) != 3 {
 		t.Fatalf("since(0) returned %d entries, want 3", len(got))
 	}
 	got[0].offset = 99
 	got[1].event.Topic = "mutated"
-	again := r.since(0, "")
+	again := r.since(0, All())
 	if again[0].offset != 1 || again[1].event.Topic != "a" {
 		t.Errorf("since(0) after mutating a previous result = %+v, want the ring unchanged", again)
 	}
-	filtered := r.since(1, "a")
+	filtered := r.since(1, Topics("a"))
 	if len(filtered) != 2 || filtered[0].offset != 2 || filtered[1].offset != 3 {
 		t.Errorf("since(1, a) = %+v, want offsets [2 3]", filtered)
 	}
-	if got := r.since(3, ""); len(got) != 0 {
+	if got := r.since(3, All()); len(got) != 0 {
 		t.Errorf("since(head) = %+v, want empty", got)
 	}
 }
@@ -110,7 +110,7 @@ func TestRing_zeroCapacityIsInert(t *testing.T) {
 	r := newRing(0)
 	r.append(&entry{offset: 1, size: 40})
 	r.evict(time.Now(), time.Minute, 1)
-	if got := r.since(0, ""); len(got) != 0 {
+	if got := r.since(0, All()); len(got) != 0 {
 		t.Errorf("since on a zero-capacity ring = %+v, want empty", got)
 	}
 	if r.floor() != 0 || r.len() != 0 || r.bytes != 0 {

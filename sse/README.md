@@ -79,7 +79,7 @@ Three compiled examples in `example_test.go` cover the next steps, and `go test`
 ## API
 
 - `New`, `MustNew` and twelve `With*` options build a hub. `ErrConfig` wraps every refusal.
-- `Serve`, with `WithTopic`, `WithOnConnect` and `WithClientTag`, streams one request. `Writer.Event` writes initial state from the hook.
+- `Serve`, with `WithTopic`, `WithScope`, `WithRequestScope`, `WithOnConnect` and `WithClientTag`, streams one request. `Writer.Event` writes initial state from the hook. `Scope`, `All`, `Topics`, `ValidTopic`, `MaxScopeTopics` and `MaxScopeHeaderBytes` describe a connection's scope, and `ScopeHandler` lets a client replace it.
 - `Publish` sends a frame and returns its offset, `(0, nil)` once the hub is shut down, or `ErrEventName`, `ErrFrameTooLarge` or `ErrInvalidUTF8`.
 - `DigestHandler`, which takes a `Resolver` and two `WithDigest*` options and returns an error wrapping `ErrConfig` for a refused one, answers a client that reconciles. A resolver receives `Held` subjects and answers one `State` each, with a `Subject`, a `Version` and a `Status` (`StatusCurrent`, `StatusGone` or `StatusForbidden`).
 - `Position`, `Snapshot`, `ClientCount`, `QueuedFrames` and `Shutdown` inspect and stop the hub.

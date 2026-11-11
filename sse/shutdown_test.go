@@ -17,7 +17,7 @@ func TestShutdown_thenPublishNeverDoubleCloses(t *testing.T) {
 	logger, _ := captureLog()
 	const buffer = 4
 	h := mustNew(t, WithLogger(logger), WithClientBuffer(buffer))
-	sub, err := h.subscribe("", "", Cursor{}, false)
+	sub, err := h.subscribe(topicReq(""), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

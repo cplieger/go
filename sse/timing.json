@@ -26,6 +26,9 @@
   "client_buffer_floor": 256,
   "digest_max_subjects": 256,
   "digest_max_body_bytes": 524288,
+  "max_scope_topics": 256,
+  "max_scope_header_bytes": 4096,
+  "max_topic_bytes": 128,
   "max_offset": "9007199254740991",
   "keepalive_event": "sse:keepalive",
   "replay_ttl_floor_extra_ms": 30000

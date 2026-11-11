@@ -40,12 +40,27 @@ func drawRing(t *rapid.T) *ringModel {
 }
 
 func (m *ringModel) resolveAndReplay(since uint64, topic string, replyCap int) (Verdict, bool, []entry) {
-	verdict, resumed := resolve(Cursor{Epoch: testEpoch, Offset: since}, true, testEpoch, m.r.floor(), m.head, m.r.len(), replyCap)
 	var replay []entry
-	if resumed && since < m.head {
-		replay = m.r.since(since, topic)
+	matched := func() int {
+		replay = m.r.since(since, topicScope(topic))
+		return len(replay)
+	}
+	verdict, resumed := resolve(Cursor{Epoch: testEpoch, Offset: since}, true, testEpoch, m.r.floor(), m.head, m.r.len(), replyCap, matched)
+	if !resumed {
+		replay = nil
 	}
 	return verdict, resumed, replay
+}
+
+// eligible is the model's count of survivors above since that topic admits.
+func (m *ringModel) eligible(since uint64, topic string) int {
+	n := 0
+	for _, e := range m.survivors() {
+		if e.offset > since && topicScope(topic).matches(e.event.Topic) {
+			n++
+		}
+	}
+	return n
 }
 
 func TestResolve_replayIsFilteredOrderedSubset(t *testing.T) {
@@ -58,7 +73,7 @@ func TestResolve_replayIsFilteredOrderedSubset(t *testing.T) {
 
 		var want []uint64
 		for _, e := range m.survivors() {
-			if e.offset > since && topicMatches(topic, e.event.Topic) {
+			if e.offset > since && topicScope(topic).matches(e.event.Topic) {
 				want = append(want, e.offset)
 			}
 		}
@@ -94,7 +109,11 @@ func TestResolve_lengthBoundedByHeadMinusSince(t *testing.T) {
 	})
 }
 
-func TestResolve_capAppliedToUnfilteredSpan(t *testing.T) {
+// The reply cap judges the frames the connection would receive, never the
+// unfiltered span: out-of-scope traffic must not turn a short reconnect into
+// a full reconciliation, and a cap below the eligible count refuses the whole
+// resume rather than replaying a prefix.
+func TestResolve_capAppliedToEligibleCount(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		m := drawRing(t)
 		if m.head == 0 {
@@ -102,20 +121,24 @@ func TestResolve_capAppliedToUnfilteredSpan(t *testing.T) {
 		}
 		since := rapid.Uint64Range(max(m.r.floor(), 1)-1, m.head-1).Draw(t, "since")
 		topic := rapid.SampledFrom(topics[1:]).Draw(t, "topic")
-		span := int(m.head - since)
-		replyCap := rapid.IntRange(0, span-1).Draw(t, "replyCap")
-		verdict, _, replay := m.resolveAndReplay(since, topic, replyCap)
 		if m.r.len() == 0 || since+1 < m.r.floor() {
+			verdict, _, _ := m.resolveAndReplay(since, topic, int(m.head))
 			if verdict != VerdictGapFloor {
 				t.Fatalf("resolve(since=%d below floor %d) = %s, want gap_floor", since, m.r.floor(), verdict)
 			}
 			return
 		}
-		if verdict != VerdictGapBudget {
-			t.Fatalf("resolve(since=%d, head=%d, replyCap=%d) = %s, want gap_budget on the unfiltered span %d", since, m.head, replyCap, verdict, span)
+		eligible := m.eligible(since, topic)
+		replyCap := rapid.IntRange(0, int(m.head-since)).Draw(t, "replyCap")
+		verdict, resumed, replay := m.resolveAndReplay(since, topic, replyCap)
+		if eligible > replyCap {
+			if verdict != VerdictGapBudget || resumed || len(replay) != 0 {
+				t.Fatalf("resolve(since=%d, eligible=%d, replyCap=%d) = (%s, %v, %d frames), want (gap_budget, false, 0)", since, eligible, replyCap, verdict, resumed, len(replay))
+			}
+			return
 		}
-		if len(replay) != 0 {
-			t.Fatalf("gap_budget replayed %d frames, want 0", len(replay))
+		if verdict != VerdictResumed || !resumed || len(replay) != eligible {
+			t.Fatalf("resolve(since=%d, eligible=%d, replyCap=%d) = (%s, %v, %d frames), want (resumed, true, %d)", since, eligible, replyCap, verdict, resumed, len(replay), eligible)
 		}
 	})
 }
@@ -145,7 +168,8 @@ func TestResolve_eachGapVerdictHasOneCause(t *testing.T) {
 			since = rapid.Uint64Range(floor-1, head-uint64(replyCap)-1).Draw(t, "since")
 			want = VerdictGapBudget
 		}
-		got, resumed := resolve(Cursor{Epoch: testEpoch, Offset: since}, true, testEpoch, floor, head, n, replyCap)
+		unfiltered := func() int { return int(head - since) }
+		got, resumed := resolve(Cursor{Epoch: testEpoch, Offset: since}, true, testEpoch, floor, head, n, replyCap, unfiltered)
 		if got != want || resumed {
 			t.Fatalf("resolve(since=%d, floor=%d, head=%d, n=%d, replyCap=%d) = (%s, %v), want (%s, false)", since, floor, head, n, replyCap, got, resumed, want)
 		}
@@ -156,7 +180,7 @@ func TestResolve_sinceEqualsHeadIsResumedOnEmptyRing(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		head := rapid.Uint64Range(0, MaxOffset).Draw(t, "head")
 		replyCap := rapid.IntRange(0, 256).Draw(t, "replyCap")
-		got, resumed := resolve(Cursor{Epoch: testEpoch, Offset: head}, true, testEpoch, 0, head, 0, replyCap)
+		got, resumed := resolve(Cursor{Epoch: testEpoch, Offset: head}, true, testEpoch, 0, head, 0, replyCap, noneMatched)
 		if got != VerdictResumed || !resumed {
 			t.Fatalf("resolve(since=head=%d, n=0) = (%s, %v), want (resumed, true)", head, got, resumed)
 		}
@@ -164,7 +188,7 @@ func TestResolve_sinceEqualsHeadIsResumedOnEmptyRing(t *testing.T) {
 }
 
 func TestResolve_offsetZeroWithHeadZeroIsResumed(t *testing.T) {
-	got, resumed := resolve(Cursor{Epoch: testEpoch, Offset: 0}, true, testEpoch, 0, 0, 0, 0)
+	got, resumed := resolve(Cursor{Epoch: testEpoch, Offset: 0}, true, testEpoch, 0, 0, 0, 0, noneMatched)
 	if got != VerdictResumed || !resumed {
 		t.Errorf("resolve(since=0, head=0) = (%s, %v), want (resumed, true)", got, resumed)
 	}
@@ -178,9 +202,12 @@ func TestResolve_offsetZeroWithHeadZeroIsResumed(t *testing.T) {
 		{name: "Invalid", cur: Cursor{}, present: true, want: VerdictCursorInvalid},
 		{name: "OtherEpoch", cur: Cursor{Epoch: "00000000000000ff"}, present: true, want: VerdictEpochChanged},
 	} {
-		got, resumed := resolve(tt.cur, tt.present, testEpoch, 0, 0, 0, 0)
+		got, resumed := resolve(tt.cur, tt.present, testEpoch, 0, 0, 0, 0, noneMatched)
 		if got != tt.want || resumed {
 			t.Errorf("resolve(%s) = (%s, %v), want (%s, false)", tt.name, got, resumed, tt.want)
 		}
 	}
 }
+
+// noneMatched is the eligible count for a resolve that never reaches the cap.
+func noneMatched() int { return 0 }

@@ -80,3 +80,8 @@ func mustDigestHandler(t testing.TB, h *Hub, resolve Resolver, opts ...DigestOpt
 	}
 	return handler
 }
+
+// topicReq is the subscription WithTopic(topic) asks for.
+func topicReq(topic string) subRequest {
+	return subRequest{scope: topicScope(topic), topic: topic}
+}

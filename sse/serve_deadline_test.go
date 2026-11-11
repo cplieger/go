@@ -288,7 +288,7 @@ func TestServe_atMostOneFrameAfterReset(t *testing.T) {
 	for run := range 200 {
 		logger, _ := captureLog()
 		h := mustNew(t, WithLogger(logger), WithClientBuffer(4))
-		sub, err := h.subscribe("", "", Cursor{}, false)
+		sub, err := h.subscribe(topicReq(""), Cursor{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
