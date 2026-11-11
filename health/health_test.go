@@ -1040,12 +1040,12 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 }
 
-// TestSet_leavesDegradedModeOnceTheMarkerPathClears: degraded mode lasts only
-// while Set cannot write, because the probe decides it from the filesystem on
-// every run. Once what blocked the marker path is gone, the next Set writes
-// the marker and logs one Info, and Healthy, Within (a signal built while
-// degraded included) and Inspect all read the marker. A directory at the
-// marker path blocks it for any user, root included.
+// TestSet_leavesDegradedModeOnceTheMarkerPathClears: once what blocked the
+// marker path is gone, the next Set(true) writes the marker; leaving is one-way
+// (TestSet_leavingDegradedModeIsOneWay). That Set writes the marker and logs
+// one Info, and Healthy, Within (a signal built while degraded included) and
+// Inspect all read the marker. A directory at the marker path blocks it for any
+// user, root included.
 func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	if err := os.Mkdir(path, 0o700); err != nil {
@@ -1189,7 +1189,7 @@ func TestNewMarker_degradedWarningNamesBothVerdicts(t *testing.T) {
 	logged := buf.String()
 	for _, want := range []string{
 		`msg="health marker not writable, marker in degraded mode"`,
-		`effect="RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"`,
+		`effect="RunProbe and Inspect report healthy while the marker cannot be written; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"`,
 	} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("degraded-mode warning = %q, want it to carry %s", logged, want)

@@ -8,15 +8,17 @@
 // If the marker directory is not writable (e.g. compose's
 // `read_only: true` without a `tmpfs: /tmp` mount), or something already
 // at the marker path is not a regular file the process can write, the
-// constructor enters degraded mode: Set and Cleanup become no-ops, and the
-// probe reports healthy rather than restart-looping a container whose only
-// broken piece is the signaling channel. Each later Set checks again and
-// leaves degraded mode once the folder and the marker can be written, so
-// an app that sets the marker only at startup stays degraded until it
-// restarts. Healthy, Within and Handler report unhealthy in degraded mode,
-// because Set cannot change the marker. In a directory that can be
-// written, a marker path os.Stat cannot read at all, such as a symlink
-// loop, is not degraded mode: the probe reports it unhealthy.
+// constructor enters degraded mode: Set and Cleanup become no-ops, and
+// while the obstacle is there the probe reports healthy rather than
+// restart-looping a container whose only broken piece is the signaling
+// channel. Each later Set checks again and leaves degraded mode once the
+// folder and the marker can be written. An app that sets the marker only
+// at startup makes no later Set, so once the obstacle is gone its probe
+// reads the marker absent until the app restarts. Healthy, Within and
+// Handler report unhealthy in degraded mode, because Set cannot change the
+// marker. In a directory that can be written, a marker path os.Stat cannot
+// read at all, such as a symlink loop, is not degraded mode: the probe
+// reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -91,7 +93,9 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 			"error", err,
 			"effect", degradedEffect,
 			"hint", "compose.yaml with read_only:true requires "+
-				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`")
+				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`; "+
+				"otherwise make the folder writable. The next Set(true) writes "+
+				"the marker, so restart a service that sets it only at startup")
 	} else if err := markerWritable(path); err != nil {
 		m.degraded.Store(true)
 		m.log().Warn("health marker not writable, marker in degraded mode",
@@ -100,8 +104,8 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 			"effect", degradedEffect,
 			"hint", "remove what is at the marker path, such as a marker an "+
 				"earlier run as another user left, a directory or a FIFO; the "+
-				"next Set writes the marker, so restart a service that sets it "+
-				"only at startup")
+				"next Set(true) writes the marker, so restart a service that "+
+				"sets it only at startup")
 	}
 	return m
 }
@@ -110,7 +114,7 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 // operator: which verdict the container gets depends on whether its
 // healthcheck reads the marker through RunProbe or asks an HTTP endpoint
 // over it.
-const degradedEffect = "RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"
+const degradedEffect = "RunProbe and Inspect report healthy while the marker cannot be written; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"
 
 // MarkerOption configures NewMarker.
 type MarkerOption func(*Marker)
@@ -271,9 +275,10 @@ func (m *Marker) Cleanup() {
 
 // Healthy reports whether the marker file currently exists via a strict
 // os.Stat, one call per invocation, not a field read; it satisfies Signal.
-// Unlike RunProbe, it reports false in degraded mode whatever file is there,
-// because Set cannot change it: an HTTP consumer via Handler deserves an
-// honest signal rather than the restart-loop avoidance the probe needs. A
+// Unlike RunProbe, which reports healthy while the marker cannot be written,
+// it reports false in degraded mode whatever file is there, because Set
+// cannot change it: an HTTP consumer via Handler deserves an honest signal
+// rather than the restart-loop avoidance the probe needs. A
 // nil *Marker reports false.
 func (m *Marker) Healthy() bool {
 	if m == nil || m.degraded.Load() {
@@ -289,7 +294,8 @@ func (m *Marker) Healthy() bool {
 // unhealthy. Pass the same [Lease.Duration] to both, so a marker Set can write
 // gets one verdict from the probe and the handler. In degraded mode (an
 // unwritable directory or marker) it is unhealthy whatever file is there, as
-// Healthy is, while the probe reports healthy. It costs one os.Stat per
+// Healthy is, while the probe reports healthy for as long as the marker
+// cannot be written. It costs one os.Stat per
 // call.
 func (m *Marker) Within(d time.Duration) Signal {
 	return markerWithin{m: m, d: d}
