@@ -10,7 +10,14 @@ import {
   reduce,
 } from "./reducer.js";
 import { type StreamState, toStreamState } from "./state.js";
-import { DEFAULT_RETRY_MS, type TimingConfig, WIRE, resolveTiming } from "./timing.js";
+import {
+  DEFAULT_RETRY_MS,
+  MAX_SCOPE_HEADER_BYTES,
+  MAX_SCOPE_TOPICS,
+  type TimingConfig,
+  WIRE,
+  resolveTiming,
+} from "./timing.js";
 import { type Connection, type TransportFrame, connect } from "./transport.js";
 import { type VersionMap, bindListener, staleListener } from "./versions.js";
 import {
@@ -19,7 +26,7 @@ import {
   adaptVisibility,
   createVisibilityManager,
 } from "./visibility.js";
-import { type Cursor, type Hello, compareOffset } from "./wire.js";
+import { type Cursor, type Hello, compareOffset, validTopic } from "./wire.js";
 
 /**
  * How one stream is built. Four fields are required — `url`, `versions`, `onFrame` and
@@ -48,6 +55,27 @@ export interface StreamOptions {
   readonly onLifecycle?: (ev: LifecycleEvent) => void;
   /** The application's reconciliation, run single-flight; it must pass ctx.signal to every fetch. */
   readonly revalidate: (ctx: RevalidateContext) => Promise<void>;
+  /**
+   * The server's scope endpoint (`ScopeHandler`). Without it the stream never sends a scope, so its
+   * connection carries everything and a `setScope` settles at once while connected, else at the
+   * next hello.
+   */
+  readonly scopeUrl?: string;
+  /** The scope the first connect presents; `null`, the default, is everything. Needs `scopeUrl`. */
+  readonly initialScope?: readonly string[] | null;
+}
+
+/** Why a `setScope` promise rejected. */
+export type ScopeFailure = "stopped" | "superseded" | "link";
+
+/** The rejection of a `setScope` promise; `failure` names why. */
+export class ScopeError extends Error {
+  readonly failure: ScopeFailure;
+  constructor(failure: ScopeFailure) {
+    super(`setScope: ${failure}`);
+    this.name = "ScopeError";
+    this.failure = failure;
+  }
 }
 
 /**
@@ -90,7 +118,10 @@ export interface RevalidateContext {
  */
 export interface Stream {
   start(): void;
-  /** For leaving the page: aborts the in-flight revalidate's signal. */
+  /**
+   * For leaving the page: aborts the in-flight revalidate's signal. An interrupted or queued run
+   * stays owed, so the next start's hello reconciles even when it resumes.
+   */
   stop(): void;
   /** Aborts the attempt and connects again in place; ignored in hidden_closed, offline and stopped. */
   reconnect(): void;
@@ -99,6 +130,15 @@ export interface Stream {
   cursor(): Cursor | null;
   /** Drops the cursor; the next connect presents none and earns a fresh hello. */
   resetCursor(): void;
+  /**
+   * Replaces the scope: `null` is everything, `[]` broadcasts only, a list those topics as well.
+   * Throws a RangeError for a topic outside `validTopic` or past MAX_SCOPE_TOPICS. Resolves once
+   * the server is guaranteed to deliver it, with the offset after which it does: read the topics'
+   * state after that, every frame at or below the offset included. Rejects `stopped` on or after
+   * stop() (the next start still presents it; before the first start it waits for the hello), or
+   * `superseded` when a later call replaced it uncovered.
+   */
+  setScope(scope: readonly string[] | null): Promise<Cursor>;
 }
 
 /** Host-only controls over a stream; reached through streamInternals, not the public interface. */
@@ -107,6 +147,15 @@ export interface StreamInternals {
   revalidate(cause: RevalidateCause, full: boolean): void;
   /** Sets the queued slot's sticky full without starting a run. */
   queueFull(): void;
+  /** The scope the server is guaranteed to hold now; `null` is everything. */
+  assured(): readonly string[] | null;
+  /** Called with `assured()` every time it changes. Returns the unsubscribe. */
+  onScope(listener: (assured: readonly string[] | null) => void): () => void;
+  /**
+   * The offset after which the current connection delivers `scope`, at least the cursor; null
+   * while `assured()` does not cover it or the cursor is null.
+   */
+  coveredSince(scope: readonly string[] | null): Cursor | null;
 }
 
 type HeldEntry =
@@ -130,13 +179,144 @@ interface Slot {
 interface Run {
   readonly controller: AbortController;
   readonly cause: RevalidateCause;
+  readonly full: boolean;
   readonly startedAt: number;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+/** A normalized scope: `null` is everything, otherwise its topics sorted and distinct. */
+type ScopeValue = readonly string[] | null;
+
+/** One connection's view of the server's scope, replaced at every hello. */
+interface ConnScope {
+  /** The hello's `conn`, or null for a connection the client cannot rescope. */
+  readonly conn: string | null;
+  confirmed: ScopeValue;
+  owed: boolean;
+  seq: number;
+  post: { readonly sent: ScopeValue; readonly controller: AbortController } | null;
+  retry: ReturnType<typeof setTimeout> | null;
+  attempts: number;
+}
+
+interface PendingScope {
+  readonly scope: ScopeValue;
+  readonly resolve: (offset: Cursor) => void;
+  readonly reject: (error: ScopeError) => void;
+}
+
+type PostOutcome =
+  | { readonly kind: "ok"; readonly offset: string }
+  | { readonly kind: "refused" | "transient" | "auth" };
+
 type RuntimeEnd = Extract<StreamEnd, HeldDiscardCause>;
 
 const ALIVE_TIMEOUT_MS = 5_000;
+const SCOPE_TIMEOUT_MS = 5_000;
+const SCOPE_HEADER = "sse-topics";
+
+/** Validates and normalizes a scope; throws a RangeError for a set the server would refuse. */
+export function normalizeScope(scope: readonly string[] | null): ScopeValue {
+  if (scope === null) {
+    return null;
+  }
+  for (const topic of scope) {
+    if (!validTopic(topic)) {
+      throw new RangeError(
+        `setScope: a topic of ${topic.length} characters is outside the grammar`,
+      );
+    }
+  }
+  const topics = [...new Set(scope)].sort();
+  if (topics.length > MAX_SCOPE_TOPICS) {
+    throw new RangeError(`setScope: ${topics.length} topics, above MAX_SCOPE_TOPICS`);
+  }
+  return topics;
+}
+
+/** a ∩ b, where null (everything) is the identity. */
+export function intersectScope(a: ScopeValue, b: ScopeValue): ScopeValue {
+  if (a === null) {
+    return b;
+  }
+  if (b === null) {
+    return a;
+  }
+  const set = new Set(b);
+  return a.filter((t) => set.has(t));
+}
+
+/** Whether a scope delivers everything b does. */
+export function coversScope(a: ScopeValue, b: ScopeValue): boolean {
+  if (a === null) {
+    return true;
+  }
+  if (b === null) {
+    return false;
+  }
+  const set = new Set(a);
+  return b.every((t) => set.has(t));
+}
+
+function sameScope(a: ScopeValue, b: ScopeValue): boolean {
+  return coversScope(a, b) && coversScope(b, a);
+}
+
+/** The copied headers without any `SSE-Topics`, whatever its case: the stream owns that header. */
+function withoutScopeHeader(
+  headers: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (name.toLowerCase() !== SCOPE_HEADER) {
+      out[name] = value;
+    }
+  }
+  return out;
+}
+
+const OFFSET_RE = /^(0|[1-9][0-9]{0,15})$/;
+
+/** Classifies a scope POST answer; a 200 must carry this connection's epoch and an offset. */
+async function classifyScopeAnswer(response: Response, epoch: string): Promise<PostOutcome> {
+  const status = response.status;
+  if (status === 401) {
+    return { kind: "auth" };
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(await response.text());
+  } catch {
+    body = null;
+  }
+  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  if (status === 200) {
+    const offset = record["offset"];
+    if (
+      !response.redirected &&
+      record["epoch"] === epoch &&
+      typeof offset === "string" &&
+      OFFSET_RE.test(offset)
+    ) {
+      return { kind: "ok", offset };
+    }
+    return { kind: "transient" };
+  }
+  // Only an answer a retry cannot change is a refusal; anything else (408, 409, 429, 5xx, a
+  // proxy's status) is transient.
+  const code = record["code"];
+  if (
+    (status === 400 && (code === "sse_scope" || code === "scope_invalid")) ||
+    status === 403 ||
+    status === 405 ||
+    status === 413 ||
+    status === 415 ||
+    (status === 404 && code !== "scope_conn")
+  ) {
+    return { kind: "refused" };
+  }
+  return { kind: "transient" };
+}
 
 const internals = new WeakMap<Stream, StreamInternals>();
 
@@ -176,6 +356,13 @@ function describe(error: unknown): string {
  */
 export function createStream(opts: StreamOptions): Stream {
   const cfg = resolveTiming(opts.timing);
+  if (Object.keys(opts.headers ?? {}).some((name) => name.toLowerCase() === SCOPE_HEADER)) {
+    throw new RangeError("createStream: the stream owns SSE-Topics; set the scope with setScope");
+  }
+  const initialScope = normalizeScope(opts.initialScope ?? null);
+  if (initialScope !== null && opts.scopeUrl === undefined) {
+    throw new RangeError("createStream: initialScope needs a scopeUrl");
+  }
   const doFetch: typeof fetch = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const minWire = opts.minWire ?? WIRE;
   const maxWire = opts.maxWire ?? WIRE;
@@ -199,15 +386,34 @@ export function createStream(opts: StreamOptions): Stream {
   let inflight: Run | null = null;
   let queued: Slot | null = null;
   let unverified = false;
+  let unverifiedFull = false;
   let binding = false;
   let knownEpoch = opts.versions.epoch();
   const helloRun = { full: false, revalidated: false };
+  // The reducer asks for the hello run inside the "connected" dispatch, before the hello's scope
+  // is entered; the run waits for it, so a host's synchronous tabs.run sees the hello's coverage.
+  let deferHello = false;
+  let helloOwed = false;
   const reducerRevalidated = (): boolean => helloRun.revalidated;
   let wasHiddenClosed = false;
 
   let defaultVisibility: VisibilityManager | null = null;
   let defaultOnline: OnlineManager | null = null;
   let unsubscribes: (() => void)[] = [];
+
+  let current: ScopeValue = initialScope;
+  let degraded = false;
+  let connScope: ConnScope | null = null;
+  /** The in-flight attempt's presentation, read by its hello and by its connect's 400. */
+  let presented: {
+    readonly generation: number;
+    readonly header: boolean;
+    readonly scope: ScopeValue;
+  } | null = null;
+  const records = new Map<string, Cursor>();
+  let wildcard: Cursor | null = null;
+  let pending: PendingScope[] = [];
+  const scopeListeners = new Set<(assured: ScopeValue) => void>();
 
   const now = (): number => Date.now();
   const rand = (): number => Math.random();
@@ -216,7 +422,7 @@ export function createStream(opts: StreamOptions): Stream {
     opts.onLifecycle?.(event);
   }
 
-  function authLost(route: "stream" | "alive" | "digest"): void {
+  function authLost(route: "stream" | "alive" | "digest" | "scope"): void {
     stream.stop();
     emit({ kind: "auth_lost", route, status: 401 });
   }
@@ -292,7 +498,11 @@ export function createStream(opts: StreamOptions): Stream {
       case "revalidate":
         if (effect.cause === "hello") {
           helloRun.revalidated = true;
-          schedule("hello", helloRun.full);
+          if (deferHello) {
+            helloOwed = true;
+          } else {
+            schedule("hello", helloRun.full);
+          }
         } else {
           schedule(effect.cause, false);
         }
@@ -327,10 +537,23 @@ export function createStream(opts: StreamOptions): Stream {
     beats = 0;
     aliveScope?.abort();
     aliveScope = new AbortController();
+    leaveConnScope();
+    const headers = withoutScopeHeader(opts.headers);
+    let presentedHeader = false;
+    let presentedScope: ScopeValue = null;
+    if (opts.scopeUrl !== undefined && !degraded && current !== null) {
+      const encoded = JSON.stringify(current);
+      if (encoded.length <= MAX_SCOPE_HEADER_BYTES) {
+        headers["SSE-Topics"] = encoded;
+        presentedHeader = true;
+        presentedScope = current;
+      }
+    }
+    presented = { generation, header: presentedHeader, scope: presentedScope };
     const conn = connect({
       url: opts.url,
       fetch: doFetch,
-      headers: { ...opts.headers },
+      headers,
       cursor,
       minWire,
       maxWire,
@@ -348,11 +571,20 @@ export function createStream(opts: StreamOptions): Stream {
               authLost("stream");
               return;
             }
+            if (
+              reason.kind === "status" &&
+              reason.status === 400 &&
+              presented?.generation === g &&
+              presented.header
+            ) {
+              degrade();
+            }
           }
           dispatch({ type: "connect_failed", generation: g, now: now(), reason, rand: rand() });
         },
         onFrame: handleFrame,
         onKeepalive: handleKeepalive,
+        onMark: handleMark,
         onUnknownFrame(g, type) {
           if (g === state.generation) {
             emit({ kind: "unknown_frame", type });
@@ -378,6 +610,8 @@ export function createStream(opts: StreamOptions): Stream {
     if (connection !== null && connection.generation === generation) {
       connection.conn.abort(reason);
       connection = null;
+      // A dead connection's conn takes no POST, and nothing is assured until the next hello.
+      leaveConnScope();
     }
     aliveScope?.abort();
     aliveScope = null;
@@ -403,7 +637,23 @@ export function createStream(opts: StreamOptions): Stream {
     if (!h.resumed) {
       cursor = { epoch: h.epoch, offset: h.head };
     }
+    deferHello = true;
     dispatch({ type: "connected", generation: g, now: now(), hello: h });
+    deferHello = false;
+    if (state.kind === "open") {
+      enterConnScope(g, h);
+    }
+    // Whatever the state, a degrade's reconnect included. A stop made inside the dispatch leaves
+    // the run owed, not started: the hello already adopted its head, so the next start reconciles.
+    if (helloOwed) {
+      helloOwed = false;
+      if (state.kind === "stopped") {
+        unverified = true;
+        unverifiedFull ||= helloRun.full;
+      } else {
+        schedule("hello", helloRun.full);
+      }
+    }
     if (state.kind !== "open") {
       return;
     }
@@ -553,6 +803,21 @@ export function createStream(opts: StreamOptions): Stream {
     emit({ kind: "drain", length: entries.length, dropped });
   }
 
+  /** A position mark advances the cursor under the same hold as a frame: never past a held one. */
+  function handleMark(g: number, id: Cursor): void {
+    if (g !== state.generation || hello?.epoch !== id.epoch) {
+      return;
+    }
+    if (!adopted) {
+      observeNonReplay(hello);
+    }
+    if (inflight !== null || held.length > 0) {
+      held.push({ kind: "adopt", generation: state.generation, epoch: id.epoch, head: id.offset });
+    } else {
+      advance(id);
+    }
+  }
+
   function handleKeepalive(g: number): void {
     if (g !== state.generation || hello === null) {
       return;
@@ -637,7 +902,9 @@ export function createStream(opts: StreamOptions): Stream {
     run(slot);
   }
 
-  function run(slot: Slot): void {
+  function run(queuedSlot: Slot): void {
+    // A full run that failed stays owed: every start, schedule's or settle's, carries it.
+    const slot: Slot = { cause: queuedSlot.cause, full: queuedSlot.full || unverifiedFull };
     const controller = new AbortController();
     const ctx: RevalidateContext = {
       cause: slot.cause,
@@ -646,7 +913,13 @@ export function createStream(opts: StreamOptions): Stream {
       full: slot.full,
       signal: controller.signal,
     };
-    const current: Run = { controller, cause: slot.cause, startedAt: now(), timer: null };
+    const current: Run = {
+      controller,
+      cause: slot.cause,
+      full: slot.full,
+      startedAt: now(),
+      timer: null,
+    };
     current.timer = setTimeout(() => {
       timeout(current);
     }, cfg.revalidateTimeoutMs);
@@ -682,9 +955,13 @@ export function createStream(opts: StreamOptions): Stream {
     inflight = null;
     if (!rejected) {
       unverified = false;
+      if (current.full) {
+        unverifiedFull = false;
+      }
       drain();
     } else {
       unverified = true;
+      unverifiedFull ||= current.full;
       const ended = state.kind === "open";
       emit({ kind: "revalidate_failed", cause: describe(error), latch: true, ended });
       if (ended) {
@@ -707,11 +984,281 @@ export function createStream(opts: StreamOptions): Stream {
     inflight = null;
     current.controller.abort(new DOMException("revalidate timed out", "TimeoutError"));
     unverified = true;
+    unverifiedFull ||= current.full;
     emit({ kind: "revalidate_timeout" });
     if (state.kind === "open") {
       endConnection("hold_timeout");
     } else {
       discardHeld("hold_timeout");
+    }
+  }
+
+  function assured(): ScopeValue {
+    if (connScope === null) {
+      return [];
+    }
+    const post = connScope.post;
+    return post === null ? connScope.confirmed : intersectScope(connScope.confirmed, post.sent);
+  }
+
+  /** Drops the coverage records of topics that left `assured`, then tells the listeners. */
+  function assuredChanged(): void {
+    const a = assured();
+    if (a !== null) {
+      // A topic that stays covered keeps the offset the wildcard gave it.
+      if (wildcard !== null) {
+        for (const topic of a) {
+          if (!records.has(topic)) {
+            records.set(topic, wildcard);
+          }
+        }
+        wildcard = null;
+      }
+      const keep = new Set(a);
+      for (const topic of [...records.keys()]) {
+        if (!keep.has(topic)) {
+          records.delete(topic);
+        }
+      }
+    }
+    for (const listener of scopeListeners) {
+      listener(a);
+    }
+  }
+
+  function coveredSince(scope: ScopeValue): Cursor | null {
+    if (cursor === null || !coversScope(assured(), scope)) {
+      return null;
+    }
+    return offsetFor(scope, cursor);
+  }
+
+  /** The offset after which this connection delivers `scope`: at least the cursor. */
+  function offsetFor(scope: ScopeValue, at: Cursor): Cursor {
+    let best = at.offset;
+    const consider = (rec: Cursor | null): void => {
+      if (rec !== null && rec.epoch === at.epoch && compareOffset(rec.offset, best) > 0) {
+        best = rec.offset;
+      }
+    };
+    if (scope === null) {
+      consider(wildcard);
+    } else {
+      for (const topic of scope) {
+        consider(records.get(topic) ?? wildcard);
+      }
+    }
+    return { epoch: at.epoch, offset: best };
+  }
+
+  /** Settles every call `assured` covers, and the earlier ones they superseded. */
+  function settleScopes(): void {
+    if (connScope === null || cursor === null || pending.length === 0) {
+      return;
+    }
+    const a = assured();
+    let last = -1;
+    for (let i = pending.length - 1; i >= 0; i--) {
+      if (coversScope(a, pending[i]?.scope ?? null)) {
+        last = i;
+        break;
+      }
+    }
+    if (last < 0) {
+      return;
+    }
+    const at = cursor;
+    const settled = pending.slice(0, last + 1);
+    pending = pending.slice(last + 1);
+    for (const call of settled) {
+      if (coversScope(a, call.scope)) {
+        call.resolve(offsetFor(call.scope, at));
+      } else {
+        call.reject(new ScopeError("superseded"));
+      }
+    }
+  }
+
+  function enterConnScope(g: number, h: Hello): void {
+    const attempt =
+      presented?.generation === g ? presented : { generation: g, header: false, scope: null };
+    presented = null;
+    const resume = cursor ?? { epoch: h.epoch, offset: h.head };
+    let confirmed: ScopeValue;
+    if (h.conn === undefined) {
+      confirmed = null;
+    } else if (h.conn === null) {
+      // A malformed conn on an attempt that presented no header still got everything.
+      confirmed = attempt.header ? [] : null;
+    } else {
+      confirmed = attempt.scope;
+    }
+    connScope = {
+      conn: typeof h.conn === "string" && !degraded ? h.conn : null,
+      confirmed,
+      owed: false,
+      seq: 0,
+      post: null,
+      retry: null,
+      attempts: 0,
+    };
+    if (confirmed === null) {
+      wildcard = resume;
+    } else {
+      for (const topic of confirmed) {
+        records.set(topic, resume);
+      }
+    }
+    // degrade() notifies, so this path must not: after leaving open when it reconnects, or with
+    // everything when no header was presented, where it also settles.
+    if (h.conn === null && opts.scopeUrl !== undefined) {
+      degrade();
+      return;
+    }
+    assuredChanged();
+    settleScopes();
+    postOwed();
+  }
+
+  function leaveConnScope(): void {
+    if (connScope === null) {
+      return;
+    }
+    connScope.post?.controller.abort();
+    if (connScope.retry !== null) {
+      clearTimeout(connScope.retry);
+    }
+    connScope = null;
+    assuredChanged();
+  }
+
+  /** Stops presenting and posting for the stream's life, and leaves a scoped connection. */
+  function degrade(): void {
+    if (!degraded) {
+      degraded = true;
+      emit({ kind: "scope_refused" });
+    }
+    const c = connScope;
+    if (c === null) {
+      return;
+    }
+    c.post?.controller.abort();
+    c.post = null;
+    if (c.retry !== null) {
+      clearTimeout(c.retry);
+      c.retry = null;
+    }
+    if (c.confirmed !== null) {
+      stream.reconnect();
+      return;
+    }
+    assuredChanged();
+    settleScopes();
+  }
+
+  function postOwed(): void {
+    const c = connScope;
+    if (c?.conn == null || degraded || opts.scopeUrl === undefined) {
+      return;
+    }
+    if (c.post !== null || c.retry !== null) {
+      return;
+    }
+    if (sameScope(current, c.confirmed) && !c.owed) {
+      return;
+    }
+    sendScope(c, opts.scopeUrl, current);
+  }
+
+  function sendScope(c: ConnScope, url: string, sent: ScopeValue): void {
+    const epoch = hello?.epoch ?? "";
+    const controller = new AbortController();
+    c.seq++;
+    const post = { sent, controller };
+    c.post = post;
+    assuredChanged();
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException("scope request timed out", "TimeoutError"));
+    }, SCOPE_TIMEOUT_MS);
+    const headers = withoutScopeHeader(opts.headers);
+    headers["Content-Type"] = "application/json";
+    void doFetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ conn: c.conn, seq: c.seq, topics: sent }),
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal,
+    })
+      .then(
+        (response) => classifyScopeAnswer(response, epoch),
+        (): PostOutcome => ({ kind: "transient" }),
+      )
+      .then((outcome) => {
+        scopeOutcome(c, post, outcome);
+      })
+      .finally(() => {
+        clearTimeout(timer);
+      });
+  }
+
+  function scopeOutcome(
+    c: ConnScope,
+    post: NonNullable<ConnScope["post"]>,
+    outcome: PostOutcome,
+  ): void {
+    // A connection change or stop() aborted it; the next hello presents the current scope.
+    if (connScope !== c || c.post !== post) {
+      return;
+    }
+    const sent = post.sent;
+    c.post = null;
+    switch (outcome.kind) {
+      case "ok": {
+        const at: Cursor = { epoch: hello?.epoch ?? "", offset: outcome.offset };
+        if (sent === null) {
+          wildcard ??= at;
+        } else {
+          for (const topic of sent) {
+            if (!records.has(topic)) {
+              records.set(topic, wildcard ?? at);
+            }
+          }
+        }
+        c.confirmed = sent;
+        c.owed = false;
+        c.attempts = 0;
+        assuredChanged();
+        settleScopes();
+        postOwed();
+        return;
+      }
+      case "auth":
+        authLost("scope");
+        return;
+      case "refused":
+        degrade();
+        return;
+      case "transient":
+        c.confirmed = intersectScope(c.confirmed, sent);
+        c.owed = true;
+        assuredChanged();
+        if (!coversScope(assured(), current)) {
+          stream.reconnect();
+          return;
+        }
+        c.attempts++;
+        c.retry = setTimeout(
+          () => {
+            if (connScope === c) {
+              c.retry = null;
+              postOwed();
+            }
+          },
+          Math.min(cfg.capMs, cfg.baseMs * 2 ** (c.attempts - 1)),
+        );
+        return;
     }
   }
 
@@ -754,10 +1301,21 @@ export function createStream(opts: StreamOptions): Stream {
     },
     stop() {
       dispatch({ type: "stop" });
+      leaveConnScope();
+      degraded = false;
+      const rejected = pending;
+      pending = [];
+      for (const call of rejected) {
+        call.reject(new ScopeError("stopped"));
+      }
       for (const unsubscribe of unsubscribes) {
         unsubscribe();
       }
       unsubscribes = [];
+      if (inflight !== null || queued !== null) {
+        unverified = true;
+        unverifiedFull ||= (inflight?.full ?? false) || (queued?.full ?? false);
+      }
       if (inflight !== null) {
         const current = inflight;
         inflight = null;
@@ -776,12 +1334,33 @@ export function createStream(opts: StreamOptions): Stream {
     resetCursor() {
       cursor = null;
     },
+    setScope(scope) {
+      const next = normalizeScope(scope);
+      current = next;
+      // Generation 0 is a stream never started: its call waits for the first hello.
+      if (state.kind === "stopped" && state.generation > 0) {
+        return Promise.reject(new ScopeError("stopped"));
+      }
+      return new Promise<Cursor>((resolve, reject) => {
+        pending.push({ scope: next, resolve, reject });
+        settleScopes();
+        postOwed();
+      });
+    },
   };
   internals.set(stream, {
     revalidate: schedule,
     queueFull() {
       queued = { cause: queued?.cause ?? "hello", full: true };
     },
+    assured,
+    onScope(listener) {
+      scopeListeners.add(listener);
+      return () => {
+        scopeListeners.delete(listener);
+      };
+    },
+    coveredSince,
   });
   return stream;
 }

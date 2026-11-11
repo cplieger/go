@@ -32,6 +32,8 @@ export interface TransportCallbacks {
   readonly onConnectFailed: (generation: number, reason: ConnectFailure) => void;
   readonly onFrame: (generation: number, frame: TransportFrame) => void;
   readonly onKeepalive: (generation: number) => void;
+  /** An id-only block after the hello: the server's position mark for a scoped connection. */
+  readonly onMark: (generation: number, id: Cursor) => void;
   readonly onUnknownFrame: (generation: number, type: string) => void;
   readonly onBadCursor: (generation: number, id: string) => void;
   readonly onRetry: (generation: number, ms: number) => void;
@@ -184,6 +186,17 @@ export function connect(opts: ConnectOptions): Connection {
       },
       onOverflow() {
         end("frame_too_large");
+      },
+      onId(raw) {
+        if (finished || !helloSeen) {
+          return;
+        }
+        const id = parseCursor(raw);
+        if (id === null) {
+          cb.onBadCursor(g, raw);
+          return;
+        }
+        cb.onMark(g, id);
       },
     },
     { maxBufferBytes: timing.maxBufferBytes },

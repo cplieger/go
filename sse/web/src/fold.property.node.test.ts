@@ -149,7 +149,9 @@ describe("profile fold", () => {
     );
   });
 
-  it("hidden exactly when the last visible tab leaves by any route", () => {
+  // The two longest properties take about 2 s alone, and a loaded host stretches them past the
+  // 5 s default. fc-strict-setup's 10 s interrupt is the binding limit, so this sits just above it.
+  it("hidden exactly when the last visible tab leaves by any route", { timeout: 12_000 }, () => {
     fc.assert(
       fc.property(sequenceArb, ([seed, inputs]) => {
         const steps = run(seed, inputs);
@@ -200,28 +202,32 @@ describe("profile fold", () => {
     );
   });
 
-  it("online/offline exactly when the latest report flips the seeded value", () => {
-    fc.assert(
-      fc.property(sequenceArb, ([seed, inputs]) => {
-        let latest = seed;
-        const steps = run(seed, inputs);
-        expect(steps).toHaveLength(inputs.length);
-        for (const step of steps) {
-          const report =
-            step.input.type === "attach" || step.input.type === "network"
-              ? step.input.online
-              : null;
-          const net = step.events.filter((e) => NETWORK.has(e));
-          if (report === null || report === latest) {
-            expect(net).toEqual([]);
-          } else {
-            expect(net).toEqual([report ? "online" : "offline"]);
-            latest = report;
+  it(
+    "online/offline exactly when the latest report flips the seeded value",
+    { timeout: 12_000 },
+    () => {
+      fc.assert(
+        fc.property(sequenceArb, ([seed, inputs]) => {
+          let latest = seed;
+          const steps = run(seed, inputs);
+          expect(steps).toHaveLength(inputs.length);
+          for (const step of steps) {
+            const report =
+              step.input.type === "attach" || step.input.type === "network"
+                ? step.input.online
+                : null;
+            const net = step.events.filter((e) => NETWORK.has(e));
+            if (report === null || report === latest) {
+              expect(net).toEqual([]);
+            } else {
+              expect(net).toEqual([report ? "online" : "offline"]);
+              latest = report;
+            }
           }
-        }
-      }),
-    );
-  });
+        }),
+      );
+    },
+  );
 
   it("the fold's output yields the same revalidate count as the equivalent single-tab sequence", () => {
     fc.assert(

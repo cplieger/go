@@ -26,6 +26,7 @@ interface Log {
   failed: ConnectFailure | null;
   frames: TransportFrame[];
   keepalives: number;
+  marks: Cursor[];
   unknown: string[];
   badCursors: string[];
   retries: number[];
@@ -42,6 +43,7 @@ function harness(
     failed: null,
     frames: [],
     keepalives: 0,
+    marks: [],
     unknown: [],
     badCursors: [],
     retries: [],
@@ -62,6 +64,9 @@ function harness(
     },
     onKeepalive: () => {
       log.keepalives++;
+    },
+    onMark: (_g, id) => {
+      log.marks.push(id);
     },
     onUnknownFrame: (_g, type) => {
       log.unknown.push(type);
@@ -286,6 +291,7 @@ describe("transport", () => {
         onConnectFailed: () => order.push("failed"),
         onFrame: () => order.push("frame"),
         onKeepalive: () => order.push("keepalive"),
+        onMark: () => order.push("mark"),
         onUnknownFrame: () => order.push("unknown"),
         onBadCursor: () => order.push("bad_cursor"),
         onRetry: () => order.push("retry"),

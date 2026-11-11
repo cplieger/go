@@ -7,6 +7,9 @@ export {
   MAX_FRAME_BYTES,
   MAX_OFFSET,
   MAX_OFFSET_STRING,
+  MAX_SCOPE_HEADER_BYTES,
+  MAX_SCOPE_TOPICS,
+  MAX_TOPIC_BYTES,
   WIRE,
   resolveTiming,
   watchdogMs,
@@ -20,6 +23,7 @@ export {
   cursorToString,
   parseCursor,
   parseResetReason,
+  validTopic,
   validateHello,
 } from "./wire.js";
 export type { Cursor, Hello, HelloRefusal, HelloResult, ResetReason } from "./wire.js";
@@ -57,8 +61,8 @@ export type {
   DigestSnapshot,
   Removed,
 } from "./digest.js";
-export { createStream } from "./stream.js";
-export type { Frame, RevalidateContext, Stream, StreamOptions } from "./stream.js";
+export { ScopeError, createStream } from "./stream.js";
+export type { Frame, RevalidateContext, ScopeFailure, Stream, StreamOptions } from "./stream.js";
 export type {
   DetachCause,
   PortRevalidateContext,
@@ -66,7 +70,7 @@ export type {
   WorkerToTab,
 } from "./port-protocol.js";
 export { createWorkerHost } from "./worker.js";
-export type { DigestVerdict, TabSet, WorkerHost, WorkerHostOptions } from "./worker.js";
+export type { DigestVerdict, HostStream, TabSet, WorkerHost, WorkerHostOptions } from "./worker.js";
 export { attachToWorker } from "./tab.js";
 export type {
   AttachOptions,

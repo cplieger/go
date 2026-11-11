@@ -55,7 +55,9 @@ export type LifecycleEvent =
   | { kind: "worker_dead"; sinceLastPortMessageMs: number }
   | { kind: "worker_unavailable"; cause: "silent" | "error" }
   | { kind: "worker_recovered" }
-  | { kind: "auth_lost"; route: "stream" | "alive" | "digest"; status: 401 }
+  | { kind: "auth_lost"; route: "stream" | "alive" | "digest" | "scope"; status: 401 }
+  | { kind: "scope_refused" }
+  | { kind: "deliver_failed"; type: string; error: string }
   | { kind: "tab_attached"; replaced: boolean; state: StreamStateKind }
   | { kind: "tab_detached"; cause: string }
   | { kind: "port_expired"; sinceLastAckMs: number }
