@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -197,15 +198,44 @@ func TestCheck_noURLs(t *testing.T) {
 	}
 }
 
+// The client's transport has no deadline of its own, so Check's context is
+// the only bound on a probe: a non-positive timeout must fail before it dials.
 func TestCheck_nonPositiveTimeout(t *testing.T) {
-	srv := statusServer(t, http.StatusOK)
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(srv.Close)
 
-	var out strings.Builder
-	code := Check(&out, 0, srv.URL)
-	if code != 1 {
-		t.Errorf("code = %d, want 1 (non-positive timeout fails immediately)", code)
+			var out strings.Builder
+			if code := Check(&out, timeout, srv.URL); code != 1 {
+				t.Errorf("Check(timeout %v) = %d, want 1", timeout, code)
+			}
+			if !strings.Contains(out.String(), srv.URL) {
+				t.Errorf("output %q does not name the URL %s", out.String(), srv.URL)
+			}
+			if n := requests.Load(); n != 0 {
+				t.Errorf("server saw %d requests, want 0", n)
+			}
+		})
 	}
-	if out.Len() == 0 {
-		t.Error("output empty, want a failure line naming the URL")
+}
+
+// No behavioural test: ProxyFromEnvironment reads the environment once per
+// process and skips loopback, so only a non-loopback name would show a proxy,
+// and resolving one sends packets off the host.
+func TestClientNeverUsesAProxy(t *testing.T) {
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("client.Transport = %T, want *http.Transport", client.Transport)
+	}
+	if tr.Proxy != nil {
+		t.Error("client transport has a Proxy func, want nil")
+	}
+	if !tr.DisableKeepAlives {
+		t.Error("client transport keeps idle connections, want DisableKeepAlives")
 	}
 }

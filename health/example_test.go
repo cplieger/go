@@ -2,6 +2,7 @@ package health_test
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,7 +10,30 @@ import (
 	"time"
 
 	"github.com/cplieger/go/health/v2"
+	"github.com/cplieger/go/health/v2/probe"
 )
+
+// A service that always listens serves its Status on /healthz, and its health
+// subcommand asks that endpoint at the URL LocalURL derives from the listen
+// address. The failure line goes to io.Discard because it names the test
+// server's random port.
+func Example() {
+	st := health.NewStatus()
+	mux := http.NewServeMux()
+	mux.Handle("GET /healthz", health.CheckHandler(
+		health.Check{Signal: st, Reason: "the service is starting or shutting down"},
+	))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	u, _ := probe.LocalURL(srv.Listener.Addr().String(), "/healthz")
+	fmt.Println(probe.Check(io.Discard, time.Second, u))
+	st.Set(true)
+	fmt.Println(probe.Check(io.Discard, time.Second, u))
+	// Output:
+	// 1
+	// 0
+}
 
 // A service that opens no port mirrors its verdict to a marker file, which
 // its health subcommand reads with RunProbe.
