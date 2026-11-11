@@ -24,7 +24,7 @@ mux.Handle("GET /healthz", health.CheckHandler(
 
 Every healthy `Set` restarts the age, so the writing side needs no change. Pick a lease comfortably above one interval plus the longest normal cycle. Three intervals is a reasonable default. A stale marker fails the probe with a stderr line that gives its age and the lease, and a stale verdict fails `/healthz` with `Fresh`'s reason.
 
-The two ages match while the wall clock does not step. `Fresh` measures with the monotonic clock, and `RunProbe` with the file's modification time. A forward clock step larger than the lease fails the file probe once while `Fresh` still passes, and the next healthy `Set` clears it.
+The two ages match while the wall clock does not step. `Fresh` measures with the monotonic clock, and `RunProbe` with the file's modification time. A forward step shortens the file probe's lease by the size of the step, so a step larger than the lease fails every file probe until the next healthy `Set` refreshes the marker, while `Fresh` still passes. A backward step lengthens it by the size of the step, so the file probe catches a stopped loop that much later, while `Fresh` fails on time.
 
 ## Building it with `Lease`
 

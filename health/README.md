@@ -99,7 +99,7 @@ func main() {
 }
 ```
 
-`MarkerPath(name)` is `/dev/shm/myservice.healthy`. Every `Set(true)` refreshes the file, so `RunProbe` with `WithMaxAge(lease)` reads the same age that `Fresh(lease)` reads in memory. The two ages match while the wall clock does not step. `Fresh` measures with the monotonic clock and `RunProbe` with the file's modification time, so a forward step larger than the lease fails the file probe while `Fresh` still passes.
+`MarkerPath(name)` is `/dev/shm/myservice.healthy`. Every `Set(true)` refreshes the file, so `RunProbe` with `WithMaxAge(lease)` reads the same age that `Fresh(lease)` reads in memory. The two ages match while the wall clock does not step. `Fresh` measures with the monotonic clock and `RunProbe` with the file's modification time, so a forward step larger than the lease fails the file probe while `Fresh` still passes, and a backward step makes the file probe catch a stopped loop later by the size of the step.
 
 When the same service also serves `/healthz`, for example on an opt-in metrics listener, list the Status and its freshness as two checks:
 

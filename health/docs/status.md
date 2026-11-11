@@ -8,7 +8,7 @@ A service keeps its verdict in one `*health.Status`, created with `NewStatus` in
 
 Healthy should mean that the service is doing its own job now. Never make it depend on an upstream outside the service: a restart cannot fix an upstream, and a healthcheck that fails for one restarts a working container.
 
-The zero `Status` is ready to use and behaves as `NewStatus()` does. A `Status` must not be copied after first use.
+The zero `Status` is ready to use, with no marker and `slog.Default`; only its first healthy log line lacks a `duration` (see Logging). A `Status` must not be copied after first use.
 
 ## Serving it
 

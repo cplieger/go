@@ -47,7 +47,7 @@ type Status struct {
 
 var _ Signal = (*Status)(nil)
 
-// verdict is one immutable reading: at is the time of the last healthy Set.
+// verdict is one immutable reading; a healthy one records in at when its Set ran.
 type verdict struct {
 	at      time.Time
 	healthy bool
@@ -120,11 +120,8 @@ func (s *Status) Set(ok bool) {
 	}
 	prev := s.verdict.Load()
 	next := &verdict{healthy: ok}
-	switch {
-	case ok:
+	if ok {
 		next.at = now()
-	case prev != nil:
-		next.at = prev.at
 	}
 	s.verdict.Store(next)
 	if s.mirror != nil {
@@ -146,7 +143,7 @@ func (s *Status) BeginDrain() {
 	prev := s.verdict.Load()
 	wasHealthy := prev != nil && prev.healthy
 	if wasHealthy {
-		s.verdict.Store(&verdict{at: prev.at})
+		s.verdict.Store(&verdict{})
 	}
 	if s.mirror != nil {
 		s.mirror.write(false)

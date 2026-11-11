@@ -284,9 +284,6 @@ func TestInspect_states(t *testing.T) {
 		if f.healthy() || f.reason() != "unhealthy: marker state unknown" {
 			t.Errorf("zero freshness: healthy %v, reason %q; want unhealthy and %q", f.healthy(), f.reason(), "unhealthy: marker state unknown")
 		}
-		if got := (freshness{state: markerUnreadable}).reason(); got != "unhealthy: marker stat failed" {
-			t.Errorf("reason(unreadable, nil err) = %q", got)
-		}
 	})
 }
 

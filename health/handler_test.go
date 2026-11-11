@@ -78,7 +78,7 @@ func TestCheckHandler_readsEachSignalPerRequest(t *testing.T) {
 }
 
 // TestCheckHandler_onTheMuxRoute pins what "GET /healthz" registration gives:
-// HEAD answers with the headers and no body, and other methods get 405.
+// HEAD answers 200 and other methods get 405.
 func TestCheckHandler_onTheMuxRoute(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", CheckHandler(Check{Signal: stubSignal{healthy: true}}))

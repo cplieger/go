@@ -128,7 +128,7 @@ const (
 type freshness struct {
 	// err is the stat error for markerUnreadable.
 	err error
-	// age is the marker's age for markerFresh and markerStale.
+	// age and maxAge are set for markerStale.
 	age    time.Duration
 	maxAge time.Duration
 	state  markerState
@@ -160,9 +160,6 @@ func (f freshness) reason() string {
 	case markerAbsent:
 		return "unhealthy: marker absent"
 	case markerUnreadable:
-		if f.err == nil {
-			return "unhealthy: marker stat failed"
-		}
 		return "unhealthy: marker stat failed: " + f.err.Error()
 	case markerFresh, markerDegraded:
 		return ""
@@ -185,7 +182,7 @@ func inspect(path string, opts ...ProbeOption) freshness {
 		}
 		age := now().Sub(info.ModTime())
 		if !stale(age, cfg.maxAge) {
-			return freshness{state: markerFresh, age: age, maxAge: cfg.maxAge}
+			return freshness{state: markerFresh}
 		}
 		// Failing a stale marker nothing can refresh would restart a
 		// container that a restart cannot fix.
