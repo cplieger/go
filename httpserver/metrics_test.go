@@ -2,6 +2,8 @@ package httpserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,7 +23,7 @@ func text(body string) http.Handler {
 // cancels it and returns Serve's error.
 func serving(t *testing.T, m *MetricsServer) (base string, stop func() error) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- m.Serve(ctx) }()
 	var once sync.Once
@@ -39,7 +41,7 @@ func serving(t *testing.T, m *MetricsServer) (base string, stop func() error) {
 
 func get(t *testing.T, method, url string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), method, url, nil)
+	req, err := http.NewRequestWithContext(t.Context(), method, url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +55,11 @@ func get(t *testing.T, method, url string) (int, string) {
 }
 
 // TestListenMetrics_servesExactlyTheTwoRoutes: GET /metrics and GET /healthz
-// reach their handlers, any other path is 404 and any other method 405, so the
-// listener never serves the app's own routes.
+// reach their handlers, HEAD too since a GET pattern matches it, any other
+// path is 404 and any other method 405, so the listener never serves the app's
+// own routes.
 func TestListenMetrics_servesExactlyTheTwoRoutes(t *testing.T) {
-	m, err := ListenMetrics(context.Background(), "127.0.0.1:0", text("metrics page"), text("healthy"))
+	m, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text("metrics page"), Healthz: text("healthy")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +74,8 @@ func TestListenMetrics_servesExactlyTheTwoRoutes(t *testing.T) {
 		"another path":    {http.MethodGet, "/api/things", http.StatusNotFound, ""},
 		"root":            {http.MethodGet, "/", http.StatusNotFound, ""},
 		"another method":  {http.MethodPost, "/metrics", http.StatusMethodNotAllowed, ""},
+		"metrics by HEAD": {http.MethodHead, "/metrics", http.StatusOK, ""},
+		"healthz by HEAD": {http.MethodHead, "/healthz", http.StatusOK, ""},
 		"healthz by POST": {http.MethodPost, "/healthz", http.StatusMethodNotAllowed, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -89,15 +94,15 @@ func TestListenMetrics_servesExactlyTheTwoRoutes(t *testing.T) {
 // ListenMetrics returns, so a second bind of it fails there, naming the
 // address, before the caller starts any work.
 func TestListenMetrics_bindsBeforeServing(t *testing.T) {
-	first, err := ListenMetrics(context.Background(), "127.0.0.1:0", text(""), text(""))
+	first, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = serving(t, first)
+	t.Cleanup(func() { _ = first.Close() })
 	addr := first.Addr().String()
-	second, err := ListenMetrics(context.Background(), addr, text(""), text(""))
+	second, err := ListenMetrics(t.Context(), addr, MetricsHandlers{Metrics: text(""), Healthz: text("")})
 	if err == nil {
-		_ = second.ln.Close()
+		_ = second.Close()
 		t.Fatalf("a second ListenMetrics on %s succeeded, want a bind error", addr)
 	}
 	if !strings.Contains(err.Error(), addr) {
@@ -108,7 +113,7 @@ func TestListenMetrics_bindsBeforeServing(t *testing.T) {
 // TestListenMetrics_emptyAddressOpensNothing: an empty address is the
 // listener switched off, so Serve returns at once and Addr is nil.
 func TestListenMetrics_emptyAddressOpensNothing(t *testing.T) {
-	m, err := ListenMetrics(context.Background(), "", text(""), text(""))
+	m, err := ListenMetrics(t.Context(), "", MetricsHandlers{Metrics: text(""), Healthz: text("")})
 	if err != nil {
 		t.Fatalf("ListenMetrics(\"\") = %v, want nil", err)
 	}
@@ -116,7 +121,7 @@ func TestListenMetrics_emptyAddressOpensNothing(t *testing.T) {
 		t.Errorf("Addr() = %v, want nil", m.Addr())
 	}
 	done := make(chan error, 1)
-	go func() { done <- m.Serve(context.Background()) }()
+	go func() { done <- m.Serve(t.Context()) }()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -130,7 +135,7 @@ func TestListenMetrics_emptyAddressOpensNothing(t *testing.T) {
 // TestListenMetrics_stopsCleanlyOnCancel: cancelling Serve's context shuts
 // the listener down and returns nil, and the address is free again.
 func TestListenMetrics_stopsCleanlyOnCancel(t *testing.T) {
-	m, err := ListenMetrics(context.Background(), "127.0.0.1:0", text(""), text(""))
+	m, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,28 +144,46 @@ func TestListenMetrics_stopsCleanlyOnCancel(t *testing.T) {
 	if err := stop(); err != nil {
 		t.Fatalf("Serve after cancel = %v, want nil", err)
 	}
-	again, err := ListenMetrics(context.Background(), addr, text(""), text(""))
+	again, err := ListenMetrics(t.Context(), addr, MetricsHandlers{Metrics: text(""), Healthz: text("")})
 	if err != nil {
 		t.Fatalf("rebinding %s after shutdown: %v", addr, err)
 	}
-	_ = again.ln.Close()
+	_ = again.Close()
 }
 
 // TestListenMetrics_boundsTheWholeRequest: both routes answer in one short
 // response, so the server bounds the request body and the response, where
 // New leaves both open for streams.
 func TestListenMetrics_boundsTheWholeRequest(t *testing.T) {
-	m, err := ListenMetrics(context.Background(), "127.0.0.1:0", text(""), text(""))
+	m, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = m.ln.Close() })
-	if m.srv.ReadTimeout != metricsReadTimeout || m.srv.WriteTimeout != metricsWriteTimeout {
-		t.Errorf("timeouts read %v write %v, want %v and %v",
-			m.srv.ReadTimeout, m.srv.WriteTimeout, metricsReadTimeout, metricsWriteTimeout)
+	t.Cleanup(func() { _ = m.Close() })
+	if m.srv.ReadTimeout != 10*time.Second || m.srv.WriteTimeout != 30*time.Second {
+		t.Errorf("timeouts read %v write %v, want the documented 10s and 30s", m.srv.ReadTimeout, m.srv.WriteTimeout)
 	}
 	if m.srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
 		t.Errorf("ReadHeaderTimeout = %v, want New's %v", m.srv.ReadHeaderTimeout, defaultReadHeaderTimeout)
+	}
+}
+
+// TestListenMetrics_passesServerOptionsToNew: opts reach New, so an app that
+// routes net/http's own error lines into slog (plex-language-sync at Warn)
+// keeps that bridge on the shared listener.
+func TestListenMetrics_passesServerOptionsToNew(t *testing.T) {
+	plain, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = plain.Close() })
+	bridged, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")}, WithSlogErrorLog(slog.LevelWarn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bridged.Close() })
+	if plain.srv.ErrorLog != nil || bridged.srv.ErrorLog == nil {
+		t.Errorf("ErrorLog plain %v, bridged %v; want nil and a slog bridge", plain.srv.ErrorLog, bridged.srv.ErrorLog)
 	}
 }
 
@@ -178,7 +201,7 @@ func TestListenMetrics_logsBothRoutesAtDebugAndRecovers(t *testing.T) {
 	}), &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	panics := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })
-	m, err := ListenMetrics(context.Background(), "127.0.0.1:0", text("page"), panics)
+	m, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text("page"), Healthz: panics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,13 +216,23 @@ func TestListenMetrics_logsBothRoutesAtDebugAndRecovers(t *testing.T) {
 	mu.Lock()
 	logged := buf.String()
 	mu.Unlock()
+	access := map[string]string{}
 	for line := range strings.SplitSeq(strings.TrimSpace(logged), "\n") {
-		if strings.Contains(line, "path=/metrics") && !strings.Contains(line, "level=DEBUG") {
-			t.Errorf("the scrape's access line is not at Debug: %s", line)
+		for _, path := range []string{"/metrics", "/healthz"} {
+			if strings.Contains(line, "msg=http ") && strings.Contains(line, "path="+path+" ") {
+				access[path] = line
+			}
 		}
 	}
-	if !strings.Contains(logged, "path=/metrics") {
-		t.Errorf("no access line for /metrics; log:\n%s", logged)
+	for path, status := range map[string]string{"/metrics": "status=200", "/healthz": "status=500"} {
+		line, ok := access[path]
+		if !ok {
+			t.Errorf("no access line for %s; log:\n%s", path, logged)
+			continue
+		}
+		if !strings.Contains(line, "level=DEBUG") || !strings.Contains(line, status) {
+			t.Errorf("access line for %s = %s, want level=DEBUG and %s", path, line, status)
+		}
 	}
 	if !strings.Contains(logged, "recovered from panic") {
 		t.Errorf("the panic was not recovered and logged; log:\n%s", logged)
@@ -210,17 +243,60 @@ func TestListenMetrics_logsBothRoutesAtDebugAndRecovers(t *testing.T) {
 // caller's bug, so it panics even when no listener would open.
 func TestListenMetrics_nilHandlerPanicsWithTheListenerOff(t *testing.T) {
 	for name, handlers := range map[string][2]http.Handler{
-		"nil metrics": {nil, text("")},
-		"nil healthz": {text(""), nil},
+		"Metrics": {nil, text("")},
+		"Healthz": {text(""), nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
-				if recover() == nil {
-					t.Error("ListenMetrics with a nil handler did not panic")
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "MetricsHandlers."+name) {
+					t.Errorf("ListenMetrics with a nil %s: recovered %v, want a panic naming MetricsHandlers.%s", name, r, name)
 				}
 			}()
-			_, _ = ListenMetrics(context.Background(), "", handlers[0], handlers[1])
+			_, _ = ListenMetrics(t.Context(), "", MetricsHandlers{Metrics: handlers[0], Healthz: handlers[1]})
 		})
+	}
+}
+
+// TestMetricsServer_closeReleasesAnUnservedListener: a startup that gives up
+// after ListenMetrics closes the listener, and the address is free again.
+func TestMetricsServer_closeReleasesAnUnservedListener(t *testing.T) {
+	m, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := m.Addr().String()
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	again, err := ListenMetrics(t.Context(), addr, MetricsHandlers{Metrics: text(""), Healthz: text("")})
+	if err != nil {
+		t.Fatalf("rebinding %s after Close: %v", addr, err)
+	}
+	_ = again.Close()
+	off, _ := ListenMetrics(t.Context(), "", MetricsHandlers{Metrics: text(""), Healthz: text("")})
+	if err := off.Close(); err != nil {
+		t.Errorf("Close with the listener off = %v, want nil", err)
+	}
+}
+
+// TestMetricsServer_secondServeIsRefused: a second Serve returns an error at
+// once instead of blocking on the listener the first one serves.
+func TestMetricsServer_secondServeIsRefused(t *testing.T) {
+	m, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, stop := serving(t, m)
+	// A request answered proves the first Serve owns the listener, so the
+	// call below is the second.
+	if code, _ := get(t, http.MethodGet, base+"/healthz"); code != http.StatusOK {
+		t.Fatalf("GET /healthz = %d", code)
+	}
+	if err := m.Serve(t.Context()); !errors.Is(err, errServedTwice) {
+		t.Errorf("second Serve = %v, want errServedTwice", err)
+	}
+	if err := stop(); err != nil {
+		t.Errorf("the first Serve after cancel = %v, want nil", err)
 	}
 }
 

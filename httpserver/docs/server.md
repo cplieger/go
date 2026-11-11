@@ -77,21 +77,29 @@ What to log, at which level, and what exit code to use stay your decisions for a
 
 ## The metrics listener
 
-An app that opens no port of its own can still offer an opt-in page for Prometheus and a health endpoint. `ListenMetrics(ctx, addr, metrics, healthz)` builds that listener in one call:
+An app that opens no port of its own can still offer an opt-in page for Prometheus and a health endpoint. `ListenMetrics(ctx, addr, MetricsHandlers{Metrics: ..., Healthz: ...}, opts...)` builds that listener in one call:
 
 ```go
-ms, err := httpserver.ListenMetrics(ctx, cfg.MetricsListenAddr, reg.Handler(), health.CheckHandler(checks...))
+ms, err := httpserver.ListenMetrics(ctx, cfg.MetricsListenAddr, httpserver.MetricsHandlers{
+	Metrics: reg.Handler(),
+	Healthz: health.CheckHandler(checks...),
+})
 if err != nil {
-	slog.Error("cannot listen on METRICS_LISTEN_ADDR; refusing to start", "address", cfg.MetricsListenAddr, "error", err)
+	slog.Error("cannot listen on METRICS_LISTEN_ADDR; refusing to start", "error", err)
 	os.Exit(1)
 }
-go func() { _ = ms.Serve(ctx) }()
+done := make(chan error, 1)
+go func() { done <- ms.Serve(ctx) }()
+// ... the app's work; cancel ctx on the way out ...
+if err := <-done; err != nil {
+	slog.Error("metrics listener stopped", "error", err)
+}
 ```
 
-- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work.
-- An empty `addr` opens nothing. `Serve` then returns nil at once and `Addr` is nil, so the app needs no branch for a listener that is off.
-- It serves exactly `GET /metrics` and `GET /healthz`. Any other path is 404 and any other method 405, so the listener never serves the app's own routes.
-- Both paths log at `Debug` through `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
-- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply.
+- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work. A startup that gives up after that calls `Close` to release the port.
+- An empty `addr` opens nothing. `Serve` then returns nil at once, without running `Run` or its options, and `Addr` is nil, so the app needs no branch for a listener that is off.
+- It routes only `/metrics` and `/healthz`, for `GET` and the `HEAD` a `GET` pattern also matches. Any other path is 404, after an unclean path is first redirected to its clean form, and any other method 405, so the listener never serves the app's own routes.
+- Both paths log under `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
+- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply, and `opts` reach `New`, so `WithSlogErrorLog` routes the accept loop's errors into `slog`.
 - It reads no environment. The app owns its setting's name, parsing and edge trimming.
-- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options.
+- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options. A second `Serve` returns an error.

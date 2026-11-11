@@ -2,9 +2,11 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,30 +18,39 @@ const (
 	metricsWriteTimeout = 30 * time.Second
 )
 
-// MetricsServer is the opt-in listener of an app that opens no port of its
-// own: it serves exactly GET /metrics and GET /healthz on one address, with
-// both paths logged at Debug (WithProbeLogLevel) and panics recovered. Build
-// it with ListenMetrics, which binds before the app starts work, then call
-// Serve.
-type MetricsServer struct {
-	srv *http.Server
-	ln  net.Listener
+// errServedTwice is Serve's answer to a second call on one MetricsServer.
+var errServedTwice = errors.New("httpserver: MetricsServer.Serve called twice")
+
+// MetricsHandlers names the two handlers the metrics listener serves, so they
+// cannot be passed in each other's place.
+type MetricsHandlers struct {
+	// Metrics answers GET /metrics, typically a measure Registry's Handler.
+	Metrics http.Handler
+	// Healthz answers GET /healthz, typically a health CheckHandler.
+	Healthz http.Handler
 }
 
-// ListenMetrics binds addr, a net.Listen "tcp" address, at once and returns a
-// MetricsServer for metrics at GET /metrics and healthz at GET /healthz. A
-// bind failure is returned naming addr before anything is served, so the
-// caller can refuse to start. An empty addr opens nothing: the returned
-// server's Serve returns nil at once and its Addr is nil, so the caller needs
-// no branch for a listener that is off. ListenMetrics reads no environment;
-// the app owns its setting's name, parsing and trimming.
-//
-// metrics and healthz must be non-nil, typically a measure Registry's Handler
-// and a health CheckHandler; ListenMetrics panics on either, whatever addr is,
-// so the mistake shows with the listener off too.
-func ListenMetrics(ctx context.Context, addr string, metrics, healthz http.Handler) (*MetricsServer, error) {
-	if metrics == nil || healthz == nil {
-		panic("httpserver: ListenMetrics needs non-nil metrics and healthz handlers")
+// MetricsServer is the opt-in listener of an app that opens no port of its
+// own: it routes only /metrics and /healthz, for GET and the HEAD a GET
+// pattern matches, both under WithProbeLogLevel, with panics recovered. Build it with ListenMetrics, which
+// binds before the app starts work, then call Serve.
+type MetricsServer struct {
+	srv    *http.Server
+	ln     net.Listener
+	served atomic.Bool
+}
+
+// ListenMetrics binds addr, a net.Listen "tcp" address, before it returns and
+// serves h once Serve runs. A bind failure is returned naming addr. An empty
+// addr opens nothing: Serve then returns nil at once and Addr is nil.
+// ListenMetrics reads no environment, and opts reach New. It panics on a nil
+// handler, whatever addr is, so the mistake shows with the listener off too.
+func ListenMetrics(ctx context.Context, addr string, h MetricsHandlers, opts ...ServerOption) (*MetricsServer, error) {
+	if h.Metrics == nil {
+		panic("httpserver: ListenMetrics needs a non-nil MetricsHandlers.Metrics")
+	}
+	if h.Healthz == nil {
+		panic("httpserver: ListenMetrics needs a non-nil MetricsHandlers.Healthz")
 	}
 	if addr == "" {
 		return &MetricsServer{}, nil
@@ -48,10 +59,11 @@ func ListenMetrics(ctx context.Context, addr string, metrics, healthz http.Handl
 	if err != nil {
 		return nil, fmt.Errorf("httpserver: listen on %q: %w", addr, err)
 	}
+	// A GET pattern also matches HEAD; any other method gets 405.
 	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", metrics)
-	mux.Handle("GET /healthz", healthz)
-	srv := New(Chain(mux, Logging(WithProbeLogLevel("/metrics", "/healthz")), Recoverer()))
+	mux.Handle("GET /metrics", h.Metrics)
+	mux.Handle("GET /healthz", h.Healthz)
+	srv := New(Chain(mux, Logging(WithProbeLogLevel("/metrics", "/healthz")), Recoverer()), opts...)
 	srv.ReadTimeout = metricsReadTimeout
 	srv.WriteTimeout = metricsWriteTimeout
 	return &MetricsServer{srv: srv, ln: ln}, nil
@@ -67,11 +79,25 @@ func (m *MetricsServer) Addr() net.Addr {
 }
 
 // Serve serves until ctx is cancelled, then shuts down as Run does with opts,
-// and returns Run's error. When the listener is off it returns nil at once.
-// Call it once.
+// and returns Run's error. When the listener is off it returns nil at once. A
+// second call on a listener that is on returns an error and serves nothing.
 func (m *MetricsServer) Serve(ctx context.Context, opts ...RunOption) error {
 	if m.srv == nil {
 		return nil
 	}
+	if !m.served.CompareAndSwap(false, true) {
+		return errServedTwice
+	}
 	return Run(ctx, m.srv, m.ln, opts...)
+}
+
+// Close releases a listener Serve has not started, for a caller that gives up
+// before serving, such as a startup that fails after ListenMetrics. Called
+// while Serve runs, it stops the server early, since the server serves that
+// same listener. It returns nil when the listener is off.
+func (m *MetricsServer) Close() error {
+	if m.ln == nil {
+		return nil
+	}
+	return m.ln.Close()
 }

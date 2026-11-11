@@ -20,7 +20,7 @@ func ExampleListenMetrics() {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ms, err := httpserver.ListenMetrics(ctx, "127.0.0.1:0", metrics, healthz)
+	ms, err := httpserver.ListenMetrics(ctx, "127.0.0.1:0", httpserver.MetricsHandlers{Metrics: metrics, Healthz: healthz})
 	if err != nil {
 		fmt.Println("refusing to start:", err)
 		return
