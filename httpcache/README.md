@@ -4,7 +4,7 @@
 
 httpcache makes your Go client's repeated GET requests cost less: when the server answers `304 Not Modified`, the answer comes from memory.
 
-It replaces the hand-written `ETag` bookkeeping a polling client keeps beside its requests. It needs Go 1.27.3 or later, depends only on the [httpclient](https://github.com/cplieger/go/tree/main/httpclient) module, and is licensed under Apache-2.0.
+It replaces the hand-written `ETag` bookkeeping a polling client keeps beside its requests. It needs Go 1.27 or later, depends only on the [httpclient](https://github.com/cplieger/go/tree/main/httpclient) module, and is licensed under Apache-2.0.
 
 ## Why use it
 

@@ -4,7 +4,7 @@
 
 httpclient makes your Go HTTP calls survive flaky servers, with retries, backoff and Retry-After built in.
 
-It replaces the retry loop, status check and redirect policy you would otherwise write around `net/http`, and it hands back a plain `*http.Client`. It uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+It replaces the retry loop, status check and redirect policy you would otherwise write around `net/http`, and it hands back a plain `*http.Client`. It uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

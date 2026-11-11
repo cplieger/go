@@ -4,7 +4,7 @@
 
 textsafe keeps untrusted text from forging your Go log lines, starting terminal escapes or reordering what a reader sees in a JSON document or report.
 
-It replaces the `strings.Map` over control characters you would otherwise write at each log call, JSON writer and report renderer with one policy they all share. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+It replaces the `strings.Map` over control characters you would otherwise write at each log call, JSON writer and report renderer with one policy they all share. It uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
