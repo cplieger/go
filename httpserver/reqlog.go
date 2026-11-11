@@ -576,12 +576,11 @@ func routeMetricLabels(r *http.Request) (method, path string) {
 // routine-machine-probe case; reach for the raw hook only when a custom
 // policy is genuinely needed.
 //
-// The canonical use is scrape-noise control on a polled service: map 2xx/3xx
-// to slog.LevelDebug so a 15-second Prometheus scrape stays out of the log
-// stream at the default level while staying visible under LOG_LEVEL=debug,
-// and raise 4xx to Warn / 5xx to Error so failures surface. Because fn also
-// receives the request, a policy can key on the path instead (quiet only the
-// scrape route, keep everything else at Info).
+// A polled path takes WithProbeLogLevel: a probe repeats one standing state,
+// so its line stays at Debug whatever the status. A split by status (2xx and
+// 3xx at Debug, 4xx at Warn, 5xx at Error) suits routes a person requests,
+// where each 4xx or 5xx is one event. Because fn also receives the request, a
+// policy can key on the path as well as the status.
 //
 // A request suppressed by WithSkipPaths or WithSkipFunc emits no line at all,
 // so fn is never called for it. A panicking fn is contained: the failure is
@@ -595,16 +594,13 @@ func WithLogLevel(fn func(r *http.Request, status int) slog.Level) LogOption {
 	}
 }
 
-// WithProbeLogLevel is the shared access-log level policy for machine-probe
-// endpoints (health checks, readiness probes, metrics scrapes). A request whose
-// r.URL.Path exactly matches one of paths logs at Debug whatever its status;
-// every other request stays at Info. A probe repeats every interval, so a line
-// per failing probe would repeat a standing state: a health signal's owner logs
-// its transitions, a failed scrape shows as `up`, an outside prober reports the
-// status it got, and a panic is still logged at Error by Recoverer. It is a
-// WithLogLevel policy, so the two are mutually exclusive (last applied wins); a
-// skipped path never consults it, and a panicking policy falls back to Info.
-// With no paths every request logs at Info.
+// WithProbeLogLevel is the access-log level policy for machine-probe endpoints
+// (health checks, readiness probes, metrics scrapes). A request whose
+// r.URL.Path exactly matches one of paths logs at Debug whatever its status,
+// since a probe repeats one standing state; every other request stays at Info.
+// It is a WithLogLevel policy, so the last of the two applied wins. A skipped
+// path never consults it, a panicking policy falls back to Info, and with no
+// paths every request logs at Info.
 func WithProbeLogLevel(paths ...string) LogOption {
 	probe := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
