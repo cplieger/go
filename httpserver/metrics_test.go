@@ -300,6 +300,39 @@ func TestMetricsServer_secondServeIsRefused(t *testing.T) {
 	}
 }
 
+// TestMetricsServer_closeAndServeExcludeEachOther: Close after Serve leaves
+// the running server alone and says how to stop it, and Serve after Close
+// serves nothing.
+func TestMetricsServer_closeAndServeExcludeEachOther(t *testing.T) {
+	served, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("ok")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, stop := serving(t, served)
+	if code, _ := get(t, http.MethodGet, base+"/healthz"); code != http.StatusOK {
+		t.Fatalf("GET /healthz = %d", code)
+	}
+	if err := served.Close(); !errors.Is(err, errCloseAfterServe) {
+		t.Errorf("Close after Serve = %v, want errCloseAfterServe", err)
+	}
+	if code, _ := get(t, http.MethodGet, base+"/healthz"); code != http.StatusOK {
+		t.Errorf("GET /healthz after the refused Close = %d, want the server still serving", code)
+	}
+	if err := stop(); err != nil {
+		t.Errorf("Serve after cancel = %v, want nil", err)
+	}
+	closed, err := ListenMetrics(t.Context(), "127.0.0.1:0", MetricsHandlers{Metrics: text(""), Healthz: text("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Serve(t.Context()); !errors.Is(err, errServedTwice) {
+		t.Errorf("Serve after Close = %v, want errServedTwice", err)
+	}
+}
+
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

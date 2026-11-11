@@ -18,22 +18,26 @@ const (
 	metricsWriteTimeout = 30 * time.Second
 )
 
-// errServedTwice is Serve's answer to a second call on one MetricsServer.
-var errServedTwice = errors.New("httpserver: MetricsServer.Serve called twice")
+// errServedTwice is Serve's answer once the server was served or closed.
+var errServedTwice = errors.New("httpserver: MetricsServer already served or closed")
+
+// errCloseAfterServe is Close's answer once Serve owns the listener, which
+// only cancelling Serve's context stops cleanly.
+var errCloseAfterServe = errors.New("httpserver: MetricsServer.Close after Serve; cancel Serve's context to stop it")
 
 // MetricsHandlers names the two handlers the metrics listener serves, so they
 // cannot be passed in each other's place.
 type MetricsHandlers struct {
-	// Metrics answers GET /metrics, typically a measure Registry's Handler.
+	// Metrics answers GET /metrics.
 	Metrics http.Handler
-	// Healthz answers GET /healthz, typically a health CheckHandler.
+	// Healthz answers GET /healthz.
 	Healthz http.Handler
 }
 
-// MetricsServer is the opt-in listener of an app that opens no port of its
-// own: it routes only /metrics and /healthz, for GET and the HEAD a GET
-// pattern matches, both under WithProbeLogLevel, with panics recovered. Build it with ListenMetrics, which
-// binds before the app starts work, then call Serve.
+// MetricsServer is the opt-in listener of an app that opens no port of its own:
+// it routes only /metrics and /healthz, for GET and the HEAD a GET pattern
+// matches, both under WithProbeLogLevel, with panics recovered. Build it with
+// ListenMetrics, which binds before the app starts work, then call Serve.
 type MetricsServer struct {
 	srv    *http.Server
 	ln     net.Listener
@@ -80,7 +84,7 @@ func (m *MetricsServer) Addr() net.Addr {
 
 // Serve serves until ctx is cancelled, then shuts down as Run does with opts,
 // and returns Run's error. When the listener is off it returns nil at once. A
-// second call on a listener that is on returns an error and serves nothing.
+// call after Serve or Close returns an error and serves nothing.
 func (m *MetricsServer) Serve(ctx context.Context, opts ...RunOption) error {
 	if m.srv == nil {
 		return nil
@@ -92,12 +96,15 @@ func (m *MetricsServer) Serve(ctx context.Context, opts ...RunOption) error {
 }
 
 // Close releases a listener Serve has not started, for a caller that gives up
-// before serving, such as a startup that fails after ListenMetrics. Called
-// while Serve runs, it stops the server early, since the server serves that
-// same listener. It returns nil when the listener is off.
+// before serving, such as a startup that fails after ListenMetrics. Once
+// Serve has started it does nothing and returns an error: cancel Serve's
+// context to stop the server. It returns nil when the listener is off.
 func (m *MetricsServer) Close() error {
 	if m.ln == nil {
 		return nil
+	}
+	if !m.served.CompareAndSwap(false, true) {
+		return errCloseAfterServe
 	}
 	return m.ln.Close()
 }

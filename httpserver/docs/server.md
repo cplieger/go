@@ -100,6 +100,7 @@ if err := <-done; err != nil {
 - An empty `addr` opens nothing. `Serve` then returns nil at once, without running `Run` or its options, and `Addr` is nil, so the app needs no branch for a listener that is off.
 - It routes only `/metrics` and `/healthz`, for `GET` and the `HEAD` a `GET` pattern also matches. Any other path is 404, after an unclean path is first redirected to its clean form, and any other method 405, so the listener never serves the app's own routes.
 - Both paths log under `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
-- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply, and `opts` reach `New`, so `WithSlogErrorLog` routes the accept loop's errors into `slog`.
+- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply.
+- `opts` reach `New`, so `WithSlogErrorLog` routes net/http's own error lines into `slog`.
 - It reads no environment. The app owns its setting's name, parsing and edge trimming.
-- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options. A second `Serve` returns an error.
+- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options. A second `Serve`, or a `Serve` after `Close`, on a listener that is on returns an error. Once `Serve` runs, stop it by cancelling `ctx`: `Close` then returns an error and leaves it serving.
