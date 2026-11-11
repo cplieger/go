@@ -4,7 +4,7 @@
 
 jsonx decodes the integer fields of someone else's JSON in Go, whether a value arrives as `14`, `"14"`, `null`, `"unknown"` or `9.0`, under one policy you choose.
 
-It replaces the custom `UnmarshalJSON` method you would otherwise write for each inconsistent field. The policy decides, shape by shape, whether to keep the value, return 0 or return a typed error. It uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+It replaces the custom `UnmarshalJSON` method you would otherwise write for each inconsistent field. The policy decides, shape by shape, whether to keep the value, return 0 or return a typed error. It uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

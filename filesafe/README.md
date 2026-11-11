@@ -4,7 +4,7 @@
 
 filesafe writes files from Go so that a crash or a power loss leaves the complete old content or the complete new content, never a partial file.
 
-It replaces the temp file, fsync and rename sequence you would otherwise write around `os.WriteFile`. It runs on Linux, containers included, and on Windows, with the limits listed under [Windows](#windows). It uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0. macOS and BSD may work but are untested.
+It replaces the temp file, fsync and rename sequence you would otherwise write around `os.WriteFile`. It runs on Linux, containers included, and on Windows, with the limits listed under [Windows](#windows). It uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0. macOS and BSD may work but are untested.
 
 ## Why use it
 

@@ -4,7 +4,7 @@
 
 measure gives your Go service a Prometheus `/metrics` endpoint with counters, gauges, histograms and process metrics, using only the standard library.
 
-It uses only the standard library, so it brings no other modules into your build. It needs Go 1.27.3 or later and is licensed under Apache-2.0.
+It uses only the standard library, so it brings no other modules into your build. It needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

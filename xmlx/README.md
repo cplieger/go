@@ -4,7 +4,7 @@
 
 xmlx caps the memory and work an untrusted XML document can cost your Go program, before and during an `encoding/xml` decode.
 
-A byte cap on the response body does not bound the decode, because `encoding/xml` builds each token before your code can check it. xmlx adds those bounds and keeps your decoder. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+A byte cap on the response body does not bound the decode, because `encoding/xml` builds each token before your code can check it. xmlx adds those bounds and keeps your decoder. It uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
