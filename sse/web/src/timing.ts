@@ -22,6 +22,15 @@ export const KEEPALIVE_EVENT = "sse:keepalive";
 /** Subjects one digest request may carry when the server runs at its default. */
 export const DIGEST_MAX_SUBJECTS = 256;
 
+/** Topics one client-supplied scope may name; the server refuses more. */
+export const MAX_SCOPE_TOPICS = 256;
+
+/** Bytes of the `SSE-Topics` header; a longer scope connects with no header and narrows by POST. */
+export const MAX_SCOPE_HEADER_BYTES = 4_096;
+
+/** Bytes of one topic in a client-supplied scope. */
+export const MAX_TOPIC_BYTES = 128;
+
 /** Client-side timing knobs. Every field has a default in DEFAULT_TIMING. */
 export interface TimingConfig {
   /** Deadline from fetch start to response headers. */

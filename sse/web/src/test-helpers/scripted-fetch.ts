@@ -14,6 +14,8 @@ interface ScriptedRequest {
   readonly method: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly signal: AbortSignal | null;
+  /** The request body when it was a string, as a POST's JSON is. */
+  readonly body: string | null;
   aborted: boolean;
   abortReason: unknown;
 }
@@ -184,6 +186,7 @@ export function scriptedFetch(): ScriptedFetch {
       method: init?.method ?? "GET",
       headers: headerRecord(init),
       signal: init?.signal ?? null,
+      body: typeof init?.body === "string" ? init.body : null,
       aborted: false,
       abortReason: undefined,
     };

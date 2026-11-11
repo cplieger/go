@@ -90,6 +90,10 @@ function fakeStream(): Stream & { readonly calls: string[] } {
     resetCursor: () => void calls.push("resetCursor"),
     state: () => STOPPED,
     cursor: () => null,
+    setScope: (scope) => {
+      calls.push(`setScope:${JSON.stringify(scope)}`);
+      return new Promise(() => undefined);
+    },
   };
 }
 

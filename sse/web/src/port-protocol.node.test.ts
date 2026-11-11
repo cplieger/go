@@ -258,6 +258,10 @@ function tabHarness(spawnTargets: (WorkerHost | null)[], visible = true, tag = "
           resetCursor() {
             fallbackStates.push("resetCursor");
           },
+          setScope(scope: readonly string[] | null) {
+            fallbackStates.push(`setScope:${JSON.stringify(scope)}`);
+            return new Promise<never>(() => undefined);
+          },
         },
       };
     },

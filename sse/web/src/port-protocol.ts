@@ -1,7 +1,7 @@
 import type { Changed, Removed } from "./digest.js";
 import type { LifecycleEvent, RevalidateCause } from "./lifecycle.js";
 import type { StreamState } from "./state.js";
-import type { Frame } from "./stream.js";
+import type { Frame, ScopeFailure } from "./stream.js";
 import type { Subject } from "./versions.js";
 import type { VisibilityInput } from "./visibility.js";
 import type { Cursor } from "./wire.js";
@@ -40,6 +40,10 @@ export type TabToWorker =
       readonly online: boolean;
       readonly hadWorker: boolean;
       readonly tag: string;
+      /** The tab's scope; absent from an older tab, which draws everything. */
+      readonly scope?: readonly string[] | null;
+      /** The tab's pending scope call this attach carries, answered like a `set_scope`. */
+      readonly scopeSeq?: number;
     }
   | { readonly type: "visibility"; readonly ev: VisibilityInput }
   | { readonly type: "network"; readonly online: boolean }
@@ -62,7 +66,8 @@ export type TabToWorker =
       /** The rejection's numeric `status`, absent when it carried none. */
       readonly status?: number;
     }
-  | { readonly type: "frame_failed"; readonly generation: number; readonly cursor: Cursor | null };
+  | { readonly type: "frame_failed"; readonly generation: number; readonly cursor: Cursor | null }
+  | { readonly type: "set_scope"; readonly seq: number; readonly topics: readonly string[] | null };
 
 /**
  * Every message the host sends a tab. Two of them are obligations rather than notifications: a
@@ -80,7 +85,16 @@ export type WorkerToTab =
   | { readonly type: "pong"; readonly seq: number }
   | { readonly type: "revalidate_run"; readonly runId: number; readonly ctx: PortRevalidateContext }
   | { readonly type: "stale" }
-  | { readonly type: "state"; readonly state: StreamState };
+  /** `scope` is true from a host that takes `set_scope`; an older host omits it. */
+  | { readonly type: "state"; readonly state: StreamState; readonly scope?: true }
+  /** Answers `set_scope` seq `seq`, and every earlier pending seq the same answer covers. */
+  | {
+      readonly type: "scope_set";
+      readonly seq: number;
+      readonly epoch: string;
+      readonly offset: string;
+    }
+  | { readonly type: "scope_failed"; readonly seq: number; readonly cause: ScopeFailure };
 
 const TAB_TYPES: ReadonlySet<string> = new Set<TabToWorker["type"]>([
   "attach",
@@ -95,6 +109,7 @@ const TAB_TYPES: ReadonlySet<string> = new Set<TabToWorker["type"]>([
   "revalidate_done",
   "revalidate_failed",
   "frame_failed",
+  "set_scope",
 ]);
 
 const WORKER_TYPES: ReadonlySet<string> = new Set<WorkerToTab["type"]>([
@@ -105,6 +120,8 @@ const WORKER_TYPES: ReadonlySet<string> = new Set<WorkerToTab["type"]>([
   "revalidate_run",
   "stale",
   "state",
+  "scope_set",
+  "scope_failed",
 ]);
 
 function typeOf(value: unknown): string | null {

@@ -22,6 +22,8 @@ export interface ParserHandlers {
   readonly onComment?: () => void;
   /** Called once when a frame exceeds maxBufferBytes; the parser then ignores every feed until reset(). */
   readonly onOverflow?: (bytes: number) => void;
+  /** Called for a frame carrying an `id` and no `data`, which dispatches no event: a position mark. */
+  readonly onId?: (id: string) => void;
 }
 
 /**
@@ -50,7 +52,7 @@ const DIGITS_RE = /^[0-9]+$/;
 
 /** Creates a WHATWG event-stream parser over raw bytes. */
 export function createParser(handlers: ParserHandlers, opts: ParserOptions): Parser {
-  const { onEvent, onRetry, onComment, onOverflow } = handlers;
+  const { onEvent, onRetry, onComment, onOverflow, onId } = handlers;
   const maxBufferBytes = opts.maxBufferBytes;
 
   let decoder = new TextDecoder("utf-8", { ignoreBOM: true });
@@ -72,6 +74,8 @@ export function createParser(handlers: ParserHandlers, opts: ParserOptions): Par
     if (dataLines.length > 0) {
       const type = typeBuffer === "" ? "message" : typeBuffer;
       onEvent({ type, data: dataLines.join("\n"), id: frameId, lastEventId, bytes: frameBytes });
+    } else if (frameId !== null) {
+      onId?.(frameId);
     }
     dataLines = [];
     typeBuffer = "";
