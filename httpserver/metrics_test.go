@@ -292,8 +292,8 @@ func TestMetricsServer_secondServeIsRefused(t *testing.T) {
 	if code, _ := get(t, http.MethodGet, base+"/healthz"); code != http.StatusOK {
 		t.Fatalf("GET /healthz = %d", code)
 	}
-	if err := m.Serve(t.Context()); !errors.Is(err, errServedTwice) {
-		t.Errorf("second Serve = %v, want errServedTwice", err)
+	if err := m.Serve(t.Context()); !errors.Is(err, errAlreadyServedOrClosed) {
+		t.Errorf("second Serve = %v, want errAlreadyServedOrClosed", err)
 	}
 	if err := stop(); err != nil {
 		t.Errorf("the first Serve after cancel = %v, want nil", err)
@@ -315,6 +315,9 @@ func TestMetricsServer_closeAndServeExcludeEachOther(t *testing.T) {
 	if err := served.Close(); !errors.Is(err, errCloseAfterServe) {
 		t.Errorf("Close after Serve = %v, want errCloseAfterServe", err)
 	}
+	// A fresh connection, so the request goes through the listener rather
+	// than an idle keep-alive connection a closed listener would not stop.
+	http.DefaultClient.CloseIdleConnections()
 	if code, _ := get(t, http.MethodGet, base+"/healthz"); code != http.StatusOK {
 		t.Errorf("GET /healthz after the refused Close = %d, want the server still serving", code)
 	}
@@ -331,8 +334,8 @@ func TestMetricsServer_closeAndServeExcludeEachOther(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Errorf("a second Close before any Serve = %v, want nil", err)
 	}
-	if err := closed.Serve(t.Context()); !errors.Is(err, errServedTwice) {
-		t.Errorf("Serve after Close = %v, want errServedTwice", err)
+	if err := closed.Serve(t.Context()); !errors.Is(err, errAlreadyServedOrClosed) {
+		t.Errorf("Serve after Close = %v, want errAlreadyServedOrClosed", err)
 	}
 }
 

@@ -96,7 +96,7 @@ if err := <-done; err != nil {
 }
 ```
 
-- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work. A startup that gives up after that calls `Close` to release the port.
+- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work. A startup that gives up after that, before it calls `Serve`, calls `Close` to release the port.
 - An empty `addr` opens nothing. `Serve` then returns nil at once, without running `Run` or its options, and `Addr` is nil, so the app needs no branch for a listener that is off.
 - It routes only `/metrics` and `/healthz`, for `GET` and the `HEAD` a `GET` pattern also matches. Any other path is 404, after an unclean path is first redirected to its clean form, and any other method 405, so the listener never serves the app's own routes.
 - Both paths log under `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.

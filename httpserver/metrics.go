@@ -18,11 +18,12 @@ const (
 	metricsWriteTimeout = 30 * time.Second
 )
 
-// errServedTwice is Serve's answer once the server was served or closed.
-var errServedTwice = errors.New("httpserver: MetricsServer already served or closed")
+// errAlreadyServedOrClosed is Serve's answer once the server was served or
+// closed.
+var errAlreadyServedOrClosed = errors.New("httpserver: MetricsServer already served or closed")
 
-// errCloseAfterServe is Close's answer once Serve owns the listener, which
-// only cancelling Serve's context stops cleanly.
+// errCloseAfterServe is Close's answer once Serve took the listener; only
+// cancelling Serve's context stops a running Serve.
 var errCloseAfterServe = errors.New("httpserver: MetricsServer.Close after Serve; cancel Serve's context to stop it")
 
 // MetricsHandlers names the two handlers the metrics listener serves, so they
@@ -100,7 +101,7 @@ func (m *MetricsServer) Serve(ctx context.Context, opts ...RunOption) error {
 		return nil
 	}
 	if !m.state.CompareAndSwap(stateIdle, stateServed) {
-		return errServedTwice
+		return errAlreadyServedOrClosed
 	}
 	return Run(ctx, m.srv, m.ln, opts...)
 }
