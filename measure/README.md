@@ -41,18 +41,18 @@ import (
 
 var (
 	reg  = measure.NewRegistry("myapp")
-	reqs = measure.NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"route", "status"})
+	reqs = measure.NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"method", "route", "code"})
 	dur  = measure.NewHistogram("http_request_duration_seconds", "Request latency")
 )
 
 func main() {
 	reg.MustRegister(reqs, dur) // panics here, at startup, on a bad metric
 
-	reqs.Inc("/api/widget", "200")
+	reqs.Inc("GET", "/api/widget", "200")
 	dur.Observe(0.042)
 
 	http.Handle("/metrics", reg.Handler())
-	log.Fatal(http.ListenAndServe(":9090", nil))
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 ```
 
@@ -89,12 +89,12 @@ func instrument(route string, next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		measure.RecordHTTP(reqs, dur, time.Since(start), route, strconv.Itoa(sw.status))
+		measure.RecordHTTP(reqs, dur, time.Since(start), r.Method, route, strconv.Itoa(sw.status))
 	})
 }
 ```
 
-Label by the route you registered, never by the raw request path. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
+Label by the route you registered, never by the raw request path, and name the labels `method`, `route` and `code`, as Prometheus's own Go handler names `method` and `code`. Each distinct label combination is a series kept until `Delete` or `Reset`. The [HTTP instrumentation](docs/how-it-works.md#http-instrumentation) section covers the adapter for [httpserver](https://github.com/cplieger/go/tree/main/httpserver)'s route hook.
 
 To serve values read when Prometheus scrapes, declare their families and register a collector. Every scrape calls the function with the request's context:
 
@@ -114,11 +114,11 @@ func init() {
 
 The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a runnable example of each pattern except serving `Handler` alone, which a test checks, so `go test` keeps them true.
 
-- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup.
+- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup. The HTTP request counter is the exception: its method, route and code combinations are open, so a rule on it uses a threshold above 1 or the absolute value instead.
 - Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
 - Serve `Handler` alone. Its page already includes the Go and process metrics.
 - Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.
-- Publish build information as a `LabeledGauge` with a `version` label, set to 1.
+- Publish build information as `build_info`, a `LabeledGauge` with a `version` label, set to 1. The registry prefix makes it `<prefix>_build_info{version="..."}`, which a query joins onto any other series of the app.
 
 ## API
 

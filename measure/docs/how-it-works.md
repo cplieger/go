@@ -88,7 +88,7 @@ Each distinct label combination is a series that stays until `Delete` or `Reset`
 
 ## HTTP instrumentation
 
-`RecordHTTP(c, h, d, labelVals...)` records one request. It increments the labeled counter `c` with `labelVals` and observes `d` in seconds on the histogram `h`. Either metric may be nil to skip it. The values must match `c`'s label names in count and order.
+`RecordHTTP(c, h, d, labelVals...)` records one request. It increments the labeled counter `c` with `labelVals` and observes `d` in seconds on the histogram `h`. Either metric may be nil to skip it. The values must match `c`'s label names in count and order. Name the counter's labels `method`, `route` and `code`, as Prometheus's own Go handler names `method` and `code`, with `route` the template you registered. Leave the counter unseeded: its label combinations are open, unlike a counter of known failure sources.
 
 `RecordHTTP` takes no request and no status, so your middleware captures both and calls it once the response is complete. Its parameters are this package's own types. Middleware that does not import measure cannot take `RecordHTTP` as its hook, so you write a small adapter that turns the middleware's per-request values into the label list.
 
