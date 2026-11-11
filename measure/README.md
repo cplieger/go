@@ -125,7 +125,7 @@ func init() {
 
 The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a runnable example of each pattern except serving `Handler` alone, which a test checks, so `go test` keeps them true.
 
-- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup. The HTTP request counter is the exception: its status codes are not known at startup, so it stays unseeded. `increase()` misses the request that creates each of its series, so a rule on it fires on an increase above 1, or adds the series that appeared within the window (`c unless c offset 15m`).
+- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup. The HTTP request counter is the exception. Its status codes are not known at startup, so it stays unseeded. `increase()` misses the request that creates each of its series, so a rule on it fires on an increase above 1, or adds the series that appeared within the window (`c unless c offset 15m`).
 - Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
 - Serve `Handler` alone. Its page already includes the Go and process metrics.
 - Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.

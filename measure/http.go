@@ -22,11 +22,11 @@ import "time"
 //
 // With httpserver, adapt the access-log hook WithRecordRouteMetric registers:
 // its method is collapsed to the nine standard methods or "other" and its path
-// is the matched pattern's template, both bounded as the rule above asks, and
-// the access logger records the status itself. A zero-dependency module cannot
-// ship a compiling example of that pairing, so the hook's signature and label
-// derivation live in httpserver's own godoc for WithRecordRouteMetric and
-// RequestMetric.
+// is the matched pattern's template or "unmatched", both bounded as the rule
+// above asks, and the access logger records the status itself. A
+// zero-dependency module cannot ship a compiling example of that pairing, so
+// the hook's signature and label derivation live in httpserver's own godoc for
+// WithRecordRouteMetric and RequestMetric.
 func RecordHTTP(c *LabeledCounter, h *Histogram, d time.Duration, labelVals ...string) {
 	if c != nil {
 		c.Inc(labelVals...)
