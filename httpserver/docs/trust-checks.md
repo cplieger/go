@@ -53,12 +53,12 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `ParseHostList(entries, opts...)` parses an operator allowlist, such as a config array or a comma-split environment variable, into an immutable `*HostPolicy`. Malformed entries come back separately, as with `ParseCIDRs`.
 - `(*HostPolicy).Middleware()` answers 403 with the code `host_not_allowed` for a request whose `Host` is not listed, and logs one Warn line, `httpserver: host not allowed`. An inactive policy returns the handler unwrapped.
 - `(*HostPolicy).Allows(r)` is the same decision for one request. `Active()` and `Size()` describe the policy, for startup logs.
-- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger and hint. A nil policy logs through `slog.Default`.
+- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger and hint. A nil or zero-value policy logs through `slog.Default` with the default hint, `host not allowed`.
 - `WithHostAllowlistError(code, msg)` changes the 403's code and message, for example to name your configuration setting.
 - `WithLoopbackExempt(true)` admits a request when both the socket peer and the `Host` are loopback, described below.
 - `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.
 
-The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the 403's message) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
+The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the policy's 403 message, set with `WithHostAllowlistError`; a caller using `LogRefusal` sets it to match its own refusal) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
 
 Place the middleware before any cross-origin or CSRF check. A rebinding request makes `Origin` and `Host` agree, so a same-origin check alone admits it.
 

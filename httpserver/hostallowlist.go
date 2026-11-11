@@ -168,6 +168,10 @@ type hostPolicyConfig struct {
 // it.
 const maxLoggedHost = 128
 
+// defaultHostRefusalMsg is the 403 message and refusal hint of a policy
+// built with no WithHostAllowlistError.
+const defaultHostRefusalMsg = "host not allowed"
+
 // WithLoopbackExempt selects whether a request is admitted when BOTH its socket
 // peer and its Host are loopback, regardless of the allowlist — the
 // container-internal carve-out. Enabled (true) it keeps a service's own loopback
@@ -209,8 +213,8 @@ func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
 	}
 }
 
-// WithHostAllowlistLogger sets the slog.Logger Middleware reports each refusal
-// to. Nil, the default, means slog.Default() as it is when ParseHostList runs.
+// WithHostAllowlistLogger sets the slog.Logger that Middleware and LogRefusal
+// report each refusal to. Nil, the default, means slog.Default() as it is when ParseHostList runs.
 // Pass a logger with a discarding handler to silence it.
 func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.logger = l }
@@ -261,7 +265,7 @@ type HostPolicy struct {
 // loopback health check or in-container clients must keep working, and with
 // WithHostAllowlistError to name the app's configuration knob in the 403.
 func ParseHostList(entries []string, opts ...HostAllowlistOption) (policy *HostPolicy, invalid []string) {
-	c := &hostPolicyConfig{code: "host_not_allowed", msg: "host not allowed"}
+	c := &hostPolicyConfig{code: "host_not_allowed", msg: defaultHostRefusalMsg}
 	for _, o := range opts {
 		if o != nil {
 			o(c)
@@ -431,18 +435,17 @@ func isLoopbackPeer(remoteAddr string) bool {
 }
 
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
-// caller that admits by its own rule (with Allows among its checks) and writes
-// its own refusal: it reports through the policy's logger
-// (WithHostAllowlistLogger) with the reason (missing, malformed or not in the
-// allowlist), the host, the remote address, the hint (WithHostAllowlistError)
-// and request_id. A nil policy logs through slog.Default with the default
-// hint. The line carries no path, which can hold a token; the access line,
-// correlated by request_id, carries the routed path. The Host is empty when
-// the request named none: HTTP/1.0 without Host, HTTP/1.1 with an empty Host
-// header, or HTTP/2 without :authority or Host.
+// caller that admits by its own rule and writes its own refusal. It logs
+// through the policy's logger (WithHostAllowlistLogger) with its hint
+// (WithHostAllowlistError); a nil or zero policy uses slog.Default and the
+// default hint. The line carries no path, which can hold a token; the access
+// line with the same request_id has it. The Host is empty when the request
+// named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
 func (p *HostPolicy) LogRefusal(r *http.Request) {
-	if p == nil {
-		p = &HostPolicy{logger: slog.Default(), msg: "host not allowed"}
+	if p == nil || p.logger == nil {
+		// ParseHostList always sets the logger, so none means a policy it did
+		// not build.
+		p = &HostPolicy{logger: slog.Default(), msg: defaultHostRefusalMsg}
 	}
 	reason := "host not in allowlist"
 	switch {
