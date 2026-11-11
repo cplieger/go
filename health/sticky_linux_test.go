@@ -78,7 +78,7 @@ func TestSetRefreshesAnotherUsersMarkerInAStickyFolder(t *testing.T) {
 			return
 		}
 		m := NewMarker(path)
-		if m.degraded {
+		if m.degraded.Load() {
 			t.Error("a marker Set can refresh: want no degraded mode")
 			return
 		}
@@ -116,7 +116,7 @@ func TestALeaseDoesNotDegradeTheMarker(t *testing.T) {
 	if err := openMarker(path, 0); !errors.Is(err, syscall.EAGAIN) {
 		t.Skipf("a held lease does not refuse this open here (%v); nothing to pin", err)
 	}
-	if m := NewMarker(path); m.degraded {
+	if m := NewMarker(path); m.degraded.Load() {
 		t.Error("a marker under a lease: want no degraded mode, the lease breaks on its own")
 	}
 }

@@ -5,16 +5,20 @@
 // RunProbe. Package probe (github.com/cplieger/go/health/probe) is the
 // HTTP-based counterpart for containers wrapping a third-party server.
 //
-// If the marker directory is not writable (e.g. compose's
-// `read_only: true` without a `tmpfs: /tmp` mount), or something already
-// at the marker path is not a regular file the process can write, the
-// constructor enters degraded mode: Set and Cleanup become no-ops, and
-// the probe reports healthy rather than restart-looping a container
-// whose only broken piece is the signaling channel. Healthy, Within and
-// Handler report unhealthy in degraded mode, because Set cannot change
-// the marker. In a directory that can be written, a marker path os.Stat
-// cannot read at all, such as a symlink loop, is not degraded mode: the
-// probe reports it unhealthy.
+// If the marker directory is not writable (e.g. compose's `read_only: true`
+// without a `tmpfs: /tmp` mount), or something already at the marker path
+// is not a regular file the process can write, the constructor enters
+// degraded mode: Set and Cleanup become no-ops, and while the obstacle is
+// there the probe reports healthy rather than restart-looping a container
+// whose only broken piece is the signaling channel. Each later Set checks
+// again and leaves degraded mode once the folder and the marker can be
+// written. An app that sets the marker only at startup makes no later Set,
+// so once the obstacle is gone its probe reads the path as it stands until
+// the app restarts: absent when nothing is there, present when a regular
+// file already is. Healthy, Within and Handler report unhealthy for the
+// whole of degraded mode, until a Set leaves it. In a directory that can
+// be written, a marker path os.Stat cannot read at all, such as a symlink
+// loop, is not degraded mode: the probe reports it unhealthy.
 //
 // The probe checks existence only by default; an opt-in freshness
 // deadline is available via WithMaxAge.
@@ -35,6 +39,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,7 +68,9 @@ type Marker struct {
 	loggedFailSigs []string
 	mu             sync.Mutex
 	failed         bool
-	degraded       bool
+	// degraded is read without mu by Healthy and the Within signal, while
+	// SetChecked may clear it, so it is atomic.
+	degraded atomic.Bool
 }
 
 // NewMarker constructs a marker for path and checks that Set can change
@@ -80,22 +87,26 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 		}
 	}
 	if err := probeHealthDir(path); err != nil {
-		m.degraded = true
+		m.degraded.Store(true)
 		m.log().Warn("health marker directory not writable, marker in degraded mode",
 			"dir", filepath.Dir(path),
 			"error", err,
 			"effect", degradedEffect,
 			"hint", "compose.yaml with read_only:true requires "+
-				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`")
+				"`tmpfs: [\"/tmp:size=1m,mode=1777,noexec,nosuid,nodev\"]`; "+
+				"otherwise create the folder or make it writable. The next "+
+				"Set(true) writes the marker, so restart a service that sets "+
+				"it only at startup")
 	} else if err := markerWritable(path); err != nil {
-		m.degraded = true
+		m.degraded.Store(true)
 		m.log().Warn("health marker not writable, marker in degraded mode",
 			"path", path,
 			"error", err,
 			"effect", degradedEffect,
 			"hint", "remove what is at the marker path, such as a marker an "+
-				"earlier run as another user left, a directory or a FIFO, "+
-				"then restart the service")
+				"earlier run as another user left, a directory or a FIFO; the "+
+				"next Set(true) writes the marker, so restart a service that "+
+				"sets it only at startup")
 	}
 	return m
 }
@@ -104,7 +115,7 @@ func NewMarker(path string, opts ...MarkerOption) *Marker {
 // operator: which verdict the container gets depends on whether its
 // healthcheck reads the marker through RunProbe or asks an HTTP endpoint
 // over it.
-const degradedEffect = "RunProbe and Inspect report healthy; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"
+const degradedEffect = "RunProbe and Inspect report healthy while the marker cannot be written; Healthy, Within and an HTTP endpoint over this marker (Handler, CheckHandler) report unhealthy"
 
 // MarkerOption configures NewMarker.
 type MarkerOption func(*Marker)
@@ -160,7 +171,11 @@ func cannotSignal(path string) error {
 // change from the file as it stands at the call (no file is unhealthy): Info
 // when healthy, Warn when not, nothing when the file already shows ok. A
 // filesystem failure is logged and swallowed (see SetChecked), and the next
-// successful write logs one Info. In degraded mode Set is a no-op.
+// successful write logs one Info. In degraded mode Set first checks whether
+// the folder and the marker can be written again: until they can it is a
+// no-op, and the first call that can leaves degraded mode, logs one Info and
+// applies ok, touching the marker for true and removing it for false.
+// Leaving is one-way: a later write failure is logged like any other.
 func (m *Marker) Set(ok bool) { _ = m.SetChecked(ok) }
 
 // SetChecked is Set with the filesystem outcome reported: it returns nil
@@ -170,12 +185,20 @@ func (m *Marker) Set(ok bool) { _ = m.SetChecked(ok) }
 // contract includes the marker write — e.g. a one-shot scan subcommand
 // whose exit code an external scheduler alerts on, where a silently lost
 // heartbeat should fail the invocation loudly instead. In degraded mode
-// it returns nil, matching Set's no-op contract.
+// it returns nil while it cannot write, matching Set.
 func (m *Marker) SetChecked(ok bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.degraded {
-		return nil
+	if m.degraded.Load() {
+		// The probe decides degraded mode from the filesystem on every run,
+		// so a refusal latched at NewMarker would leave the marker unwritten
+		// once the obstacle cleared, and the probe would read the path as it
+		// stands rather than as the app last set it.
+		if cannotSignal(m.path) != nil {
+			return nil
+		}
+		m.degraded.Store(false)
+		m.log().Info("health marker writable again, leaving degraded mode", "path", m.path)
 	}
 
 	// Read per call: a separate process (a docker exec subcommand) may write
@@ -243,7 +266,7 @@ func (m *Marker) logHealthState(ok bool) {
 func (m *Marker) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.degraded {
+	if m.degraded.Load() {
 		return
 	}
 	if err := os.Remove(m.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -254,12 +277,12 @@ func (m *Marker) Cleanup() {
 
 // Healthy reports whether the marker file currently exists via a strict
 // os.Stat, one call per invocation, not a field read; it satisfies Signal.
-// Unlike RunProbe, it reports false in degraded mode whatever file is there,
-// because Set cannot change it: an HTTP consumer via Handler deserves an
-// honest signal rather than the restart-loop avoidance the probe needs. A
-// nil *Marker reports false.
+// Unlike RunProbe, which reports healthy while the marker cannot be written, it
+// reports false for the whole of degraded mode, whatever file is there, until a
+// Set leaves it: an HTTP consumer via Handler deserves an honest signal rather
+// than the restart-loop avoidance the probe needs. A nil *Marker reports false.
 func (m *Marker) Healthy() bool {
-	if m == nil || m.degraded {
+	if m == nil || m.degraded.Load() {
 		return false
 	}
 	_, err := os.Stat(m.path)
@@ -270,26 +293,27 @@ func (m *Marker) Healthy() bool {
 // non-positive or the marker is no older than d, the comparison [WithMaxAge]
 // gives the probe, so a future modification time is fresh. Any stat error is
 // unhealthy. Pass the same [Lease.Duration] to both, so a marker Set can write
-// gets one verdict from the probe and the handler. In degraded mode (an
-// unwritable directory or marker) it is unhealthy whatever file is there, as
-// Healthy is, while the probe reports healthy. It costs one os.Stat per
-// call.
+// gets one verdict from the probe and the handler. In degraded mode it is
+// unhealthy whatever file is there, as Healthy is, until a Set leaves it, while
+// the probe reports healthy for as long as the marker cannot be written. It
+// costs one os.Stat per call.
 func (m *Marker) Within(d time.Duration) Signal {
-	if m == nil || m.degraded {
-		return markerWithin{}
-	}
-	return markerWithin{path: m.path, d: d}
+	return markerWithin{m: m, d: d}
 }
 
-// markerWithin is the Signal Within returns; a nil or degraded marker leaves
-// path empty, which never stats.
+// markerWithin is the Signal Within returns. It reads degraded mode on each
+// call, so a marker that leaves degraded mode after the signal was built
+// reports through it.
 type markerWithin struct {
-	path string
-	d    time.Duration
+	m *Marker
+	d time.Duration
 }
 
 func (w markerWithin) Healthy() bool {
-	info, err := os.Stat(w.path)
+	if w.m == nil || w.m.degraded.Load() {
+		return false
+	}
+	info, err := os.Stat(w.m.path)
 	return err == nil && !stale(time.Since(info.ModTime()), w.d)
 }
 
