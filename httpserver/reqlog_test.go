@@ -1182,7 +1182,7 @@ func probeLevelOf(t *testing.T, target string, status int, probePaths ...string)
 func TestWithProbeLogLevel_logsEveryProbeStatusAtDebug(t *testing.T) {
 	for name, status := range map[string]int{
 		"healthy probe":     http.StatusOK,
-		"redirect":          http.StatusNotModified,
+		"not modified":      http.StatusNotModified,
 		"forbidden":         http.StatusForbidden,
 		"client error":      http.StatusNotFound,
 		"server error":      http.StatusInternalServerError,
