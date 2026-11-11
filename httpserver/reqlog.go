@@ -567,25 +567,13 @@ func routeMetricLabels(r *http.Request) (method, path string) {
 	return routeMetricMethod(r.Method), routeMetricPath(r)
 }
 
-// WithLogLevel sets the LEVEL POLICY for the access-log line: fn is called
-// once per logged request with the request and the final status, and the line
-// is emitted at the returned level. The default without this option is
-// slog.LevelInfo, unchanged. The hook chooses the level only — the line's
-// attributes and emission rules (deferred emit, skip paths) are the logger's
-// fixed mechanism. WithProbeLogLevel is the named preset over this hook for the
-// routine-machine-probe case; reach for the raw hook only when a custom
-// policy is genuinely needed.
-//
-// A polled path takes WithProbeLogLevel: a probe repeats one standing state,
-// so its line stays at Debug whatever the status. A split by status (2xx and
-// 3xx at Debug, 4xx at Warn, 5xx at Error) suits routes a person requests,
-// where each 4xx or 5xx is one event. Because fn also receives the request, a
-// policy can key on the path as well as the status.
-//
-// A request suppressed by WithSkipPaths or WithSkipFunc emits no line at all,
-// so fn is never called for it. A panicking fn is contained: the failure is
-// logged and the line falls back to Info, mirroring the package's other
-// callback guards. A nil fn is ignored (the skip-nil option convention).
+// WithLogLevel sets the access line's level: fn gets the request and the
+// final status, and the line is emitted at the level it returns (Info
+// without this option). WithProbeLogLevel is the preset for probe paths; a
+// split by status (2xx and 3xx at Debug, 4xx at Warn, 5xx at Error) suits
+// routes a person requests, where each 4xx or 5xx is one event. A skipped
+// request never calls fn, a panicking fn is logged and the line falls back
+// to Info, and a nil fn is ignored.
 func WithLogLevel(fn func(r *http.Request, status int) slog.Level) LogOption {
 	return func(c *logConfig) {
 		if fn != nil {
