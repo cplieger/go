@@ -1,6 +1,6 @@
 # Server and shutdown
 
-This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog` and the shutdown sequence `Run` follows.
+This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog`, the shutdown sequence `Run` follows and the metrics listener of an app that opens no port of its own.
 
 ## New
 
@@ -74,3 +74,24 @@ It matches `context.Cause(ctx)` as well as `ctx.Err()`. A cause passed to `conte
 After `ctx` fires, it checks `done` once more. A drain that used the whole grace hands the teardown an expired context. A `select` with both cases ready picks one at random, so the plain two-case wait sometimes reports a finished teardown as still running. A nil `done` never closes, so the wait then ends with `ctx`.
 
 What to log, at which level, and what exit code to use stay your decisions for all three helpers.
+
+## The metrics listener
+
+An app that opens no port of its own can still offer an opt-in page for Prometheus and a health endpoint. `ListenMetrics(ctx, addr, metrics, healthz)` builds that listener in one call:
+
+```go
+ms, err := httpserver.ListenMetrics(ctx, cfg.MetricsListenAddr, reg.Handler(), health.CheckHandler(checks...))
+if err != nil {
+	slog.Error("cannot listen on METRICS_LISTEN_ADDR; refusing to start", "address", cfg.MetricsListenAddr, "error", err)
+	os.Exit(1)
+}
+go func() { _ = ms.Serve(ctx) }()
+```
+
+- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work.
+- An empty `addr` opens nothing. `Serve` then returns nil at once and `Addr` is nil, so the app needs no branch for a listener that is off.
+- It serves exactly `GET /metrics` and `GET /healthz`. Any other path is 404 and any other method 405, so the listener never serves the app's own routes.
+- Both paths log at `Debug` through `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
+- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply.
+- It reads no environment. The app owns its setting's name, parsing and edge trimming.
+- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options.
