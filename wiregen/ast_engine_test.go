@@ -192,6 +192,13 @@ func TestCommentToJSDoc_dropsToolDirectives(t *testing.T) {
 		return cg
 	}
 	// gofmt puts a "//" line between a type's doc text and its directive.
+	if got, want := commentToJSDoc(group("/* Foo is a block doc. */")), "/** Foo is a block doc. */\n"; got != want {
+		t.Errorf("block doc = %q, want %q", got, want)
+	}
+	if got, want := commentToJSDoc(group("/*\n * Foo is a starred block.\n * Second line.\n */")),
+		"/**\n * * Foo is a starred block.\n * * Second line.\n */\n"; got != want {
+		t.Errorf("starred block doc = %q, want %q", got, want)
+	}
 	if got, want := commentToJSDoc(group("// KiroDoc is one doc row.", "//", "//deadset:ignore DS1403 -- read by the template")),
 		"/** KiroDoc is one doc row. */\n"; got != want {
 		t.Errorf("gofmt-shaped doc = %q, want %q", got, want)
@@ -204,6 +211,9 @@ func TestCommentToJSDoc_dropsToolDirectives(t *testing.T) {
 		"// nolint:lll",
 		"// nolint",
 		"// #nosec G101 -- not a secret",
+		"//nolint",
+		"//#nosec",
+		"// #nosecG101",
 		"//go:generate stringer",
 		"//line foo.go:10",
 		"//export Name",

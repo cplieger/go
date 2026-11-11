@@ -93,7 +93,6 @@ func (g *generator) emitStructInterfaces(w *strings.Builder, engine *astEngine) 
 // emitInterfaceField writes one `name: type;` (or `name?: type;`) interface
 // member, prefixed by its JSDoc when present.
 func emitInterfaceField(w *strings.Builder, f *fieldInfo) {
-	// Every line of a multi-line JSDoc takes the field's indent, not only the first.
 	for l := range strings.Lines(f.Doc) {
 		w.WriteString("  " + l)
 	}
