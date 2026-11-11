@@ -214,8 +214,8 @@ func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
 }
 
 // WithHostAllowlistLogger sets the slog.Logger that Middleware and LogRefusal
-// report each refusal to. Nil, the default, means slog.Default() as it is when ParseHostList runs.
-// Pass a logger with a discarding handler to silence it.
+// report each refusal to. Nil, the default, means slog.Default() as it is when
+// ParseHostList runs. Pass a logger with a discarding handler to silence it.
 func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.logger = l }
 }
@@ -437,10 +437,10 @@ func isLoopbackPeer(remoteAddr string) bool {
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
 // caller that admits by its own rule and writes its own refusal. It logs
 // through the policy's logger (WithHostAllowlistLogger) with its hint
-// (WithHostAllowlistError); a nil or zero policy uses slog.Default and the
-// default hint. The line carries no path, which can hold a token; the access
-// line with the same request_id has it. The Host is empty when the request
-// named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
+// (WithHostAllowlistError); a nil or zero-value policy uses slog.Default and
+// the default hint. The line carries no path, which can hold a token; the
+// access line with the same request_id has it. The Host is empty when the
+// request named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
 func (p *HostPolicy) LogRefusal(r *http.Request) {
 	if p == nil || p.logger == nil {
 		// ParseHostList always sets the logger, so none means a policy it did
