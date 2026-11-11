@@ -26,13 +26,15 @@ The hub decides the hello, the replay and the start of live delivery under one l
 
 A keepalive is the named frame `event: sse:keepalive` with `data: {}`, every 15 seconds by default. It carries no id, so it moves no cursor. With `WithKeepaliveEvent("")` the hub writes the comment `: keepalive` instead, which an `EventSource` never dispatches.
 
+A connection whose scope is not everything also carries position marks: an id-only block, `id: <epoch>:<offset>` and a blank line, with no `event:` and no `data:`. A narrow cursor otherwise moves only on the frames it receives, so out-of-scope traffic would push the replay floor past it. The hub writes a mark at most once a second, and the first one right after the handshake. It writes one only when nothing for the connection is queued and the head has moved past the last id it wrote, so every frame the connection receives at or below the mark has already been sent. An `EventSource` records the id and dispatches nothing. A burst larger than the replay buffer within one second still ends as `gap_floor`.
+
 The hub ends a stream with `event: sse:reset`. Its data is `{"reason":"slow"}` for a client whose buffer filled, written under a 250ms deadline, or `{"reason":"shutdown"}` when the hub shuts down.
 
 Event names that start with `sse:` are reserved for these frames. `Wire` is the revision of this contract, and every hello declares it.
 
 ## The hello and its verdicts
 
-The hello's data is a JSON object with eight fields:
+The hello's data is a JSON object with eight fields, and a ninth, `conn`, on a connection served with `WithRequestScope`:
 
 | Field | Meaning |
 | --- | --- |
@@ -44,18 +46,52 @@ The hello's data is a JSON object with eight fields:
 | `verdict` | why, for logs and counters |
 | `keepalive_ms` | the keepalive interval in milliseconds |
 | `keepalive_event` | the keepalive frame's name, empty for the comment form |
+| `conn` | the 22-character id that names this connection to the scope endpoint, absent unless the connection can be rescoped; it is a capability, so never log it |
 
 A client branches on `resumed` only. The verdict is one of seven values:
 
 - `fresh`: the client presented no cursor.
 - `resumed`: the hub holds every missed frame within the reply cap, and they follow the hello in order.
 - `gap_floor`: the cursor is below the floor, so frames were lost to retention.
-- `gap_budget`: the hub holds the gap, but the reply cap would cut the replay short.
+- `gap_budget`: the hub holds the gap, but the frames the connection would receive outnumber the reply cap. The cap counts only frames in the connection's scope, and a resume over it is refused whole, never cut to a prefix.
 - `gap_ahead`: the cursor is beyond the head.
 - `epoch_changed`: the cursor belongs to another hub, such as the process before a restart.
 - `cursor_invalid`: the cursor did not parse.
 
 Every verdict other than `resumed` comes with `resumed: false` and no replay, and the client reconciles from the application's state. The hub checks the three gaps in the order ahead, floor, budget, so the verdict names the first reason a resume failed.
+
+## Scopes
+
+A connection receives broadcasts, the events published with an empty topic, plus the topics in its scope. A scope is everything, broadcasts only, or a set of topics. A scope narrows delivery and grants nothing.
+
+A connection served with `WithRequestScope` takes its scope from the `SSE-Topics` request header, a JSON array of topics (`[]` is broadcasts only), and an absent header is everything. A topic is 1 to 128 bytes of printable ASCII (`0x21` to `0x7E`) other than `"` and `\`, so the header and its JSON form are the same bytes. Both halves fix the same limits:
+
+| Constant | Value |
+| --- | --- |
+| `MaxScopeTopics` | 256 topics in one scope |
+| `MaxScopeHeaderBytes` | 4096 bytes of `SSE-Topics`; a longer scope connects with no header and narrows by `POST` |
+
+`Serve` answers a header outside the grammar or the limits with 400 `sse_scope`, before it subscribes.
+
+The scope endpoint replaces a live connection's scope:
+
+| Direction | JSON |
+| --- | --- |
+| Request (`POST`, `application/json`) | `{"conn": "<22 chars>", "seq": 1, "topics": ["run:a"]}`, where `topics` is `null` for everything and must be present |
+| Response (200) | `{"epoch": "<hex16>", "offset": "42"}` |
+
+`seq` is a positive integer the client increments for each request on a connection, retries included. The hub applies a request only when its `seq` is above the last one applied, so a request the client abandoned cannot land after a later one and undo it. `offset` is a decimal string: every frame at or below it was matched against the old scope, and the new scope delivers only later offsets.
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `scope_invalid` | the body does not parse, or lacks `conn`, a positive `seq` or `topics` |
+| 400 | `sse_scope` | a topic outside the grammar, or more than `MaxScopeTopics` |
+| 403 | `scope_forbidden` | the caller does not own the connection |
+| 404 | `scope_conn` | no live rescopable connection has this `conn`, including after `Shutdown` |
+| 405 | `scope_method` | not `POST`; `Allow: POST` is set |
+| 409 | `scope_stale` | a request with this `seq` or a later one was already applied |
+| 413 | `scope_too_large` | the body exceeds 64 KiB |
+| 415 | `scope_content_type` | the body is not `application/json` |
 
 ## The digest
 

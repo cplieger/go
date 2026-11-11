@@ -17,7 +17,8 @@ func TestResolve_replyCapBoundary(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cur := Cursor{Epoch: testEpoch, Offset: tc.since}
-			verdict, resumed := resolve(cur, true, testEpoch, 1, head, head, replyCap)
+			span := func() int { return int(head - tc.since) }
+			verdict, resumed := resolve(cur, true, testEpoch, 1, head, head, replyCap, span)
 			if verdict != tc.wantVerdict || resumed != tc.wantResumed {
 				t.Errorf("resolve(since=%d, head=%d, replyCap=%d) = %s, %t, want %s, %t", tc.since, head, replyCap, verdict, resumed, tc.wantVerdict, tc.wantResumed)
 			}
