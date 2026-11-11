@@ -118,7 +118,10 @@ export interface RevalidateContext {
  */
 export interface Stream {
   start(): void;
-  /** For leaving the page: aborts the in-flight revalidate's signal. */
+  /**
+   * For leaving the page: aborts the in-flight revalidate's signal. An interrupted or queued run
+   * stays owed, so the next start's hello reconciles even when it resumes.
+   */
   stop(): void;
   /** Aborts the attempt and connects again in place; ignored in hidden_closed, offline and stopped. */
   reconnect(): void;
@@ -1106,7 +1109,8 @@ export function createStream(opts: StreamOptions): Stream {
         records.set(topic, resume);
       }
     }
-    // A connection about to degrade reports no coverage: degrade() tells the listeners itself.
+    // degrade() notifies, so this path must not: after leaving open when it reconnects, or with
+    // everything when no header was presented, where it also settles.
     if (h.conn === null && opts.scopeUrl !== undefined) {
       degrade();
       return;
@@ -1308,6 +1312,11 @@ export function createStream(opts: StreamOptions): Stream {
         unsubscribe();
       }
       unsubscribes = [];
+      // An interrupted run stays owed: the next start's hello reconciles even when it resumes.
+      if (inflight !== null || queued !== null) {
+        unverified = true;
+        unverifiedFull ||= (inflight?.full ?? false) || (queued?.full ?? false);
+      }
       if (inflight !== null) {
         const current = inflight;
         inflight = null;

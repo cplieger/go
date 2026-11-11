@@ -649,4 +649,36 @@ describe("worker host scope", () => {
     await settle();
     expect(a.ofType("scope_failed")).toEqual([{ type: "scope_failed", seq: 2, cause: "stopped" }]);
   });
+
+  it("a call pending at a hello with conn null and no presented header settles at that hello", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: null, scopeSeq: 1 });
+    await settle();
+    expect(h.sf.connections.at(-1)!.request.headers["SSE-Topics"]).toBeUndefined();
+    await hello(h, { conn: null });
+    expect(h.host.stream().state().kind).toBe("open");
+    expect(a.ofType("scope_set")).toEqual([{ type: "scope_set", seq: 1, epoch: A, offset: "5" }]);
+  });
+
+  it("a logout while the host's hello run is in flight leaves it owed to the restart's resumed hello", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h);
+    expect(h.runs).toHaveLength(1);
+    const z = tab(h, "z");
+    z.attach({ scope: ["run:a"] });
+    await settle();
+    z.send({ type: "detach", cause: "logout" });
+    await settle();
+    expect(h.host.stream().state().kind).toBe("stopped");
+    expect(h.runs[0]!.ctx.signal.aborted).toBe(true);
+    tab(h, "c").attach({ scope: ["run:a"] });
+    await settle();
+    expect(h.sf.connections.at(-1)!.request.headers["Last-Event-ID"]).toBe(`${A}:5`);
+    await hello(h, { resumed: true, verdict: "resumed" });
+    expect(h.runs.slice(1).map((r) => r.ctx.cause)).toEqual(["hello"]);
+  });
 });

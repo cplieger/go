@@ -29,6 +29,7 @@ import { createVisibilityManager } from "./visibility.js";
 import type { Cursor } from "./wire.js";
 
 const A = "aaaaaaaaaaaaaaaa";
+const B = "bbbbbbbbbbbbbbbb";
 const CONN = "AbCdEfGhIjKlMnOpQrStUv";
 
 /** A POST the test answers by hand; `body` is the decoded request. */
@@ -89,6 +90,63 @@ function track(p: Promise<Cursor>): { value?: Cursor; error?: unknown } {
 
 function scoped(initialScope: readonly string[] | null = ["run:a"]): Harness {
   return harness({ scopeUrl: "/scope", initialScope });
+}
+
+/**
+ * A bare stream whose lifecycle listener stops it at the hello's open (`state`) or its hello
+ * event while `stopAt.at` names one; each revalidate waits for the test to settle it.
+ */
+function stoppable() {
+  const sf = scriptedFetch();
+  const versions = createVersionMap();
+  const ctxs: RevalidateContext[] = [];
+  const settles: { resolve(): void; reject(e: unknown): void }[] = [];
+  const stopAt: { at: "state" | "hello" | "none" } = { at: "none" };
+  const box: { s?: Stream } = {};
+  const stream = createStream({
+    url: "/events",
+    fetch: sf.fetch,
+    versions,
+    visibility: createVisibilityManager(fakeVisibility().source),
+    online: createOnlineManager(fakeOnline().source),
+    onFrame: () => undefined,
+    revalidate(ctx) {
+      ctxs.push(ctx);
+      return new Promise<void>((resolve, reject) => settles.push({ resolve, reject }));
+    },
+    onLifecycle(ev) {
+      if (
+        (stopAt.at === "state" && ev.kind === "state" && ev.to === "open") ||
+        (stopAt.at === "hello" && ev.kind === "hello")
+      ) {
+        box.s!.stop();
+      }
+    },
+  });
+  box.s = stream;
+  return {
+    sf,
+    versions,
+    ctxs,
+    settles,
+    stopAt,
+    stream,
+    /** Starts the stopped stream, checks it presents `epoch:head`, and answers a resumed hello. */
+    async resumeAt(epoch: string, head: string): Promise<void> {
+      stream.start();
+      await flush();
+      expect(sf.connections.at(-1)!.request.headers["Last-Event-ID"]).toBe(`${epoch}:${head}`);
+      sf.connections.at(-1)!.push(helloFrame({ epoch, head, resumed: true, verdict: "resumed" }));
+      await flush();
+    },
+    /** The cause and fullness of every run from `from` on that no stop aborted. */
+    live(from = 0): [string, boolean][] {
+      return ctxs
+        .slice(from)
+        .filter((c) => !c.signal.aborted)
+        .map((c) => [c.cause, c.full]);
+    },
+  };
 }
 
 const helloWithConn = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -440,49 +498,75 @@ describe("stream scope", () => {
   });
 
   it("a stop made from a lifecycle listener on the hello leaves the hello run owed to the next start", async () => {
-    for (const first of ["state", "hello"] as const) {
-      let on: "state" | "hello" | "none" = first;
-      const sf = scriptedFetch();
-      const ctxs: RevalidateContext[] = [];
-      const box: { s?: Stream } = {};
-      box.s = createStream({
-        url: "/events",
-        fetch: sf.fetch,
-        versions: createVersionMap(),
-        visibility: createVisibilityManager(fakeVisibility().source),
-        online: createOnlineManager(fakeOnline().source),
-        onFrame: () => undefined,
-        revalidate(ctx) {
-          ctxs.push(ctx);
-          return new Promise<void>(() => undefined);
-        },
-        onLifecycle(ev) {
-          if (
-            (on === "state" && ev.kind === "state" && ev.to === "open") ||
-            (on === "hello" && ev.kind === "hello")
-          ) {
-            box.s!.stop();
-          }
-        },
-      });
-      box.s.start();
+    for (const at of ["state", "hello"] as const) {
+      const t = stoppable();
+      t.stopAt.at = at;
+      t.stream.start();
       await flush();
-      sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
+      t.sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
       await flush();
-      expect(box.s.state().kind).toBe("stopped");
-      expect(ctxs.every((c) => c.signal.aborted)).toBe(true);
+      expect(t.stream.state().kind).toBe("stopped");
+      expect(t.ctxs).toEqual([]);
       // The hello adopted head 5, so the restart's resumed hello must still reconcile.
-      on = "none";
-      box.s.start();
-      await flush();
-      expect(sf.connections.at(-1)!.request.headers["Last-Event-ID"]).toBe(`${A}:5`);
-      sf.connections
-        .at(-1)!
-        .push(helloFrame({ epoch: A, head: "5", resumed: true, verdict: "resumed" }));
-      await flush();
-      const live = ctxs.filter((c) => !c.signal.aborted);
-      expect(live.map((c) => [c.cause, c.full])).toEqual([["hello", false]]);
+      t.stopAt.at = "none";
+      await t.resumeAt(A, "5");
+      expect(t.live()).toEqual([["hello", false]]);
     }
+  });
+
+  it("a stop while an epoch change's full run is owed or in flight leaves it owed full", async () => {
+    for (const at of ["state", "hello", "outside"] as const) {
+      const t = stoppable();
+      t.stream.start();
+      await flush();
+      t.sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
+      await flush();
+      t.settles.at(-1)!.resolve();
+      await flush();
+      t.versions.observe({ kind: "chat", ref: "c1" }, "3", A);
+      if (at !== "outside") {
+        t.stopAt.at = at;
+      }
+      t.stream.reconnect();
+      await flush();
+      // The new epoch's bind drops the held version, so this hello's run is full.
+      t.sf.connections.at(-1)!.push(helloFrame({ epoch: B, head: "9" }));
+      await flush();
+      if (at === "outside") {
+        expect(t.ctxs.at(-1)!.full).toBe(true);
+        t.stream.stop();
+      }
+      t.stopAt.at = "none";
+      const before = t.ctxs.length;
+      await t.resumeAt(B, "9");
+      expect(t.live(before)).toEqual([["hello", true]]);
+    }
+  });
+
+  it("a stop while the hello's run is in flight leaves it owed to the restart's resumed hello", async () => {
+    const t = stoppable();
+    t.stream.start();
+    await flush();
+    t.sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
+    await flush();
+    expect(t.ctxs).toHaveLength(1);
+    t.stream.stop();
+    expect(t.ctxs[0]!.signal.aborted).toBe(true);
+    await t.resumeAt(A, "5");
+    expect(t.live(1)).toEqual([["hello", false]]);
+  });
+
+  it("a hello run that ends in a 401 stays owed to the next start", async () => {
+    const t = stoppable();
+    t.stream.start();
+    await flush();
+    t.sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
+    await flush();
+    t.settles.at(-1)!.reject({ status: 401 });
+    await flush();
+    expect(t.stream.state().kind).toBe("stopped");
+    await t.resumeAt(A, "5");
+    expect(t.live(1)).toEqual([["hello", false]]);
   });
 
   it("stop ends degraded mode, so the next start presents the scope again", async () => {
