@@ -1,7 +1,6 @@
 package sse
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -102,13 +101,12 @@ var errScope = errors.New("sse: invalid scope")
 // parseScope decodes a client-supplied scope, JSON null (everything) or an
 // array of topics, applying ValidTopic and MaxScopeTopics.
 func parseScope(raw []byte) (Scope, error) {
-	raw = bytes.TrimSpace(raw)
-	if bytes.Equal(raw, []byte("null")) {
-		return All(), nil
-	}
 	var topics []string
-	if err := json.Unmarshal(raw, &topics); err != nil || topics == nil {
+	if err := json.Unmarshal(raw, &topics); err != nil {
 		return Scope{}, fmt.Errorf("%w: not null or an array of strings", errScope)
+	}
+	if topics == nil {
+		return All(), nil
 	}
 	if len(topics) > MaxScopeTopics {
 		return Scope{}, fmt.Errorf("%w: %d topics, max %d", errScope, len(topics), MaxScopeTopics)
@@ -157,17 +155,12 @@ type scopeResponse struct {
 }
 
 // ScopeHandler answers POST application/json {"conn","seq","topics"}, which
-// replaces the scope of the live connection conn names, one served with
-// WithRequestScope. It answers 200 {"epoch","offset"} with the hub head at the
-// swap: every frame at or below offset was matched against the old scope,
-// every later one against the new. seq orders one connection's requests, so a
-// request that arrives after a later one answers 409 and applies nothing.
-//
-// authorize receives the owner WithRequestScope recorded and refuses a caller
-// that does not own the connection (403); a scope grants nothing, so it judges
-// ownership, never topics. Mount the handler inside the application's
-// authentication and cross-origin middleware. A nil authorize returns an error
-// wrapping ErrConfig and no handler.
+// replaces the scope of a live WithRequestScope connection, with 200
+// {"epoch","offset"}: offset is the hub head at the swap, the last offset
+// matched against the old scope. A seq at or below the last applied answers 409.
+// authorize receives the owner WithRequestScope recorded and judges ownership,
+// never topics (403). Mount it inside the application's authentication and
+// cross-origin middleware. A nil authorize returns an error wrapping ErrConfig.
 func (h *Hub) ScopeHandler(authorize func(r *http.Request, owner any) error) (http.Handler, error) {
 	if authorize == nil {
 		return nil, fmt.Errorf("%w: ScopeHandler needs an authorize function", ErrConfig)

@@ -415,8 +415,9 @@ func (h *Hub) writeHandshake(w io.Writer, sub *subscription) error {
 	return nil
 }
 
-// handshakeOffset is the last offset the handshake wrote: the last replayed
-// frame, or the presented cursor of a resume that replayed nothing.
+// handshakeOffset is the offset the client's cursor holds after the
+// handshake: the last replayed frame, the presented cursor of a resume that
+// replayed nothing, or the head of a hello that did not resume.
 func handshakeOffset(sub *subscription, cur Cursor) uint64 {
 	if n := len(sub.replay); n > 0 {
 		return sub.replay[n-1].offset
@@ -424,7 +425,7 @@ func handshakeOffset(sub *subscription, cur Cursor) uint64 {
 	if sub.hello.Resumed {
 		return cur.Offset
 	}
-	return 0
+	return sub.hello.Head
 }
 
 func (h *Hub) writeEntry(w io.Writer, e *entry) error {

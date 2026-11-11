@@ -64,7 +64,7 @@ Every verdict other than `resumed` comes with `resumed: false` and no replay, an
 
 A connection receives broadcasts, the events published with an empty topic, plus the topics in its scope. A scope is everything, broadcasts only, or a set of topics. A scope narrows delivery and grants nothing.
 
-A connection served with `WithRequestScope` takes its scope from the `SSE-Topics` request header, a JSON array of topics (`[]` is broadcasts only), and an absent header is everything. A topic is 1 to 128 bytes of printable ASCII (`0x21` to `0x7E`) other than `"` and `\`, so the header and its JSON form are the same bytes. Both halves fix the same limits:
+A connection served with `WithRequestScope` takes its scope from the `SSE-Topics` request header: a JSON array of topics (`[]` is broadcasts only), or `null`. An absent header or `null` is everything. A topic is 1 to 128 bytes of printable ASCII (`0x21` to `0x7E`) other than `"` and `\`, so the header and its JSON form are the same bytes. Both halves fix the same limits:
 
 | Constant | Value |
 | --- | --- |

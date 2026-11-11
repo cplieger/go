@@ -55,7 +55,7 @@ var (
 // lock, by Publish (which also deletes the record) or by Shutdown (which sets
 // closed so no later Publish reaches the record); reason is written before
 // the close and read after it. scope and lastSeq are read and written only
-// under the hub lock; every other field is fixed at subscribe.
+// under the hub lock; every other field but reason is fixed at subscribe.
 type client struct {
 	owner      any
 	scope      Scope

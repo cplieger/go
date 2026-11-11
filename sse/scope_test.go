@@ -3,6 +3,7 @@ package sse
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,8 +11,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -175,9 +179,10 @@ func TestScope_lastOptionWins(t *testing.T) {
 		wantTopic   string
 	}{
 		{"WithTopic then WithScope", []ServeOption{WithTopic("t"), WithScope(Topics("a", "b"))}, true, false, ""},
-		{"WithScope then WithTopic", []ServeOption{WithScope(Topics("a")), WithTopic("t")}, true, false, "t"},
+		{"WithScope then WithTopic", []ServeOption{WithScope(Topics("b")), WithTopic("a")}, true, false, "a"},
 		{"WithRequestScope then WithTopic everything", []ServeOption{WithRequestScope("p"), WithTopic("")}, false, false, ""},
 		{"WithTopic then WithRequestScope", []ServeOption{WithTopic("t"), WithRequestScope("p")}, false, true, ""},
+		{"WithRequestScope then WithScope", []ServeOption{WithRequestScope("p"), WithScope(Topics("a"))}, true, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var sc serveConfig
@@ -187,6 +192,13 @@ func TestScope_lastOptionWins(t *testing.T) {
 			if sc.scope.scoped != tc.wantScoped || sc.requestScope != tc.wantRequest || sc.topic != tc.wantTopic {
 				t.Errorf("config = (scoped %v, request %v, topic %q), want (%v, %v, %q)",
 					sc.scope.scoped, sc.requestScope, sc.topic, tc.wantScoped, tc.wantRequest, tc.wantTopic)
+			}
+			if (sc.owner != nil) != tc.wantRequest {
+				t.Errorf("owner = %v, want one only under WithRequestScope", sc.owner)
+			}
+			if tc.wantScoped && (!sc.scope.matches("a") || sc.scope.matches("z") || !sc.scope.matches("")) {
+				t.Errorf("scope admits a %v, z %v, broadcasts %v; want only its own topics and broadcasts",
+					sc.scope.matches("a"), sc.scope.matches("z"), sc.scope.matches(""))
 			}
 		})
 	}
@@ -411,24 +423,40 @@ func TestScopeHandler_answers(t *testing.T) {
 			if w.Code != tc.wantStatus || !strings.Contains(w.Body.String(), `"`+tc.wantCode+`"`) {
 				t.Errorf("answered %d %s, want %d %s", w.Code, w.Body.String(), tc.wantStatus, tc.wantCode)
 			}
+			if tc.wantStatus == http.StatusMethodNotAllowed && w.Header().Get("Allow") != http.MethodPost {
+				t.Errorf("405 Allow = %q, want POST", w.Header().Get("Allow"))
+			}
 		})
+	}
+	for range 3 {
+		if _, err := h.Publish(Event{Data: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ok := postScope(handler, http.MethodPost, "application/json", body(1, `["run:b"]`))
 	var answer struct {
 		Epoch  string `json:"epoch"`
 		Offset string `json:"offset"`
 	}
-	if ok.Code != http.StatusOK || json.Unmarshal(ok.Body.Bytes(), &answer) != nil || answer.Epoch != testEpoch || answer.Offset != "0" {
-		t.Fatalf("a valid request answered %d %s, want 200 with this epoch and the head as a decimal string", ok.Code, ok.Body.String())
+	if ok.Code != http.StatusOK || json.Unmarshal(ok.Body.Bytes(), &answer) != nil || answer.Epoch != testEpoch || answer.Offset != "3" {
+		t.Fatalf("a valid request answered %d %s, want 200 with this epoch and the head 3 as a decimal string", ok.Code, ok.Body.String())
 	}
-	if stale := postScope(handler, http.MethodPost, "application/json", body(1, "[]")); stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), `"scope_stale"`) {
+	if all := postScope(handler, http.MethodPost, "application/json", body(2, "null")); all.Code != http.StatusOK {
+		t.Fatalf("an explicit null answered %d %s, want 200", all.Code, all.Body.String())
+	}
+	h.mu.Lock()
+	everything := !h.byConn[hello.Conn].scope.scoped
+	h.mu.Unlock()
+	if !everything {
+		t.Error("an explicit null did not widen the connection to everything")
+	}
+	if stale := postScope(handler, http.MethodPost, "application/json", body(2, "[]")); stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), `"scope_stale"`) {
 		t.Errorf("a repeated seq answered %d %s, want 409 scope_stale", stale.Code, stale.Body.String())
 	}
-	go h.Shutdown(t.Context())
-	for !h.isClosed() {
-		time.Sleep(time.Millisecond)
-	}
-	if gone := postScope(handler, http.MethodPost, "application/json", body(2, "[]")); gone.Code != http.StatusNotFound {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_ = h.Shutdown(ctx)
+	if gone := postScope(handler, http.MethodPost, "application/json", body(3, "[]")); gone.Code != http.StatusNotFound {
 		t.Errorf("a request after Shutdown answered %d, want 404", gone.Code)
 	}
 }
@@ -465,34 +493,53 @@ func TestScopeResponse_offsetAtMaxOffset(t *testing.T) {
 
 // One head splits the stream: every frame at or below the offset a swap
 // returns was matched against the old scope, every later one against the new,
-// with publishers running concurrently.
+// with publishers running concurrently. Each publisher stops at 400 frames
+// until the swap and sends 100 after it, so the split always lands mid-stream
+// and the stream fits the ring.
 func TestSetScopeSeq_splitsTheStreamAtOneHead(t *testing.T) {
-	h := mustNew(t, withEpoch(testEpoch), WithClientBuffer(4096))
+	h := mustNew(t, withEpoch(testEpoch), WithClientBuffer(4096), WithReplay(1024), WithReplayTTL(replayTTL))
 	sub, err := h.subscribe(subRequest{scope: Topics("a"), rescopable: true}, Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer h.unsubscribe(sub.c)
 	var wg sync.WaitGroup
+	var swapped atomic.Bool
 	start := make(chan struct{})
 	for _, topic := range []string{"a", "b"} {
 		wg.Go(func() {
 			<-start
-			for range 500 {
+			published := 0
+			for after := 0; after < 100; {
+				switch {
+				case swapped.Load():
+					after++
+				case published == 400:
+					runtime.Gosched()
+					continue
+				}
 				if _, err := h.Publish(Event{Topic: topic, Data: []byte(topic)}); err != nil {
 					t.Error(err)
 					return
 				}
+				published++
+				runtime.Gosched()
 			}
 		})
 	}
 	close(start)
-	time.Sleep(time.Millisecond) // the publishers are mid-stream when the swap lands
+	for h.Position().Head < 250 {
+		runtime.Gosched()
+	}
 	split, err := h.setScopeSeq(sub.hello.Conn, 1, Topics("b"))
+	swapped.Store(true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wg.Wait()
+	if head := h.Position().Head; split < 250 || split >= head {
+		t.Fatalf("split %d, want mid-stream in [250, %d)", split, head)
+	}
 	got := map[uint64]string{}
 	for len(sub.c.ch) > 0 {
 		e := <-sub.c.ch
@@ -717,16 +764,68 @@ type recorderWriter struct {
 
 func (r *recorderWriter) Write(p []byte) (int, error) { return r.buf.Write(p) }
 
-// isClosed reports whether Shutdown has begun.
-func (h *Hub) isClosed() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.closed
+// nextBlock reads the stream's next block: the lines up to a blank one.
+func nextBlock(t *testing.T, sc *bufio.Scanner) []string {
+	t.Helper()
+	var block []string
+	for sc.Scan() {
+		if sc.Text() == "" {
+			if len(block) > 0 {
+				return block
+			}
+			continue
+		}
+		block = append(block, sc.Text())
+	}
+	t.Fatalf("stream ended: %v", sc.Err())
+	return nil
 }
 
-// The first mark leaves right after the handshake when out-of-scope traffic
-// already moved the head past what the handshake wrote, without waiting a tick.
-func TestScope_firstMarkIsImmediate(t *testing.T) {
+// A connection that receives everything writes no marks, however much
+// traffic passes; a scoped one writes none at an offset it already received.
+func TestScope_marksOnlyWhereTheCursorLags(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := mustNew(t, withEpoch(testEpoch), WithReplay(64), WithReplayTTL(replayTTL))
+		srv := startServer(t, h, WithRequestScope("p"))
+		wide, sc := openStream(t, srv, srv.URL, nil)
+		defer wide.Body.Close()
+		readHello(t, sc)
+		if _, err := h.Publish(Event{Topic: "run:b", Data: []byte("b")}); err != nil {
+			t.Fatal(err)
+		}
+		if block := nextBlock(t, sc); len(block) < 2 {
+			t.Fatalf("everything connection: first block %q, want the frame", block)
+		}
+		time.Sleep(2 * scopeMarkInterval)
+		if _, err := h.Publish(Event{Topic: "run:a", Data: []byte("a")}); err != nil {
+			t.Fatal(err)
+		}
+		if block := nextBlock(t, sc); len(block) < 2 {
+			t.Errorf("everything connection wrote %q before its next frame, want no mark", block)
+		}
+
+		narrow, sc2 := openStream(t, srv, srv.URL, http.Header{scopeHeader: {`["run:a"]`}})
+		defer narrow.Body.Close()
+		readHello(t, sc2)
+		if _, err := h.Publish(Event{Topic: "run:a", Data: []byte("a2")}); err != nil {
+			t.Fatal(err)
+		}
+		if block := nextBlock(t, sc2); len(block) < 2 {
+			t.Fatalf("scoped connection: first block %q, want the frame", block)
+		}
+		time.Sleep(2 * scopeMarkInterval)
+		if _, err := h.Publish(Event{Topic: "run:a", Data: []byte("a3")}); err != nil {
+			t.Fatal(err)
+		}
+		if block := nextBlock(t, sc2); len(block) < 2 {
+			t.Errorf("scoped connection wrote %q at an offset it already received, want no mark", block)
+		}
+	})
+}
+
+// A fresh connect's cursor is the hello's head, so the first mark waits for
+// the head to move past it.
+func TestScope_firstMarkAfterAFreshHelloIsPastItsHead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := mustNew(t, withEpoch(testEpoch), WithReplay(64), WithReplayTTL(replayTTL))
 		for range 3 {
@@ -734,19 +833,38 @@ func TestScope_firstMarkIsImmediate(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		srv := startServer(t, h, WithRequestScope("p"))
-		header := http.Header{scopeHeader: {`["run:a"]`}, "Last-Event-ID": {(Cursor{Epoch: testEpoch, Offset: 1}).String()}}
-		resp, sc := openStream(t, srv, srv.URL, header)
+		srv := startServer(t, h, WithTopic("run:a"))
+		resp, sc := openStream(t, srv, srv.URL, nil)
 		defer resp.Body.Close()
-		if hello, _ := readHello(t, sc); !hello.Resumed {
-			t.Fatalf("hello = %s, want resumed", hello.Verdict)
+		readHello(t, sc)
+		time.Sleep(2 * scopeMarkInterval)
+		if _, err := h.Publish(Event{Topic: "run:b", Data: []byte("x")}); err != nil {
+			t.Fatal(err)
 		}
-		start := time.Now()
-		if mark := marksOf(t, sc, 1)[0]; mark != (Cursor{Epoch: testEpoch, Offset: 3}).String() {
-			t.Errorf("first mark = %s, want offset 3", mark)
+		time.Sleep(scopeMarkInterval)
+		if mark := marksOf(t, sc, 1)[0]; mark != (Cursor{Epoch: testEpoch, Offset: 4}).String() {
+			t.Errorf("first mark = %s, want offset 4", mark)
 		}
-		if waited := time.Since(start); waited != 0 {
-			t.Errorf("the first mark waited %v, want none", waited)
+	})
+}
+
+// A set the server chooses is never encoded, so WithScope takes any topic and
+// mints no conn.
+func TestScope_withScopeTakesAnyTopic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := mustNew(t, withEpoch(testEpoch))
+		srv := startServer(t, h, WithScope(Topics("run a", "run:\u00e9")))
+		resp, sc := openStream(t, srv, srv.URL, nil)
+		defer resp.Body.Close()
+		hello, _ := readHello(t, sc)
+		if hello.Conn != "" {
+			t.Errorf("a WithScope hello carries conn %q, want none", hello.Conn)
+		}
+		if _, err := h.Publish(Event{Topic: "run a", Data: []byte("spaced")}); err != nil {
+			t.Fatal(err)
+		}
+		if block := nextBlock(t, sc); !slices.Contains(block, "data: spaced") {
+			t.Errorf("block %q, want the frame on topic \"run a\"", block)
 		}
 	})
 }
