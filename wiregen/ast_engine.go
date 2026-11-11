@@ -1250,11 +1250,14 @@ func typeDoc(pkg *packages.Package, name string) *ast.CommentGroup {
 }
 
 // commentText returns the human text of a single comment line/block, with ok
-// false for a Go pragma, which must not flow into JSDoc.
+// false for a tool directive, which must not flow into JSDoc.
 func commentText(c *ast.Comment) (string, bool) {
 	text := c.Text
-	trimmed := strings.TrimSpace(strings.TrimPrefix(text, "//"))
-	if strings.HasPrefix(trimmed, "nolint") || strings.HasPrefix(trimmed, "go:") {
+	if after, ok := strings.CutPrefix(text, "//"); ok && isDirective(after) {
+		return "", false
+	}
+	// golangci-lint also reads "// nolint" with a space, which Go's rule does not call a directive.
+	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "//")), "nolint") {
 		return "", false
 	}
 	if strings.HasPrefix(text, "//") {
@@ -1264,6 +1267,29 @@ func commentText(c *ast.Comment) (string, bool) {
 		return strings.TrimSpace(strings.TrimSuffix(inner, "*/")), true
 	}
 	return "", false
+}
+
+// isDirective reports whether a line comment's text after "//" is a directive by
+// go/ast's rule (ast.CommentGroup.Text drops the same lines): "line ", "extern "
+// and "export ", or [a-z0-9]+:[a-z0-9] with no space after the slashes, as in a
+// generate, nolint or deadset directive.
+func isDirective(c string) bool {
+	if strings.HasPrefix(c, "line ") || strings.HasPrefix(c, "extern ") || strings.HasPrefix(c, "export ") {
+		return true
+	}
+	colon := strings.Index(c, ":")
+	if colon <= 0 || colon+1 >= len(c) {
+		return false
+	}
+	for i := 0; i <= colon+1; i++ {
+		if i == colon {
+			continue
+		}
+		if b := c[i]; (b < 'a' || b > 'z') && (b < '0' || b > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func commentToJSDoc(cg *ast.CommentGroup) string {

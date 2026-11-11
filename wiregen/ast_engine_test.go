@@ -180,3 +180,34 @@ func fieldNamePos(t *testing.T, file *ast.File, name string) token.Pos {
 	}
 	return pos
 }
+
+// A tool directive in a Go doc comment never reaches the generated JSDoc,
+// whatever the tool, while a comment that only looks like one stays.
+func TestCommentToJSDoc_dropsToolDirectives(t *testing.T) {
+	lines := []string{
+		"// Name is the user's display name.",
+		"//deadset:ignore DS1403 -- read by the template",
+		"//nolint:unused // kept for the wire",
+		"// nolint:lll",
+		"//go:generate stringer",
+		"//line foo.go:10",
+		"//export Name",
+		"// Note: the colon here is prose.",
+		"//TODO: a comment with a space-free colon but capitals",
+	}
+	cg := &ast.CommentGroup{}
+	for _, l := range lines {
+		cg.List = append(cg.List, &ast.Comment{Text: l})
+	}
+	got := commentToJSDoc(cg)
+	for _, gone := range []string{"deadset", "nolint", "go:generate", "line foo", "export Name"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("JSDoc kept the directive %q:\n%s", gone, got)
+		}
+	}
+	for _, kept := range []string{"display name", "the colon here is prose", "TODO: a comment"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("JSDoc dropped %q:\n%s", kept, got)
+		}
+	}
+}

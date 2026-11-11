@@ -5,7 +5,7 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 ## Field rules
 
 - A registered type is a struct or a named map (see [Named maps](#named-maps)). Register an enum with `StringEnum` or `TextEnum`, and a type wiregen cannot read with a mapping.
-- Doc comments on registered structs and their fields become `/** ... */` JSDoc on the generated interfaces.
+- Doc comments on registered structs and their fields become `/** ... */` JSDoc on the generated interfaces. Tool directive lines are left out, by Go's own rule for a directive (`//go:generate`, `//nolint:...`, `//deadset:ignore ...`, `//line`, `//export`), and so is `// nolint`.
 - Unexported fields are skipped, as `encoding/json` skips them. An embedded struct, exported or not, is flattened with the promotion rules of `encoding/json`: the shallowest field wins, a tagged field beats an untagged one at the same depth, and a field reached through two sibling embeds at the same depth is dropped as ambiguous.
 - A field with no `json` tag takes the name `encoding/json` gives it, its Go name. With `WithRequireJSONTags(true)` such a field is a generation error naming its path. A tag name may hold letters, digits, spaces and the punctuation `!#$%&()*+-./:;<=>?@[]^_{|}~`.
 - A field `encoding/json` may leave out, or send as `null` for a nil pointer, is optional in TypeScript, `key?: T`: a pointer, a field tagged `omitzero`, a field tagged `omitempty` whose type `omitempty` can find empty (never a struct), and a field promoted through an embedded pointer, which is skipped when nil. Every other field is required.
