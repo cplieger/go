@@ -640,9 +640,12 @@ export function createStream(opts: StreamOptions): Stream {
     if (state.kind === "open") {
       enterConnScope(g, h);
     }
+    // Whatever the state, a degrade's reconnect included, except a stop made inside the dispatch.
     if (helloOwed) {
       helloOwed = false;
-      schedule("hello", helloRun.full);
+      if (state.kind !== "stopped") {
+        schedule("hello", helloRun.full);
+      }
     }
     if (state.kind !== "open") {
       return;

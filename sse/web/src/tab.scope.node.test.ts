@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { TabToWorker, WorkerToTab } from "./port-protocol.js";
 import type { ClientState } from "./reducer.js";
-import { ScopeError, type Stream } from "./stream.js";
+import { ScopeError, type Stream, createStream } from "./stream.js";
 import { type SharedWorkerLike, type TabAttachment, attachToWorker } from "./tab.js";
+import { helloFrame, scriptedFetch } from "./test-helpers/scripted-fetch.js";
 import { createVersionMap } from "./versions.js";
 import {
   type VisibilityEvent,
@@ -302,7 +303,6 @@ describe("tab scope", () => {
       onFrame: () => undefined,
     });
     live.push(attachment);
-    // The scope is set before start, so the first connect presents it.
     expect(fallbacks[0]!.scopes.map((s) => s.scope)).toEqual([["run:a"]]);
     expect(fallbacks[0]!.calls).toEqual(['setScope ["run:a"]', "start"]);
     const call = track(attachment.setScope(["run:b"]));
@@ -381,12 +381,55 @@ describe("tab scope", () => {
     fireError!();
     expect(attachment.mode()).toBe("fallback");
     await tick(5);
-    // The scope set before start is the first connect's, and the pending call settles from it.
     expect(fb.calls.slice(0, 2)).toEqual(['setScope ["run:a","run:b"]', "start"]);
     expect(call.error).toBeUndefined();
     fb.scopes.at(-1)!.resolve({ epoch: A, offset: "4" });
     await waitFor("resolved", () => call.value !== undefined);
     expect(call.value).toEqual({ epoch: A, offset: "4" });
+  });
+
+  it("a call pending when the worker errors settles at the real fallback stream's hello", async () => {
+    let fireError: (() => void) | null = null;
+    const sf = scriptedFetch();
+    const w = fakeWorker();
+    const attachment = attachToWorker({
+      heartbeatMs: STEADY_HB,
+      supported: true,
+      spawn: () => ({
+        port: w.port,
+        addEventListener(_type: string, cb: () => void) {
+          fireError = cb;
+        },
+      }),
+      fallback: () => {
+        const headers: Record<string, string> = {};
+        return {
+          stream: createStream({
+            url: "/events",
+            fetch: sf.fetch,
+            headers,
+            versions: createVersionMap(),
+            scopeUrl: "/scope",
+            onFrame: () => undefined,
+            revalidate: async () => undefined,
+          }),
+          versions: createVersionMap(),
+          headers,
+        };
+      },
+      onFrame: () => undefined,
+    });
+    live.push(attachment);
+    const call = track(attachment.setScope(["run:a"]));
+    await tick(5);
+    fireError!();
+    expect(attachment.mode()).toBe("fallback");
+    await waitFor("fallback connect", () => sf.connections.length > 0);
+    expect(sf.connections[0]!.request.headers["SSE-Topics"]).toBe('["run:a"]');
+    sf.connections[0]!.push(helloFrame({ epoch: A, head: "6", conn: "AbCdEfGhIjKlMnOpQrStUv" }));
+    await waitFor("settled", () => call.value !== undefined || call.error !== undefined);
+    expect(call.error).toBeUndefined();
+    expect(call.value).toEqual({ epoch: A, offset: "6" });
   });
 
   it("detach rejects every pending call with link, and a bad set throws", async () => {

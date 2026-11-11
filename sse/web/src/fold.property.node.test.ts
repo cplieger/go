@@ -149,9 +149,9 @@ describe("profile fold", () => {
     );
   });
 
-  // The two longest properties take about 2 s alone; a loaded host stretches them past the 5 s
-  // default, which exists to catch a hang, not a slow full run.
-  it("hidden exactly when the last visible tab leaves by any route", { timeout: 30_000 }, () => {
+  // The two longest properties take about 2 s alone, and a loaded host stretches them past the
+  // 5 s default. fc-strict-setup's 10 s interrupt is the binding limit, so this sits just above it.
+  it("hidden exactly when the last visible tab leaves by any route", { timeout: 12_000 }, () => {
     fc.assert(
       fc.property(sequenceArb, ([seed, inputs]) => {
         const steps = run(seed, inputs);
@@ -204,7 +204,7 @@ describe("profile fold", () => {
 
   it(
     "online/offline exactly when the latest report flips the seeded value",
-    { timeout: 30_000 },
+    { timeout: 12_000 },
     () => {
       fc.assert(
         fc.property(sequenceArb, ([seed, inputs]) => {

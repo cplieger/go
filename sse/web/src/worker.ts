@@ -357,7 +357,11 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       entry.owedRun = false;
       perPortFull(entry);
     }
-    // The offset needs the cursor, so a call made while it is null waits for the next hello.
+    // Only an open connection delivers from an offset, so a call waits for the next hello while
+    // the stream is between connections, and for the cursor when it is null.
+    if (stream.state().kind !== "open") {
+      return;
+    }
     const at = entry.pendingScopes.length > 0 ? controls.coveredSince(entry.scope) : null;
     if (at === null) {
       return;
@@ -441,6 +445,8 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       entry.owedRun = true;
       return;
     }
+    // This run replaces a pending retry; its own failure sets retryRun again.
+    entry.retryRun = false;
     const runId = ++runSeq;
     quorums.set(runId, {
       pending: new Set([entry]),

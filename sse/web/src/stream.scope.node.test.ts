@@ -1,16 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOnlineManager } from "./online.js";
 import {
+  type RevalidateContext,
   ScopeError,
+  type Stream,
   coversScope,
   createStream,
   intersectScope,
   normalizeScope,
   streamInternals,
 } from "./stream.js";
-import { FAKE_CLOCK, flush, frame, helloFrame } from "./test-helpers/scripted-fetch.js";
-import { type Harness, harness } from "./test-helpers/stream-harness.js";
+import {
+  FAKE_CLOCK,
+  flush,
+  frame,
+  helloFrame,
+  scriptedFetch,
+} from "./test-helpers/scripted-fetch.js";
+import {
+  type Harness,
+  fakeOnline,
+  fakeVisibility,
+  harness,
+} from "./test-helpers/stream-harness.js";
 import { MAX_SCOPE_HEADER_BYTES, MAX_SCOPE_TOPICS } from "./timing.js";
 import { createVersionMap } from "./versions.js";
+import { createVisibilityManager } from "./visibility.js";
 import type { Cursor } from "./wire.js";
 
 const A = "aaaaaaaaaaaaaaaa";
@@ -415,6 +430,47 @@ describe("stream scope", () => {
     await h.open(helloWithConn());
     expect(h.sf.connections[0]!.request.headers["SSE-Topics"]).toBe('["run:a"]');
     expect(early.value).toEqual({ epoch: A, offset: "5" });
+  });
+
+  it("a hello whose malformed conn degrades still runs its hello run", async () => {
+    const h = scoped();
+    await h.open({ head: "5", conn: null });
+    expect(h.stream.state().kind).toBe("connecting");
+    expect(h.runs.map((r) => r.ctx.cause)).toEqual(["hello"]);
+  });
+
+  it("a stop made from a lifecycle listener on the hello leaves no hello run running", async () => {
+    for (const on of ["state", "hello"] as const) {
+      const sf = scriptedFetch();
+      const ctxs: RevalidateContext[] = [];
+      const box: { s?: Stream } = {};
+      box.s = createStream({
+        url: "/events",
+        fetch: sf.fetch,
+        versions: createVersionMap(),
+        visibility: createVisibilityManager(fakeVisibility().source),
+        online: createOnlineManager(fakeOnline().source),
+        onFrame: () => undefined,
+        revalidate(ctx) {
+          ctxs.push(ctx);
+          return new Promise<void>(() => undefined);
+        },
+        onLifecycle(ev) {
+          if (
+            (on === "state" && ev.kind === "state" && ev.to === "open") ||
+            (on === "hello" && ev.kind === "hello")
+          ) {
+            box.s!.stop();
+          }
+        },
+      });
+      box.s.start();
+      await flush();
+      sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
+      await flush();
+      expect(box.s.state().kind).toBe("stopped");
+      expect(ctxs.every((c) => c.signal.aborted)).toBe(true);
+    }
   });
 
   it("stop ends degraded mode, so the next start presents the scope again", async () => {
