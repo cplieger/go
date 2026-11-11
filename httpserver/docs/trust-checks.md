@@ -77,9 +77,9 @@ Activation fails closed. A nil or all-blank entry list leaves the policy inactiv
 `WithLoopbackExempt(true)` keeps a container healthcheck or an in-container client working under an allowlist meant for browsers. It admits a request in two cases:
 
 - The socket peer and the `Host` are both loopback.
-- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist.
+- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist. A zoned IPv6 link-local bind and a listener that is not TCP are not covered; list such an address in the allowlist.
 
-A rebinding attack cannot reach it, because the attack's `Host` is the attacker's name. A remote client cannot forge it: a remote peer is not loopback, and it cannot connect from the server's own address, because the reply to that address never leaves the host. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
+A rebinding attack cannot reach it, because the attack's `Host` is the attacker's name. A remote client cannot forge it: a remote peer is not loopback, and it cannot connect from the server's own address, because the reply to that address never leaves the host. That holds for a listener that receives only traffic addressed to this host. A transparent (`IP_TRANSPARENT`) listener, or a PROXY-protocol wrapper that reports the header's addresses, makes the local address a value the client or proxy chose, so do not use the exemption or `LoopbackOnly` behind one. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
 
 ## Loopback-only endpoints
 
@@ -91,9 +91,9 @@ A rebinding attack cannot reach it, because the attack's `Host` is the attacker'
 
 ### Why the middleware also checks forwarding headers
 
-A normal in-container command-line client sends none of those headers. Their presence points to a browser or a proxy, so `LoopbackOnly` refuses the request. Host networking or a shared network namespace puts a reverse proxy on the server's own network stack. Both nginx and Apache then rewrite `Host` to their upstream address by default, whether that is loopback or the server's bound address, which passes the `Host` check, and the proxy itself passes the peer check. Without the header check, a remote request would pass both.
+A normal in-container command-line client sends none of those headers. Their presence points to a browser or a proxy, so `LoopbackOnly` refuses the request. Host networking or a shared network namespace puts a reverse proxy on the server's own network stack. Both nginx and Apache then rewrite `Host` to their upstream address by default, whether that is loopback or the server's bound address, which passes the `Host` check, and the proxy itself passes the peer check. Apache also adds `X-Forwarded-For` by default, so the header check refuses it. nginx adds no forwarding header by default, so only a browser's `Origin` or `Sec-Fetch-Site` tells its requests apart.
 
-The check has a limit. It admits a proxy on the same host that removes every forwarding header, because nothing then tells it apart from an in-container caller. Only authentication closes that gap.
+The check has a limit. It admits a same-host proxy that sends none of these headers, which is nginx's default for any client that is not a browser, because nothing then tells it apart from an in-container caller. Only authentication closes that gap.
 
 This is a different question from `HostPolicy`. The allowlist asks whether the `Host` is one the operator named, so it admits a remote client sending `Host: localhost` when the operator lists that name. `LoopbackOnly` asks whether the request came from inside.
 

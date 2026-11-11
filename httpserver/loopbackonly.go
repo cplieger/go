@@ -8,10 +8,10 @@ import (
 // LoopbackOnly is middleware that admits a request only when LoopbackRequest
 // passes and ProxiedRequest finds no forwarding or browser header, and answers
 // every other request 403 through WriteError with the code "loopback_only".
-// The header check refuses a reverse proxy on this host's network stack, which
-// rewrites Host to its upstream address and so passes LoopbackRequest. It is
-// not authentication: a same-host proxy that strips every such header passes.
-// WithLoopbackError sets the code and message, and WithLoopbackResponder the
+// The header check refuses a same-host reverse proxy that sends one, since such
+// a proxy rewrites Host to its upstream address and so passes LoopbackRequest.
+// It is not authentication: a same-host proxy that sends none passes.
+// WithLoopbackError sets the code and message, WithLoopbackResponder the
 // renderer.
 func LoopbackOnly(opts ...LoopbackOption) Middleware {
 	c := &loopbackConfig{

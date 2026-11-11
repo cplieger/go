@@ -156,6 +156,7 @@ func TestLoopbackRequest(t *testing.T) {
 		{"non-address peer", "localhost:9848", "not-an-addr", false},
 		{"non-ip peer host", "localhost:9848", "not-an-ip:1234", false},
 		{"unbracketed ipv6 peer (too many colons)", "localhost:9848", "::1:5000", false},
+		{"zoned loopback peer", "localhost:9848", "[::1%lo]:5000", false},
 
 		// Unparseable or empty Host fails closed: CanonicalHost returns "",
 		// which names nothing, and is never repaired into a match.
@@ -697,7 +698,8 @@ func TestHostPolicyAdmitsAClientOfItsOwnBind(t *testing.T) {
 	ln.Close()
 	for _, exempt := range []bool{true, false} {
 		t.Run(fmt.Sprintf("exempt=%v", exempt), func(t *testing.T) {
-			p, _ := httpserver.ParseHostList([]string{"app.example"}, httpserver.WithLoopbackExempt(exempt))
+			p, _ := httpserver.ParseHostList([]string{"app.example"},
+				httpserver.WithLoopbackExempt(exempt), httpserver.WithHostAllowlistLogger(discardLogger()))
 			srv := httptest.NewUnstartedServer(p.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			})))

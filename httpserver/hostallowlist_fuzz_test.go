@@ -188,6 +188,7 @@ func FuzzLoopbackRequest(f *testing.F) {
 	f.Add("localhost..", "127.0.0.1:5000")
 	f.Add("127.0.0.001:9848", "127.0.0.1:5000")
 	f.Add("webterm.example.com", "203.0.113.9:5000")
+	f.Add("localhost:9848", "[::1%lo]:5000")
 
 	// A fixed, active allowlist of one browser-facing (non-loopback) host, so
 	// invariant 3's two branches never overlap.

@@ -115,7 +115,7 @@ Place a `HostPolicy` before any cross-origin or CSRF check. In a DNS rebinding a
 
 `RouteTimeout` buffers the whole response, so never wrap a streaming or hijacking handler with it. If the handler is still running at its deadline, it answers 503 without stopping it, so never wrap a handler that changes state with it either; use `RouteDeadline` for that one. [Middleware](docs/middleware.md) has each option and default.
 
-Behind a proxy, `ClientIP` is safe only when the trusted set holds every proxy hop. It reads at most 64 entries of each forwarding header and treats a longer header as invalid. `LoopbackOnly` is not authentication, because a proxy on the same host that removes every forwarding header passes it. An empty `NewStaticTokenVerifier` secret denies every value. When a page carries inline scripts, treat an empty `InlineScriptHashes` result as a startup error and never fall back to `'unsafe-inline'`.
+Behind a proxy, `ClientIP` is safe only when the trusted set holds every proxy hop. It reads at most 64 entries of each forwarding header and treats a longer header as invalid. `LoopbackOnly` is not authentication, because a proxy on the same host that sends no forwarding header passes it, and nginx sends none by default. An empty `NewStaticTokenVerifier` secret denies every value. When a page carries inline scripts, treat an empty `InlineScriptHashes` result as a startup error and never fall back to `'unsafe-inline'`.
 
 ## Graceful shutdown
 

@@ -303,8 +303,8 @@ func (p *HostPolicy) Size() int {
 
 // Allows reports whether the request is admitted. An inactive (or nil) policy
 // admits every request. An active policy admits a request only when its
-// canonicalized Host is in the allowlist, or — when WithLoopbackExempt was set
-// — when both the socket peer and the Host are loopback. r.Host is the only
+// canonicalized Host is in the allowlist, or, when WithLoopbackExempt was set,
+// when the request is local by LoopbackRequest's rule. r.Host is the only
 // host value consulted; X-Forwarded-Host is deliberately ignored (it is
 // client-controlled and this check must hold on the direct-exposure path). A
 // malformed Host canonicalizes to "" and can never match.
@@ -372,12 +372,11 @@ func localRequest(r *http.Request, canon string) bool {
 	if peer.IsLoopback() {
 		return isLoopbackHost(canon)
 	}
-	local, ok := listenerAddr(r)
-	if !ok || peer != local {
+	if peer != listenerAddr(r) {
 		return false
 	}
 	host, err := netip.ParseAddr(canon)
-	return err == nil && host.Unmap() == local
+	return err == nil && host == peer
 }
 
 // isLoopbackHost reports whether a CanonicalHost-normalized value names the
@@ -392,10 +391,10 @@ func isLoopbackHost(canon string) bool {
 
 // peerAddr parses an http.Request.RemoteAddr, which the server sets from the
 // accepted connection ("host:port"), so it cannot be spoofed at this layer.
-// Anything that does not split as host:port, or carries a zone no Host can
-// name, fails closed: a lenient fallback would let a non-stdlib caller with a
-// hand-built RemoteAddr widen the carve-out. It stays unexported: a peer-only
-// gate admits a DNS-rebound page on this host (CWE-346).
+// Anything that does not split as host:port, or carries a zone (net.ParseIP
+// refused one, and no Host can name one), fails closed: a lenient fallback
+// would let a hand-built RemoteAddr widen the carve-out. It stays unexported:
+// a peer-only gate admits a DNS-rebound page on this host (CWE-346).
 func peerAddr(remoteAddr string) (netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -408,17 +407,16 @@ func peerAddr(remoteAddr string) (netip.Addr, bool) {
 	return a.Unmap(), true
 }
 
-// listenerAddr is the local address of r's connection, which http.Server
-// records under LocalAddrContextKey. A request with none (a handler called
-// directly, a listener that is not TCP) or an unspecified one has no address
-// a peer can match.
-func listenerAddr(r *http.Request) (netip.Addr, bool) {
-	ta, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
-	if !ok || ta == nil {
-		return netip.Addr{}, false
-	}
+// listenerAddr is the local address http.Server records under
+// LocalAddrContextKey, or the zero Addr when there is no TCP one or it is
+// unspecified, which no peer matches.
+func listenerAddr(r *http.Request) netip.Addr {
+	ta, _ := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
 	a := ta.AddrPort().Addr().Unmap()
-	return a, a.IsValid() && !a.IsUnspecified()
+	if a.IsUnspecified() {
+		return netip.Addr{}
+	}
+	return a
 }
 
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
