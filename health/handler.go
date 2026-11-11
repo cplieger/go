@@ -13,7 +13,7 @@ const (
 	statusUnhealthy = "unhealthy"
 )
 
-// reasonUnhealthy is the reason Handler gives for its one signal.
+// reasonUnhealthy is the reason an empty Check.Reason reads as.
 const reasonUnhealthy = "the app reports itself unhealthy"
 
 // Check is one condition a health endpoint reports.
@@ -60,10 +60,4 @@ func CheckHandler(checks ...Check) http.Handler {
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(b)
 	})
-}
-
-// Handler returns CheckHandler for one signal, s, with the reason "the app
-// reports itself unhealthy"; a nil s is unhealthy.
-func Handler(s Signal) http.Handler {
-	return CheckHandler(Check{Signal: s, Reason: reasonUnhealthy})
 }

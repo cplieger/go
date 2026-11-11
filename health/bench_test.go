@@ -44,7 +44,7 @@ func BenchmarkStatusHealthy(b *testing.B) {
 // BenchmarkHandlerHealthy benchmarks the full HTTP handler render path
 // when the signal reports healthy.
 func BenchmarkHandlerHealthy(b *testing.B) {
-	h := Handler(stubSignal{healthy: true})
+	h := CheckHandler(Check{Signal: stubSignal{healthy: true}, Reason: "the store is not writable"})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	b.ResetTimer()
 	for b.Loop() {
@@ -55,7 +55,7 @@ func BenchmarkHandlerHealthy(b *testing.B) {
 
 // BenchmarkHandlerUnhealthy benchmarks the handler render for the 503 path.
 func BenchmarkHandlerUnhealthy(b *testing.B) {
-	h := Handler(stubSignal{healthy: false})
+	h := CheckHandler(Check{Signal: stubSignal{healthy: false}, Reason: "the store is not writable"})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	b.ResetTimer()
 	for b.Loop() {

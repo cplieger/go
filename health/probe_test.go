@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"pgregory.net/rapid"
@@ -297,29 +298,50 @@ func TestInspectAndProbeCannotDisagree(t *testing.T) {
 	if err := os.Symlink(loop, loop); err != nil {
 		t.Fatal(err)
 	}
+	aged := func(age time.Duration) func(*testing.T) string {
+		return func(t *testing.T) string { return markerAged(t, age) }
+	}
 	for name, tc := range map[string]struct {
-		path     string
-		opts     []ProbeOption
-		wantExit int
+		marker     func(*testing.T) string
+		wantReason string
+		opts       []ProbeOption
+		wantExit   int
 	}{
-		"fresh, unarmed":   {path: markerAged(t, time.Second)},
-		"fresh, armed":     {path: markerAged(t, time.Second), opts: []ProbeOption{WithMaxAge(time.Hour)}},
-		"stale":            {path: markerAged(t, 2*time.Hour), opts: []ProbeOption{WithMaxAge(time.Hour)}, wantExit: 1},
-		"aged but unarmed": {path: markerAged(t, 100*time.Hour)},
-		"absent":           {path: filepath.Join(t.TempDir(), "app.healthy"), wantExit: 1},
-		"unreadable":       {path: overlongName(t), wantExit: 1},
-		"symlink":          {path: loop},
+		"fresh, unarmed": {marker: aged(time.Second)},
+		"fresh, armed":   {marker: aged(time.Second), opts: []ProbeOption{WithMaxAge(time.Hour)}},
+		// Under half a millisecond past a whole one, so only rounding up
+		// prints 0.002s; truncating or rounding to nearest prints 0.001s.
+		"stale": {
+			marker: aged(2*time.Hour + 1200*time.Microsecond), opts: []ProbeOption{WithMaxAge(time.Hour)}, wantExit: 1,
+			wantReason: "unhealthy: marker stale: 2h0m0.002s old exceeds max-age 1h0m0s",
+		},
+		"aged but unarmed": {marker: aged(100 * time.Hour)},
+		"absent": {
+			marker: func(t *testing.T) string { return filepath.Join(t.TempDir(), "app.healthy") }, wantExit: 1,
+			wantReason: "unhealthy: marker absent",
+		},
+		"unreadable": {marker: overlongName, wantExit: 1},
+		"symlink":    {marker: func(*testing.T) string { return loop }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			f := inspect(tc.path, tc.opts...)
-			code, reason := probeCheck(tc.path, tc.opts...)
-			if code != tc.wantExit || f.healthy() != (tc.wantExit == 0) {
-				t.Errorf("probeCheck = %d, inspect healthy = %v (state %v); want exit %d from both", code, f.healthy(), f.state, tc.wantExit)
-			}
-			if reason != f.reason() {
-				t.Errorf("probeCheck reason = %q, inspect reason = %q; want the same text", reason, f.reason())
-			}
+			// The stale reason prints the age, so both readings must share one
+			// instant: the bubble's clock stands still while nothing blocks, and
+			// the marker is backdated from that clock.
+			synctest.Test(t, func(t *testing.T) {
+				path := tc.marker(t)
+				f := inspect(path, tc.opts...)
+				code, reason := probeCheck(path, tc.opts...)
+				if code != tc.wantExit || f.healthy() != (tc.wantExit == 0) {
+					t.Errorf("probeCheck = %d, inspect healthy = %v (state %v); want exit %d from both", code, f.healthy(), f.state, tc.wantExit)
+				}
+				if reason != f.reason() {
+					t.Errorf("probeCheck reason = %q, inspect reason = %q; want the same text", reason, f.reason())
+				}
+				if tc.wantReason != "" && reason != tc.wantReason {
+					t.Errorf("reason = %q, want %q", reason, tc.wantReason)
+				}
+			})
 		})
 	}
 }

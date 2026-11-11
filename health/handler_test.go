@@ -25,9 +25,9 @@ func TestCheckHandler_writesTheBody(t *testing.T) {
 		code int
 		body string
 	}{
-		"healthy":   {Handler(stubSignal{healthy: true}), http.StatusOK, `{"status":"ok"}`},
-		"unhealthy": {Handler(stubSignal{healthy: false}), http.StatusServiceUnavailable, `{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}`},
-		"nil":       {Handler(nil), http.StatusServiceUnavailable, `{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}`},
+		"healthy":   {CheckHandler(Check{Signal: stubSignal{healthy: true}, Reason: "the store is not writable"}), http.StatusOK, `{"status":"ok"}`},
+		"unhealthy": {CheckHandler(Check{Signal: stubSignal{healthy: false}, Reason: "the store is not writable"}), http.StatusServiceUnavailable, `{"status":"unhealthy","reasons":["the store is not writable"]}`},
+		"nil":       {CheckHandler(Check{}), http.StatusServiceUnavailable, `{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}`},
 		"no checks": {CheckHandler(), http.StatusOK, `{"status":"ok"}`},
 		"empty reason": {
 			CheckHandler(Check{Signal: stubSignal{healthy: false}}), http.StatusServiceUnavailable,
@@ -81,7 +81,7 @@ func TestCheckHandler_readsEachSignalPerRequest(t *testing.T) {
 // HEAD answers with the headers and no body, and other methods get 405.
 func TestCheckHandler_onTheMuxRoute(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.Handle("GET /healthz", Handler(stubSignal{healthy: true}))
+	mux.Handle("GET /healthz", CheckHandler(Check{Signal: stubSignal{healthy: true}}))
 	for method, want := range map[string]int{http.MethodGet: 200, http.MethodHead: 200, http.MethodPost: 405, http.MethodPut: 405} {
 		t.Run(method, func(t *testing.T) {
 			rec := httptest.NewRecorder()
