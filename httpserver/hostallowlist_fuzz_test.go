@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -187,6 +188,7 @@ func FuzzLoopbackRequest(f *testing.F) {
 	f.Add("localhost..", "127.0.0.1:5000")
 	f.Add("127.0.0.001:9848", "127.0.0.1:5000")
 	f.Add("webterm.example.com", "203.0.113.9:5000")
+	f.Add("localhost:9848", "[::1%lo]:5000")
 
 	// A fixed, active allowlist of one browser-facing (non-loopback) host, so
 	// invariant 3's two branches never overlap.
@@ -221,6 +223,77 @@ func FuzzLoopbackRequest(f *testing.F) {
 				allows, wantAllows, httpserver.CanonicalHost(host) == allowed, got, host, remoteAddr)
 		}
 	})
+}
+
+// FuzzLoopbackRequest_ownAddress adds the connection's local address to the
+// input. An admitted request is loopback under the oracles above, or its peer
+// is the local address and its Host names it, both read with net.ParseIP; a
+// local address never refuses what its absence admits; and HostPolicy's
+// carve-out is the same rule.
+func FuzzLoopbackRequest_ownAddress(f *testing.F) {
+	f.Add("192.0.2.10:9190", "192.0.2.10:5000", "192.0.2.10")
+	f.Add("192.0.2.10", "[::ffff:192.0.2.10]:5000", "192.0.2.10")
+	f.Add("[2001:db8::10]:9190", "[2001:db8::10]:5000", "2001:db8::10")
+	f.Add("192.0.2.10.:9190", "192.0.2.10:5000", "::ffff:192.0.2.10")
+	f.Add("192.0.2.10:9190", "192.0.2.11:5000", "192.0.2.10")
+	f.Add("attacker.evil:9190", "192.0.2.10:5000", "192.0.2.10")
+	f.Add("0.0.0.0", "0.0.0.0:5000", "0.0.0.0")
+	f.Add("fe80::10", "[fe80::10%eth0]:5000", "fe80::10")
+	f.Add("localhost:9848", "127.0.0.1:5000", "127.0.0.1")
+
+	const allowed = "webterm.example.com"
+	f.Fuzz(func(t *testing.T, host, remoteAddr, localIP string) {
+		build := func(local net.Addr) *http.Request {
+			req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
+			req.Host = host
+			req.RemoteAddr = remoteAddr
+			if local != nil {
+				req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, local))
+			}
+			return req
+		}
+		lip := net.ParseIP(localIP)
+		if lip == nil {
+			return
+		}
+		local := &net.TCPAddr{IP: lip, Port: 9190}
+
+		got := httpserver.LoopbackRequest(build(local))
+		loopback := loopbackAddr(remoteAddr) && oracleLoopbackHost(host)
+		if got && !loopback && !atOwnAddress(host, remoteAddr, lip) {
+			t.Errorf("admitted an unjustified request: host=%q remoteAddr=%q local=%q", host, remoteAddr, localIP)
+		}
+		if httpserver.LoopbackRequest(build(nil)) && !got {
+			t.Errorf("a local address refused a request admitted without one: host=%q remoteAddr=%q local=%q", host, remoteAddr, localIP)
+		}
+		p, _ := httpserver.ParseHostList([]string{allowed}, httpserver.WithLoopbackExempt(true))
+		wantAllows := httpserver.CanonicalHost(host) == allowed || got
+		if allows := p.Allows(build(local)); allows != wantAllows {
+			t.Errorf("exempt HostPolicy.Allows = %v, want %v: host=%q remoteAddr=%q local=%q", allows, wantAllows, host, remoteAddr, localIP)
+		}
+	})
+}
+
+// atOwnAddress is the own-address rule from the standard library alone: the
+// peer is the local address, which is not unspecified, and the Host is that
+// address as an IP literal, bracketed or not, with an optional port and
+// trailing dot.
+func atOwnAddress(host, remoteAddr string, local net.IP) bool {
+	ph, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil || local.IsUnspecified() {
+		return false
+	}
+	peer := net.ParseIP(ph)
+	if peer == nil || !peer.Equal(local) {
+		return false
+	}
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(name, "["), "]"), ".")
+	hip := net.ParseIP(name)
+	return hip != nil && hip.Equal(local)
 }
 
 // oracleLowerASCII lowercases the ASCII uppercase letters of s and leaves every

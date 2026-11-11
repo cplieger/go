@@ -55,7 +55,7 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `(*HostPolicy).Allows(r)` is the same decision for one request. `Active()` and `Size()` describe the policy, for startup logs.
 - `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger and hint. A nil or zero-value policy logs through `slog.Default` with the default hint, `host not allowed`.
 - `WithHostAllowlistError(code, msg)` changes the 403's code and message, for example to name your configuration setting.
-- `WithLoopbackExempt(true)` admits a request when both the socket peer and the `Host` are loopback, described below.
+- `WithLoopbackExempt(true)` admits a request from this host's own network stack, described below.
 - `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.
 
 The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the policy's 403 message, set with `WithHostAllowlistError`; a caller using `LogRefusal` sets it to match its own refusal) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
@@ -74,23 +74,26 @@ Activation fails closed. A nil or all-blank entry list leaves the policy inactiv
 
 ### The loopback exemption
 
-`WithLoopbackExempt(true)` keeps a container healthcheck or an in-container client working under an allowlist meant for browsers. It admits a request only when the socket peer and the `Host` are both loopback.
+`WithLoopbackExempt(true)` keeps a container healthcheck or an in-container client working under an allowlist meant for browsers. It admits a request in two cases:
 
-A rebinding attack cannot reach it, because the attack's `Host` is not loopback. A remote client cannot forge it, because a remote peer is not loopback. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
+- The socket peer and the `Host` are both loopback.
+- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist. A zoned IPv6 link-local bind and a listener that is not TCP are not covered; list such an address in the allowlist.
+
+A rebinding attack cannot reach it, because the attack's `Host` is the attacker's name. A remote client cannot forge it: a remote peer is not loopback, and it cannot connect from the server's own address, because the reply to that address never leaves the host. That holds for a listener that receives only traffic addressed to this host. A transparent (`IP_TRANSPARENT`) listener, or a PROXY-protocol wrapper that reports the header's addresses, makes the local address a value the client or proxy chose, so do not use the exemption or `LoopbackOnly` behind one. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
 
 ## Loopback-only endpoints
 
 `LoopbackOnly(opts...)` admits a request only when `LoopbackRequest` passes and `ProxiedRequest` finds no forwarding header. Every other request is answered 403 with the standard error envelope and the code `loopback_only`. `WithLoopbackError(code, msg)` sets your own code and message, and `WithLoopbackResponder(fn)` renders the refusal yourself, for an envelope your clients already depend on or a refusal you want to log, as the matching options do for `RateLimiter`.
 
-`LoopbackRequest(r)` reports whether a request is local. The socket peer must be loopback and the `Host` must name the local host, and either check failing refuses. It reads `r.RemoteAddr` and `r.Host` and nothing else, so forwarded headers never admit or refuse a request. The `Host` check accepts every spelling `CanonicalHost` collapses: `localhost` in any case, `127.0.0.0/8` and `::1`, with an optional port or trailing dot.
+`LoopbackRequest(r)` reports whether a request is local, by the same two cases as the exemption above. Either check failing refuses. It reads `r.RemoteAddr`, `r.Host` and the connection's local address that `http.Server` records, and nothing else, so forwarded headers never admit or refuse a request. A handler called without a server has no local address, so only the loopback case can pass there. The `Host` check accepts every spelling `CanonicalHost` collapses: `localhost` in any case, `127.0.0.0/8` and `::1`, with an optional port or trailing dot.
 
 `ProxiedRequest(h)` reports whether the headers show that a proxy forwarded the request or a browser sent it. The set is `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-Ip`, `Sec-Fetch-Site` and `Origin`. A missing header proves nothing. Use it directly when your app has its own admission chain and cannot take the middleware whole.
 
 ### Why the middleware also checks forwarding headers
 
-A normal in-container command-line client sends none of those headers. Their presence points to a browser or a proxy, so `LoopbackOnly` refuses the request. Host networking or a shared network namespace puts a reverse proxy on the server's own loopback interface. Both nginx and Apache then rewrite `Host` to their upstream address by default, which passes the `Host` check, and the proxy itself passes the peer check. Without the header check, a remote request would pass both.
+A normal in-container command-line client sends none of those headers. Their presence points to a browser or a proxy, so `LoopbackOnly` refuses the request. Host networking or a shared network namespace puts a reverse proxy on the server's own network stack. Both nginx and Apache then rewrite `Host` to their upstream address by default, whether that is loopback or the server's bound address, which passes the `Host` check, and the proxy itself passes the peer check. Apache also adds `X-Forwarded-For` by default, so the header check refuses it. nginx adds no forwarding header by default, so only a browser's `Origin` or `Sec-Fetch-Site` tells its requests apart.
 
-The check has a limit. It admits a proxy on the same loopback interface that removes every forwarding header, because nothing then tells it apart from an in-container caller. Only authentication closes that gap.
+The check has a limit. It admits a same-host proxy that sends none of these headers, which is nginx's default for any client that is not a browser, because nothing then tells it apart from an in-container caller. Only authentication closes that gap.
 
 This is a different question from `HostPolicy`. The allowlist asks whether the `Host` is one the operator named, so it admits a remote client sending `Host: localhost` when the operator lists that name. `LoopbackOnly` asks whether the request came from inside.
 
