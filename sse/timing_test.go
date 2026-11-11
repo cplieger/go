@@ -31,6 +31,9 @@ type timingContract struct {
 	HeldMaxBytesFrames    int    `json:"held_max_bytes_frames"`
 	DigestMaxSubjects     int    `json:"digest_max_subjects"`
 	DigestMaxBodyBytes    int    `json:"digest_max_body_bytes"`
+	MaxScopeTopics        int    `json:"max_scope_topics"`
+	MaxScopeHeaderBytes   int    `json:"max_scope_header_bytes"`
+	MaxTopicBytes         int    `json:"max_topic_bytes"`
 }
 
 func TestTiming_goConstantsMatchContract(t *testing.T) {
@@ -71,6 +74,9 @@ func TestTiming_goConstantsMatchContract(t *testing.T) {
 		{"held_max_bytes_frames equals replay_max_bytes_frames", c.HeldMaxBytesFrames, c.ReplayMaxBytesFrames},
 		{"defaultDigestMaxSubjects", defaultDigestMaxSubjects, c.DigestMaxSubjects},
 		{"defaultDigestMaxBody", defaultDigestMaxBody, c.DigestMaxBodyBytes},
+		{"MaxScopeTopics", MaxScopeTopics, c.MaxScopeTopics},
+		{"MaxScopeHeaderBytes", MaxScopeHeaderBytes, c.MaxScopeHeaderBytes},
+		{"maxTopicBytes", maxTopicBytes, c.MaxTopicBytes},
 	}
 	for _, chk := range checks {
 		if chk.got != chk.want {

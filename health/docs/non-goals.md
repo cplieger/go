@@ -4,12 +4,15 @@ This page lists what health leaves out on purpose and why, for a developer decid
 
 | Left out | Reason |
 | --- | --- |
-| Running dependency checks on each request | `Set(bool)` and the signals given to `CheckHandler` are where your code records its checks, and the service owns that logic. `CheckHandler` only reads those signals; a registry that calls a database or an upstream per request is a different abstraction |
-| Separate liveness and readiness signals | Docker Compose has one `HEALTHCHECK`. On Kubernetes, create two `Marker` values with different paths |
-| Graceful shutdown hooks or `context.Context` | `Cleanup` is the shutdown action. The library starts no goroutine, so nothing needs cancelling |
-| Status-change callbacks | Changes of state are logged through `slog`. Wrap `Set` to add your own callback |
-| A staleness check by default | The default checks existence, and Docker's `--interval` decides how often. A deadline is opt-in for each service through `WithMaxAge` |
+| Running dependency checks on each request | The Status is a verdict the service records, not a registry of checks. `CheckHandler` reads the signals it is given and never calls a database or an upstream; a registry that does so per request is a different abstraction |
+| Separate liveness and readiness signals | Docker has one `HEALTHCHECK`. On Kubernetes, serve two `CheckHandler`s over two Status values |
+| A shutdown hook or `context.Context` | The library starts no goroutine, so nothing needs cancelling. `BeginDrain` is the shutdown action |
+| Status-change callbacks | Each change of verdict is logged through `slog`. Wrap `Set` to add your own callback |
+| A staleness check by default | A lease is opt-in for each service, through `Fresh` and `WithMaxAge`, because only a service with its own work cycle can name one |
 | Prometheus metrics | A consumer adds one with `prometheus.NewGaugeFunc` over `Healthy` |
-| Content inside the marker file | The check is one `os.Stat`, with no format to parse or version |
+| Content inside the marker file | The probe's check is one stat, with no format to parse or version |
+| An exported degraded-mode flag | `/healthz` reads memory, so no reader needs to know whether the marker can be written. The warning `NewStatus` logs names the cause and the fix |
+| Health written by a second process | Only the long-running process writes its verdict. A second writer would race the verdict `/healthz` reports, and a one-shot command reports through its exit code |
+| A `Signal` that takes a context | A signal reads state the service already keeps, so it has nothing to wait on or cancel |
 
 If you need registered checks against your dependencies behind an HTTP endpoint, consider [alexliesenfeld/health](https://github.com/alexliesenfeld/health). It runs them on each request or periodically, caches the results and reports a status for each component.

@@ -72,8 +72,8 @@ func (r *ring) len() int {
 }
 
 // since returns a copy of the entries with an offset above since that a client
-// filtered to topic would receive, oldest first.
-func (r *ring) since(since uint64, topic string) []entry {
+// in scope would receive, oldest first.
+func (r *ring) since(since uint64, scope Scope) []entry {
 	var out []entry
 	if r.n == 0 {
 		return out
@@ -81,7 +81,7 @@ func (r *ring) since(since uint64, topic string) []entry {
 	start := r.oldest()
 	for i := range r.n {
 		e := r.buf[(start+i)%len(r.buf)]
-		if e.offset > since && topicMatches(topic, e.event.Topic) {
+		if e.offset > since && scope.matches(e.event.Topic) {
 			out = append(out, e)
 		}
 	}

@@ -22,7 +22,7 @@ func FuzzHandlerSignal(f *testing.F) {
 		if target == "" {
 			target = "/"
 		}
-		h := Handler(stubSignal{healthy: healthy})
+		h := CheckHandler(Check{Signal: stubSignal{healthy: healthy}})
 		req, err := http.NewRequest(method, target, nil)
 		if err != nil {
 			t.Skip() // invalid method/target can't construct a request; not a handler concern

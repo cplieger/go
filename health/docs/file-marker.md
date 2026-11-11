@@ -1,44 +1,45 @@
-# The file marker
+# The marker file
 
-This page is for a Go developer wiring the file marker into a service. It covers the two roles, degraded mode, a marker written by a separate process, shutdown and the optional HTTP handler.
+This page is for a Go developer whose service opens no port by default, so its healthcheck cannot ask `/healthz`. It covers how the marker works, where it lives, a shared `/dev/shm`, the one-writer rule, degraded mode and write failures.
 
-## Two roles, one binary
+## How it works
 
-The service's main process owns a `*Marker`. It calls `Set(true)` once it is ready, `Set(false)` when it cannot do its work, and `Cleanup` on shutdown. `Set(true)` creates the marker file and `Set(false)` removes it. The probe is the same binary, started by Docker with a `health` argument. It reads the marker and exits. Kubernetes can run the same subcommand as an exec liveness probe.
+The long-running process creates its Status with `WithMarker`, and every write is mirrored to a file: `Set(true)` creates the marker or refreshes its modification time, and `Set(false)` and `BeginDrain` remove it. The healthcheck is the same binary, started by Docker with a `health` argument. It runs `RunProbe` on the same path and exits. Kubernetes can run the same subcommand as an exec liveness probe.
 
 ```go
 func main() {
+    path := health.MarkerPath("myservice")
     if len(os.Args) > 1 && os.Args[1] == "health" {
-        health.RunProbe(health.DefaultPath) // calls os.Exit
+        health.RunProbe(path) // exits 0 or 1
     }
 
-    m := health.NewMarker(health.DefaultPath)
-    defer m.Cleanup()
-    m.Set(true)
+    st := health.NewStatus(health.WithMarker(path))
+    st.Set(true)
 
-    // ... run the service ...
+    // ... run the service, calling st.Set(false) when it cannot do its work,
+    // and st.BeginDrain() when shutdown begins ...
 }
 ```
 
-`DefaultPath` is `/tmp/.healthy`. The two processes share nothing but that file, and the library starts no goroutine of its own.
+Unless it starts in degraded mode, `NewStatus` removes any marker an earlier run left, so the file starts as unhealthy as the verdict. `RunProbe` exits 0 while the marker exists. It exits 1 when the marker is absent from a writable folder, or when it cannot read the marker for another reason, and writes one line to stderr naming the cause, such as `unhealthy: marker absent`.
 
-`RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker in a writable folder fails for another reason, and it writes one line to stderr naming the cause. `Inspect(path, opts...).Healthy()` gives the same verdict as a bool without exiting, for tests, and `Reason` gives the line `RunProbe` writes.
+With `WithMaxAge(d)`, `RunProbe` also fails a marker older than `d`. Every healthy `Set` refreshes the file, so the probe reads the same age `Fresh(d)` reads in memory while the wall clock does not step. The [freshness deadline](freshness.md) page explains the exception.
 
-`Set` is safe to call from any goroutine. Each call compares the value with the marker file as it stands, the state the probe reads without `WithMaxAge`: a file is healthy and no file is unhealthy. A change logs at Info level for healthy and at Warn level for unhealthy, and a call that changes nothing stays silent. So a first `Set(false)` at startup with no file logs nothing, and a `Set(false)` that removes a marker another process wrote logs Warn. It logs to the logger you pass with `NewMarker(path, health.WithLogger(l))`, or to `slog.Default()` at the time of each line.
+The marker serves only the healthcheck. When the service also serves `/healthz`, for example on an opt-in metrics listener, that endpoint reads the Status in memory and never the file.
 
-When the marker cannot be read, written or removed, `Set` logs the failure once for each distinct error and carries on. A marker it cannot read, such as a symlink loop, is left as it is. The first write that succeeds after a failure logs one Info line. `SetChecked` does the same write and returns the error, for a caller that must act on it.
+## Where the marker lives
 
-## Degraded mode
+`MarkerPath(name)` returns `/dev/shm/<name>.healthy`. `/dev/shm` stays a writable memory filesystem when the root filesystem is read-only, under Docker's `read_only: true`, Kubernetes's `readOnlyRootFilesystem: true` and Podman's `--read-only`, so no extra mount is needed.
 
-`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that anything already at the marker path is a regular file `Set` can refresh, without changing it. When either fails, the marker enters degraded mode and logs one warning with the folder or the marker path, the error, which calls report healthy and which unhealthy, and the fix: a tmpfs mount for the folder, or removing what is at the marker path, such as a marker an earlier run as another user left behind, a directory or a FIFO. In a folder that can be written, a path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the probe reports it unhealthy and names the stat error. Callers do not need to branch on the result.
+Pass the service's own name, the same constant on both sides. `MarkerPath` panics on an empty name, a name that starts with a dot, or one that holds a slash or a NUL byte, so the first test run catches a bad constant. Give each Status its own path.
 
-In degraded mode:
+## When `/dev/shm` is shared
 
-- `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts. Each `Set` checks again first. Once the folder and the marker can be written, it leaves degraded mode, logs `health marker writable again, leaving degraded mode` and applies its value: `Set(true)` writes the marker and `Set(false)` leaves it absent. An app that keeps calling `Set` needs no restart once the cause is fixed. One that calls it only at startup makes no later `Set`, so once the obstacle is gone its probe reads the path as it stands until the app restarts: absent when nothing is there, and present when a regular file already is. Leaving is one-way: a later write failure is logged like any other and does not re-enter degraded mode.
-- `RunProbe` and `Inspect` report healthy while the folder or the marker cannot be written. The service is alive, and only its way of reporting health is broken, which a restart cannot fix while the obstacle stays, such as a folder under `read_only: true` with no tmpfs or a directory at the marker path. Once the obstacle is gone they read the path again.
-- `Healthy`, `Within` and `Handler` report unhealthy for the whole of degraded mode, until a `Set` leaves it, even when a marker was left in the folder.
+`/dev/shm` is private to a container under Docker's default IPC mode. It is shared by every container in a Kubernetes pod, with the host and every other such container under `ipc: host`, and with any container that joins another's IPC namespace (`ipc: container:<name>`). Two copies of the same service sharing it would read each other's marker.
 
-The usual cause is compose's `read_only: true` with no tmpfs at `/tmp`. Mount one to keep a working signal:
+Any process there can also put something at the marker path first, as another user. If the service cannot open what it finds, or it is not a regular file the service can refresh (a directory, a FIFO, or a symlink, which the marker never follows, so nothing the link names is written), that is degraded mode: `RunProbe` reports healthy however old the file gets, with or without a lease, for as long as it stays. If the service can open the file but not remove it, which is the case for a world-writable file in a sticky folder such as `/dev/shm`, every unhealthy write logs a warning, and `RunProbe` reports healthy until an armed lease expires after refreshing stops, or with no lease for as long as the file stays.
+
+So a neighbour that plants a symlink or a file pins the probe healthy, and a service that must not trust its IPC namespace keeps its marker on its own tmpfs. Where `/dev/shm` is shared, pass a path on a tmpfs the container owns to `WithMarker` and `RunProbe` instead, such as `/tmp/<name>.healthy` with a tmpfs mounted at `/tmp`:
 
 ```yaml
 read_only: true
@@ -46,63 +47,38 @@ tmpfs:
   - /tmp:size=1m,mode=1777,noexec,nosuid,nodev
 ```
 
-Under Kubernetes, `readOnlyRootFilesystem: true` has the same effect. Mount a memory-backed `emptyDir` volume at `/tmp`.
+With `ipc: none` there is no `/dev/shm` at all, which is degraded mode with its warning.
 
-## A marker written by a separate process
+## One writer
 
-The marker belongs to the user that created it. When a separate `docker exec` process updates it, for example a job scheduler that runs your binary's `run` or `sync` subcommand, run that exec as the same UID as the container's main process. Otherwise, filesystem ownership and mode may make the marker write fail with permission denied. Under `Set` that failure is only logged, so the health signal is lost without any other sign.
+Only the long-running process writes health. A subcommand run with `docker exec` reports its result through its exit code, or hands its work to the running process. A second writer would race the verdict the endpoint reports.
 
-When an external scheduler alerts on the subcommand's exit code, call `SetChecked` and turn the returned error into a failing exit code. The scheduler's job then fails instead of losing the update.
+Create the Status with its marker only in the long-running process, after the `health` subcommand is dispatched. `NewStatus` removes the marker at its path, so a second process that creates one, even one that never calls `Set`, turns the running service unhealthy.
 
-## Shutdown with `Latch`
+## Degraded mode
 
-During shutdown, work that finishes late can call `Set(true)` and hide that the service is stopping. `Latch` wraps a marker to prevent it. Send ordinary health decisions through the latch's `Set`, and call `BeginDrain` before you wait for work in flight:
+Degraded mode is decided when `NewStatus` runs. It starts when the marker's folder cannot be written, or when the marker path holds something a write cannot refresh. The Status then logs one warning, with `effect` saying what each reader reports and `hint` naming the fix:
 
-```go
-marker := health.NewMarker(health.DefaultPath)
-defer marker.Cleanup()
+| Cause | Message | Attributes |
+| --- | --- | --- |
+| The folder cannot be written | `health marker directory not writable, marker in degraded mode` | `dir`, `error`, `effect`, `hint` |
+| The path holds something a write cannot refresh | `health marker not writable, marker in degraded mode` | `path`, `error`, `effect`, `hint` |
 
-state := health.NewLatch(marker)
-state.Set(true)
+In degraded mode `RunProbe` reports healthy while the marker cannot be written. The service still works, and only its marker is broken, which a restart cannot fix while the obstacle stays. The in-memory verdict, `Fresh` and every HTTP endpoint over the Status keep reporting the verdict your code recorded.
 
-// Stop admitting work, then make health monotonic toward unhealthy.
-state.BeginDrain()
+The causes:
 
-// This is dropped after BeginDrain. state.Set(false) would still land.
-state.Set(runSucceeded)
-```
+- `ipc: none`, which leaves no `/dev/shm`.
+- A read-only folder, or a path whose parent is not a folder.
+- Something at the path a write cannot refresh: another user's file the service cannot open, a directory or a FIFO.
+- A symlink at the path when `NewStatus` runs.
 
-`BeginDrain` marks the service unhealthy at once. After it, a healthy value is dropped and an unhealthy one still reaches the marker. One lock covers the drain check and the marker write, so shutdown wins over a completion that races it. The latch only decides which write wins. Your service still decides whether a result means healthy, unhealthy or no write at all. Keep the `*Marker` to call `Cleanup`.
+A symlink planted after `NewStatus` runs fails the write, and is not followed where the platform has `O_NOFOLLOW`, as every Unix does. `RunProbe` never follows one, and reads it as degraded mode. Pass the real path, never a link, to both `WithMarker` and `RunProbe`. A process that can put a link or a file at the marker path can keep the probe reporting healthy. Where `/dev/shm` is shared, keep the marker on a tmpfs the container owns, such as `/tmp/<name>.healthy`, and pass that path to both `WithMarker` and `RunProbe`.
 
-## The HTTP handler
+A service that keeps calling `Set` needs no restart once the cause is fixed: the first `Set` that can write leaves degraded mode, logs `health marker writable again, leaving degraded mode` with how long it lasted in `duration`, and applies its value. `Set(true)` writes the marker, and `Set(false)` or `BeginDrain` leaves it absent. One that sets its verdict only at startup makes no later `Set`, so once the obstacle is gone its probe reads the path as it stands until the service restarts: absent when nothing is there, and present when a regular file already is. Leaving is one-way: a later write failure is logged and does not re-enter degraded mode.
 
-A service that already serves HTTP can also expose its health at `GET /healthz`, for an uptime prober or a Kubernetes HTTP probe:
+## Write failures
 
-```go
-m := health.NewMarker(health.DefaultPath)
-mux.Handle("GET /healthz", health.Handler(m))
-```
+A write can fail outside degraded mode, for example when the process runs out of file descriptors. The Status logs `failed to create health marker` or `failed to remove health marker` at Warn, with `path`, `error` and `effect`, once for each distinct error in a run of failures. The first write that succeeds after one logs `health marker write recovered` at Info, with `path`, `healthy` and `duration`, how long the failures lasted.
 
-`Handler` answers 200 when the signal is healthy, and 503 otherwise, a nil signal included:
-
-```json
-{"status":"ok"}
-{"status":"unhealthy","reasons":["the app reports itself unhealthy"]}
-```
-
-Both carry `Content-Type: application/json`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and no timestamp: the `Date` header carries the time. Registered as `GET /healthz`, the route also answers `HEAD` and answers 405 to every other method.
-
-`CheckHandler` reports several conditions at once. Each `Check` pairs a `Signal` with a `Reason`, one plain sentence that `reasons` lists, in order, while that signal is unhealthy:
-
-```go
-mux.Handle("GET /healthz", health.CheckHandler(
-	health.Check{Signal: listener, Reason: "the listener has not started"},
-	health.Check{Signal: store, Reason: "the store is not writable"},
-))
-```
-
-Write each reason where you wire the check, never from an error's text: the endpoint answers without authentication, and error text can carry paths, hosts or tokens.
-
-Both take any `Signal`, the one-method interface `*Marker` satisfies, so an in-memory flag works too. With a `*Marker`, each request does one `os.Stat`, so serve it at your platform's probe interval rather than on a busy path. To make the endpoint follow the probe's deadline, pass `m.Within(lease.Duration())` instead of `m`, as [Freshness deadline](freshness.md) describes.
-
-In degraded mode `Handler` answers 503 until a `Set` leaves it, even for a marker left in the folder, while `RunProbe` and `Inspect` report healthy for as long as the folder or the marker cannot be written. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.
+A failed write never changes the verdict: memory is the record, and `/healthz` keeps reporting it. Until a write succeeds, the healthcheck may disagree with it. A failed refresh leaves the file stale or absent while the verdict is healthy, so `RunProbe` can fail while `/healthz` passes. A failed removal leaves the file present while the verdict is unhealthy.

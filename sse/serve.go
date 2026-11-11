@@ -17,15 +17,43 @@ import (
 type ServeOption func(*serveConfig)
 
 type serveConfig struct {
-	onConnect func(w *Writer, h Hello) error
-	topic     string
-	tag       string
+	owner        any
+	onConnect    func(w *Writer, h Hello) error
+	scope        Scope
+	topic        string
+	tag          string
+	requestScope bool
 }
 
 // WithTopic subscribes the connection to broadcasts plus events scoped to
-// topic. The empty topic (the default) receives everything.
+// topic. The empty topic (the default) receives everything. WithTopic,
+// WithScope and WithRequestScope set one scope; the last applied wins.
 func WithTopic(topic string) ServeOption {
-	return func(c *serveConfig) { c.topic = topic }
+	return func(c *serveConfig) {
+		c.scope, c.topic, c.requestScope, c.owner = topicScope(topic), topic, false, nil
+	}
+}
+
+// WithScope subscribes the connection to a scope the server chooses, which
+// the client cannot change. The last of WithTopic, WithScope and
+// WithRequestScope applied wins.
+func WithScope(s Scope) ServeOption {
+	return func(c *serveConfig) {
+		c.scope, c.topic, c.requestScope, c.owner = s, "", false, nil
+	}
+}
+
+// WithRequestScope takes the scope from the client's SSE-Topics header
+// (absent is everything; outside the grammar is 400 sse_scope) and lets
+// ScopeHandler replace it; the hello's Conn names the connection, and owner,
+// typically the principal, is what authorize receives. A scope grants
+// nothing: the client may ask for every topic, so keep a topic from a
+// principal by not publishing it on a hub that principal reads. The last of
+// WithTopic, WithScope and WithRequestScope applied wins.
+func WithRequestScope(owner any) ServeOption {
+	return func(c *serveConfig) {
+		c.scope, c.topic, c.requestScope, c.owner = All(), "", true, owner
+	}
 }
 
 // WithOnConnect installs a hook that runs after the retry: field, the hello and
@@ -50,12 +78,13 @@ func WithClientTag(tag string) ServeOption {
 // Writer is handed to the WithOnConnect hook only; frames it writes carry no id. Serve
 // always supplies it, so there is no constructor and no useful zero value.
 type Writer struct {
-	w         http.ResponseWriter
-	rc        *http.ResponseController
-	keepalive string
-	timeout   time.Duration
-	failed    bool
-	deadlines bool
+	w          http.ResponseWriter
+	rc         *http.ResponseController
+	keepalive  string
+	timeout    time.Duration
+	lastOffset uint64 // the last frame or mark offset written, for position marks
+	failed     bool
+	deadlines  bool
 }
 
 // Event writes one frame as its own bounded write and flush; name may be
@@ -112,9 +141,9 @@ func (sw *Writer) writeAndFlushOnce(timeout time.Duration, write func(w io.Write
 // the hub shuts down. It owns the response headers, the retry: field, the
 // hello, the Last-Event-ID replay, keepalives and the sse:reset frame.
 //
-// It answers 503 sse_unavailable over the client cap or after Shutdown, and
-// 500 streaming_unsupported when no http.Flusher is reachable through the
-// ResponseWriter or its Unwrap chain.
+// It answers 503 sse_unavailable over the client cap or after Shutdown, 500
+// streaming_unsupported when no http.Flusher is reachable through the
+// ResponseWriter's Unwrap chain, and 400 sse_scope (WithRequestScope).
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption) {
 	var sc serveConfig
 	for _, opt := range opts {
@@ -122,7 +151,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 			opt(&sc)
 		}
 	}
-	tag := h.clientTag(sc)
+	tag := h.clientTag(&sc)
 	raw := r.Header.Get("Last-Event-ID")
 	present := raw != ""
 	var cur Cursor
@@ -141,7 +170,11 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 		httpserver.WriteError(w, r, http.StatusInternalServerError, "streaming_unsupported", "streaming not supported")
 		return
 	}
-	sub, err := h.subscribe(sc.topic, tag, cur, present)
+	req, ok := h.connectRequest(w, r, &sc, tag)
+	if !ok {
+		return
+	}
+	sub, err := h.subscribe(req, cur, present)
 	if err != nil {
 		if errors.Is(err, errClientCap) {
 			h.logger.Info("sse: client cap reached", "clients", h.ClientCount(), "max", h.maxClients())
@@ -168,6 +201,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 		h.unsubscribe(c)
 		return
 	}
+	sw.lastOffset = handshakeOffset(sub, cur)
 	connected := h.presenceEvent(c, PresenceConnected)
 	connected.Verdict = sub.hello.Verdict
 	h.presence(&connected)
@@ -181,12 +215,30 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 		disconnected.Cause, disconnected.Write = dep.cause, dep.write
 		h.presence(&disconnected)
 	}()
-	dep = h.serveConnected(r.Context(), sw, sub, sc)
+	dep = h.serveConnected(r.Context(), sw, sub, &sc)
+}
+
+// connectRequest builds the subscription a Serve call asks for; under
+// WithRequestScope it reads SSE-Topics and answers a refusal itself, and ok is
+// false once it has.
+func (h *Hub) connectRequest(w http.ResponseWriter, r *http.Request, sc *serveConfig, tag string) (subRequest, bool) {
+	req := subRequest{scope: sc.scope, topic: sc.topic, tag: tag, owner: sc.owner, rescopable: sc.requestScope}
+	if !sc.requestScope {
+		return req, true
+	}
+	s, err := requestScope(r)
+	if err != nil {
+		h.logger.Debug("sse: connect scope refused", "error", err)
+		httpserver.WriteError(w, r, http.StatusBadRequest, "sse_scope", "scope outside the topic grammar or bound")
+		return req, false
+	}
+	req.scope = s
+	return req, true
 }
 
 // serveConnected runs the hook and the live loop once the hello has left, and
 // reports why the connection ended.
-func (h *Hub) serveConnected(ctx context.Context, sw *Writer, sub *subscription, sc serveConfig) departure {
+func (h *Hub) serveConnected(ctx context.Context, sw *Writer, sub *subscription, sc *serveConfig) departure {
 	c := sub.c
 	if isClosed(c.reset) {
 		return h.writeReset(sw, c)
@@ -207,7 +259,7 @@ func (h *Hub) serveConnected(ctx context.Context, sw *Writer, sub *subscription,
 }
 
 // clientTag applies the tag grammar; a failing tag is absent, with one Warn.
-func (h *Hub) clientTag(sc serveConfig) string {
+func (h *Hub) clientTag(sc *serveConfig) string {
 	if sc.tag == "" || httpserver.ValidRequestID(sc.tag) {
 		return sc.tag
 	}
@@ -247,6 +299,11 @@ func canFlush(w http.ResponseWriter) bool {
 func (h *Hub) stream(ctx context.Context, sw *Writer, c *client) departure {
 	ticker := time.NewTicker(h.cfg.keepalive)
 	defer ticker.Stop()
+	marks, stopMarks, err := h.startMarks(sw, c)
+	defer stopMarks()
+	if err != nil {
+		return h.endOnWriteError(sw, c, PresenceWriteFrame, err)
+	}
 	for {
 		if isClosed(c.reset) {
 			return h.writeReset(sw, c)
@@ -265,11 +322,48 @@ func (h *Hub) stream(ctx context.Context, sw *Writer, c *client) departure {
 			if err != nil {
 				return h.endOnWriteError(sw, c, PresenceWriteKeepalive, err)
 			}
+		case <-marks:
+			if err := h.mark(sw, c); err != nil {
+				return h.endOnWriteError(sw, c, PresenceWriteFrame, err)
+			}
 		case <-ctx.Done():
 			h.logger.Debug("sse: peer disconnected", "topic", c.topic)
 			return departure{cause: PresenceClosed}
 		}
 	}
+}
+
+// startMarks starts a connection's position marks, writing the first at once:
+// a connection that is or may become scoped needs them, and one that receives
+// everything for its whole life gets a nil channel, which never fires.
+func (h *Hub) startMarks(sw *Writer, c *client) (marks <-chan time.Time, stop func(), err error) {
+	if !c.scoped && c.conn == "" {
+		return nil, func() {}, nil
+	}
+	ticker := time.NewTicker(scopeMarkInterval)
+	return ticker.C, ticker.Stop, h.mark(sw, c)
+}
+
+// mark writes an id-only block with the hub head when the live scope is not
+// everything, the channel is empty and the head moved past the last id
+// written, so out-of-scope traffic cannot push the floor past a narrow cursor.
+// The check holds the lock and the write does not: every matching frame at or
+// below that head was already written by this goroutine, and a later one
+// drains after the mark. A WHATWG parser records the id and dispatches nothing.
+func (h *Hub) mark(sw *Writer, c *client) error {
+	h.mu.Lock()
+	scoped, empty, seq := c.scope.scoped, len(c.ch) == 0, h.seq
+	h.mu.Unlock()
+	if !scoped || !empty || seq <= sw.lastOffset {
+		return nil
+	}
+	err := sw.writeAndFlush(sw.timeout, func(w io.Writer) error {
+		return writeFrame(w, Cursor{Epoch: h.epoch, Offset: seq}.String(), "", nil)
+	})
+	if err == nil {
+		sw.lastOffset = seq
+	}
+	return err
 }
 
 // drain writes first plus everything queued behind it as one bounded write
@@ -288,6 +382,7 @@ func (h *Hub) drain(sw *Writer, c *client, first *entry) error {
 			if err := h.writeEntry(w, &e); err != nil {
 				return err
 			}
+			sw.lastOffset = e.offset
 			select {
 			case e = <-c.ch:
 			case <-c.reset:
@@ -318,6 +413,19 @@ func (h *Hub) writeHandshake(w io.Writer, sub *subscription) error {
 		}
 	}
 	return nil
+}
+
+// handshakeOffset is the offset the client's cursor holds after the
+// handshake: the last replayed frame, the presented cursor of a resume that
+// replayed nothing, or the head of a hello that did not resume.
+func handshakeOffset(sub *subscription, cur Cursor) uint64 {
+	if n := len(sub.replay); n > 0 {
+		return sub.replay[n-1].offset
+	}
+	if sub.hello.Resumed {
+		return cur.Offset
+	}
+	return sub.hello.Head
 }
 
 func (h *Hub) writeEntry(w io.Writer, e *entry) error {

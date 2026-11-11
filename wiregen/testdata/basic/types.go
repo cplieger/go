@@ -85,6 +85,11 @@ type HasCustomMapped struct {
 
 // HasTime has a time.Time field.
 type HasTime struct {
+	// Created is when the row was first written.
+	//
+	// It never changes after that.
+	//
+	//fixture:directive the JSDoc must not carry
 	Created time.Time  `json:"created"`
 	Updated *time.Time `json:"updated,omitempty"`
 }

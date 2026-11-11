@@ -58,12 +58,12 @@ func TestPublish_maxOffsetPanics(t *testing.T) {
 
 func TestPublish_fanOutRespectsTopic(t *testing.T) {
 	h := mustNew(t)
-	subA, err := h.subscribe("a", "", Cursor{}, false)
+	subA, err := h.subscribe(topicReq("a"), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer h.unsubscribe(subA.c)
-	subAll, err := h.subscribe("", "", Cursor{}, false)
+	subAll, err := h.subscribe(topicReq(""), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestPublish_fanOutRespectsTopic(t *testing.T) {
 func TestPublish_slowClientClosesResetOnce(t *testing.T) {
 	logger, logged := captureLog()
 	h := mustNew(t, WithClientBuffer(1), WithLogger(logger))
-	sub, err := h.subscribe("t", "", Cursor{}, false)
+	sub, err := h.subscribe(topicReq("t"), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,12 +141,12 @@ func TestSnapshot_clonesData(t *testing.T) {
 
 func TestQueuedFrames_sumsChannels(t *testing.T) {
 	h := mustNew(t)
-	subA, err := h.subscribe("a", "", Cursor{}, false)
+	subA, err := h.subscribe(topicReq("a"), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer h.unsubscribe(subA.c)
-	subAll, err := h.subscribe("", "", Cursor{}, false)
+	subAll, err := h.subscribe(topicReq(""), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestSubscribe_registersHeadOnce(t *testing.T) {
 		})
 	}
 	for range 200 {
-		sub, err := h.subscribe("a", "", Cursor{}, false)
+		sub, err := h.subscribe(topicReq("a"), Cursor{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,7 +224,7 @@ func TestSubscribe_registersHeadOnce(t *testing.T) {
 func TestShutdown_twiceIsIdempotent(t *testing.T) {
 	logger, _ := captureLog()
 	h := mustNew(t, WithLogger(logger))
-	sub, err := h.subscribe("", "", Cursor{}, false)
+	sub, err := h.subscribe(topicReq(""), Cursor{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

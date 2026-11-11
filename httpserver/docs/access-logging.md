@@ -84,7 +84,7 @@ A panicking or empty-returning `fn` records `(path-redaction-failed)`, never the
 - A refused host is a `Warn` line from `HostPolicy`, which logs whether or not the access line is kept.
 - A panic is an `Error` line from `Recoverer`, wherever it sits in the chain. Its access line shows the 500 only when `Recoverer` sits inside `Logging`.
 - `RateLimiter`, `LoopbackOnly` and a caller's own refusal gate log nothing of their own. A caller that wants a line for those refusals logs it from its responder (`WithRateLimitResponder`, `WithLoopbackResponder`) or its gate.
-- A health verdict changing is logged only where the signal's owner logs it. `go/health`'s marker logs each change `Set` makes. A lease that lapses under `Within`, and a `CheckHandler` answering 503, log nothing.
+- A health verdict changing is logged only where the signal's owner logs it. `go/health`'s `Status` logs each change of verdict that `Set` and `BeginDrain` make. A lease that lapses under `Fresh`, and a `CheckHandler` answering 503, log nothing.
 - A scrape that gets a non-2xx answer shows as Prometheus's `up` of 0 for that target.
 
 Prefer it over skipping probe paths, which removes the lines even under `LOG_LEVEL=debug`. Keep skip rules for streams, where one open-to-close line misleads by its shape. The two level options exclude each other, and the last one applied wins.

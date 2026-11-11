@@ -54,14 +54,21 @@ var (
 // client is one connected stream. reset is closed at most once, under the hub
 // lock, by Publish (which also deletes the record) or by Shutdown (which sets
 // closed so no later Publish reaches the record); reason is written before
-// the close and read after it.
+// the close and read after it. scope and lastSeq are read and written only
+// under the hub lock; every other field but reason is fixed at subscribe.
 type client struct {
-	ch     chan entry
-	reset  chan struct{}
-	reason string
-	topic  string
-	tag    string
-	id     uint64
+	owner      any
+	scope      Scope
+	ch         chan entry
+	reset      chan struct{}
+	reason     string
+	topic      string
+	tag        string
+	conn       string
+	id         uint64
+	lastSeq    uint64
+	topicCount int
+	scoped     bool
 }
 
 type subscription struct {
@@ -70,8 +77,14 @@ type subscription struct {
 	hello  Hello
 }
 
-func topicMatches(subTopic, eventTopic string) bool {
-	return eventTopic == "" || subTopic == "" || subTopic == eventTopic
+// subRequest is what one Serve call subscribes with. topic is WithTopic's
+// value, kept for logs and presence; scope is what delivery matches.
+type subRequest struct {
+	owner      any
+	scope      Scope
+	topic      string
+	tag        string
+	rescopable bool
 }
 
 // Hub is a broadcast fan-out for Server-Sent Events with a replay ring. The
@@ -81,6 +94,7 @@ type Hub struct {
 	logger       *slog.Logger
 	ring         *ring
 	clients      map[*client]struct{}
+	byConn       map[string]*client
 	epoch        string
 	cfg          config
 	wg           sync.WaitGroup
@@ -114,6 +128,7 @@ func New(opts ...Option) (*Hub, error) {
 		logger:  cfg.logger,
 		ring:    newRing(cfg.ringSize),
 		clients: make(map[*client]struct{}),
+		byConn:  make(map[string]*client),
 		epoch:   cfg.epoch,
 		cfg:     cfg,
 	}, nil
@@ -173,7 +188,7 @@ func (h *Hub) Publish(ev Event) (uint64, error) {
 	h.ring.evict(now, h.cfg.ttl, h.cfg.maxBytes)
 	var evicted []*client
 	for c := range h.clients {
-		if !topicMatches(c.topic, ev.Topic) {
+		if !c.scope.matches(ev.Topic) {
 			continue
 		}
 		select {
@@ -182,6 +197,7 @@ func (h *Hub) Publish(ev Event) (uint64, error) {
 			c.reason = reasonSlow
 			close(c.reset)
 			delete(h.clients, c)
+			delete(h.byConn, c.conn)
 			evicted = append(evicted, c)
 		}
 	}
@@ -207,7 +223,7 @@ func (h *Hub) Position() Position {
 // cloned so the caller cannot change replay bytes. A diagnostic surface.
 func (h *Hub) Snapshot() []ReplayEvent {
 	h.mu.Lock()
-	entries := h.ring.since(0, "")
+	entries := h.ring.since(0, All())
 	h.mu.Unlock()
 	out := make([]ReplayEvent, len(entries))
 	for i, e := range entries {
@@ -272,7 +288,7 @@ func (h *Hub) Shutdown(ctx context.Context) error {
 // eviction, verdict, replay copy, hello, channel, wg.Add and registration all
 // happen under the lock, so no later Publish can allocate an offset at or
 // below the hello's head and wg.Add cannot race Shutdown's Wait.
-func (h *Hub) subscribe(topic, tag string, cur Cursor, present bool) (*subscription, error) {
+func (h *Hub) subscribe(req subRequest, cur Cursor, present bool) (*subscription, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -284,19 +300,34 @@ func (h *Hub) subscribe(topic, tag string, cur Cursor, present bool) (*subscript
 	}
 	h.ring.evict(h.cfg.now(), h.cfg.ttl, h.cfg.maxBytes)
 	floor, head := h.ring.floor(), h.seq
-	verdict, resumed := resolve(cur, present, h.epoch, floor, head, h.ring.len(), h.cfg.replyMax)
+	// The reply cap counts what this connection would receive, so out-of-scope
+	// traffic cannot push a short reconnect past it.
 	var replay []entry
-	if resumed && cur.Offset < head {
-		replay = h.ring.since(cur.Offset, topic)
+	matched := func() int {
+		replay = h.ring.since(cur.Offset, req.scope)
+		return len(replay)
+	}
+	verdict, resumed := resolve(cur, present, h.epoch, floor, head, h.ring.len(), h.cfg.replyMax, matched)
+	if !resumed {
+		replay = nil
+	}
+	c := &client{
+		owner:  req.owner,
+		scope:  req.scope,
+		ch:     make(chan entry, h.cfg.clientBuffer),
+		reset:  make(chan struct{}),
+		topic:  req.topic,
+		tag:    req.tag,
+		id:     h.nextClientID + 1,
+		scoped: req.scope.scoped,
+	}
+	c.topicCount = len(req.scope.topics)
+	if req.rescopable {
+		c.conn = newConn()
+		h.byConn[c.conn] = c
 	}
 	sub := &subscription{
-		c: &client{
-			ch:    make(chan entry, h.cfg.clientBuffer),
-			reset: make(chan struct{}),
-			topic: topic,
-			tag:   tag,
-			id:    h.nextClientID + 1,
-		},
+		c:      c,
 		replay: replay,
 		hello: Hello{
 			Wire:           Wire,
@@ -307,6 +338,7 @@ func (h *Hub) subscribe(topic, tag string, cur Cursor, present bool) (*subscript
 			Verdict:        verdict,
 			KeepaliveMS:    int(h.cfg.keepalive.Milliseconds()),
 			KeepaliveEvent: h.cfg.keepaliveEvent,
+			Conn:           c.conn,
 		},
 	}
 	h.nextClientID++
@@ -317,7 +349,7 @@ func (h *Hub) subscribe(topic, tag string, cur Cursor, present bool) (*subscript
 
 	h.logger.Debug("sse: client connected",
 		"epoch", h.epoch, "verdict", verdict, "head", head, "floor", floor,
-		"replayed", len(replay), "topic", topic, "clients", n)
+		"replayed", len(replay), "topic", req.topic, "scoped", c.scoped, "topic_count", c.topicCount, "clients", n)
 	return sub, nil
 }
 
@@ -325,6 +357,7 @@ func (h *Hub) unsubscribe(c *client) {
 	defer h.wg.Done()
 	h.mu.Lock()
 	delete(h.clients, c)
+	delete(h.byConn, c.conn)
 	n := len(h.clients)
 	h.mu.Unlock()
 	h.logger.Debug("sse: client disconnected", "topic", c.topic, "clients", n)

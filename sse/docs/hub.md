@@ -36,7 +36,7 @@ The hub keeps recent frames in memory, in one buffer bounded three ways at once.
 
 The TTL floor is the client's watchdog window plus its 30-second backoff cap. That is the longest a healthy client can be away before it reconnects. A shorter TTL would evict frames a resuming client is entitled to.
 
-`WithReplyMaxEvents` caps how many frames one reconnecting client may be sent, so a long replay cannot hold up a reconnect. A resume that needs more gets the `gap_budget` verdict and no replay.
+`WithReplyMaxEvents` caps how many frames one reconnecting client may be sent, so a long replay cannot hold up a reconnect. It counts only the frames in the connection's scope. A resume that needs more gets the `gap_budget` verdict and no replay.
 
 ## Serving a stream
 
@@ -46,11 +46,19 @@ When the `ResponseWriter` supports write deadlines, every write runs under `With
 
 `Serve` finds an `http.Flusher` through any `Unwrap()` chain of the `ResponseWriter`. It answers 500 `streaming_unsupported` only when no flusher exists at any depth. It answers 503 `sse_unavailable` to a connection over the client cap or after `Shutdown`.
 
-`Serve` takes three options:
+`Serve` takes five options. The first three set the connection's scope, and the last one applied wins:
 
 - `WithTopic(t)` receives broadcasts plus the events published to topic `t`. The empty topic, the default, receives everything.
+- `WithScope(s)` receives a scope the server chooses: `sse.All()` (or the zero `Scope`), `sse.Topics()` for broadcasts only, or `sse.Topics("a", "b")`. The client cannot change it.
+- `WithRequestScope(owner)` takes the scope from the client's `SSE-Topics` header, and lets the scope endpoint replace it while the connection lives. The hello carries the `conn` that names it. `owner`, typically the principal, is what the scope endpoint's `authorize` receives. The client may ask for any topic on the hub, so an application that must keep a topic from a principal does not publish it on a hub that principal reads.
 - `WithOnConnect(fn func(w *Writer, h Hello) error)` runs after the `retry:` field, the hello and the replay have been flushed, so the client's connect deadline never measures the hook. It receives the `Hello` the client received. It writes initial-state frames with `Writer.Event(name, data)`, each its own bounded write and flush, and none carries an id. An error from the hook ends the connection.
 - `WithClientTag(tag)` sets the key your application groups clients by, carried on `PresenceEvent.Tag`. The empty string means no tag, so `r.Header.Get("SSE-Client")` can be passed through unconditionally. Any other value outside `[A-Za-z0-9_-]{1,64}` is treated as absent, with one Warn log line.
+
+### Replacing a scope
+
+`(*Hub).ScopeHandler(authorize func(r *http.Request, owner any) error) (http.Handler, error)` answers the scope requests [the wire contract](wire.md#scopes) describes. Mount it inside your authentication and cross-origin middleware, as `DigestHandler`. `authorize` refuses a caller that does not own the connection, so it judges ownership, never topics. A nil `authorize` returns an error wrapping `ErrConfig`.
+
+A connection whose scope is not everything gets position marks once a second, so its cursor stays inside the replay buffer while out-of-scope traffic flows. A connection that receives everything for its whole life gets none.
 
 ## Publishing
 
@@ -81,7 +89,7 @@ Per client, the `Shutdown` wait is the rest of a running `WithOnConnect` hook pl
 
 `WithPresence(fn func(PresenceEvent))` installs one hook. It sees each arrival after its hello was flushed, and exactly one departure per arrival. It runs on the stream's own goroutine and never under the hub lock, so a slow hook delays only that stream. A panic in it is recovered and logged.
 
-A `PresenceEvent` carries `At`, `Kind`, `Topic`, `Verdict`, `Cause`, `Write`, `Epoch`, `Tag` and `ClientID`. `Kind` is `PresenceConnected` or `PresenceDisconnected`, the strings `connected` and `disconnected`. An arrival carries the hello's `Verdict`. A departure's `Cause` is one of five values:
+A `PresenceEvent` carries `At`, `Kind`, `Topic`, `Verdict`, `Cause`, `Write`, `Epoch`, `Tag`, `ClientID`, `Scoped` and `TopicCount`. `Topic` is the `WithTopic` value. `Scoped` is false for a connection that receives everything, and `TopicCount` counts the topics its scope names. All three describe the scope at connect and do not follow a later scope request. `Kind` is `PresenceConnected` or `PresenceDisconnected`, the strings `connected` and `disconnected`. An arrival carries the hello's `Verdict`. A departure's `Cause` is one of five values:
 
 - `closed`: the request context ended.
 - `dead`: a write failed with the socket still open. `Write` is `PresenceWriteKeepalive`, `PresenceWriteFrame` or `PresenceWriteHook`.

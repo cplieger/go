@@ -32,8 +32,10 @@ const (
 // still open, which the kernel may take minutes to notice: it is observability
 // of socket death, not a liveness bound.
 type PresenceEvent struct {
-	At    time.Time
-	Kind  PresenceKind
+	At   time.Time
+	Kind PresenceKind
+	// Topic is the WithTopic value: "" for a WithScope or WithRequestScope
+	// connection, and for everything.
 	Topic string
 	// Verdict is the hello's verdict on connected; empty on disconnected.
 	Verdict Verdict
@@ -50,6 +52,11 @@ type PresenceEvent struct {
 	// ClientID is process-unique and minted at subscribe, so two connects from
 	// one browser are two clients.
 	ClientID uint64
+	// TopicCount is the number of topics the connect-time scope names, and
+	// Scoped is false when it receives everything; neither follows a later
+	// ScopeHandler request.
+	TopicCount int
+	Scoped     bool
 }
 
 // PresenceWrite names the write that failed when a stream ended dead, or the
@@ -90,12 +97,14 @@ func (h *Hub) presence(ev *PresenceEvent) {
 
 func (h *Hub) presenceEvent(c *client, kind PresenceKind) PresenceEvent {
 	return PresenceEvent{
-		At:       h.cfg.now(),
-		Kind:     kind,
-		Topic:    c.topic,
-		Epoch:    h.epoch,
-		Tag:      c.tag,
-		ClientID: c.id,
+		At:         h.cfg.now(),
+		Kind:       kind,
+		Topic:      c.topic,
+		Epoch:      h.epoch,
+		Tag:        c.tag,
+		ClientID:   c.id,
+		TopicCount: c.topicCount,
+		Scoped:     c.scoped,
 	}
 }
 

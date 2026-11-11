@@ -1,4 +1,4 @@
-module github.com/cplieger/go/health
+module github.com/cplieger/go/health/v2
 
 go 1.27.4
 
