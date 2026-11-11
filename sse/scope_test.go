@@ -505,6 +505,7 @@ func TestSetScopeSeq_splitsTheStreamAtOneHead(t *testing.T) {
 	defer h.unsubscribe(sub.c)
 	var wg sync.WaitGroup
 	var swapped atomic.Bool
+	defer func() { swapped.Store(true); wg.Wait() }()
 	start := make(chan struct{})
 	for _, topic := range []string{"a", "b"} {
 		wg.Go(func() {
@@ -528,7 +529,11 @@ func TestSetScopeSeq_splitsTheStreamAtOneHead(t *testing.T) {
 		})
 	}
 	close(start)
+	deadline := time.Now().Add(30 * time.Second)
 	for h.Position().Head < 250 {
+		if time.Now().After(deadline) {
+			t.Fatalf("head %d: the publishers stopped before 250", h.Position().Head)
+		}
 		runtime.Gosched()
 	}
 	split, err := h.setScopeSeq(sub.hello.Conn, 1, Topics("b"))
@@ -611,7 +616,11 @@ func marksOf(t *testing.T, sc *bufio.Scanner, n int) []string {
 	t.Helper()
 	var marks []string
 	var block []string
+	start := time.Now()
 	for len(marks) < n {
+		if waited := time.Since(start); waited > 10*scopeMarkInterval {
+			t.Fatalf("%d marks after %v, want %d", len(marks), waited, n)
+		}
 		if !sc.Scan() {
 			t.Fatalf("stream ended after %d marks: %v", len(marks), sc.Err())
 		}
@@ -781,27 +790,34 @@ func nextBlock(t *testing.T, sc *bufio.Scanner) []string {
 	return nil
 }
 
-// A connection that receives everything writes no marks, however much
-// traffic passes; a scoped one writes none at an offset it already received.
+// A connection whose live scope is everything writes no marks, even after
+// out-of-scope frames left its cursor behind while it was narrowed; a scoped
+// one writes none at an offset it already received.
 func TestScope_marksOnlyWhereTheCursorLags(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := mustNew(t, withEpoch(testEpoch), WithReplay(64), WithReplayTTL(replayTTL))
-		srv := startServer(t, h, WithRequestScope("p"))
+		srv, handler := scopeServer(t, h, nil)
 		wide, sc := openStream(t, srv, srv.URL, nil)
 		defer wide.Body.Close()
-		readHello(t, sc)
+		hello, _ := readHello(t, sc)
+		post := func(seq int, topics string) {
+			t.Helper()
+			body := fmt.Sprintf(`{"conn":%q,"seq":%d,"topics":%s}`, hello.Conn, seq, topics)
+			if w := postScope(handler, http.MethodPost, "application/json", body); w.Code != http.StatusOK {
+				t.Fatalf("scope %s answered %d", topics, w.Code)
+			}
+		}
+		post(1, `["run:a"]`)
 		if _, err := h.Publish(Event{Topic: "run:b", Data: []byte("b")}); err != nil {
 			t.Fatal(err)
 		}
-		if block := nextBlock(t, sc); len(block) < 2 {
-			t.Fatalf("everything connection: first block %q, want the frame", block)
-		}
+		post(2, "null")
 		time.Sleep(2 * scopeMarkInterval)
-		if _, err := h.Publish(Event{Topic: "run:a", Data: []byte("a")}); err != nil {
+		if _, err := h.Publish(Event{Topic: "run:c", Data: []byte("c")}); err != nil {
 			t.Fatal(err)
 		}
 		if block := nextBlock(t, sc); len(block) < 2 {
-			t.Errorf("everything connection wrote %q before its next frame, want no mark", block)
+			t.Errorf("widened connection wrote %q before its next frame, want no mark", block)
 		}
 
 		narrow, sc2 := openStream(t, srv, srv.URL, http.Header{scopeHeader: {`["run:a"]`}})
@@ -819,6 +835,63 @@ func TestScope_marksOnlyWhereTheCursorLags(t *testing.T) {
 		}
 		if block := nextBlock(t, sc2); len(block) < 2 {
 			t.Errorf("scoped connection wrote %q at an offset it already received, want no mark", block)
+		}
+	})
+}
+
+// A resumed hello with nothing to replay leaves the cursor at the presented
+// offset, so the first mark goes out at once.
+func TestScope_firstMarkIsImmediateOnResume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := mustNew(t, withEpoch(testEpoch), WithReplay(64), WithReplayTTL(replayTTL))
+		for range 3 {
+			if _, err := h.Publish(Event{Topic: "run:b", Data: []byte("x")}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		srv := startServer(t, h, WithRequestScope("p"))
+		header := http.Header{
+			scopeHeader:     {`["run:a"]`},
+			"Last-Event-ID": {(Cursor{Epoch: testEpoch, Offset: 1}).String()},
+		}
+		resp, sc := openStream(t, srv, srv.URL, header)
+		defer resp.Body.Close()
+		if hello, _ := readHello(t, sc); !hello.Resumed {
+			t.Fatalf("hello = %s, want resumed", hello.Verdict)
+		}
+		start := time.Now()
+		if mark := marksOf(t, sc, 1)[0]; mark != (Cursor{Epoch: testEpoch, Offset: 3}).String() {
+			t.Errorf("first mark = %s, want offset 3", mark)
+		}
+		if waited := time.Since(start); waited != 0 {
+			t.Errorf("the first mark waited %v, want none", waited)
+		}
+	})
+}
+
+// A filtered replay that ends below the head leaves the cursor at its last
+// frame, so the first mark goes out at once.
+func TestScope_firstMarkAfterAFilteredReplay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := mustNew(t, withEpoch(testEpoch), WithReplay(64), WithReplayTTL(replayTTL))
+		for _, topic := range []string{"run:b", "run:a", "run:b", "run:b"} {
+			if _, err := h.Publish(Event{Topic: topic, Data: []byte("x")}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		srv := startServer(t, h, WithTopic("run:a"))
+		header := http.Header{"Last-Event-ID": {(Cursor{Epoch: testEpoch, Offset: 1}).String()}}
+		resp, sc := openStream(t, srv, srv.URL, header)
+		defer resp.Body.Close()
+		if hello, _ := readHello(t, sc); !hello.Resumed {
+			t.Fatalf("hello = %s, want resumed", hello.Verdict)
+		}
+		start := time.Now()
+		if mark := marksOf(t, sc, 1)[0]; mark != (Cursor{Epoch: testEpoch, Offset: 4}).String() {
+			t.Errorf("first mark = %s, want offset 4", mark)
+		}
+		if waited := time.Since(start); waited != 0 {
+			t.Errorf("the first mark waited %v, want none", waited)
 		}
 	})
 }
