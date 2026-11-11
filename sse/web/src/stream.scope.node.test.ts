@@ -556,6 +556,25 @@ describe("stream scope", () => {
     expect(t.live(1)).toEqual([["hello", false]]);
   });
 
+  it("a queued full run a stop clears before its hello stays owed full", async () => {
+    const t = stoppable();
+    t.stream.start();
+    await flush();
+    t.sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5" }));
+    await flush();
+    t.settles.at(-1)!.resolve();
+    await flush();
+    t.stream.stop();
+    // A worker attach on a stopped stream queues a full run, then starts it.
+    streamInternals(t.stream).queueFull();
+    t.stream.start();
+    await flush();
+    t.stream.stop();
+    const before = t.ctxs.length;
+    await t.resumeAt(A, "5");
+    expect(t.live(before)).toEqual([["hello", true]]);
+  });
+
   it("a hello run that ends in a 401 stays owed to the next start", async () => {
     const t = stoppable();
     t.stream.start();

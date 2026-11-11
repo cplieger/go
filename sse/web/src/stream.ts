@@ -1312,7 +1312,6 @@ export function createStream(opts: StreamOptions): Stream {
         unsubscribe();
       }
       unsubscribes = [];
-      // An interrupted run stays owed: the next start's hello reconciles even when it resumes.
       if (inflight !== null || queued !== null) {
         unverified = true;
         unverifiedFull ||= (inflight?.full ?? false) || (queued?.full ?? false);
