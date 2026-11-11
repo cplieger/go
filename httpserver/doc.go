@@ -6,7 +6,8 @@
 // Host allowlist against DNS rebinding (HostPolicy, CanonicalHost), an
 // embedded StaticHandler, JSON envelope helpers (WriteJSON, WriteError),
 // request preludes (LimitBody, RequireMethod, DecodeBody), a constant-time
-// NewStaticTokenVerifier, ClassifyBind, and a graceful server (New, Run).
+// NewStaticTokenVerifier, ClassifyBind, a graceful server (New, Run) and an
+// opt-in metrics listener (ListenMetrics).
 //
 // Middleware is func(http.Handler) http.Handler and Chain lists the outermost
 // first, so Chain(mux, Logging(), Recoverer(), SecurityHeaders()) logs a

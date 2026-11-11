@@ -4,7 +4,7 @@
 
 slogx gives every Go service the same `log/slog` setup in one call, with text or JSON output, UTC timestamps, a level you can change at run time and `LOG_LEVEL` parsing.
 
-It replaces the handler, level and timestamp code each Go service otherwise writes at startup, and it installs the standard library's own `TextHandler` or `JSONHandler`. Its `capture` subpackage records log output for tests. It uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+It replaces the handler, level and timestamp code each Go service otherwise writes at startup, and it installs the standard library's own `TextHandler` or `JSONHandler`. Its `capture` subpackage records log output for tests. It uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

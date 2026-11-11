@@ -4,7 +4,7 @@
 
 urlform tells your Go code which host a browser opens for an untrusted URL, or that it cannot vouch for one, before you publish or match the link.
 
-Go's `net/url` and a browser can read the same URL differently. For example, a browser drops embedded tabs and newlines, reads a backslash as a slash and opens a schemeless `host/x` at `host`. Code that trusts Go can then link to a host it never checked. urlform uses only the standard library, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+Go's `net/url` and a browser can read the same URL differently. For example, a browser drops embedded tabs and newlines, reads a backslash as a slash and opens a schemeless `host/x` at `host`. Code that trusts Go can then link to a host it never checked. urlform uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 

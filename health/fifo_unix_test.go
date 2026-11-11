@@ -3,6 +3,7 @@
 package health
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -37,7 +38,7 @@ func TestAFIFOAtTheMarkerPathNeverBlocks(t *testing.T) {
 	}
 	var m *Marker
 	within(t, "NewMarker", func() { m = NewMarker(path) })
-	if !m.degraded {
+	if !m.degraded.Load() {
 		t.Error("a FIFO at the marker path: want degraded mode")
 	}
 	old := time.Now().Add(-2 * time.Hour)
@@ -52,7 +53,7 @@ func TestAFIFOAtTheMarkerPathNeverBlocks(t *testing.T) {
 
 	late := filepath.Join(t.TempDir(), ".healthy")
 	lm := NewMarker(late)
-	if lm.degraded {
+	if lm.degraded.Load() {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 	if err := syscall.Mkfifo(late, 0o600); err != nil {
@@ -96,8 +97,10 @@ func TestTransient(t *testing.T) {
 		&os.PathError{Op: "open", Err: errNotRegular}:  false,
 		nil: false,
 	} {
-		if got := transient(err); got != want {
-			t.Errorf("transient(%v) = %v, want %v", err, got, want)
-		}
+		t.Run(fmt.Sprint(err), func(t *testing.T) {
+			if got := transient(err); got != want {
+				t.Errorf("transient(%v) = %v, want %v", err, got, want)
+			}
+		})
 	}
 }

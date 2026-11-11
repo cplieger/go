@@ -22,7 +22,7 @@ func main() {
 
 `DefaultPath` is `/tmp/.healthy`. The two processes share nothing but that file, and the library starts no goroutine of its own.
 
-`RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker fails for another reason, and it writes one line to stderr naming the cause. `Inspect(path, opts...).Healthy()` gives the same verdict as a bool without exiting, for tests, and `Reason` gives the line `RunProbe` writes.
+`RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker in a writable folder fails for another reason, and it writes one line to stderr naming the cause. `Inspect(path, opts...).Healthy()` gives the same verdict as a bool without exiting, for tests, and `Reason` gives the line `RunProbe` writes.
 
 `Set` is safe to call from any goroutine. Each call compares the value with the marker file as it stands, the state the probe reads without `WithMaxAge`: a file is healthy and no file is unhealthy. A change logs at Info level for healthy and at Warn level for unhealthy, and a call that changes nothing stays silent. So a first `Set(false)` at startup with no file logs nothing, and a `Set(false)` that removes a marker another process wrote logs Warn. It logs to the logger you pass with `NewMarker(path, health.WithLogger(l))`, or to `slog.Default()` at the time of each line.
 
@@ -30,13 +30,13 @@ When the marker cannot be read, written or removed, `Set` logs the failure once 
 
 ## Degraded mode
 
-`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that anything already at the marker path is a regular file `Set` can refresh, without changing it. When either fails, the marker enters degraded mode and logs one warning with the path, the error and the fix: a tmpfs mount for the folder, or removing what is at the marker path, such as a marker an earlier run as another user left behind, a directory or a FIFO. A path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the probe reports it unhealthy and names the stat error. Callers do not need to branch on the result.
+`NewMarker` checks that the marker's folder is writable by creating and deleting a temporary file in it, and that anything already at the marker path is a regular file `Set` can refresh, without changing it. When either fails, the marker enters degraded mode and logs one warning with the folder or the marker path, the error, which calls report healthy and which unhealthy, and the fix: a tmpfs mount for the folder, or removing what is at the marker path, such as a marker an earlier run as another user left behind, a directory or a FIFO. In a folder that can be written, a path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the probe reports it unhealthy and names the stat error. Callers do not need to branch on the result.
 
 In degraded mode:
 
-- `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts.
-- `RunProbe` and `Inspect` report healthy. The service is alive, and only its way of reporting health is broken, which a restart cannot fix.
-- `Healthy`, `Within` and `Handler` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it.
+- `Set` and `Cleanup` do nothing, and `SetChecked` returns nil, so a compose mistake never turns into a loop of alerts. Each `Set` checks again first. Once the folder and the marker can be written, it leaves degraded mode, logs `health marker writable again, leaving degraded mode` and applies its value: `Set(true)` writes the marker and `Set(false)` leaves it absent. An app that keeps calling `Set` needs no restart once the cause is fixed. One that calls it only at startup makes no later `Set`, so once the obstacle is gone its probe reads the path as it stands until the app restarts: absent when nothing is there, and present when a regular file already is. Leaving is one-way: a later write failure is logged like any other and does not re-enter degraded mode.
+- `RunProbe` and `Inspect` report healthy while the folder or the marker cannot be written. The service is alive, and only its way of reporting health is broken, which a restart cannot fix while the obstacle stays, such as a folder under `read_only: true` with no tmpfs or a directory at the marker path. Once the obstacle is gone they read the path again.
+- `Healthy`, `Within` and `Handler` report unhealthy for the whole of degraded mode, until a `Set` leaves it, even when a marker was left in the folder.
 
 The usual cause is compose's `read_only: true` with no tmpfs at `/tmp`. Mount one to keep a working signal:
 
@@ -105,4 +105,4 @@ Write each reason where you wire the check, never from an error's text: the endp
 
 Both take any `Signal`, the one-method interface `*Marker` satisfies, so an in-memory flag works too. With a `*Marker`, each request does one `os.Stat`, so serve it at your platform's probe interval rather than on a busy path. To make the endpoint follow the probe's deadline, pass `m.Within(lease.Duration())` instead of `m`, as [Freshness deadline](freshness.md) describes.
 
-In degraded mode `Handler` always answers 503, even for a marker left in the folder, because `Set` cannot change it, while the `health` subcommand reports healthy. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.
+In degraded mode `Handler` answers 503 until a `Set` leaves it, even for a marker left in the folder, while `RunProbe` and `Inspect` report healthy for as long as the folder or the marker cannot be written. Do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`, or the platform will restart a container that is working.

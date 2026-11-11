@@ -13,13 +13,13 @@ import (
 
 func Example() {
 	r := measure.NewRegistry("myapp") // prefixes every registered metric name with "myapp_"
-	reqs := measure.NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"method", "status"})
-	dur := measure.NewHistogram("http_duration_seconds", "Request latency", measure.WithBuckets([]float64{0.01, 0.05, 0.1, 0.5, 1, 5}))
-	// Exposed as myapp_http_requests_total and myapp_http_duration_seconds.
+	reqs := measure.NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"method", "route", "code"})
+	dur := measure.NewHistogram("http_request_duration_seconds", "Request latency", measure.WithBuckets([]float64{0.01, 0.05, 0.1, 0.5, 1, 5}))
+	// Exposed as myapp_http_requests_total and myapp_http_request_duration_seconds.
 	// MustRegister panics on a bad metric; Register returns the error instead.
 	r.MustRegister(reqs, dur)
 
-	reqs.Inc("GET", "200")
+	reqs.Inc("GET", "/api/widget", "200")
 	timer := measure.NewTimer(dur)
 	timer.ObserveDuration()
 
@@ -91,16 +91,16 @@ func ExampleLabeledGauge_Delete() {
 // labeled histogram in the same middleware, beside RecordHTTP, and pass nil for
 // RecordHTTP's histogram.
 func ExampleRecordHTTP_routeDuration() {
-	reqs := measure.NewLabeledCounter("http_requests_total", "HTTP requests by route and status.", []string{"route", "code"})
+	reqs := measure.NewLabeledCounter("http_requests_total", "HTTP requests by method, route and code.", []string{"method", "route", "code"})
 	byRoute := measure.NewLabeledHistogram("http_request_duration_seconds", "Request latency by route.",
 		[]string{"route"}, measure.WithBuckets([]float64{0.1, 1}))
-	record := func(route string, code int, elapsed time.Duration) {
-		measure.RecordHTTP(reqs, nil, elapsed, route, strconv.Itoa(code))
+	record := func(method, route string, code int, elapsed time.Duration) {
+		measure.RecordHTTP(reqs, nil, elapsed, method, route, strconv.Itoa(code))
 		byRoute.Observe(elapsed.Seconds(), route)
 	}
 
-	record("/api/items", 200, 40*time.Millisecond)
-	record("/api/items", 500, 2*time.Second)
+	record("GET", "/api/items", 200, 40*time.Millisecond)
+	record("GET", "/api/items", 500, 2*time.Second)
 
 	r := measure.NewRegistry("")
 	r.MustRegister(reqs, byRoute)
@@ -109,10 +109,10 @@ func ExampleRecordHTTP_routeDuration() {
 	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
 	fmt.Print(page)
 	// Output:
-	// # HELP http_requests_total HTTP requests by route and status.
+	// # HELP http_requests_total HTTP requests by method, route and code.
 	// # TYPE http_requests_total counter
-	// http_requests_total{code="200",route="/api/items"} 1
-	// http_requests_total{code="500",route="/api/items"} 1
+	// http_requests_total{code="200",method="GET",route="/api/items"} 1
+	// http_requests_total{code="500",method="GET",route="/api/items"} 1
 	// # HELP http_request_duration_seconds Request latency by route.
 	// # TYPE http_request_duration_seconds histogram
 	// http_request_duration_seconds_bucket{route="/api/items",le="0.1"} 1

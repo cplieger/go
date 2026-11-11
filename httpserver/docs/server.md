@@ -1,6 +1,6 @@
 # Server and shutdown
 
-This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog` and the shutdown sequence `Run` follows.
+This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog`, the shutdown sequence `Run` follows and the metrics listener of an app that opens no port of its own.
 
 ## New
 
@@ -74,3 +74,33 @@ It matches `context.Cause(ctx)` as well as `ctx.Err()`. A cause passed to `conte
 After `ctx` fires, it checks `done` once more. A drain that used the whole grace hands the teardown an expired context. A `select` with both cases ready picks one at random, so the plain two-case wait sometimes reports a finished teardown as still running. A nil `done` never closes, so the wait then ends with `ctx`.
 
 What to log, at which level, and what exit code to use stay your decisions for all three helpers.
+
+## The metrics listener
+
+An app that opens no port of its own can still offer an opt-in page for Prometheus and a health endpoint. `ListenMetrics(ctx, addr, MetricsHandlers{Metrics: ..., Healthz: ...}, opts...)` builds that listener in one call:
+
+```go
+ms, err := httpserver.ListenMetrics(ctx, cfg.MetricsListenAddr, httpserver.MetricsHandlers{
+	Metrics: reg.Handler(),
+	Healthz: health.CheckHandler(checks...),
+})
+if err != nil {
+	slog.Error("cannot listen on METRICS_LISTEN_ADDR; refusing to start", "error", err)
+	os.Exit(1)
+}
+done := make(chan error, 1)
+go func() { done <- ms.Serve(ctx) }()
+// ... the app's work; cancel ctx on the way out ...
+if err := <-done; err != nil {
+	slog.Error("metrics listener stopped", "error", err)
+}
+```
+
+- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work. A startup that gives up after that, before it calls `Serve`, calls `Close` to release the port.
+- An empty `addr` opens nothing. `Serve` then returns nil at once, without running `Run` or its options, and `Addr` is nil, so the app needs no branch for a listener that is off.
+- It routes only `/metrics` and `/healthz`, for `GET` and the `HEAD` a `GET` pattern also matches. Any other path is 404, after an unclean path is first redirected to its clean form, and any other method 405, so the listener never serves the app's own routes.
+- Both paths log under `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
+- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply.
+- `opts` reach `New`, so `WithSlogErrorLog` routes net/http's own error lines into `slog`.
+- It reads no environment. The app owns its setting's name, parsing and edge trimming.
+- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options. A second `Serve`, or a `Serve` after `Close`, on a listener that is on returns an error. Once `Serve` runs, stop it by cancelling `ctx`: `Close` then returns an error and leaves it serving.

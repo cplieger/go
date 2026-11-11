@@ -4,14 +4,14 @@
 
 health gives distroless Go services a Docker healthcheck with no shell, curl or wget. Your service writes a marker file, and the same binary checks it when Docker asks.
 
-It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks an HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27.3 or later and is licensed under Apache-2.0.
+It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks an HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
 
 ## Why use it
 
 health is built for container images with no shell, whether the main process is your own Go service or a server you did not write.
 
 - Your code decides what healthy means. `Set(true)` writes the marker and `Set(false)` removes it.
-- When `/tmp` cannot be written, the check still reports healthy and the service logs one warning with the fix. A read-only filesystem never marks a working container unhealthy.
+- When `/tmp` cannot be written, `RunProbe` still reports healthy and the service logs one warning with the fix, so a read-only filesystem never fails a healthcheck that reads the marker. An HTTP endpoint over the marker reports unhealthy then.
 - An optional deadline fails the check when a work loop stops refreshing the marker.
 - `Latch` keeps the container unhealthy once shutdown begins, even when late work succeeds.
 - `CheckHandler` serves `GET /healthz`: 200 with `{"status":"ok"}`, or 503 listing one plain reason for each failing check.
@@ -78,11 +78,11 @@ Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write i
 
 The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/go/health) and [health/probe](https://pkg.go.dev/github.com/cplieger/go/health/probe). Its `Example` functions are runnable, and `go test` keeps them true.
 
-## Degraded mode keeps the container healthy
+## Degraded mode
 
-`NewMarker` checks that the marker's folder is writable, and that anything already at the marker path is a regular file `Set` can refresh. When either fails, the marker enters degraded mode. The folder fails under compose's `read_only: true` with no tmpfs at `/tmp`; the marker fails when an earlier run as another user left one in a shared `/tmp` that this user cannot write, or when the path holds a directory or a FIFO. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the fix. A marker path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: the `health` subcommand reports it unhealthy and names the error.
+`NewMarker` checks that the marker's folder is writable, and that anything already at the marker path is a regular file `Set` can refresh. When either fails, the marker enters degraded mode. The folder fails under compose's `read_only: true` with no tmpfs at `/tmp`; the marker fails when an earlier run as another user left one in a shared `/tmp` that this user cannot write, or when the path holds a directory or a FIFO. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the fix. Each `Set` checks again, and the first one that can write leaves degraded mode. So an app that keeps calling `Set` needs no restart once the cause is fixed, while one that calls it only at startup does. In a folder that can be written, a marker path that cannot be stat'ed at all, such as a symlink loop, is not degraded mode: `RunProbe` reports it unhealthy and names the error.
 
-In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler`, `Healthy` and `Within` report unhealthy, even when a marker was left in the folder, because `Set` cannot change it. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
+While the folder or the marker cannot be written, `RunProbe` and `Inspect` report healthy, because the service still works and only its health reporting is broken. Once the obstacle is gone they read the path as it stands. A service still in degraded mode reads it absent until its next `Set(true)` when nothing is there, and reads the file when a regular file already is. `Handler`, `Healthy` and `Within` report unhealthy for the whole of degraded mode, until a `Set` leaves it, even when a marker was left in the folder. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
 
 To run read-only with a working signal, mount a tmpfs at `/tmp`:
 
