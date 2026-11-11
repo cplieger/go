@@ -20,19 +20,25 @@ type SignalFunc func() bool
 // Healthy reports f(), or false for a nil f.
 func (f SignalFunc) Healthy() bool { return f != nil && f() }
 
-// now is the clock a Status and the probe read; tests replace it.
+// now is the clock a Status, its marker and the probe read; tests replace it.
 var now = time.Now
+
+// since is how long ago t was, as the end of a standing state logs it.
+func since(t time.Time) time.Duration { return now().Sub(t).Round(time.Millisecond) }
 
 // Status is a service's health verdict, kept in memory. It starts unhealthy.
 // Set records a verdict, BeginDrain makes it unhealthy for good, and Healthy
-// and Fresh read it without blocking on a write. It logs each change of
-// verdict: Info when it turns healthy, Warn when it turns unhealthy.
+// and Fresh read it without blocking on a write. With WithMarker, every write
+// is mirrored to a marker file for RunProbe. It logs each change of verdict:
+// Info when it turns healthy, Warn when it turns unhealthy.
 //
-// The zero Status is ready to use, with slog.Default. A Status is safe for
-// concurrent use and must not be copied after first use.
+// The zero Status is ready to use, with no marker and slog.Default. A Status
+// is safe for concurrent use and must not be copied after first use.
 type Status struct {
 	unhealthySince time.Time
 	logger         *slog.Logger
+	// mirror is written under mu, so the file follows the order of the calls.
+	mirror *marker
 	// verdict is read without mu, so a reader never waits on a writer.
 	verdict  atomic.Pointer[verdict]
 	mu       sync.Mutex
@@ -48,7 +54,12 @@ type verdict struct {
 }
 
 // NewStatus returns an unhealthy Status configured by opts; a nil option is
-// skipped.
+// skipped. With WithMarker it checks that the marker can be written and
+// removes any marker an earlier run left (and warns if it cannot). A marker
+// it cannot write puts the Status in degraded mode and logs one warning
+// saying so. Create a Status with a marker only in the long-running process,
+// after the health subcommand is dispatched: a second process that creates
+// one removes the marker and turns the running service unhealthy.
 func NewStatus(opts ...StatusOption) *Status {
 	s := &Status{}
 	for _, o := range opts {
@@ -57,6 +68,9 @@ func NewStatus(opts ...StatusOption) *Status {
 		}
 	}
 	s.unhealthySince = now()
+	if s.mirror != nil {
+		s.mirror.open()
+	}
 	return s
 }
 
@@ -69,6 +83,23 @@ func WithLogger(l *slog.Logger) StatusOption {
 	return func(s *Status) { s.logger = l }
 }
 
+// WithMarker mirrors the verdict to a marker file at path, for a service whose
+// healthcheck runs RunProbe on the same path. Set(true) creates the marker or
+// refreshes its modification time, so RunProbe with WithMaxAge measures the
+// age Fresh does unless the wall clock steps; Set(false) and BeginDrain remove
+// it. A failed write is logged and leaves the verdict unchanged. A symlink at
+// path when NewStatus runs is degraded mode; one planted later fails the write
+// and, where the platform has O_NOFOLLOW, is not followed. NewStatus panics on
+// an empty path. Give each Status its own path.
+func WithMarker(path string) StatusOption {
+	return func(s *Status) {
+		if path == "" {
+			panic("health: WithMarker with an empty path")
+		}
+		s.mirror = &marker{path: path, log: s.log}
+	}
+}
+
 func (s *Status) log() *slog.Logger {
 	if s.logger != nil {
 		return s.logger
@@ -79,7 +110,8 @@ func (s *Status) log() *slog.Logger {
 // Set records the verdict: healthy when ok, unhealthy otherwise. A healthy Set
 // also restarts the age Fresh measures, even when the verdict was already
 // healthy. After BeginDrain a healthy Set is dropped and an unhealthy one
-// still lands. Set may be called from any goroutine.
+// still lands. Set may be called from any goroutine. A Status with a marker
+// writes it under the same lock, so the file follows the order of the calls.
 func (s *Status) Set(ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -95,6 +127,9 @@ func (s *Status) Set(ok bool) {
 		next.at = prev.at
 	}
 	s.verdict.Store(next)
+	if s.mirror != nil {
+		s.mirror.write(ok)
+	}
 	if wasHealthy := prev != nil && prev.healthy; wasHealthy != ok {
 		s.logChange(ok)
 	}
@@ -109,31 +144,36 @@ func (s *Status) BeginDrain() {
 	defer s.mu.Unlock()
 	s.draining = true
 	prev := s.verdict.Load()
-	if prev == nil || !prev.healthy {
-		return
+	wasHealthy := prev != nil && prev.healthy
+	if wasHealthy {
+		s.verdict.Store(&verdict{at: prev.at})
 	}
-	s.verdict.Store(&verdict{at: prev.at})
-	s.logChange(false, "draining", true)
+	if s.mirror != nil {
+		s.mirror.write(false)
+	}
+	if wasHealthy {
+		s.logChange(false, "draining", true)
+	}
 }
 
 // logChange logs a change of verdict. The healthy line carries how long the
 // service was unhealthy, which a zero Status that never ran NewStatus cannot
 // know before its first write. Caller holds mu.
 func (s *Status) logChange(healthy bool, attrs ...any) {
-	t := now()
 	if !healthy {
-		s.unhealthySince = t
+		s.unhealthySince = now()
 		s.log().Warn("health state changed", append([]any{"healthy", false}, attrs...)...)
 		return
 	}
 	attrs = append([]any{"healthy", true}, attrs...)
 	if !s.unhealthySince.IsZero() {
-		attrs = append(attrs, "duration", t.Sub(s.unhealthySince).Round(time.Millisecond))
+		attrs = append(attrs, "duration", since(s.unhealthySince))
 	}
 	s.log().Info("health state changed", attrs...)
 }
 
-// Healthy reports the verdict. A nil *Status is unhealthy.
+// Healthy reports the verdict. It reads memory only, never the marker. A nil
+// *Status is unhealthy.
 func (s *Status) Healthy() bool {
 	if s == nil {
 		return false

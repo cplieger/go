@@ -11,7 +11,7 @@ import (
 // BenchmarkProbe_Healthy benchmarks the steady-state hot path when
 // the marker file exists.
 func BenchmarkProbe_Healthy(b *testing.B) {
-	path := filepath.Join(b.TempDir(), ".healthy")
+	path := filepath.Join(b.TempDir(), "app.healthy")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		b.Fatal(err)
 	}
@@ -24,22 +24,20 @@ func BenchmarkProbe_Healthy(b *testing.B) {
 // BenchmarkProbe_Unhealthy benchmarks the probe when the marker is
 // absent from a writable directory.
 func BenchmarkProbe_Unhealthy(b *testing.B) {
-	path := filepath.Join(b.TempDir(), ".healthy")
+	path := filepath.Join(b.TempDir(), "app.healthy")
 	b.ResetTimer()
 	for b.Loop() {
 		probeCode(path)
 	}
 }
 
-// BenchmarkMarkerHealthy benchmarks the os.Stat call HTTP handlers
-// invoke on every request (Signal.Healthy delegates to it).
-func BenchmarkMarkerHealthy(b *testing.B) {
-	path := filepath.Join(b.TempDir(), ".healthy")
-	m := NewMarker(path)
-	m.Set(true)
-	b.ResetTimer()
+// BenchmarkStatusHealthy benchmarks the read every health request makes per
+// check.
+func BenchmarkStatusHealthy(b *testing.B) {
+	st := NewStatus(WithLogger(discard))
+	st.Set(true)
 	for b.Loop() {
-		m.Healthy()
+		st.Healthy()
 	}
 }
 
@@ -66,13 +64,11 @@ func BenchmarkHandlerUnhealthy(b *testing.B) {
 	}
 }
 
-// BenchmarkMarkerSet benchmarks Set(true) which touches the marker file —
-// the write path exercised on every liveness state change.
-func BenchmarkMarkerSet(b *testing.B) {
-	path := filepath.Join(b.TempDir(), ".healthy")
-	m := NewMarker(path)
-	b.ResetTimer()
+// BenchmarkStatusSetWithMarker benchmarks Set(true) with a marker, which
+// refreshes the file on every call.
+func BenchmarkStatusSetWithMarker(b *testing.B) {
+	st := NewStatus(WithLogger(discard), WithMarker(filepath.Join(b.TempDir(), "app.healthy")))
 	for b.Loop() {
-		m.Set(true)
+		st.Set(true)
 	}
 }

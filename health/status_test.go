@@ -1,10 +1,11 @@
 package health
 
 import (
-	"bytes"
 	"encoding/json"
-	"log/slog"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,58 +13,6 @@ import (
 	"testing/synctest"
 	"time"
 )
-
-// clock is a settable stand-in for now. Tests that use it swap a package
-// global, so they never call t.Parallel.
-type clock struct {
-	t  time.Time
-	mu sync.Mutex
-}
-
-var epoch = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-
-func useClock(t *testing.T) *clock {
-	t.Helper()
-	c := &clock{t: epoch}
-	prev := now
-	now = c.now
-	t.Cleanup(func() { now = prev })
-	return c
-}
-
-func (c *clock) now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
-
-func (c *clock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
-}
-
-// jsonLog returns a logger writing JSON lines to the returned buffer.
-func jsonLog() (*slog.Logger, *bytes.Buffer) {
-	buf := &bytes.Buffer{}
-	return slog.New(slog.NewJSONHandler(buf, nil)), buf
-}
-
-// records decodes every JSON line in buf.
-func records(t *testing.T, buf *bytes.Buffer) []map[string]any {
-	t.Helper()
-	var out []map[string]any
-	for line := range strings.Lines(buf.String()) {
-		var r map[string]any
-		if err := json.Unmarshal([]byte(line), &r); err != nil {
-			t.Fatalf("log line %q: %v", line, err)
-		}
-		out = append(out, r)
-	}
-	return out
-}
-
-var discard = slog.New(slog.DiscardHandler)
 
 func TestNewStatusStartsUnhealthy(t *testing.T) {
 	t.Parallel()
@@ -178,15 +127,35 @@ func TestWithLogger(t *testing.T) {
 
 func TestHealthySetAfterDrainIsDropped(t *testing.T) {
 	t.Parallel()
-	st := NewStatus(WithLogger(discard))
+	p := filepath.Join(t.TempDir(), "app.healthy")
+	st := NewStatus(WithLogger(discard), WithMarker(p))
 	st.Set(true)
 	st.BeginDrain()
-	if st.Healthy() {
-		t.Fatal("Healthy() right after BeginDrain = true, want false")
+	if st.Healthy() || exists(t, p) {
+		t.Fatalf("right after BeginDrain: Healthy() = %v, marker present = %v; want both false", st.Healthy(), exists(t, p))
 	}
 	st.Set(true)
 	if st.Healthy() {
 		t.Error("Set(true) after BeginDrain restored the verdict, want it dropped")
+	}
+	if exists(t, p) {
+		t.Error("Set(true) after BeginDrain wrote the marker, want it dropped")
+	}
+}
+
+func TestUnhealthySetAfterDrainLands(t *testing.T) {
+	t.Parallel()
+	p := filepath.Join(t.TempDir(), "app.healthy")
+	st := NewStatus(WithLogger(discard), WithMarker(p))
+	st.BeginDrain()
+	// A file at the path stands for any healthy state a dropped unhealthy
+	// write would leave in place.
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st.Set(false)
+	if exists(t, p) {
+		t.Error("Set(false) after BeginDrain left the marker, want it removed")
 	}
 }
 
@@ -223,8 +192,10 @@ func TestBeginDrainLogsOnceWithDraining(t *testing.T) {
 
 func TestBeginDrainWinsARacingHealthySet(t *testing.T) {
 	t.Parallel()
+	dir := t.TempDir()
 	for i := range 200 {
-		st := NewStatus(WithLogger(discard))
+		p := filepath.Join(dir, fmt.Sprintf("app-%d.healthy", i))
+		st := NewStatus(WithLogger(discard), WithMarker(p))
 		st.Set(true)
 		stop := make(chan struct{})
 		var wg sync.WaitGroup
@@ -242,16 +213,16 @@ func TestBeginDrainWinsARacingHealthySet(t *testing.T) {
 		}
 		st.BeginDrain()
 		for range 50 {
-			if st.Healthy() {
+			if st.Healthy() || exists(t, p) {
 				close(stop)
 				wg.Wait()
-				t.Fatalf("iteration %d: Healthy() = true while healthy writers race a finished BeginDrain", i)
+				t.Fatalf("iteration %d: Healthy() = %v, marker present = %v while healthy writers race a finished BeginDrain; want both false", i, st.Healthy(), exists(t, p))
 			}
 		}
 		close(stop)
 		wg.Wait()
-		if st.Healthy() {
-			t.Fatalf("iteration %d: Healthy() = true after the racing writers stopped", i)
+		if st.Healthy() || exists(t, p) {
+			t.Fatalf("iteration %d: Healthy() = %v, marker present = %v after the racing writers stopped; want both false", i, st.Healthy(), exists(t, p))
 		}
 	}
 }
@@ -385,6 +356,24 @@ func TestEndLinesCarryTheirDuration(t *testing.T) {
 		}
 		if !strings.Contains(lines[2], "duration=2s") {
 			t.Errorf("second healthy line %q, want duration=2s", lines[2])
+		}
+	})
+	t.Run("the write recovery line, from the streak's first failure", func(t *testing.T) {
+		c := useClock(t)
+		l, buf := jsonLog()
+		p := markerIn(t)
+		st := NewStatus(WithLogger(l), WithMarker(p))
+		blockFolder(t, p)
+		c.advance(time.Second)
+		st.Set(true)
+		c.advance(time.Second)
+		st.Set(true)
+		unblockFolder(t, p)
+		c.advance(2 * time.Second)
+		st.Set(true)
+		got := withMsg(t, buf, "health marker write recovered")
+		if len(got) != 1 || got[0]["duration"] != float64(3*time.Second) {
+			t.Errorf("recovery lines = %v, want one with duration 3s", got)
 		}
 	})
 	t.Run("rounded to the millisecond", func(t *testing.T) {

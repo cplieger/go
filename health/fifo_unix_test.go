@@ -28,51 +28,50 @@ func within(t *testing.T, what string, fn func()) {
 }
 
 // TestAFIFOAtTheMarkerPathNeverBlocks: a FIFO with no reader at the marker
-// path makes the marker degraded instead of hanging NewMarker, a stale one is
-// a healthy probe instead of a hung one, and a FIFO that appears after
-// construction fails Set instead of hanging it.
+// path makes NewStatus degraded instead of hanging it, a stale one is a
+// healthy probe instead of a hung one, and a FIFO that appears after
+// construction fails the write instead of hanging it.
 func TestAFIFOAtTheMarkerPathNeverBlocks(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".healthy")
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "app.healthy")
 	if err := syscall.Mkfifo(path, 0o600); err != nil {
-		t.Skipf("mkfifo: %v", err)
+		t.Fatalf("mkfifo: %v", err)
 	}
-	var m *Marker
-	within(t, "NewMarker", func() { m = NewMarker(path) })
-	if !m.degraded.Load() {
+	var st *Status
+	within(t, "NewStatus", func() { st = NewStatus(WithLogger(discard), WithMarker(path)) })
+	if !st.mirror.degraded {
 		t.Error("a FIFO at the marker path: want degraded mode")
 	}
 	old := time.Now().Add(-2 * time.Hour)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	var f Freshness
-	within(t, "Inspect", func() { f = Inspect(path, WithMaxAge(time.Hour)) })
-	if f.State != MarkerDirUnavailable {
-		t.Errorf("stale FIFO: Inspect = %+v, want MarkerDirUnavailable", f)
+	var f freshness
+	within(t, "inspect", func() { f = inspect(path, WithMaxAge(time.Hour)) })
+	if f.state != markerDegraded {
+		t.Errorf("stale FIFO: inspect = %+v, want markerDegraded", f)
 	}
 
-	late := filepath.Join(t.TempDir(), ".healthy")
-	lm := NewMarker(late)
-	if lm.degraded.Load() {
-		t.Skip("parent dir not writable in this environment; skipping")
-	}
+	late := filepath.Join(t.TempDir(), "app.healthy")
+	l, buf := jsonLog()
+	lst := NewStatus(WithLogger(l), WithMarker(late))
 	if err := syscall.Mkfifo(late, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var err error
-	within(t, "Set(true)", func() { err = lm.SetChecked(true) })
-	if err == nil {
-		t.Error("Set(true) on a FIFO: want an error, not a refreshed marker")
+	within(t, "Set(true)", func() { lst.Set(true) })
+	if n := len(withMsg(t, buf, msgCreateFailed)); n != 1 {
+		t.Errorf("Set(true) on a FIFO: %q lines = %d, want 1", msgCreateFailed, n)
 	}
 }
 
 // TestAFIFOWithAReaderIsNotAMarker: with a reader holding the FIFO open, the
 // write-only open succeeds, and only the regular-file check stops Set from
-// counting an open that refreshes nothing as a heartbeat.
+// counting an open that refreshes nothing as a healthy write.
 func TestAFIFOWithAReaderIsNotAMarker(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".healthy")
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "app.healthy")
 	if err := syscall.Mkfifo(path, 0o600); err != nil {
-		t.Skipf("mkfifo: %v", err)
+		t.Fatalf("mkfifo: %v", err)
 	}
 	r, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {

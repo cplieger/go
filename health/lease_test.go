@@ -43,6 +43,22 @@ func TestLeaseDurationDisabledOnlyByInterval(t *testing.T) {
 	}
 }
 
+// TestLeaseDurationIsZeroWithNothingToArm pins the other zero Duration's
+// godoc names: a positive Interval whose cycles, attempts and Floor all add
+// nothing.
+func TestLeaseDurationIsZeroWithNothingToArm(t *testing.T) {
+	for name, l := range map[string]Lease{
+		"interval alone":                     {Interval: time.Second},
+		"negative cycles and negative floor": {Interval: time.Second, Cycles: -1, Floor: -time.Hour},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := l.Duration(); got != 0 {
+				t.Errorf("Lease%+v.Duration() = %s, want 0", l, got)
+			}
+		})
+	}
+}
+
 // TestLeaseDurationReproducesEveryConsumerFormula checks each distinct
 // deadline formula a consumer writes inline today against the shape that
 // replaces it, at ordinary inputs.

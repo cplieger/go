@@ -2,6 +2,8 @@ package health_test
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"time"
@@ -9,44 +11,73 @@ import (
 	"github.com/cplieger/go/health/v2"
 )
 
-// Example demonstrates the two-process healthcheck pattern.
-// The long-running process creates a marker; the probe process stats it.
-func Example() {
-	path := filepath.Join(os.TempDir(), ".healthy-example")
-	m := health.NewMarker(path)
-	defer m.Cleanup()
-
-	m.Set(true)
-	fmt.Println("healthy:", m.Healthy())
-
-	m.Set(false)
-	fmt.Println("healthy:", m.Healthy())
-	// Output:
-	// healthy: true
-	// healthy: false
-}
-
-// ExampleInspect shows the probe decision without os.Exit: Inspect reads the
-// marker and Healthy is the verdict RunProbe turns into its exit code.
-func ExampleInspect() {
+// A service that opens no port mirrors its verdict to a marker file, which
+// its health subcommand reads with RunProbe.
+func Example_withMarker() {
 	dir, _ := os.MkdirTemp("", "health-example-*")
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, ".healthy")
+	path := filepath.Join(dir, "myservice.healthy")
 
-	// No marker yet in a writable dir: unhealthy.
-	f := health.Inspect(path)
-	fmt.Println(f.Healthy(), f.Reason())
+	st := health.NewStatus(health.WithMarker(path))
+	st.Set(true)
+	_, err := os.Stat(path)
+	fmt.Println(err == nil)
 
-	// Create the marker: healthy.
-	os.WriteFile(path, nil, 0o600)
-	fmt.Println(health.Inspect(path).Healthy())
+	st.Set(false)
+	_, err = os.Stat(path)
+	fmt.Println(err == nil)
 	// Output:
-	// false unhealthy: marker absent
 	// true
+	// false
 }
 
-// ExampleLease_Duration builds the argument for WithMaxAge from an app's own
-// cadence: tolerate two missed refreshes plus one worst-case run.
+// Work that finishes after shutdown begins cannot report the service healthy.
+func ExampleStatus_BeginDrain() {
+	st := health.NewStatus()
+	st.Set(true)
+	st.BeginDrain()
+	st.Set(true)
+	fmt.Println(st.Healthy())
+	// Output: false
+}
+
+// Fresh beside the Status names a work loop that stopped refreshing a healthy
+// verdict, with its own reason.
+func ExampleStatus_Fresh() {
+	st := health.NewStatus()
+	h := health.CheckHandler(
+		health.Check{Signal: st, Reason: "the service is starting or shutting down"},
+		health.Check{Signal: st.Fresh(time.Millisecond), Reason: "the work loop has stopped"},
+	)
+	st.Set(true)
+	time.Sleep(2 * time.Millisecond)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	fmt.Print(rec.Code, " ", rec.Body.String())
+	// Output: 503 {"status":"unhealthy","reasons":["the work loop has stopped"]}
+}
+
+// SignalFunc turns any condition the service already tracks into a Check.
+func ExampleSignalFunc() {
+	queueFull := false
+	h := health.CheckHandler(health.Check{
+		Signal: health.SignalFunc(func() bool { return !queueFull }),
+		Reason: "the job queue is full",
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	fmt.Print(rec.Code, " ", rec.Body.String())
+	// Output: 200 {"status":"ok"}
+}
+
+func ExampleMarkerPath() {
+	fmt.Println(health.MarkerPath("myservice"))
+	// Output: /dev/shm/myservice.healthy
+}
+
+// ExampleLease_Duration builds the argument for WithMaxAge and Fresh from a
+// service's own cadence: tolerate two missed refreshes plus one worst-case run.
 func ExampleLease_Duration() {
 	lease := health.Lease{
 		Interval: 6 * time.Hour, Cycles: 2,
