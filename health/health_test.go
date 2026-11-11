@@ -1041,11 +1041,11 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 }
 
 // TestSet_leavesDegradedModeOnceTheMarkerPathClears: once what blocked the
-// marker path is gone, the next Set(true) writes the marker; leaving is one-way
-// (TestSet_leavingDegradedModeIsOneWay). That Set writes the marker and logs
-// one Info, and Healthy, Within (a signal built while degraded included) and
-// Inspect all read the marker. A directory at the marker path blocks it for any
-// user, root included.
+// marker path is gone, the next Set(true) leaves degraded mode, writes the
+// marker and logs one Info, and Healthy, Within (a signal built while degraded
+// included) and Inspect all read the marker. Leaving is one-way
+// (TestSet_leavingDegradedModeIsOneWay). A directory at the marker path blocks
+// it for any user, root included.
 func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	if err := os.Mkdir(path, 0o700); err != nil {
@@ -1085,7 +1085,7 @@ func TestSet_leavesDegradedModeOnceTheMarkerPathClears(t *testing.T) {
 // TestSet_leavesDegradedModeOnceTheFolderExists is the folder branch of the
 // same rule: a folder that cannot be written at start (here, one that does
 // not exist yet; in production, a mode fixed by hand) becomes writable, and
-// the next Set writes the marker. A missing folder blocks it for any user,
+// the next Set(true) writes the marker. A missing folder blocks it for any user,
 // root included.
 func TestSet_leavesDegradedModeOnceTheFolderExists(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "later")
@@ -1176,8 +1176,9 @@ func TestSet_leavingDegradedModeRacesNoReader(t *testing.T) {
 
 // TestNewMarker_degradedWarningNamesBothVerdicts pins that the warning states
 // what degraded mode reports through each path, since the container's verdict
-// depends on which one its healthcheck uses: RunProbe reports healthy, and an
-// HTTP endpoint over the marker reports unhealthy.
+// depends on which one its healthcheck uses: RunProbe reports healthy while
+// the marker cannot be written, and an HTTP endpoint over the marker reports
+// unhealthy.
 func TestNewMarker_degradedWarningNamesBothVerdicts(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), ".healthy")
@@ -1296,9 +1297,9 @@ func TestSetRefreshesAWriteOnlyMarker(t *testing.T) {
 }
 
 // TestDegradedMarkerMeansAHealthyProbe: whatever is at the marker path, a
-// marker NewMarker calls degraded is one the probe reports healthy, even
-// past its lease, so the warning's effect ("RunProbe and Inspect report
-// healthy") is true.
+// marker NewMarker calls degraded is one the probe reports healthy at that
+// point, even past its lease, so the warning's effect (RunProbe and Inspect
+// report healthy while the marker cannot be written) is true.
 func TestDegradedMarkerMeansAHealthyProbe(t *testing.T) {
 	old := time.Now().Add(-2 * time.Hour)
 	for name, setup := range map[string]func(path string) error{
