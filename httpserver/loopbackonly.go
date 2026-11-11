@@ -5,40 +5,14 @@ import (
 	"slices"
 )
 
-// LoopbackOnly is the MIDDLEWARE half of the loopback-only admission decision,
-// beside the LoopbackRequest predicate this package already exports.
-//
-// The predicate answers "did this request come from inside" from the two fields
-// that cannot be spoofed at this layer. This adds the second half every real
-// consumer of that predicate turned out to need: a refusal on proxy and browser
-// PROVENANCE headers. LoopbackRequest deliberately ignores those headers in both
-// directions — they can never admit and never refuse — and its documentation
-// tells an app that wants the deny to "compose that deny around this predicate
-// rather than finding it folded in". That guidance stands; this is that
-// composition, written once. The predicate is untouched, so nothing that calls
-// it directly changes behaviour.
-//
-// Why the deny is needed at all, and why it is not paranoia: the consumer of a
-// loopback-only surface is an in-container CLI client, which sends none of these
-// headers, so their presence is positive evidence the request did NOT originate
-// inside the container. It matters because a reverse proxy SHARING the server's
-// loopback interface (host networking, a shared network namespace) rewrites Host
-// to its upstream address by default in both nginx and Apache — which satisfies
-// LoopbackRequest's Host leg while the peer leg is satisfied by the proxy itself.
-// Both legs pass and the request is remote. The provenance headers are what
-// distinguishes it.
-//
-// It has a known ceiling, stated because a gate whose limits are unwritten gets
-// trusted past them: a same-loopback proxy that strips every provenance header
-// is indistinguishable from an in-container caller and is admitted. Closing that
-// needs authentication, not a header rule.
-//
-// A refused request is answered 403 through WriteError with the code
-// "loopback_only" and a message telling the caller to call from inside the
-// container. WithLoopbackError replaces the code and message and
-// WithLoopbackResponder the renderer, as WithRateLimitError and
-// WithRateLimitResponder do for RateLimiter: the refusal is the whole of what a
-// rejected caller is told, so its wording belongs to the app.
+// LoopbackOnly is middleware that admits a request only when LoopbackRequest
+// passes and ProxiedRequest finds no forwarding or browser header, and answers
+// every other request 403 through WriteError with the code "loopback_only".
+// The header check refuses a reverse proxy on this host's network stack, which
+// rewrites Host to its upstream address and so passes LoopbackRequest. It is
+// not authentication: a same-host proxy that strips every such header passes.
+// WithLoopbackError sets the code and message, and WithLoopbackResponder the
+// renderer.
 func LoopbackOnly(opts ...LoopbackOption) Middleware {
 	c := &loopbackConfig{
 		code:      loopbackRefusalCode,

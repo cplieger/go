@@ -1,9 +1,14 @@
 package httpserver_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -621,4 +626,123 @@ func TestHostPolicy_LogRefusal_noBuiltPolicyLogsThroughDefault(t *testing.T) {
 			}
 		})
 	}
+}
+
+// atLocal builds a request whose connection reached local, as http.Server
+// records it under LocalAddrContextKey; local nil records none.
+func atLocal(host, remoteAddr string, local net.Addr) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
+	req.Host = host
+	req.RemoteAddr = remoteAddr
+	if local != nil {
+		req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, local))
+	}
+	return req
+}
+
+// A service bound to one non-loopback address is probed from that address, so
+// the peer is the connection's own local address and the Host names it. That is
+// traffic from this host, admitted like loopback; any other peer, a Host that is
+// a name or another address, or a request with no local address is refused.
+func TestLoopbackRequestAtTheListenersOwnAddress(t *testing.T) {
+	v4 := &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 9190}
+	v6 := &net.TCPAddr{IP: net.ParseIP("2001:db8::10"), Port: 9190}
+	mapped := &net.TCPAddr{IP: net.ParseIP("::ffff:192.0.2.10"), Port: 9190}
+	cases := []struct {
+		name, host, remoteAddr string
+		local                  net.Addr
+		want                   bool
+	}{
+		{"ipv4 probe of its own bind", "192.0.2.10:9190", "192.0.2.10:5000", v4, true},
+		{"portless Host", "192.0.2.10", "192.0.2.10:5000", v4, true},
+		{"ipv6 probe of its own bind", "[2001:db8::10]:9190", "[2001:db8::10]:5000", v6, true},
+		{"v4-mapped peer", "192.0.2.10:9190", "[::ffff:192.0.2.10]:5000", v4, true},
+		{"v4-mapped local address of a dual-stack listener", "192.0.2.10:9190", "192.0.2.10:5000", mapped, true},
+
+		{"another peer on the network", "192.0.2.10:9190", "192.0.2.11:5000", v4, false},
+		{"Host naming another address", "192.0.2.99:9190", "192.0.2.10:5000", v4, false},
+		{"rebinding: the attacker's name in Host", "attacker.evil:9190", "192.0.2.10:5000", v4, false},
+		{"a LAN name in Host", "kiro.lan:9190", "192.0.2.10:5000", v4, false},
+		{"localhost in Host from a non-loopback peer", "localhost:9190", "192.0.2.10:5000", v4, false},
+		{"leading-zero literal Host is not repaired", "192.0.2.010:9190", "192.0.2.10:5000", v4, false},
+		{"no local address recorded", "192.0.2.10:9190", "192.0.2.10:5000", nil, false},
+		{"a local address that is not TCP", "192.0.2.10:9190", "192.0.2.10:5000", &net.UnixAddr{Name: "/run/app.sock", Net: "unix"}, false},
+		{"an unspecified local address", "0.0.0.0:9190", "0.0.0.0:5000", &net.TCPAddr{IP: net.IPv4zero, Port: 9190}, false},
+		{"a zoned peer", "fe80::10", "[fe80::10%eth0]:5000", &net.TCPAddr{IP: net.ParseIP("fe80::10"), Port: 9190, Zone: "eth0"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := httpserver.LoopbackRequest(atLocal(tc.host, tc.remoteAddr, tc.local)); got != tc.want {
+				t.Errorf("LoopbackRequest(Host %q, peer %q, local %v) = %v, want %v", tc.host, tc.remoteAddr, tc.local, got, tc.want)
+			}
+			for _, exempt := range []bool{false, true} {
+				p, _ := httpserver.ParseHostList([]string{"app.example"}, httpserver.WithLoopbackExempt(exempt))
+				if got, want := p.Allows(atLocal(tc.host, tc.remoteAddr, tc.local)), exempt && tc.want; got != want {
+					t.Errorf("WithLoopbackExempt(%v).Allows(Host %q, peer %q, local %v) = %v, want %v", exempt, tc.host, tc.remoteAddr, tc.local, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The kernel's own answer: a client on this host that dials the server's
+// non-loopback bind arrives from that address, so an exempt allowlist admits it
+// and a plain one refuses it.
+func TestHostPolicyAdmitsAClientOfItsOwnBind(t *testing.T) {
+	ip := ownNonLoopbackIPv4(t)
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", ip, err)
+	}
+	ln.Close()
+	for _, exempt := range []bool{true, false} {
+		t.Run(fmt.Sprintf("exempt=%v", exempt), func(t *testing.T) {
+			p, _ := httpserver.ParseHostList([]string{"app.example"}, httpserver.WithLoopbackExempt(exempt))
+			srv := httptest.NewUnstartedServer(p.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})))
+			l, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+			if err != nil {
+				t.Fatalf("listen on %s: %v", ip, err)
+			}
+			srv.Listener = l
+			srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+			srv.Start()
+			t.Cleanup(srv.Close)
+
+			resp, err := srv.Client().Get(srv.URL)
+			if err != nil {
+				t.Fatalf("GET %s: %v", srv.URL, err)
+			}
+			resp.Body.Close()
+			want := http.StatusForbidden
+			if exempt {
+				want = http.StatusNoContent
+			}
+			if resp.StatusCode != want {
+				t.Errorf("GET %s from this host = %d, want %d", srv.URL, resp.StatusCode, want)
+			}
+		})
+	}
+}
+
+// ownNonLoopbackIPv4 is an IPv4 address of this host that is neither loopback
+// nor link-local, or skips the test when the host has none.
+func ownNonLoopbackIPv4(t *testing.T) net.IP {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("cannot list interface addresses: %v", err)
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip := n.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+			return ip
+		}
+	}
+	t.Skip("this host has no non-loopback IPv4 address")
+	return nil
 }

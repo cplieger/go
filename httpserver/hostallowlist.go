@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -172,28 +173,14 @@ const maxLoggedHost = 128
 // built with no WithHostAllowlistError.
 const defaultHostRefusalMsg = "host not allowed"
 
-// WithLoopbackExempt selects whether a request is admitted when BOTH its socket
-// peer and its Host are loopback, regardless of the allowlist — the
-// container-internal carve-out. Enabled (true) it keeps a service's own loopback
-// clients working under any allowlist: a baked Docker healthcheck (curl
-// http://127.0.0.1:PORT), an in-container agent hitting localhost, a sidecar
-// probe. Without it, an allowlist of browser-facing hostnames rejects those
-// callers and can brick a health signal.
-//
-// The carve-out is unreachable by the attacks a host allowlist defends against.
-// A DNS-rebinding request carries the ATTACKER'S hostname in Host, so it fails
-// the loopback-Host test even when it originates from a browser on this same
-// machine (a loopback peer); and a remote client forging Host: 127.0.0.1 is not
-// a loopback socket peer, so it fails the peer test. Both conditions must hold,
-// and only genuinely local traffic can satisfy both.
-//
-// The default (false) matches leaving the option out: a bare allowlist rejects
-// everything not listed, loopback included. Passing false explicitly is how a
-// caller threads its own computed flag — a config field, an env var — without
-// branching around the option, and options are last-wins, so a later
-// WithLoopbackExempt(false) closes a carve-out an earlier true opened. Opt in
-// when the service runs behind a loopback health check or serves in-container
-// clients.
+// WithLoopbackExempt selects whether a request from this host's own network
+// stack bypasses the allowlist: a socket peer and Host that are both loopback,
+// or a peer at the connection's own local address with that address as Host
+// (the probe of a service bound to one non-loopback address). It keeps a
+// container healthcheck or in-container client working under an allowlist of
+// browser hostnames; neither a rebinding request (the attacker's name in Host)
+// nor a remote peer can pass. False, the default, is the same as leaving it
+// out, and options are last-wins.
 func WithLoopbackExempt(exempt bool) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.loopbackExempt = exempt }
 }
@@ -329,7 +316,7 @@ func (p *HostPolicy) Allows(r *http.Request) bool {
 	if _, ok := p.allowed[host]; ok {
 		return true
 	}
-	if p.loopbackExempt && isLoopbackHost(host) && isLoopbackPeer(r.RemoteAddr) {
+	if p.loopbackExempt && localRequest(r, host) {
 		return true
 	}
 	return false
@@ -359,53 +346,38 @@ func (p *HostPolicy) Middleware() Middleware {
 	}
 }
 
-// LoopbackRequest reports whether a request is genuinely local: its socket PEER
-// is loopback AND its Host header names the local host. Both legs are required,
-// so either one failing refuses. It is the route-level gate for a loopback-only
-// surface on an otherwise-unauthenticated port — an in-container agent running
-// curl localhost:PORT, an operator repair hook — and it decides admission only:
-// the refusal's status, envelope and wording stay with the caller, as does any
-// ADDITIONAL deny the app layers on top.
-//
-// It consults exactly two fields, r.RemoteAddr and r.Host, and nothing else. The
-// forwarded headers (X-Forwarded-For, X-Forwarded-Host, Forwarded) are IGNORED
-// in both directions: their presence can never admit a request, and never
-// refuse one either. That asymmetry is what makes the answer trustworthy —
-// RemoteAddr is set by the server from the accepted connection
-// (net.Conn.RemoteAddr().String()), so it cannot be spoofed at this layer, while
-// any header can be. An app that wants to REFUSE on proxy provenance composes
-// that deny around this predicate rather than finding it folded in.
-//
-// Both legs fail CLOSED. A RemoteAddr that does not split as host:port (a
-// portless value from a non-stdlib caller, an empty string) or whose host
-// net.ParseIP refuses is not a loopback peer; a Host that CanonicalHost rejects
-// canonicalizes to "" and names nothing. The Host leg accepts every well-formed
-// spelling CanonicalHost collapses: "localhost" in any case, with or without a
-// port or one trailing FQDN dot, 127.0.0.0/8, ::1, and bracketed IPv6 with or
-// without a port.
-//
-// The CONJUNCTION is the reusable unit, which is why it is what this library
-// exports. A bare peer-only predicate is withheld BY DESIGN (see BindClass's
-// rule: a peer is classified internally where a feature's own contract needs it,
-// never handed out loose), because the peer leg alone invites exactly the misuse
-// this export replaces. A DNS-rebound page reaches a server sharing its loopback
-// interface with a LOOPBACK socket peer and the ATTACKER's name in Host, so a
-// peer-only gate admits it (CWE-346); and after rebinding Origin and Host agree,
-// so a same-origin check does not catch it either. Requiring the Host leg in the
-// same call is what makes the shared unit safe to reach for — two separately
-// exported halves would let a consumer ship half the check and believe it had
-// the gate.
-//
-// This is NOT HostPolicy, and cannot be assembled from one. HostPolicy evaluates
-// its Host-only allowlist BEFORE the two-legged loopback exemption (Allows
-// checks the allowlist map first), so a REMOTE caller sending Host: localhost is
-// ADMITTED whenever that name is allowed — precisely the caller this predicate
-// must refuse, and a name an operator has every reason to allow so their own
-// browser reaches the service. An inactive policy (unset configuration) admits
-// everything besides. The allowlist answers "is this Host one the operator
-// named"; this answers "did this request come from inside".
+// LoopbackRequest reports whether r came from this host's own network stack:
+// its socket peer is loopback and its Host names the local host, or its peer is
+// the connection's own local address and its Host is that address. Both legs
+// must hold, and each fails closed on a malformed value. It reads r.RemoteAddr,
+// r.Host and the local address http.Server records, never a forwarded header.
+// It decides admission only, for a loopback-only route. Unlike HostPolicy,
+// whose allowlist admits a remote caller sending an allowed Host such as
+// localhost, nothing outside this host can satisfy it.
 func LoopbackRequest(r *http.Request) bool {
-	return isLoopbackPeer(r.RemoteAddr) && isLoopbackHost(CanonicalHost(r.Host))
+	return localRequest(r, CanonicalHost(r.Host))
+}
+
+// localRequest reports whether r came from this host's own network stack and
+// names the address it reached: a loopback peer whose Host is the local host,
+// or a peer at the connection's own local address whose Host is that address
+// (the probe of a service bound to one non-loopback address). No remote peer
+// can hold the server's own address: the handshake's reply to it never leaves
+// the host. canon is CanonicalHost(r.Host).
+func localRequest(r *http.Request, canon string) bool {
+	peer, ok := peerAddr(r.RemoteAddr)
+	if !ok {
+		return false
+	}
+	if peer.IsLoopback() {
+		return isLoopbackHost(canon)
+	}
+	local, ok := listenerAddr(r)
+	if !ok || peer != local {
+		return false
+	}
+	host, err := netip.ParseAddr(canon)
+	return err == nil && host.Unmap() == local
 }
 
 // isLoopbackHost reports whether a CanonicalHost-normalized value names the
@@ -418,20 +390,35 @@ func isLoopbackHost(canon string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// isLoopbackPeer reports whether an http.Request.RemoteAddr belongs to a
-// loopback socket peer. RemoteAddr is set by the server from the accepted
-// connection (net.Conn.RemoteAddr().String(), always "host:port"), so it
-// cannot be spoofed at this layer; forwarded headers play no part. Anything
-// that does not split cleanly as host:port fails CLOSED — a lenient portless
-// fallback would let a non-stdlib caller with a hand-built RemoteAddr widen
-// the loopback carve-out.
-func isLoopbackPeer(remoteAddr string) bool {
+// peerAddr parses an http.Request.RemoteAddr, which the server sets from the
+// accepted connection ("host:port"), so it cannot be spoofed at this layer.
+// Anything that does not split as host:port, or carries a zone no Host can
+// name, fails closed: a lenient fallback would let a non-stdlib caller with a
+// hand-built RemoteAddr widen the carve-out. It stays unexported: a peer-only
+// gate admits a DNS-rebound page on this host (CWE-346).
+func peerAddr(remoteAddr string) (netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return false
+		return netip.Addr{}, false
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	a, err := netip.ParseAddr(host)
+	if err != nil || a.Zone() != "" {
+		return netip.Addr{}, false
+	}
+	return a.Unmap(), true
+}
+
+// listenerAddr is the local address of r's connection, which http.Server
+// records under LocalAddrContextKey. A request with none (a handler called
+// directly, a listener that is not TCP) or an unspecified one has no address
+// a peer can match.
+func listenerAddr(r *http.Request) (netip.Addr, bool) {
+	ta, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if !ok || ta == nil {
+		return netip.Addr{}, false
+	}
+	a := ta.AddrPort().Addr().Unmap()
+	return a, a.IsValid() && !a.IsUnspecified()
 }
 
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
