@@ -407,6 +407,16 @@ describe("stream scope", () => {
     expect(h.last().request.headers["SSE-Topics"]).toBe('["run:z"]');
   });
 
+  it("a call before the first start waits for the first hello", async () => {
+    const h = scoped([]);
+    const early = track(h.stream.setScope(["run:a"]));
+    await flush();
+    expect(early.error).toBeUndefined();
+    await h.open(helloWithConn());
+    expect(h.sf.connections[0]!.request.headers["SSE-Topics"]).toBe('["run:a"]');
+    expect(early.value).toEqual({ epoch: A, offset: "5" });
+  });
+
   it("stop ends degraded mode, so the next start presents the scope again", async () => {
     const h = scoped();
     await h.open(helloWithConn({ conn: "x" }));

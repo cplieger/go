@@ -383,6 +383,96 @@ describe("worker host scope", () => {
     expect(a.ofType("scope_set")).toEqual([{ type: "scope_set", seq: 5, epoch: A, offset: "9" }]);
   });
 
+  it("an attach that starts a stopped host settles the scope call it carries at the hello", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    a.attach({ scope: ["run:a"], scopeSeq: 3, hadWorker: true });
+    await settle();
+    await hello(h);
+    expect(a.ofType("scope_failed")).toEqual([]);
+    expect(a.ofType("scope_set")).toEqual([{ type: "scope_set", seq: 3, epoch: A, offset: "5" }]);
+  });
+
+  it("a host whose revalidate calls tabs.run at once reaches a covered tab in the hello run", async () => {
+    const sf = scriptedFetch();
+    const got: WorkerToTab[] = [];
+    const host = createWorkerHost({
+      url: "/events",
+      fetch: sf.fetch,
+      versions: createVersionMap(),
+      heartbeatMs: 1000,
+      scopeUrl: "/scope",
+      revalidate: (ctx, tabs) => tabs.run(ctx),
+    });
+    hosts.push(host);
+    const channel = new MessageChannel();
+    channel.port2.onmessage = (e: MessageEvent) => {
+      got.push(e.data as WorkerToTab);
+    };
+    host.attach(channel.port1);
+    channel.port2.postMessage({
+      type: "attach",
+      tabId: "a",
+      visible: true,
+      online: true,
+      hadWorker: false,
+      tag: "",
+      scope: ["run:a"],
+    } satisfies TabToWorker);
+    await settle();
+    sf.connections.at(-1)!.push(helloFrame({ epoch: A, head: "5", conn: CONN, resumed: false }));
+    await settle();
+    const runs = got.filter((m) => m.type === "revalidate_run") as Extract<
+      WorkerToTab,
+      { type: "revalidate_run" }
+    >[];
+    // The shared hello run (not full: nothing was dropped), never a per-port full run instead.
+    expect(runs.map((r) => [r.ctx.cause, r.ctx.full])).toEqual([["hello", false]]);
+  });
+
+  it("a port repaired while stopped gets its full run after the next start", async () => {
+    const h = hostHarness();
+    const a = tab(h, "a");
+    const b = tab(h, "b");
+    a.attach({ scope: ["run:a"] });
+    b.attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h, { resumed: true });
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(1000);
+      await settle();
+      const hb = a.ofType("heartbeat").at(-1);
+      if (hb) {
+        a.send({ type: "heartbeat_ack", seq: hb.seq });
+      }
+      await settle();
+    }
+    expect(h.ofKind("port_expired")).toHaveLength(1);
+    const z = tab(h, "z");
+    z.attach({ scope: ["run:a"] });
+    await settle();
+    z.send({ type: "detach", cause: "logout" });
+    await settle();
+    expect(h.host.stream().state().kind).toBe("stopped");
+    b.send({ type: "heartbeat_ack", seq: b.ofType("heartbeat").at(-1)!.seq });
+    await settle();
+    expect(h.ofKind("port_repaired")).toHaveLength(1);
+    const before = b.ofType("revalidate_run").length;
+    tab(h, "c").attach({ scope: ["run:a"] });
+    await settle();
+    await hello(h, { resumed: true });
+    for (const r of h.runs) {
+      void r.tabs.run(r.ctx);
+    }
+    await settle();
+    expect(
+      b
+        .ofType("revalidate_run")
+        .slice(before)
+        .map((m) => m.ctx.full),
+    ).toContain(true);
+  });
+
   it("a stopped stream fails every pending scope call with stopped", async () => {
     const h = hostHarness();
     const a = tab(h, "a");

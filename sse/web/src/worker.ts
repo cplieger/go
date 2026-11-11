@@ -316,12 +316,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     }
   }
 
-  /**
-   * Whether a run may read this port's state now. With no scope endpoint the connection carries
-   * everything. Between connections the next connect presents the union, this port included, and
-   * replays from the cursor, so a read now misses nothing. An open or connecting stream must be
-   * assured of the port's scope: an attempt in flight presented the union as it stood then.
-   */
+  /** Whether a run may read this port's state now: always without a scope endpoint, else only once the stream is assured of its scope. */
   function covered(entry: PortEntry): boolean {
     return opts.scopeUrl === undefined || coversScope(controls.assured(), entry.scope);
   }
@@ -395,25 +390,19 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
     entry.scope = scope;
     entry.scopeSet = scope === null ? null : new Set(scope);
     if (seq !== undefined) {
-      if (stream.state().kind === "stopped") {
-        post(entry, { type: "scope_failed", seq, cause: "stopped" });
-      } else {
-        entry.pendingScopes.push({ seq, scope });
-      }
+      entry.pendingScopes.push({ seq, scope });
     }
     updateUnion();
     settlePort(entry);
   }
 
-  /** At stop: fails every pending scope call and drops the runs held for coverage. */
+  /** At stop: fails every pending scope call. */
   function failPendingScopes(cause: "stopped"): void {
     for (const entry of entries.values()) {
       for (const call of entry.pendingScopes) {
         post(entry, { type: "scope_failed", seq: call.seq, cause });
       }
       entry.pendingScopes = [];
-      entry.owedRun = false;
-      entry.retryRun = false;
     }
   }
 
@@ -447,10 +436,8 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
    * non-full run on the shared map could certify a version this port never read.
    */
   function perPortFull(entry: PortEntry): void {
-    if (stream.state().kind === "stopped") {
-      return;
-    }
-    if (!covered(entry)) {
+    // A stopped stream holds the run until the next start covers the port.
+    if (stream.state().kind === "stopped" || !covered(entry)) {
       entry.owedRun = true;
       return;
     }
@@ -598,7 +585,14 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         adoptTag(message.tag);
         return;
       case "set_scope":
-        setPortScope(entry, message.topics, message.seq);
+        // A stopped stream answers at once: only a new attach starts it, and that attach's
+        // own scopeSeq settles at its hello.
+        if (stream.state().kind === "stopped") {
+          setPortScope(entry, message.topics, undefined);
+          post(entry, { type: "scope_failed", seq: message.seq, cause: "stopped" });
+        } else {
+          setPortScope(entry, message.topics, message.seq);
+        }
         return;
       case "revalidate_done":
       case "revalidate_failed": {

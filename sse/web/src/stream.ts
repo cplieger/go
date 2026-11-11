@@ -129,11 +129,11 @@ export interface Stream {
   resetCursor(): void;
   /**
    * Replaces the scope: `null` is everything, `[]` broadcasts only, a list those topics as well.
-   * Throws a RangeError for a topic outside `validTopic` or more than MAX_SCOPE_TOPICS. Resolves
-   * once the server is guaranteed to deliver the scope, with the offset after which it does: read
-   * the topics' state after it resolves, including every frame at or below that offset. Rejects
-   * with a ScopeError `stopped` on stop() or while stopped (the next start presents the scope),
-   * or `superseded` when a later call replaced it uncovered.
+   * Throws a RangeError for a topic outside `validTopic` or past MAX_SCOPE_TOPICS. Resolves once
+   * the server is guaranteed to deliver it, with the offset after which it does: read the topics'
+   * state after that, every frame at or below the offset included. Rejects `stopped` on or after
+   * stop() (the next start still presents it; before the first start it waits for the hello), or
+   * `superseded` when a later call replaced it uncovered.
    */
   setScope(scope: readonly string[] | null): Promise<Cursor>;
 }
@@ -387,6 +387,10 @@ export function createStream(opts: StreamOptions): Stream {
   let binding = false;
   let knownEpoch = opts.versions.epoch();
   const helloRun = { full: false, revalidated: false };
+  // The reducer asks for the hello run inside the "connected" dispatch, before the hello's scope
+  // is entered; the run waits for it, so a host's synchronous tabs.run sees the hello's coverage.
+  let deferHello = false;
+  let helloOwed = false;
   const reducerRevalidated = (): boolean => helloRun.revalidated;
   let wasHiddenClosed = false;
 
@@ -397,7 +401,7 @@ export function createStream(opts: StreamOptions): Stream {
   let current: ScopeValue = initialScope;
   let degraded = false;
   let connScope: ConnScope | null = null;
-  /** What the current connect attempt presented; only that generation's hello reads it. */
+  /** The in-flight attempt's presentation, read by its hello and by its connect's 400. */
   let presented: {
     readonly generation: number;
     readonly header: boolean;
@@ -491,7 +495,11 @@ export function createStream(opts: StreamOptions): Stream {
       case "revalidate":
         if (effect.cause === "hello") {
           helloRun.revalidated = true;
-          schedule("hello", helloRun.full);
+          if (deferHello) {
+            helloOwed = true;
+          } else {
+            schedule("hello", helloRun.full);
+          }
         } else {
           schedule(effect.cause, false);
         }
@@ -626,9 +634,15 @@ export function createStream(opts: StreamOptions): Stream {
     if (!h.resumed) {
       cursor = { epoch: h.epoch, offset: h.head };
     }
+    deferHello = true;
     dispatch({ type: "connected", generation: g, now: now(), hello: h });
+    deferHello = false;
     if (state.kind === "open") {
       enterConnScope(g, h);
+    }
+    if (helloOwed) {
+      helloOwed = false;
+      schedule("hello", helloRun.full);
     }
     if (state.kind !== "open") {
       return;
@@ -1307,7 +1321,8 @@ export function createStream(opts: StreamOptions): Stream {
     setScope(scope) {
       const next = normalizeScope(scope);
       current = next;
-      if (state.kind === "stopped") {
+      // Generation 0 is a stream never started: its call waits for the first hello.
+      if (state.kind === "stopped" && state.generation > 0) {
         return Promise.reject(new ScopeError("stopped"));
       }
       return new Promise<Cursor>((resolve, reject) => {

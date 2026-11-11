@@ -72,11 +72,17 @@ const STOPPED: ClientState = { kind: "stopped", generation: 0 };
 function fakeFallback(): FakeFallback {
   const scopes: FakeFallback["scopes"] = [];
   const calls: string[] = [];
+  // Like a real stream, a call after stop() rejects stopped; one before the first start waits.
+  let stopped = false;
   return {
     scopes,
     calls,
-    start: () => void calls.push("start"),
+    start: () => {
+      stopped = false;
+      calls.push("start");
+    },
     stop: () => {
+      stopped = true;
       calls.push("stop");
       for (const s of scopes.splice(0)) {
         s.reject(new ScopeError("stopped"));
@@ -87,6 +93,10 @@ function fakeFallback(): FakeFallback {
     state: () => STOPPED,
     cursor: () => null,
     setScope(scope) {
+      calls.push(`setScope ${JSON.stringify(scope)}`);
+      if (stopped) {
+        return Promise.reject(new ScopeError("stopped"));
+      }
       return new Promise<Cursor>((resolve, reject) => {
         scopes.push({ scope, resolve, reject });
       });
@@ -292,8 +302,9 @@ describe("tab scope", () => {
       onFrame: () => undefined,
     });
     live.push(attachment);
+    // The scope is set before start, so the first connect presents it.
     expect(fallbacks[0]!.scopes.map((s) => s.scope)).toEqual([["run:a"]]);
-    expect(fallbacks[0]!.calls).toEqual(["start"]);
+    expect(fallbacks[0]!.calls).toEqual(['setScope ["run:a"]', "start"]);
     const call = track(attachment.setScope(["run:b"]));
     await tick(5);
     fallbacks[0]!.scopes.at(-1)!.resolve({ epoch: A, offset: "3" });
@@ -345,6 +356,37 @@ describe("tab scope", () => {
     workers[0]!.host({ type: "scope_set", seq: attach.scopeSeq!, epoch: A, offset: "7" });
     await waitFor("resolve", () => call.value !== undefined);
     expect(call.value).toEqual({ epoch: A, offset: "7" });
+  });
+
+  it("a call pending when the worker errors resolves on the fallback, never stopped", async () => {
+    let fireError: (() => void) | null = null;
+    const w = fakeWorker();
+    const fb = fakeFallback();
+    const attachment = attachToWorker({
+      heartbeatMs: STEADY_HB,
+      supported: true,
+      scope: ["run:a"],
+      spawn: () => ({
+        port: w.port,
+        addEventListener(_type: string, cb: () => void) {
+          fireError = cb;
+        },
+      }),
+      fallback: () => ({ stream: fb, versions: createVersionMap(), headers: {} }),
+      onFrame: () => undefined,
+    });
+    live.push(attachment);
+    const call = track(attachment.setScope(["run:a", "run:b"]));
+    await tick(5);
+    fireError!();
+    expect(attachment.mode()).toBe("fallback");
+    await tick(5);
+    // The scope set before start is the first connect's, and the pending call settles from it.
+    expect(fb.calls.slice(0, 2)).toEqual(['setScope ["run:a","run:b"]', "start"]);
+    expect(call.error).toBeUndefined();
+    fb.scopes.at(-1)!.resolve({ epoch: A, offset: "4" });
+    await waitFor("resolved", () => call.value !== undefined);
+    expect(call.value).toEqual({ epoch: A, offset: "4" });
   });
 
   it("detach rejects every pending call with link, and a bad set throws", async () => {
