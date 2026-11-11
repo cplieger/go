@@ -328,6 +328,9 @@ func TestMetricsServer_closeAndServeExcludeEachOther(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := closed.Close(); err != nil {
+		t.Errorf("a second Close before any Serve = %v, want nil", err)
+	}
 	if err := closed.Serve(t.Context()); !errors.Is(err, errServedTwice) {
 		t.Errorf("Serve after Close = %v, want errServedTwice", err)
 	}

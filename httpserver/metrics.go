@@ -39,10 +39,19 @@ type MetricsHandlers struct {
 // matches, both under WithProbeLogLevel, with panics recovered. Build it with
 // ListenMetrics, which binds before the app starts work, then call Serve.
 type MetricsServer struct {
-	srv    *http.Server
-	ln     net.Listener
-	served atomic.Bool
+	srv *http.Server
+	ln  net.Listener
+	// state is which call claimed the listener: stateIdle, stateServed or
+	// stateClosed.
+	state atomic.Uint32
 }
+
+// The MetricsServer states.
+const (
+	stateIdle uint32 = iota
+	stateServed
+	stateClosed
+)
 
 // ListenMetrics binds addr, a net.Listen "tcp" address, before it returns and
 // serves h once Serve runs. A bind failure is returned naming addr. An empty
@@ -84,12 +93,13 @@ func (m *MetricsServer) Addr() net.Addr {
 
 // Serve serves until ctx is cancelled, then shuts down as Run does with opts,
 // and returns Run's error. When the listener is off it returns nil at once. A
-// call after Serve or Close returns an error and serves nothing.
+// call after Serve or Close, on a listener that is on, returns an error and
+// serves nothing.
 func (m *MetricsServer) Serve(ctx context.Context, opts ...RunOption) error {
 	if m.srv == nil {
 		return nil
 	}
-	if !m.served.CompareAndSwap(false, true) {
+	if !m.state.CompareAndSwap(stateIdle, stateServed) {
 		return errServedTwice
 	}
 	return Run(ctx, m.srv, m.ln, opts...)
@@ -98,13 +108,17 @@ func (m *MetricsServer) Serve(ctx context.Context, opts ...RunOption) error {
 // Close releases a listener Serve has not started, for a caller that gives up
 // before serving, such as a startup that fails after ListenMetrics. Once
 // Serve has started it does nothing and returns an error: cancel Serve's
-// context to stop the server. It returns nil when the listener is off.
+// context to stop the server. It returns nil when the listener is off, and
+// for a repeated Close.
 func (m *MetricsServer) Close() error {
 	if m.ln == nil {
 		return nil
 	}
-	if !m.served.CompareAndSwap(false, true) {
-		return errCloseAfterServe
+	if m.state.CompareAndSwap(stateIdle, stateClosed) {
+		return m.ln.Close()
 	}
-	return m.ln.Close()
+	if m.state.Load() == stateClosed {
+		return nil
+	}
+	return errCloseAfterServe
 }
