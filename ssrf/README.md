@@ -4,7 +4,7 @@
 
 ssrf keeps your Go service's outbound requests off private networks and cloud metadata endpoints, by checking URLs before you fetch and every address at connect time.
 
-It replaces the URL checks and custom dialer you would otherwise write around `net/http`, and it hands back a plain `*http.Transport` and `CheckRedirect` function. At run time it uses the standard library and two dependencies by the same author: [textsafe](https://github.com/cplieger/go/tree/main/textsafe), to clean untrusted text in its log lines, and [urlform](https://github.com/cplieger/go/tree/main/urlform), for its ASCII-only case folding of schemes and hosts. It needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the URL checks and custom dialer you would otherwise write around `net/http`, and it hands back a plain `*http.Transport` and `CheckRedirect` function. At run time it uses the standard library and two dependencies by the same author: [textsafe](https://github.com/cplieger/go/tree/main/textsafe), to clean untrusted text in its log lines, and [urlform](https://github.com/cplieger/go/tree/main/urlform), for its ASCII-only case folding of schemes and hosts. It is licensed under Apache-2.0.
 
 ## Why use it
 

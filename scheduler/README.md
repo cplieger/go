@@ -4,7 +4,7 @@
 
 scheduler lets your Go container run its job on an interval or an outside trigger, with no overlapping runs and a clean shutdown.
 
-It replaces the interval parsing, ticker loop, lock-file handling and graceful child-process shutdown you would otherwise write in each job runner's `main`. It uses only the standard library at run time, needs Go 1.27 or later, works on Unix systems only because its locks use `flock(2)`, and is licensed under Apache-2.0.
+It replaces the interval parsing, ticker loop, lock-file handling and graceful child-process shutdown you would otherwise write in each job runner's `main`. It uses only the standard library at run time, works on Unix systems only because its locks use `flock(2)`, and is licensed under Apache-2.0.
 
 ## Why use it
 
