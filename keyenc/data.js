@@ -1,24 +1,24 @@
 window.BENCHMARK_DATA = {
   "lastUpdate": 1794451717798,
-  "repoUrl": "https://github.com/cplieger/ci",
+  "repoUrl": "https://github.com/cplieger/go",
   "entries": {
     "Benchmark": [
       {
         "commit": {
           "author": {
-            "name": "Christopher Plieger",
-            "username": "cplieger",
-            "email": "917744+cplieger@users.noreply.github.com"
+            "name": "tribble-trouble[bot]",
+            "username": "tribble-trouble[bot]",
+            "email": "338123824+tribble-trouble[bot]@users.noreply.github.com"
           },
           "committer": {
             "name": "GitHub",
             "username": "web-flow",
             "email": "noreply@github.com"
           },
-          "id": "cfca5f4e73eeba96fcf294f8fcd4851873467031",
-          "message": "feat: pass each repository's CI_RUNNER to the shared workflows (#1053)\n\n## Release note\n\nThe synced `ci.yml` and `security.yml` callers now pass the repository's `CI_RUNNER` variable as the shared workflows' `runner` input, so setting that variable moves a repository's CI onto a self-hosted runner, and leaving it unset keeps GitHub-hosted runners.",
-          "timestamp": "2026-11-12T02:09:18Z",
-          "url": "https://github.com/cplieger/ci/commit/cfca5f4e73eeba96fcf294f8fcd4851873467031"
+          "id": "250b214e1c2faa7a597be255e91bc7bfe87b94e5",
+          "message": "chore(sync): synced file(s) with cplieger/ci (#160)\n\nCo-authored-by: tribble-trouble[bot] <338123824+tribble-trouble[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-12T01:49:39Z",
+          "url": "https://github.com/cplieger/go/commit/250b214e1c2faa7a597be255e91bc7bfe87b94e5"
         },
         "date": 1794451717524,
         "tool": "customSmallerIsBetter",
