@@ -660,7 +660,7 @@ func (c *logConfig) resolveClientIP(r *http.Request) string {
 // completed request into a connection reset; it degrades gracefully instead —
 // the client_ip attribute is omitted, or the metric is skipped — mirroring
 // Recoverer's isolation of its WithPanicHook.
-func (c *logConfig) emitAccessLog(rec *StatusRecorder, r *http.Request, path, id string, start time.Time) {
+func (c *logConfig) emitAccessLog(rec *StatusRecorder, r *http.Request, path, id string, start time.Time, added *logAttrs) {
 	// The suppression test comes first, so a suppressed record costs no
 	// path transform, no client-ip resolution, no level policy, and no metric
 	// hook. The fact it reads was latched when the handler wrote 101 (or
@@ -690,6 +690,7 @@ func (c *logConfig) emitAccessLog(rec *StatusRecorder, r *http.Request, path, id
 			args = append(args, "client_ip", ip)
 		}
 	}
+	args = append(args, added.take()...)
 	lvl := slog.LevelInfo
 	if c.logLevel != nil {
 		lvl = c.safeLogLevel(r, status, id, path)
@@ -834,8 +835,10 @@ func requestLogger(next http.Handler, opts ...LogOption) http.Handler {
 			return
 		}
 
+		added := &logAttrs{}
+		r = r.WithContext(context.WithValue(r.Context(), logAttrsKey{}, added))
 		rec := NewStatusRecorder(w)
-		defer c.emitAccessLog(rec, r, path, id, start)
+		defer c.emitAccessLog(rec, r, path, id, start, added)
 		next.ServeHTTP(rec, r)
 	})
 }

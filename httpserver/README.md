@@ -97,7 +97,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 ## API
 
 - Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
-- Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`), `StatusRecorder` and `NewStatusRecorder`.
+- Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), `AddLogAttrs` for a handler's own access-line attributes, the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`), `StatusRecorder` and `NewStatusRecorder`.
 - Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `LogRefusal`), `CanonicalHost`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewStaticTokenVerifier`.
 - Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorCode` and `ErrorResponder`, `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler`, `InlineScriptHashes`, `InlineStyleHashes`.

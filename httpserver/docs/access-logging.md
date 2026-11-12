@@ -35,6 +35,14 @@ A skipped request still gets an id minted, echoed and threaded. It gets no acces
 
 `WithClientIP` and `WithClientIPFunc` exclude each other, and the last one applied wins. `WithClientIPFunc` suits a trusted proxy set that changes at run time.
 
+### Attributes from the handler
+
+`AddLogAttrs(ctx, attrs...)` adds attributes to the access line of the request `ctx` belongs to, after the line's own. Use it for what only a handler knows, such as the name of the API key a request authenticated with. It is safe from any goroutine.
+
+- It does nothing without `Logging` in the chain, for a request `Logging` skips, or once the line has been written.
+- An attribute whose key is empty or repeats one of the line's own (`method`, `path`, `status`, `duration_ms`, `request_id`, `client_ip`) is dropped, so a handler cannot rewrite what the line records.
+- A line takes at most eight added attributes, and a group at most eight members. Each value is resolved when it is added. A string, or any other value written as text, is cut at 256 bytes on a rune boundary with the `...(truncated)` marker, like an over-long path.
+
 ### Upgraded connections
 
 `WithSkipUpgrades(true)` suppresses the record of a request whose response actually switched protocols. That is a recorded status 101, or a hijack taken before any status was recorded, the two shapes a completed WebSocket handshake takes.
