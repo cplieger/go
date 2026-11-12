@@ -4,7 +4,7 @@
 
 envx configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it.
 
-It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. It needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. It is licensed under Apache-2.0.
 
 ## Why use it
 

@@ -4,7 +4,7 @@
 
 keyenc joins untrusted strings into one cache, dedupe or map key with no separator collisions, and builds the same key byte for byte in Go and TypeScript.
 
-It replaces keys like `kind + ":" + host`, where `"a:b"` and `"c"` give the same key as `"a"` and `"b:c"`. The Go module uses only the standard library and needs Go 1.27 or later. The npm and JSR package has no runtime dependencies and ships its TypeScript source as an ES module, which your own build compiles. Both are licensed under Apache-2.0.
+It replaces keys like `kind + ":" + host`, where `"a:b"` and `"c"` give the same key as `"a"` and `"b:c"`. The Go module uses only the standard library. The npm and JSR package has no runtime dependencies and ships its TypeScript source as an ES module, which your own build compiles. Both are licensed under Apache-2.0.
 
 ## Why use it
 
