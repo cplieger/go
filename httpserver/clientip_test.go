@@ -406,6 +406,48 @@ func TestResolveClientReportsPeerTrusted(t *testing.T) {
 	}
 }
 
+func TestResolveClientReadsForwardedHTTPSFromATrustedPeerOnly(t *testing.T) {
+	t.Parallel()
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	for _, tc := range []struct {
+		name, remote string
+		proto        []string
+		want         bool
+	}{
+		{"one https field from a trusted peer", "10.0.0.1:4000", []string{"https"}, true},
+		{"https in another case, with spaces", "10.0.0.1:4000", []string{"  HTTPS \t"}, true},
+		{"a list holding https first", "10.0.0.1:4000", []string{"https, http"}, false},
+		{"a list of https twice", "10.0.0.1:4000", []string{"https,https"}, false},
+		{"two fields", "10.0.0.1:4000", []string{"https", "https"}, false},
+		{"http", "10.0.0.1:4000", []string{"http"}, false},
+		{"an empty field", "10.0.0.1:4000", []string{""}, false},
+		{"no field", "10.0.0.1:4000", nil, false},
+		{"https from an untrusted peer", "192.168.1.50:4000", []string{"https"}, false},
+		{"https from a peer that is no address", "pipe", []string{"https"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			r.RemoteAddr = tc.remote
+			for _, v := range tc.proto {
+				r.Header.Add("X-Forwarded-Proto", v)
+			}
+			if got := httpserver.ResolveClient(r, trusted...).ForwardedHTTPS; got != tc.want {
+				t.Errorf("ForwardedHTTPS = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	t.Run("the Forwarded header's proto is not read", func(t *testing.T) {
+		t.Parallel()
+		r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		r.RemoteAddr = "10.0.0.1:4000"
+		r.Header.Set("Forwarded", "for=192.0.2.1;proto=https")
+		if httpserver.ResolveClient(r, trusted...).ForwardedHTTPS {
+			t.Error("ForwardedHTTPS = true from Forwarded: proto=https, want false")
+		}
+	})
+}
+
 // derivedResolution is ResolveClient's contract applied to the projection of
 // its one parse of the forwarding fields, so a resolver that reads a header
 // on its own, or drops a parsed fact, disagrees with it.

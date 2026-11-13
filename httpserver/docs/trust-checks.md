@@ -30,6 +30,7 @@ The answer is a `ClientResolution`:
 | `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
 | `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |
 | `IgnoredPublic` | One of those ignored headers named a public address, meaning global unicast and outside the private ranges |
+| `ForwardedHTTPS` | A trusted peer sent exactly one `X-Forwarded-Proto` field holding the one token `https`, any case. A list such as `https, http`, a repeated field, an empty value or an untrusted peer reads as plain, and `Forwarded: proto=` is not read. A listed proxy must overwrite the client's field, as Caddy does, not append to it |
 
 Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `PeerTrusted` tells that proxy apart from a direct client, so read another header a proxy sets, such as `X-Forwarded-Proto`, only when it is true. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
 
