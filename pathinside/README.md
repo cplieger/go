@@ -4,7 +4,7 @@
 
 pathinside catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`.
 
-It replaces the `strings.HasPrefix` or `filepath.Rel` check you would otherwise write before an archive entry, a request path or a file-watcher event reaches the filesystem. It reads names only and never touches the disk. It uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the `strings.HasPrefix` or `filepath.Rel` check you would otherwise write before an archive entry, a request path or a file-watcher event reaches the filesystem. It reads names only and never touches the disk. It uses only the standard library and is licensed under Apache-2.0.
 
 ## Why use it
 

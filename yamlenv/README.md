@@ -4,7 +4,7 @@
 
 yamlenv loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. It is for an app that reads a YAML config file and keeps its secrets in the environment.
 
-Its one dependency is [go-yaml](https://github.com/yaml/go-yaml) v4, and its API takes go-yaml v4 nodes and errors, so a new go-yaml major means a new yamlenv major. It is a module of its own, so a program that only needs envx links no YAML library. It needs Go 1.27 or later and is licensed under Apache-2.0.
+Its one dependency is [go-yaml](https://github.com/yaml/go-yaml) v4, and its API takes go-yaml v4 nodes and errors, so a new go-yaml major means a new yamlenv major. It is a module of its own, so a program that only needs envx links no YAML library. It is licensed under Apache-2.0.
 
 ```sh
 go get github.com/cplieger/go/yamlenv@latest

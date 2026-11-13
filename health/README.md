@@ -4,7 +4,7 @@
 
 health gives a Go service one health verdict, kept in memory, served at `GET /healthz`, and checked by the same binary when Docker asks. It needs no shell, curl or wget in the image.
 
-It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks that server's HTTP endpoint instead. The module uses only the standard library at run time, needs Go 1.27 or later and is licensed under Apache-2.0.
+It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, its `probe` package ships a static binary that checks that server's HTTP endpoint instead. The module uses only the standard library at run time and is licensed under Apache-2.0.
 
 ## Why use it
 
