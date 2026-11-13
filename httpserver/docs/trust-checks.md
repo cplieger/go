@@ -1,6 +1,6 @@
 # Client IP, hosts and credentials
 
-This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, classifying a listen address and checking one static credential.
+This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address and checking one static credential.
 
 ## Client IP
 
@@ -97,6 +97,22 @@ A normal in-container command-line client sends none of those headers. Their pre
 The check has a limit. It admits a same-host proxy that sends none of these headers, which is nginx's default for any client that is not a browser, because nothing then tells it apart from an in-container caller. Only authentication closes that gap.
 
 This is a different question from `HostPolicy`. The allowlist asks whether the `Host` is one the operator named, so it admits a remote client sending `Host: localhost` when the operator lists that name. `LoopbackOnly` asks whether the request came from inside.
+
+## Forwarders in front of the host
+
+A container runtime, a tunnel or a router can relay a remote client under its own address, which is often private. Docker's bridge gateway, rootless Podman's slirp4netns address and the Swarm routing mesh's ingress addresses all do this. So a direct private peer is not proof of a local client. Ask `ForwarderCheck` before you trust one more, for example before a first-run setup asks no token of a local client.
+
+`NewForwarderCheck(opts...)` returns a check, and `IsForwarder(peer)` reports that the peer is one of these forwarders when it is:
+
+- a gateway of any route;
+- an address of a non-loopback interface;
+- inside the connected subnet of an interface that carries no default route of the peer's family.
+
+The check reads Linux's `/proc/net/route` and `/proc/net/ipv6_route` and the host's interfaces on every call, so a network connected after start counts. A missing IPv6 route file reads as no IPv6 routes. Any other failed read, as on a host without these files, answers true, so the caller fails closed and logs one Warn line per source, `httpserver: forwarder check could not read the host's network`. An invalid address and a nil check also answer true. The peer's zone is dropped, and an IPv4-mapped address compares as IPv4.
+
+- `WithRouteFiles(ipv4, ipv6)` reads the route tables from other paths, in the same formats.
+- `WithInterfaceAddrs(read)` replaces the read of the interfaces, each an `InterfaceAddrs` of name, prefixes and loopback flag.
+- `WithForwarderLogger(logger)` sends the Warn line to `logger`. Nil, the default, means `slog.Default()` as it is when `NewForwarderCheck` runs.
 
 ## Bind classification
 
