@@ -1,5 +1,5 @@
-github.com/cplieger/go/httpserver v1.5.0-dev.1 h1:Vag2RYIElMFBbiXIaYCKquugDcrfv0iGuaW+scb4kns=
-github.com/cplieger/go/httpserver v1.5.0-dev.1/go.mod h1:MuZxKRRjQG6DAJBO88cTGhVdhSCmBu2PMeA/DWRbiTQ=
+github.com/cplieger/go/httpserver v1.5.0-dev.2 h1:PXRoXCN/C9CSHG/jx8lX7VNSndNwi4B1PHw4JHxvWzw=
+github.com/cplieger/go/httpserver v1.5.0-dev.2/go.mod h1:MuZxKRRjQG6DAJBO88cTGhVdhSCmBu2PMeA/DWRbiTQ=
 github.com/cplieger/go/textsafe v1.1.0 h1:D+p7ZDBQmABv/empI2TNMZfvhMXNlfii8E2e5V+dUWE=
 github.com/cplieger/go/textsafe v1.1.0/go.mod h1:x29RmZpMO2yjPt1zRbjtcXWVdkekukl+jA5FN1wXUlI=
 pgregory.net/rapid v1.3.0 h1:vBvO0VSqti75J1jjYqpgPNBLKMd1+gxa9fYo7vk/Exc=
