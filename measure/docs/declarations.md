@@ -100,7 +100,7 @@ A constructor never panics on a bad declaration. It captures the error, and `Reg
 | An export off the list | `which is not metric, chartdata or both` |
 | `WithBuckets` on anything but a histogram instrument | `not a histogram instrument` |
 | `WithSeed` on an unlabeled instrument, an info series or a collector family, or with the wrong number of values | `which takes no seed`, `gives 1 label values, want 2` |
-| A state set with no labels, no states, a repeated state or a state that is not valid UTF-8 | `has no state label`, `declares no states`, `twice`, `not valid UTF-8` |
+| A state set with no labels, no states, an empty state, a repeated state or a state that is not valid UTF-8 | `has no state label`, `declares no states`, `declares an empty state`, `twice`, `not valid UTF-8` |
 
 A name with no suffix contradicts nothing: `jobs_queued` may be `UnitCount`, and a counter may leave out `_total`. A gauge whose name ends in `_count` or `_info` is a valid Prometheus name and is accepted. Every series the cplieger apps export under measure v1 passes these rules, which a test checks on every release.
 

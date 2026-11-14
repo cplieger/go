@@ -139,8 +139,8 @@ type declMeta struct {
 	source    Source
 }
 
-// fill records a recorded declaration's fixed fields; labels must be the
-// caller's owned copy.
+// fill records the fields every declaration fixes at construction; labels
+// must be the caller's owned copy.
 func (m *declMeta) fill(name, help string, kind Kind, unit Unit, labels []string, o *options) {
 	m.base, m.help, m.kind, m.unit, m.labels = name, help, kind, unit, labels
 	m.unbounded = slices.Clone(o.unbounded)

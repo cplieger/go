@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -152,6 +153,45 @@ func TestCollectorNamesCollideWithEveryOtherFamily(t *testing.T) {
 		if err := NewRegistry("").Register(c); err != nil {
 			t.Fatalf("a collector refused for a collision must stay registrable: %v", err)
 		}
+	})
+}
+
+func TestCollectorHistogramClaimsItsSeriesNames(t *testing.T) {
+	noop := func(context.Context, *Emitter) {}
+	hist := func() *Collector {
+		return NewCollector(noop, NewHistogramDesc("wait_seconds", "h", UnitSeconds, nil, []float64{1}))
+	}
+	for _, suffix := range []string{"_bucket", "_sum", "_count"} {
+		t.Run("collector histogram, then a gauge named"+suffix, func(t *testing.T) {
+			r := NewRegistry("p")
+			r.MustRegister(hist())
+			mustRegisterError(t, r, NewGauge("wait_seconds"+suffix, "h", UnitSeconds), "collides")
+		})
+		t.Run("a gauge named"+suffix+", then a collector histogram", func(t *testing.T) {
+			r := NewRegistry("p")
+			r.MustRegister(NewGauge("wait_seconds"+suffix, "h", UnitSeconds))
+			mustRegisterError(t, r, hist(), "collides")
+		})
+	}
+	t.Run("a histogram desc and its _count desc in one collector", func(t *testing.T) {
+		c := NewCollector(noop,
+			NewHistogramDesc("wait_seconds", "h", UnitSeconds, nil, []float64{1}),
+			NewGaugeDesc("wait_seconds_count", "h", UnitCount, nil))
+		mustRegisterError(t, NewRegistry(""), c, "collides")
+	})
+	t.Run("a refused collector leaves the name table unchanged", func(t *testing.T) {
+		r := NewRegistry("")
+		r.MustRegister(NewGauge("late", "h", UnitNone))
+		before := maps.Clone(r.names)
+		c := NewCollector(noop,
+			NewHistogramDesc("wait_seconds", "h", UnitSeconds, nil, []float64{1}),
+			NewGaugeDesc("depth", "h", UnitCount, nil),
+			NewGaugeDesc("late", "h", UnitNone, nil))
+		mustRegisterError(t, r, c, "collides")
+		if !maps.Equal(r.names, before) {
+			t.Errorf("name table after a refused collector = %v, want %v", r.names, before)
+		}
+		r.MustRegister(NewHistogram("wait_seconds", "h", UnitSeconds), NewGauge("depth", "h", UnitCount))
 	})
 }
 

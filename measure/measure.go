@@ -219,6 +219,17 @@ func (r *Registry) reserveHistogramFamily(name, kind string) error {
 	return nil
 }
 
+// releaseFamily frees the names reserveName or, for a histogram,
+// reserveHistogramFamily claimed for name. Callers must hold r.mu.
+func (r *Registry) releaseFamily(name string, histogram bool) {
+	delete(r.names, name)
+	if histogram {
+		delete(r.names, name+suffixBucket)
+		delete(r.names, name+suffixSum)
+		delete(r.names, name+suffixCount)
+	}
+}
+
 // Metric is implemented by every metric type in this package: *Counter,
 // *Gauge, *LabeledCounter, *LabeledGauge, *StateSet, *Info, *Histogram,
 // *LabeledHistogram and *Collector. The interface is sealed (its method is

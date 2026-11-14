@@ -197,9 +197,13 @@ func (c *Collector) registerInto(r *Registry) error {
 	names := make([]string, len(c.descs))
 	for i, d := range c.descs {
 		names[i] = r.prefixed(d.name)
-		if err := r.reserveName(names[i], "collector family"); err != nil {
-			for _, claimed := range names[:i] {
-				delete(r.names, claimed)
+		reserve := r.reserveName
+		if d.typ == TypeHistogram {
+			reserve = r.reserveHistogramFamily
+		}
+		if err := reserve(names[i], "collector family"); err != nil {
+			for j, claimed := range names[:i] {
+				r.releaseFamily(claimed, c.descs[j].typ == TypeHistogram)
 			}
 			c.registered.Store(false)
 			return err

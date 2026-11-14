@@ -33,9 +33,9 @@ type StateSet struct {
 // such as a provider whose health the states name. With only the state
 // label, every state starts at 0; with more, [WithSeed] takes the other
 // labels' values and starts each such set at 0. A state set's unit is
-// [UnitNone]. No labels, no states, a repeated state or one that is not
-// valid UTF-8 is a construction error, as is any error [NewLabeledGauge]
-// captures.
+// [UnitNone]. No labels, no states, an empty or repeated state or one that
+// is not valid UTF-8 is a construction error, as is any error
+// [NewLabeledGauge] captures.
 func NewStateSet(name, help string, labels, states []string, opts ...Option) *StateSet {
 	help = sanitizeHelp(name, help)
 	o := applyOptions(opts)
@@ -76,6 +76,11 @@ func checkStates(name string, labels, states []string) error {
 		return fmt.Errorf("measure: state set %q declares no states", name)
 	}
 	for i, st := range states {
+		if st == "" {
+			// Prometheus treats an empty label value as the label being absent,
+			// so no selector could pick this state out.
+			return fmt.Errorf("measure: state set %q declares an empty state", name)
+		}
 		if !utf8.ValidString(st) {
 			return fmt.Errorf("measure: state set %q declares state %q, which is not valid UTF-8", name, st)
 		}

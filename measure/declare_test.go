@@ -75,8 +75,11 @@ func TestRegisterRefusesAContradictoryDeclaration(t *testing.T) {
 		{"stateSetNoStates", NewStateSet("mode", "h", []string{"mode"}, nil), "declares no states"},
 		{"stateSetRepeatedState", NewStateSet("mode", "h", []string{"mode"}, []string{"a", "b", "a"}), `state "a" twice`},
 		{"stateSetInvalidState", NewStateSet("mode", "h", []string{"mode"}, []string{"a\xff"}), "not valid UTF-8"},
+		{"stateSetEmptyState", NewStateSet("mode", "h", []string{"mode"}, []string{"a", ""}), "declares an empty state"},
 		{"stateSetDescNoStates", NewCollector(func(context.Context, *Emitter) {},
 			NewStateSetDesc("mode", "h", []string{"mode"}, nil)), "declares no states"},
+		{"stateSetDescEmptyState", NewCollector(func(context.Context, *Emitter) {},
+			NewStateSetDesc("mode", "h", []string{"mode"}, []string{""})), "declares an empty state"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
