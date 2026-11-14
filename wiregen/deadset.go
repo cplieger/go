@@ -1,6 +1,7 @@
 package wiregen
 
 import (
+	"cmp"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -134,12 +135,34 @@ func readEdgesDocument(name string) (edgesDocument, error) {
 	return doc, nil
 }
 
-// edgeScope places the generated files and the registered packages relative
-// to deadset's target root.
+// edgeScope places the registered packages relative to deadset's target
+// root and the generated files relative to the output tree, the edges file's
+// directory.
 type edgeScope struct {
-	pkgDirs     map[string]string
-	inside      map[string]bool
-	root, tsDir string // resolved, absolute
+	pkgDirs          map[string]string
+	inside           map[string]bool
+	root, out, tsDir string // resolved, absolute
+}
+
+// edgesPath is the edges file's path as the options name it.
+func (o *options) edgesPath() string {
+	return cmp.Or(o.deadsetEdgesFile, o.deadsetRoot+string(filepath.Separator)+deadsetEdgesFile)
+}
+
+// edgesOutput is the edges file Generate writes, on false when
+// WithDeadsetEdges is off.
+func (o *options) edgesOutput() (f genFile, on bool, err error) {
+	if o.deadsetRoot == "" {
+		if o.deadsetEdgesFile != "" {
+			return genFile{}, false, errors.New("wiregen: WithDeadsetEdgesFile needs WithDeadsetEdges, which names the target root")
+		}
+		return genFile{}, false, nil
+	}
+	name := o.edgesPath()
+	if _, file := filepath.Split(name); file == "" || file == "." || file == ".." {
+		return genFile{}, false, fmt.Errorf("wiregen: the edges file %q names no file", name)
+	}
+	return genFile{role: roleDeadsetEdges, name: name}, true, nil
 }
 
 func (g *generator) newEdgeScope(engine *astEngine, edgesFile string) (*edgeScope, error) {
@@ -147,25 +170,49 @@ func (g *generator) newEdgeScope(engine *astEngine, edgesFile string) (*edgeScop
 	if err != nil {
 		return nil, fmt.Errorf("wiregen: the deadset target root %q: %w", g.o.deadsetRoot, err)
 	}
+	// Split, not Dir: Dir's lexical clean would resolve "link/.." other than
+	// the operating system does.
+	dir, file := filepath.Split(g.o.edgesPath())
+	out, err := resolvedPath(cmp.Or(dir, "."))
+	if err != nil {
+		return nil, fmt.Errorf("wiregen: the directory of the edges file %q: %w", g.o.edgesPath(), err)
+	}
 	// edgesFile is the output path with its symlinks resolved, so it differs
-	// only when deadset-edges.json itself is a link.
-	if want := filepath.Join(root, deadsetEdgesFile); edgesFile != want {
+	// only when the edges file itself is a link.
+	if want := filepath.Join(out, file); edgesFile != want {
 		return nil, fmt.Errorf("wiregen: %s is a symbolic link to %s; deadset reads it as a regular file, so replace the link with the file", want, edgesFile)
 	}
 	tsDir, err := resolvedPath(g.o.tsDir)
 	if err != nil {
 		return nil, fmt.Errorf("wiregen: the TS directory %q: %w", g.o.tsDir, err)
 	}
-	if _, ok := below(root, tsDir); !ok {
-		return nil, fmt.Errorf("wiregen: the TS directory %s is outside the deadset target root %s, which deadset reads TypeScript below", tsDir, root)
+	if _, ok := below(out, tsDir); !ok {
+		return nil, fmt.Errorf("wiregen: the TS directory %s is outside %s, the edges file's directory, below which deadset reads the TypeScript", tsDir, out)
 	}
-	sc := &edgeScope{root: root, tsDir: tsDir, pkgDirs: map[string]string{}, inside: map[string]bool{}}
+	sc := &edgeScope{root: root, out: out, tsDir: tsDir, pkgDirs: map[string]string{}, inside: map[string]bool{}}
 	for p, pkg := range engine.pkgs {
 		if len(pkg.GoFiles) > 0 {
 			sc.pkgDirs[p] = filepath.Dir(pkg.GoFiles[0])
 		}
 	}
+	if pkgs := g.registeredPackages(); len(pkgs) > 0 && !slices.ContainsFunc(pkgs, sc.hasPackage) {
+		return nil, fmt.Errorf("wiregen: the deadset target root %s holds none of the registered Go packages %s, so no edge would be written; pass the directory deadset analyses, which holds them", root, strings.Join(pkgs, ", "))
+	}
 	return sc, nil
+}
+
+// registeredPackages lists the packages of the registered types and enums,
+// sorted.
+func (g *generator) registeredPackages() []string {
+	pkgs := make([]string, 0, len(g.typeNames)+len(g.enums))
+	for _, p := range g.typeNames {
+		pkgs = append(pkgs, p)
+	}
+	for _, def := range g.enums {
+		pkgs = append(pkgs, def.pkgPath)
+	}
+	slices.Sort(pkgs)
+	return slices.Compact(pkgs)
 }
 
 // resolvedPath is p made absolute with the symlinks of its existing part
@@ -205,13 +252,13 @@ func (sc *edgeScope) hasPackage(pkgPath string) bool {
 }
 
 // module is the ts:// scope of name, a file inside the TS directory: the
-// nearest package.json naming a package at or above it up to the root, else
-// "." and the path from the root (deadset-spec contract/grammar/symbol-ref.md,
-// "The TypeScript scope").
+// nearest package.json naming a package at or above it up to the output
+// tree's root, else "." and the path from that root (deadset-spec
+// contract/grammar/symbol-ref.md, "The TypeScript scope").
 func (sc *edgeScope) module(name string) string {
-	rel, _ := below(sc.root, filepath.Join(sc.tsDir, name)) // the TS directory is below the root
+	rel, _ := below(sc.out, filepath.Join(sc.tsDir, name)) // the TS directory is below the output tree
 	for dir := path.Dir(rel); ; dir = path.Dir(dir) {
-		if pkg := manifestName(filepath.Join(sc.root, filepath.FromSlash(dir))); pkg != "" {
+		if pkg := manifestName(filepath.Join(sc.out, filepath.FromSlash(dir))); pkg != "" {
 			return "ts://" + packageScope(pkg) + "/" + pathScope(strings.TrimPrefix(rel, dir+"/"))
 		}
 		if dir == "." {

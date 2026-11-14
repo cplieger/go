@@ -386,6 +386,134 @@ func TestDeadsetEdges_SkipsPackagesOutsideTheRoot(t *testing.T) {
 	}
 }
 
+// A target root holding none of the registered Go packages would drop every
+// edge, so Generate refuses it, naming the root and the packages, before
+// writing anything.
+func TestDeadsetEdges_RefusesARootWithoutRegisteredPackages(t *testing.T) {
+	root, _ := edgesProject(t, `{"name": "app"}`)
+	r := &wiregen.Registry{Types: []wiregen.Type{wiregen.TypeRef[basic.Address]()}}
+	doc, err := generateEdges(t, root, r)
+	if err == nil || !strings.Contains(err.Error(), resolved(t, root)) || !strings.Contains(err.Error(), "github.com/cplieger/go/wiregen/v2/testdata/basic") {
+		t.Errorf("Generate = %v, want a refusal naming the root %s and the package testdata/basic", err, root)
+	}
+	if doc != "" {
+		t.Errorf("an edges document was written:\n%s", doc)
+	}
+	if _, err := os.Stat(filepath.Join(root, "web", "src", "wire", "types.gen.ts")); err == nil {
+		t.Error("Generate wrote the types file before refusing")
+	}
+}
+
+// A registry naming no Go package has no edge to drop, so its document holds
+// none and Generate succeeds.
+func TestDeadsetEdges_RegistryWithoutPackagesWritesNoEdges(t *testing.T) {
+	root, _ := edgesProject(t, `{"name": "app"}`)
+	r := &wiregen.Registry{Constants: []wiregen.Const{{TSName: "LIMIT", Value: 1}}}
+	if _, edges := readEdges(t, mustGenerateEdges(t, root, r)); len(edges) != 0 {
+		t.Errorf("edges = %v, want none", edges)
+	}
+}
+
+// wiregen's outputs, the TS files and the edges file, resolve against the
+// edges file's directory, and its Go packages against the target root, so
+// generating the output tree into a mirror writes what generating in place
+// does, byte for byte.
+func TestDeadsetEdges_MirroredOutputTreeMatchesInPlace(t *testing.T) {
+	const manifest = `{"name": "app"}`
+	root, pkg := edgesProject(t, manifest)
+	r := wireRegistry(pkg, "User", "Other")
+	mirror := t.TempDir()
+	if err := os.Mkdir(filepath.Join(mirror, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(mirror, "web", "package.json"), manifest)
+	err := r.Generate(t.Context(), wiregen.WithTSDir(filepath.Join(mirror, "web", "src", "wire")),
+		wiregen.WithDeadsetEdges(root), wiregen.WithDeadsetEdgesFile(filepath.Join(mirror, "deadset-edges.json")))
+	if err != nil {
+		t.Fatalf("Generate into the mirror: %v", err)
+	}
+	inPlace := mustGenerateEdges(t, root, r)
+	if _, edges := readEdges(t, inPlace); edges["wiregen/User"].UsedBy != "ts://app/src/wire/types.gen.ts#User" {
+		t.Fatalf("in place, wiregen/User = %+v, want it paired with app's types file", edges["wiregen/User"])
+	}
+	got, want := tree(t, mirror), tree(t, root)
+	for _, rel := range []string{"deadset-edges.json", filepath.Join("web", "src", "wire", "types.gen.ts")} {
+		if _, ok := got[rel]; !ok {
+			t.Errorf("the mirror holds no %s", rel)
+		}
+	}
+	for rel, content := range got {
+		if content != want[rel] {
+			t.Errorf("the mirror's %s differs from in place:\n%s\nwant:\n%s", rel, content, want[rel])
+		}
+	}
+}
+
+// Generate merges into the file WithDeadsetEdgesFile names, keeping its hand
+// edges, and leaves the target root's own edges file alone.
+func TestDeadsetEdges_MergesTheFileWhereAsked(t *testing.T) {
+	root, pkg := edgesProject(t, `{"name": "app"}`)
+	const rootDoc = `{"edges": {"root/x": {"provides": "go://example.com/x#X", "used_by": "ts://app/x.ts#X"}}}`
+	writeFile(t, filepath.Join(root, "deadset-edges.json"), rootDoc)
+	out := filepath.Join(root, "web", "deadset-edges.json")
+	writeFile(t, out, `{"edges": {"web/y": {"provides": "go://example.com/x#Y", "used_by": "ts://app/y.ts#Y"}}}`)
+	err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(filepath.Join(root, "web", "src", "wire")),
+		wiregen.WithDeadsetEdges(root), wiregen.WithDeadsetEdgesFile(out))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edges := readEdges(t, string(data))
+	if _, ok := edges["web/y"]; !ok {
+		t.Errorf("the hand edge web/y is missing:\n%s", data)
+	}
+	if _, ok := edges["root/x"]; ok {
+		t.Errorf("the target root's edge root/x was merged in:\n%s", data)
+	}
+	if got, want := edges["wiregen/User"].UsedBy, "ts://app/src/wire/types.gen.ts#User"; got != want {
+		t.Errorf("wiregen/User used_by = %q, want %q", got, want)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "deadset-edges.json")); string(data) != rootDoc {
+		t.Errorf("the target root's edges file was rewritten:\n%s", data)
+	}
+}
+
+// The package.json walk stops at the edges file's directory, as the output
+// tree ends there: a manifest above it names no package.
+func TestDeadsetEdges_TSScopeStopsAtTheEdgesFile(t *testing.T) {
+	root, pkg := edgesProject(t, `{"name": "app"}`)
+	out := filepath.Join(root, "web", "src", "deadset-edges.json")
+	err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(filepath.Join(root, "web", "src", "wire")),
+		wiregen.WithDeadsetEdges(root), wiregen.WithDeadsetEdgesFile(out))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, edges := readEdges(t, string(data)); edges["wiregen/User"].UsedBy != "ts://./wire/types.gen.ts#User" {
+		t.Errorf("wiregen/User = %+v, want it scoped from the edges file's directory", edges["wiregen/User"])
+	}
+}
+
+// WithDeadsetEdgesFile places the file WithDeadsetEdges asks for; alone it
+// asks for none, so Generate refuses it rather than write nothing.
+func TestDeadsetEdges_RefusesAFileOptionAlone(t *testing.T) {
+	root, pkg := edgesProject(t, `{"name": "app"}`)
+	err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(filepath.Join(root, "web", "src", "wire")),
+		wiregen.WithDeadsetEdgesFile(filepath.Join(root, "deadset-edges.json")))
+	if err == nil || !strings.Contains(err.Error(), "WithDeadsetEdgesFile needs WithDeadsetEdges") {
+		t.Errorf("Generate = %v, want WithDeadsetEdgesFile refused without WithDeadsetEdges", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "deadset-edges.json")); err == nil {
+		t.Error("an edges document was written")
+	}
+}
+
 // A merge keeps the description and every edge outside wiregen/ as written,
 // escapes included, and replaces wiregen's own.
 func TestDeadsetEdges_MergeKeepsHandEdges(t *testing.T) {
@@ -613,9 +741,50 @@ func TestDeadsetEdges_ResolvesTheRootPhysically(t *testing.T) {
 func TestDeadsetEdges_RefusesAMisplacedLayout(t *testing.T) {
 	t.Run("a TS directory outside the root", func(t *testing.T) {
 		root, pkg := edgesProject(t, `{"name": "app"}`)
-		err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(t.TempDir()), wiregen.WithDeadsetEdges(filepath.Join(root, "wire")))
-		if err == nil || !strings.Contains(err.Error(), "the TS directory") || !strings.Contains(err.Error(), "outside the deadset target root") {
-			t.Errorf("Generate = %v, want the TS directory refused as outside the target root", err)
+		tsDir, wire := resolved(t, t.TempDir()), filepath.Join(root, "wire")
+		err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(tsDir), wiregen.WithDeadsetEdges(wire))
+		if err == nil || !strings.Contains(err.Error(), "the TS directory "+tsDir) || !strings.Contains(err.Error(), resolved(t, wire)) {
+			t.Errorf("Generate = %v, want the TS directory %s refused as outside %s", err, tsDir, wire)
+		}
+	})
+	t.Run("a TS directory outside the edges file's directory", func(t *testing.T) {
+		root, pkg := edgesProject(t, `{"name": "app"}`)
+		tsDir, out := resolved(t, filepath.Join(root, "web", "src", "wire")), resolved(t, t.TempDir())
+		err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(tsDir),
+			wiregen.WithDeadsetEdges(root), wiregen.WithDeadsetEdgesFile(filepath.Join(out, "deadset-edges.json")))
+		if err == nil || !strings.Contains(err.Error(), "the TS directory "+tsDir) || !strings.Contains(err.Error(), "outside "+out) {
+			t.Errorf("Generate = %v, want the TS directory %s refused as outside %s", err, tsDir, out)
+		}
+		if _, err := os.Stat(filepath.Join(root, "deadset-edges.json")); err == nil {
+			t.Error("an edges document was written at the target root")
+		}
+	})
+	t.Run("a symlinked edges file where asked", func(t *testing.T) {
+		root, pkg := edgesProject(t, `{"name": "app"}`)
+		target, link := filepath.Join(root, "web", "edges.json"), filepath.Join(root, "web", "deadset-edges.json")
+		const content = `{"edges": {}}`
+		writeFile(t, target, content)
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(filepath.Join(root, "web", "src", "wire")),
+			wiregen.WithDeadsetEdges(root), wiregen.WithDeadsetEdgesFile(link))
+		if err == nil || !strings.Contains(err.Error(), "is a symbolic link") {
+			t.Errorf("Generate = %v, want the link refused", err)
+		}
+		if data, _ := os.ReadFile(target); string(data) != content {
+			t.Errorf("the link's target was rewritten:\n%s", data)
+		}
+	})
+	t.Run("an edges file path naming no file", func(t *testing.T) {
+		root, pkg := edgesProject(t, `{"name": "app"}`)
+		web := filepath.Join(root, "web")
+		for _, p := range []string{web + string(filepath.Separator), web + string(filepath.Separator) + ".", filepath.Join(web, "src") + string(filepath.Separator) + ".."} {
+			err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(filepath.Join(web, "src", "wire")),
+				wiregen.WithDeadsetEdges(root), wiregen.WithDeadsetEdgesFile(p))
+			if err == nil || !strings.Contains(err.Error(), "names no file") {
+				t.Errorf("Generate with the edges file %q = %v, want it refused as naming no file", p, err)
+			}
 		}
 	})
 	t.Run("a symlinked edges file", func(t *testing.T) {
@@ -668,6 +837,16 @@ func TestDeadsetEdges_OffByDefault(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "deadset-edges.json")); err == nil {
 		t.Error("an edges document was written without WithDeadsetEdges")
 	}
+}
+
+// resolved is p with its symlinks resolved, as Generate names it in an error.
+func resolved(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // treeOf lists every path below root with its file mode, so a refusal can be
