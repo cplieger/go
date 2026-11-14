@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -582,6 +583,9 @@ func TestDeadsetEdges_PercentEncodesTheScope(t *testing.T) {
 // A target root climbing out of a symlink with ".." is the directory the
 // operating system reaches, not the lexical parent.
 func TestDeadsetEdges_ResolvesTheRootPhysically(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`Windows resolves ".." lexically, so src\hop\.. is src (TestDeadsetEdges_RootClimbingOutOfASymlinkIsLexicalOnWindows)`)
+	}
 	root, pkg := edgesProject(t, `{"name": "app"}`)
 	hop := filepath.Join(root, "web", "src", "hop")
 	if err := os.Symlink(filepath.Join(root, "web"), hop); err != nil {
