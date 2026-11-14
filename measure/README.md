@@ -15,7 +15,7 @@ measure is built for Go services whose set of metrics is fixed when the program 
 - The handler writes valid Prometheus text format 0.0.4, with invalid UTF-8 replaced by U+FFFD.
 - Every registry adds the Go and process metrics that client_golang's default collectors serve, under the same names, so stock Go dashboards work. On Linux and macOS, the process ones the OS gives a program without cgo appear when their reads succeed.
 - A labeled metric logs one warning when it reaches 1,000 series, so a runaway label shows in your logs.
-- A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, with any number of labels.
+- A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, as gauges, counters or histograms with any number of labels.
 - `Gather` reads a registry as structured values, so a test can check a metric without parsing the page.
 - Recording and scraping are safe from many goroutines at once.
 
@@ -137,7 +137,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a
 - Buckets: `DefaultBuckets`, `APIBuckets` and the `WithBuckets` option.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.
 - Registry: `NewRegistry` with its `WithLogger` option (`RegistryOption`), `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement.
-- Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewCollector` and `(*Emitter).Emit`.
+- Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewHistogramDesc`, `NewCollector`, `(*Emitter).Emit` and `(*Emitter).EmitHistogram`.
 - Reading: `Gather`, which returns `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
