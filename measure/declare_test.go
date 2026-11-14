@@ -2,6 +2,7 @@ package measure
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -376,4 +377,23 @@ func TestFindAndSampleReadAFamilyByName(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestExportAndSourceNameTheirValues(t *testing.T) {
+	for _, tc := range []struct {
+		got  fmt.Stringer
+		want string
+	}{
+		{ExportMetric, "metric"},
+		{ExportChartdata, "chartdata"},
+		{ExportBoth, "both"},
+		{Export(7), "Export(7)"},
+		{SourceRecorded, "recorded"},
+		{SourceRead, "read"},
+		{Source(5), "Source(5)"},
+	} {
+		if got := tc.got.String(); got != tc.want {
+			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
+	}
 }

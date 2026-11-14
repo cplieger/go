@@ -84,10 +84,13 @@ const (
 
 // String returns "recorded" or "read".
 func (s Source) String() string {
-	if s == SourceRead {
+	switch s {
+	case SourceRecorded:
+		return "recorded"
+	case SourceRead:
 		return "read"
 	}
-	return "recorded"
+	return fmt.Sprintf("Source(%d)", int(s))
 }
 
 // Declaration is the metadata of one declared series, as
