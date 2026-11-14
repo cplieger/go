@@ -1,13 +1,17 @@
-// Package measure is a standard-library-only Prometheus exposition library;
-// Handler serves text format 0.0.4.
+// Package measure declares a service's series once, records or reads their
+// current values, and serves them: Handler as Prometheus text format 0.0.4,
+// and Gather and GatherOf as structured values for tests and charts. It uses
+// only the standard library.
 //
-// Construction never panics on an invalid name, label or bucket set: the
+// Every declaration states its unit, kind and labels, and with WithExport
+// where it is served. Construction never panics on a bad declaration: the
 // error is captured into the metric and surfaces at registration, where
 // Register returns it and MustRegister panics. Such a metric records nothing
-// (one warning on the first dropped record) and Handler emits nothing for it.
-// A label-arity mismatch on a record path and a negative Counter.Add panic.
+// (one warning on the first dropped record) and Handler emits nothing for
+// it. A label-arity mismatch on a record path, a negative Counter.Add and an
+// undeclared state passed to StateSet.Set panic.
 //
-// Registry handlers and record paths are safe concurrently with
+// Registry handlers, GatherOf and record paths are safe concurrently with
 // registration. What is left out by design is listed in the README.
 package measure
 
