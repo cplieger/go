@@ -386,8 +386,36 @@ func TestDeadsetEdges_SkipsPackagesOutsideTheRoot(t *testing.T) {
 	}
 }
 
-// A target root holding none of the registered Go packages would drop every
-// edge, so Generate refuses it, naming the root and the packages, before
+// An embedded struct's field is keyed by the package declaring the struct, so
+// a type outside the target root embedding a struct from inside it still
+// writes that field's edge, and Generate accepts the root.
+func TestDeadsetEdges_EmbedFromInsideTheRootGetsItsEdge(t *testing.T) {
+	p := moduleTempDir(t)
+	mod := "github.com/cplieger/go/wiregen/v2/" + filepath.Base(p)
+	for _, d := range []string{"outer", filepath.Join("inner", "base"), filepath.Join("inner", "web", "src", "wire")} {
+		if err := os.MkdirAll(filepath.Join(p, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(p, "inner", "base", "base.go"), "package base\n\ntype Base struct {\n\tRev int `json:\"rev\"`\n}\n")
+	writeFile(t, filepath.Join(p, "outer", "outer.go"), "package outer\n\nimport \""+mod+"/inner/base\"\n\ntype User struct {\n\tbase.Base\n\tID int `json:\"id\"`\n}\n")
+	root := filepath.Join(p, "inner")
+	r := &wiregen.Registry{Types: []wiregen.Type{{PkgPath: mod + "/outer", Name: "User"}}}
+	doc, err := generateEdges(t, root, r)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, edges := readEdges(t, doc)
+	if got, want := edges["wiregen/User/Base.Rev"].Provides, "go://"+mod+"/inner/base#Base.Rev"; got != want {
+		t.Errorf("wiregen/User/Base.Rev provides = %q, want %q", got, want)
+	}
+	if _, ok := edges["wiregen/User"]; ok {
+		t.Error("wiregen/User names the outer package, outside the target root")
+	}
+}
+
+// A target root giving the registered types and enums no edge would leave the
+// file empty, so Generate refuses it, naming the root and the packages, before
 // writing anything.
 func TestDeadsetEdges_RefusesARootWithoutRegisteredPackages(t *testing.T) {
 	root, _ := edgesProject(t, `{"name": "app"}`)
@@ -414,10 +442,9 @@ func TestDeadsetEdges_RegistryWithoutPackagesWritesNoEdges(t *testing.T) {
 	}
 }
 
-// wiregen's outputs, the TS files and the edges file, resolve against the
-// edges file's directory, and its Go packages against the target root, so
-// generating the output tree into a mirror writes what generating in place
-// does, byte for byte.
+// The TS scopes resolve against the edges file's directory and the Go
+// packages against the target root, so generating the output tree into a
+// mirror writes what generating in place does, byte for byte.
 func TestDeadsetEdges_MirroredOutputTreeMatchesInPlace(t *testing.T) {
 	const manifest = `{"name": "app"}`
 	root, pkg := edgesProject(t, manifest)

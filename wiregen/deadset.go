@@ -53,6 +53,12 @@ func (g *generator) renderDeadsetEdges(engine *astEngine, files []genFile) (stri
 	if err != nil {
 		return "", err
 	}
+	// The check is on the edges, not the registered packages: an embedded
+	// struct's field is keyed by the package declaring it.
+	edges := g.generatedEdges(engine, sc)
+	if pkgs := g.registeredPackages(); len(edges) == 0 && len(pkgs) > 0 {
+		return "", fmt.Errorf("wiregen: the deadset target root %s holds none of the Go packages wiregen pairs, so the edges file would hold no edge; registered: %s; pass the directory deadset analyses, which holds them", sc.root, strings.Join(pkgs, ", "))
+	}
 	doc, err := readEdgesDocument(files[i].name)
 	if err != nil {
 		return "", err
@@ -75,7 +81,7 @@ func (g *generator) renderDeadsetEdges(engine *astEngine, files []genFile) (stri
 		slices.Sort(hand)
 		return "", fmt.Errorf("wiregen: %s holds hand-written edges under the %q prefix wiregen owns: %s; rename each outside it", files[i].name, edgePrefix, strings.Join(hand, ", "))
 	}
-	for id, e := range g.generatedEdges(engine, sc) {
+	for id, e := range edges {
 		raw, encErr := json.Marshal(e)
 		if encErr != nil {
 			return "", fmt.Errorf("wiregen: encode edge %s: %w", id, encErr)
@@ -135,7 +141,7 @@ func readEdgesDocument(name string) (edgesDocument, error) {
 	return doc, nil
 }
 
-// edgeScope places the registered packages relative to deadset's target
+// edgeScope places the loaded Go packages relative to deadset's target
 // root and the generated files relative to the output tree, the edges file's
 // directory.
 type edgeScope struct {
@@ -194,9 +200,6 @@ func (g *generator) newEdgeScope(engine *astEngine, edgesFile string) (*edgeScop
 		if len(pkg.GoFiles) > 0 {
 			sc.pkgDirs[p] = filepath.Dir(pkg.GoFiles[0])
 		}
-	}
-	if pkgs := g.registeredPackages(); len(pkgs) > 0 && !slices.ContainsFunc(pkgs, sc.hasPackage) {
-		return nil, fmt.Errorf("wiregen: the deadset target root %s holds none of the registered Go packages %s, so no edge would be written; pass the directory deadset analyses, which holds them", root, strings.Join(pkgs, ", "))
 	}
 	return sc, nil
 }

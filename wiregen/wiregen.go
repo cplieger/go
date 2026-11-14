@@ -249,8 +249,8 @@ func WithOpenAPIFiles(paths ...string) Option {
 // (https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md). It pairs
 // each generated Go symbol with its TS symbol under "wiregen/" identifiers,
 // keeps every other edge and refuses a hand-written one under that prefix.
-// Only Go packages below targetRoot get edges, and a root holding none of the
-// registered types' and enums' packages is an error. The TS directory must lie
+// Only Go packages below targetRoot get edges, and a root that gives a
+// registered type or enum no edge at all is an error. The TS directory must lie
 // below the edges file's directory ([WithDeadsetEdgesFile]). Empty writes no file.
 func WithDeadsetEdges(targetRoot string) Option {
 	return func(o *options) { o.deadsetRoot = targetRoot }
