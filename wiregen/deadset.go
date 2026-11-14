@@ -37,11 +37,11 @@ type edge struct {
 	UsedBy   string `json:"used_by"`
 }
 
-// edgesDocument keeps every value it read as raw JSON, so a hand-written
-// edge is written back as it was, only re-indented. Description is a pointer
-// so fieldalignment holds with the members declared in output order.
+// edgesDocument keeps every edge it read as raw JSON, so a hand-written edge
+// is written back as it was, only re-indented. Description is a pointer so
+// fieldalignment holds with the members declared in output order.
 type edgesDocument struct {
-	Description *jsontext.Value           `json:"description,omitzero"`
+	Description *string                   `json:"description,omitzero"`
 	Edges       map[string]jsontext.Value `json:"edges"`
 }
 
@@ -89,12 +89,14 @@ func (g *generator) renderDeadsetEdges(engine *astEngine, files []genFile) (stri
 	return string(out) + "\n", nil
 }
 
-// readEdgesDocument reads the edges document at name, refusing one deadset
-// would refuse: not a regular file, larger than maxEdgesBytes, or not strict
-// JSON of the schema's two members. An absent file reads as a new document.
+// readEdgesDocument reads the edges document at name. It refuses a file that
+// is not regular, is larger than maxEdgesBytes, is not strict JSON, holds a
+// member besides description and edges, or whose description is no string;
+// deadset validates the edges themselves. An absent file reads as a new
+// document.
 func readEdgesDocument(name string) (edgesDocument, error) {
-	description, _ := json.Marshal(defaultEdgesDescription) // a string always encodes
-	fresh := edgesDocument{Description: (*jsontext.Value)(&description), Edges: map[string]jsontext.Value{}}
+	description := defaultEdgesDescription
+	fresh := edgesDocument{Description: &description, Edges: map[string]jsontext.Value{}}
 	f, err := os.Open(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return fresh, nil
@@ -136,8 +138,10 @@ func (g *generator) newEdgeScope(engine *astEngine, edgesFile string) (*edgeScop
 	if err != nil {
 		return nil, fmt.Errorf("wiregen: the deadset target root %q: %w", g.o.deadsetRoot, err)
 	}
-	if edgesFile != filepath.Join(root, deadsetEdgesFile) {
-		return nil, fmt.Errorf("wiregen: %s resolves to %s, outside the deadset target root %s", deadsetEdgesFile, edgesFile, root)
+	// edgesFile is the output path with its symlinks resolved, so it differs
+	// only when deadset-edges.json itself is a link.
+	if want := filepath.Join(root, deadsetEdgesFile); edgesFile != want {
+		return nil, fmt.Errorf("wiregen: %s is a symbolic link to %s; deadset reads it as a regular file, so replace the link with the file", want, edgesFile)
 	}
 	tsDir, err := resolvedPath(g.o.tsDir)
 	if err != nil {
@@ -254,20 +258,49 @@ func (g *generator) generatedEdges(engine *astEngine, sc *edgeScope) map[string]
 // typeEdges adds each registered type's edge and its fields'.
 func (g *generator) typeEdges(engine *astEngine, s edgeSet, typesMod string) {
 	for _, ti := range engine.types {
-		tn := g.tsName(ti.Name)
-		s.add(edgeSegment(ti.Name), g.typeNames[ti.Name], ti.Name, typesMod+tn)
-		if ti.Union != nil || ti.Map != nil {
-			continue
-		}
-		for i := range ti.Fields {
-			f := &ti.Fields[i]
-			if f.Owner.Name == "" {
-				continue
+		tn := typesMod + g.tsName(ti.Name)
+		s.add(edgeSegment(ti.Name), g.typeNames[ti.Name], ti.Name, tn)
+		switch {
+		case ti.Map != nil:
+		case ti.Union != nil:
+			s.unionFields(ti, tn)
+		default:
+			for i := range ti.Fields {
+				s.field(ti, &ti.Fields[i], tn, true)
 			}
-			own := f.GoName[strings.LastIndex(f.GoName, ".")+1:]
-			s.add(edgeSegment(ti.Name)+"/"+edgeSegment(f.GoName), f.Owner.PkgPath, f.Owner.Name+"."+own, typesMod+tn+"."+tsComponent(f.WireName))
 		}
 	}
+}
+
+// unionFields adds the edges of the fields ti's cases emit. deadset-ts
+// (src/inventory/syntax.ts, aliasMembers) makes a property one case alone
+// declares a member of the alias, and names none that two cases declare, so
+// such a field pairs with the alias itself.
+func (s edgeSet) unionFields(ti *typeInfo, alias string) {
+	declaring := map[string]int{}
+	for i := range ti.Union.cases {
+		for _, f := range ti.caseFields(&ti.Union.cases[i]) {
+			declaring[f.WireName]++
+		}
+	}
+	for name, n := range declaring {
+		s.field(ti, ti.field(name), alias, n == 1)
+	}
+}
+
+// field adds the edge of ti's field f, paired with the TS type ts or, when
+// member, with f's property in it. A property whose wire name holds a space
+// gets none: deadset-spec contract/edges.schema.json's reference holds no
+// whitespace, and isValidJSONName admits no other.
+func (s edgeSet) field(ti *typeInfo, f *fieldInfo, ts string, member bool) {
+	if f.Owner.Name == "" || member && strings.Contains(f.WireName, " ") {
+		return
+	}
+	if member {
+		ts += "." + tsComponent(f.WireName)
+	}
+	own := f.GoName[strings.LastIndex(f.GoName, ".")+1:]
+	s.add(edgeSegment(ti.Name)+"/"+edgeSegment(f.GoName), f.Owner.PkgPath, f.Owner.Name+"."+own, ts)
 }
 
 // enumEdges adds each enum's edge and its constants': a constant pairs with
@@ -304,27 +337,26 @@ func edgeSegment(goName string) string {
 	return b.String()
 }
 
-// tsComponent spells a wire name as a ts:// fragment component: bare when an
-// ECMAScript IdentifierName, else single-quoted (deadset-spec
-// contract/grammar/symbol-ref.md, "Components"). isValidJSONName admits none
-// of the ' \ CR and LF a quoted component escapes.
+// tsComponent spells a wire name as a ts:// fragment component the way
+// deadset-ts src/ref.ts nameComponent does: bare when it matches TS_IDENT or
+// '#' and TS_IDENT, else single-quoted. isValidJSONName admits none of the
+// ' \ CR and LF a quoted component escapes.
 func tsComponent(name string) string {
-	if isIdentifierName(name) {
+	if isTSIdent(strings.TrimPrefix(name, "#")) {
 		return name
 	}
 	return "'" + name + "'"
 }
 
-// isIdentifierName is ECMA-262's IdentifierName over Unicode's ID_Start and
-// ID_Continue (https://tc39.es/ecma262/#prod-IdentifierName).
-func isIdentifierName(s string) bool {
+// isTSIdent is deadset-ts's TS_IDENT: an ASCII letter, '_', '$' or non-ASCII
+// rune, then any of those or an ASCII digit.
+func isTSIdent(s string) bool {
 	if s == "" {
 		return false
 	}
 	for i, r := range s {
-		start := r == '$' || r == '_' || unicode.In(r, unicode.L, unicode.Nl, unicode.Other_ID_Start)
-		cont := start || r == '\u200C' || r == '\u200D' || unicode.In(r, unicode.Mn, unicode.Mc, unicode.Nd, unicode.Pc, unicode.Other_ID_Continue)
-		if unicode.In(r, unicode.Pattern_Syntax, unicode.Pattern_White_Space) || (i == 0 && !start) || !cont {
+		ok := r == '_' || r == '$' || r > unicode.MaxASCII || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || i > 0 && '0' <= r && r <= '9'
+		if !ok {
 			return false
 		}
 	}
