@@ -1,6 +1,7 @@
 package measure_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,16 +30,22 @@ func Example() {
 
 // A labeled counter has no series until its first record, so increase() over a
 // failure that has never happened reads as no data, and an alert on it cannot
-// tell "no failures" from "no series". Seed each label set you know of at 0
-// when the program starts, so the first failure shows as an increase.
-func ExampleLabeledCounter_Add_seed() {
-	failures := measure.NewLabeledCounter("sync_failures_total", "Sync failures by source.", measure.UnitCount, []string{"source"})
-	for _, source := range []string{"plex", "sonarr"} {
-		failures.Add(0, source)
+// tell "no failures" from "no series". Seed each label set known at start,
+// from configuration or an enum, so the first failure shows as an increase.
+// A source added while the program runs is recorded by the code that adds
+// it, with Add(0, ...).
+func ExampleWithSeed() {
+	sources := []string{"plex", "sonarr"} // from the configuration
+	var seeds [][]string
+	for _, source := range sources {
+		seeds = append(seeds, []string{source})
 	}
+	failures := measure.NewLabeledCounter("sync_failures_total", "Sync failures by source.", measure.UnitCount,
+		[]string{"source"}, measure.WithSeed(seeds...))
 
 	r := measure.NewRegistry("")
 	r.MustRegister(failures)
+	failures.Add(0, "radarr") // a source the operator added at run time
 	rec := httptest.NewRecorder()
 	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
@@ -47,7 +54,28 @@ func ExampleLabeledCounter_Add_seed() {
 	// # HELP sync_failures_total Sync failures by source.
 	// # TYPE sync_failures_total counter
 	// sync_failures_total{source="plex"} 0
+	// sync_failures_total{source="radarr"} 0
 	// sync_failures_total{source="sonarr"} 0
+}
+
+// A state set's Set makes one state current, so a scrape never sees two
+// states at 1 or none. The page shows a gauge per state.
+func ExampleStateSet() {
+	mode := measure.NewStateSet("config_mode", "1 for the configuration's current mode, 0 for the others.",
+		[]string{"mode"}, []string{"live", "dry_run"})
+	mode.Set("dry_run")
+
+	r := measure.NewRegistry("")
+	r.MustRegister(mode)
+	rec := httptest.NewRecorder()
+	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
+	fmt.Print(page)
+	// Output:
+	// # HELP config_mode 1 for the configuration's current mode, 0 for the others.
+	// # TYPE config_mode gauge
+	// config_mode{mode="dry_run"} 1
+	// config_mode{mode="live"} 0
 }
 
 // Refresh a labeled gauge from each new snapshot by setting what is there and
@@ -122,12 +150,12 @@ func ExampleRecordHTTP_routeDuration() {
 	// http_request_duration_seconds_count{route="/api/items"} 2
 }
 
-// A build-info gauge carries the version as a label and the value 1, so a query
-// can join it onto any other series of the app.
-func Example_buildInfo() {
+// A build-info series carries the version as a label and the value 1, so a
+// query can join it onto any other series of the app.
+func ExampleInfo() {
 	version := "v1.4.0" // in an app, set at build time with -ldflags "-X main.version=..."
-	info := measure.NewLabeledGauge("build_info", "Build information, always 1.", measure.UnitNone, []string{"version"})
-	info.Set(1, version)
+	info := measure.NewInfo("build_info", "Build information, always 1.", []string{"version"})
+	info.Set(version)
 
 	r := measure.NewRegistry("")
 	r.MustRegister(info)
@@ -139,4 +167,26 @@ func Example_buildInfo() {
 	// # HELP build_info Build information, always 1.
 	// # TYPE build_info gauge
 	// build_info{version="v1.4.0"} 1
+}
+
+// A series only a chart reads is declared ExportChartdata: the page never
+// serves it, and GatherOf reads it with the other declarations a chart
+// draws. Only such a series may carry an unbounded label.
+func ExampleRegistry_GatherOf() {
+	turns := measure.NewLabeledCounter("turns_total", "Turns taken, by agent.", measure.UnitCount, []string{"agent"},
+		measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+	r := measure.NewRegistry("myapp")
+	r.MustRegister(turns)
+	turns.Add(3, "reviewer")
+
+	fams, err := r.GatherOf(context.Background(), turns)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	s, _ := fams[0].Sample("reviewer")
+	d := turns.Declaration()
+	fmt.Println(fams[0].Name, d.Unit, d.Export, s.Value)
+	// Output:
+	// myapp_turns_total count chartdata 3
 }
