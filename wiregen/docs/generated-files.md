@@ -79,7 +79,7 @@ Your event-stream code reads each `EventSource` message's `event` and parsed `da
 
 [deadset](https://github.com/cplieger/deadset) finds unused code across Go and TypeScript. A Go wire type that only the generated TypeScript reads looks unused to it. An [edges document](https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md) declares that use, and `WithDeadsetEdges(targetRoot)` writes one for everything wiregen generates.
 
-Pass the directory deadset analyses, relative to the working directory. wiregen writes `deadset-edges.json` there, the one name and place deadset reads. The TS directory must lie below it, and when a type or an enum is registered, at least one edge must come out: a registered package, or the package declaring a struct a registered type embeds, must have its files below it. A root giving none is refused with an error naming the root and the registered packages, since the file would hold no edge. A registry with no type or enum writes a file with no edges.
+Pass the directory deadset analyses, relative to the working directory. wiregen writes `deadset-edges.json` there, the one name and place deadset reads. The TS directory must lie below it. When a type or an enum is registered, at least one edge must come out, so a package declaring a paired symbol must have its files below the root. That is a registered type's or enum's package, or one declaring a struct a registered type embeds, directly or through another embed. A root giving none is refused with an error naming the root and the registered packages, since the file would hold no edge. A registry with no type or enum writes a file with no edges.
 
 ```go
 err := r.Generate(ctx, wiregen.WithTSDir("web/src/wire"), wiregen.WithDeadsetEdges("."))
