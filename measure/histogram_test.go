@@ -680,20 +680,10 @@ func TestHistogram_nameEndingInCount(t *testing.T) {
 }
 
 // TestHistogramObserveIsAllocationFreeAtEveryBucketPosition pins Observe at
-// zero allocations wherever the observed value falls. Observe walks the bounds
-// to find the first bucket the value fits, then increments every bucket from
-// there up, so the branch it takes is chosen by the value: a value below the
-// first bound runs the longest bucket loop, one above the last bound skips the
-// loop entirely and touches only +Inf, and a value exactly ON a bound must
-// land in that bucket (the comparison is `seconds <= bound`) rather than
-// falling through to the next. Each of those is a different path and any of
-// them could start allocating on its own, which is why the positions are
-// listed rather than sampled.
-//
-// The two shape cases are there for a different reason: a histogram with only
-// the implicit +Inf bucket and one with 64 bounds bracket the loop, so a
-// regression that allocated per bucket visited would show up in the wide case
-// even if it hid in the default eight.
+// zero allocations wherever the value falls: below the first bound (the
+// longest bucket loop), on a bound (which must count in that bucket), and
+// above the last (only +Inf). Each is its own path, so the positions are
+// listed, not sampled; the +Inf-only and 64-bound shapes bracket the loop.
 func TestHistogramObserveIsAllocationFreeAtEveryBucketPosition(t *testing.T) {
 	// DefaultBuckets is 0.005 .. 1.0, so these positions are stated against
 	// it. Spelled out rather than derived, so a change to DefaultBuckets is a
@@ -745,17 +735,11 @@ func TestLabeledHistogramObserveIsAllocationFreeOnAnExistingSeries(t *testing.T)
 	}
 }
 
-// TestLabeledHistogramNewSeriesCostIsConstant pins series creation for the
-// labeled histogram, whose new series is a whole child Histogram rather than
-// one atomic: it measures two allocations (the Histogram and its bucket slice)
-// where the counter and gauge measure one.
-//
-// The bucket-count axis is the one specific to this type. `make([]atomic.Int64,
-// len(bounds)+1)` is a single allocation whatever its length, so the constant
-// must not move between an 8-bound and a 32-bound histogram; if it ever does,
-// something started building per-bucket state and a metric's bucket layout
-// begins multiplying the cost of every label set a caller adds. The
-// existing-series axis is the quadratic guard, as on the counter.
+// TestLabeledHistogramNewSeriesCostIsConstant pins a new labeled histogram
+// series at two allocations (the child Histogram and its bucket slice),
+// whatever its bucket count: per-bucket state would multiply the cost of
+// every label set. The existing-series axis is the quadratic guard, as on
+// the counter.
 func TestLabeledHistogramNewSeriesCostIsConstant(t *testing.T) {
 	// The 20k-series pre-fill crosses cardinalityWarnThreshold; keep its
 	// warning out of the test output. The crossing is in setup.
@@ -810,21 +794,12 @@ func TestLabeledHistogramNewSeriesCostIsConstant(t *testing.T) {
 	})
 }
 
-// TestTimerAllocationCost pins the timer, which the README puts on the
-// `defer t.ObserveDuration()` path of a request handler, and it is the one
-// place in this file where the answer is not a uniform zero.
-//
-// Recording is free: ObserveDuration is time.Since plus a call through the
-// stored observe func, for both timer flavors. Construction is not, and the
-// two flavors differ for a reason worth stating. NewTimer stores the
-// histogram's Observe METHOD VALUE, which costs nothing while the timer stays
-// on the stack — the whole create-and-observe round measures 0 — but two
-// allocations (the Timer and the bound method) as soon as it escapes.
-// (*LabeledHistogram).NewTimer always costs three: it clones the caller's
-// label values and closes over them, and a closure the Timer holds escapes by
-// construction. That is the price of the label set, not of the timer, and what
-// matters is that it is a constant: it must not grow with the number of label
-// values, or a per-label-per-timer cost lands on every instrumented request.
+// TestTimerAllocationCost pins the timer on a handler's deferred
+// ObserveDuration path. Recording is free for both flavors. NewTimer costs 0
+// on the stack and 2 once it escapes (the Timer and the bound method);
+// (*LabeledHistogram).NewTimer always costs 3, since it clones and closes
+// over the label values. Those must stay constant, never growing with the
+// number of label values.
 func TestTimerAllocationCost(t *testing.T) {
 	h := NewHistogram("alloc_timer_seconds", "allocation contract", UnitSeconds)
 

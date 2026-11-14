@@ -76,15 +76,10 @@ func goldenFixtureRegistry() *Registry {
 	return r
 }
 
-// maskProcessValues normalises non-deterministic process-metric sample VALUES
-// so the exposition format (family ordering, HELP/TYPE lines and their order,
-// sample series names) can be locked in a golden file while the volatile
-// numeric values are ignored. Sample lines whose series name begins with
-// "process_" or "go_" (the built-in Go runtime / process families, e.g.
-// go_goroutines and go_memstats_heap_alloc_bytes) are masked; comment lines
-// (# HELP / # TYPE) are deterministic and pass through untouched. The fixture
-// registers no user metric under those prefixes, so the mask targets only the
-// built-ins.
+// maskProcessValues masks the values of the Go and process families' sample
+// lines, which vary between runs, so the page's families, HELP and TYPE
+// lines and series names compare exactly. The fixture registers no metric
+// named go_ or process_, so the mask touches only the built-ins.
 func maskProcessValues(exposition string) string {
 	lines := strings.Split(exposition, "\n")
 	for i, line := range lines {

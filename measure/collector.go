@@ -268,7 +268,7 @@ func (e *Emitter) EmitState(d *Desc, state string, labelValues ...string) {
 		return
 	}
 	vals := append(slices.Clone(labelValues), state)
-	if _, dup := e.samples[d][e.key(vals)]; dup {
+	if _, dup := e.samples[d][sanitizedKey(vals)]; dup {
 		e.problems[problemKey{d.name, problemDuplicate}]++
 		return
 	}
@@ -341,8 +341,9 @@ func (e *Emitter) accepts(d *Desc, n int) bool {
 	return true
 }
 
-// key is the map key of labelValues once sanitized, as record stores it.
-func (e *Emitter) key(labelValues []string) string {
+// sanitizedKey is the map key of labelValues once sanitized, as record
+// stores it.
+func sanitizedKey(labelValues []string) string {
 	vals := make([]string, len(labelValues))
 	for i, v := range labelValues {
 		vals[i], _ = sanitizeUTF8(v)

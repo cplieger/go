@@ -110,8 +110,8 @@ func FuzzRegistryFullExposition(f *testing.F) {
 }
 
 // FuzzLabeledExposition_balanced asserts that for any label value, the labeled
-// counter and gauge exposition keep braces and quotes balanced — i.e. the
-// label-value escaping can never break the line structure.
+// counter, gauge, state set and info exposition keep braces and quotes
+// balanced — i.e. the label-value escaping can never break the line structure.
 func FuzzLabeledExposition_balanced(f *testing.F) {
 	f.Add("simple", 1.0)
 	f.Add("with\"quote", 0.0)
@@ -141,13 +141,15 @@ func FuzzLabeledExposition_balanced(f *testing.F) {
 		lc.Inc(val)
 		lg := NewLabeledGauge("fuzz_gauge", "fuzz help", UnitNone, []string{"v"})
 		lg.Set(gaugeVal, val)
+		ss := NewStateSet("fuzz_state", "fuzz help", []string{"v", "state"}, []string{"a", "b"})
+		ss.Set("b", val)
+		info := NewInfo("fuzz_info", "fuzz help", []string{"v"})
+		info.Set(val)
 
-		var b strings.Builder
-		writeFamily(&b, lc)
-		assertExpositionLabelsBalanced(t, b.String())
-
-		b.Reset()
-		writeFamily(&b, lg)
-		assertExpositionLabelsBalanced(t, b.String())
+		for _, m := range []instrument{lc, lg, ss, info} {
+			var b strings.Builder
+			writeFamily(&b, m)
+			assertExpositionLabelsBalanced(t, b.String())
+		}
 	})
 }

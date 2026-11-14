@@ -293,28 +293,13 @@ func TestHelpEscaping_Prometheus(t *testing.T) {
 	}
 }
 
-// TestExpositionCostDependsOnLabelValueContent measures what escaping costs at
-// scrape time. It is the only contract here whose answer turns on what the
-// input CONTAINS rather than on how much of it there is, and the answer is yes:
-// a label value carrying a character the text format must escape (`\`, `"` or a
-// newline) costs measurably MORE to expose than one that does not, and the
-// surcharge grows with the value's length.
-//
-// Both halves are worth pinning rather than only the flattering one. Label
-// values are caller-owned and the README already warns that they may carry
-// upstream text, so whoever supplies that text also chooses which of these two
-// paths a scrape takes. What the library owes is that the choice buys a bounded
-// surcharge: it must stay charged per VALUE and per output doubling, never per
-// byte. A per-byte escape cost would let a caller feeding a quoted 64 KiB
-// string into a label turn one series into thousands of allocations on every
-// scrape — an amplification vector reachable from ordinary input, since none of
-// this is on the record path where a cardinality warning would fire.
-//
-// Measured at 100 series: the escaped path costs about 3 allocations more per
-// series at 32 bytes and 11 at 2048, the same under -race. Sixty-four times
-// the bytes for under four times the surcharge is the escaper's output buffer
-// doubling, which is the shape a correct implementation has; a per-byte one
-// would have cost 64 times as much.
+// TestExpositionCostDependsOnLabelValueContent pins what escaping costs at
+// scrape time. A label value holding a backslash, a quote or a newline costs
+// more to expose, and since a caller's upstream text chooses that path, the
+// surcharge must stay per value and per output-buffer doubling, never per
+// byte, or a quoted 64 KiB value turns one series into thousands of
+// allocations per scrape. Measured at 100 series: about 3 more allocations
+// per series at 32 bytes and 11 at 2048.
 func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
 	// maxSurchargePerSeries bounds the escaped path's extra allocations per
 	// series at the smallest value size, and maxSurchargeGrowth bounds how much
@@ -328,14 +313,10 @@ func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
 	)
 
 	// buildRegistry returns a registry holding one labeled counter with
-	// `series` series whose label value is valueLen bytes of fill. The fill is
-	// a quote on the escaped path, so EVERY byte needs escaping: that is the
-	// worst case the grammar allows and the one a caller cannot make worse.
-	//
-	// The measurement below goes through collect+encode rather than the
-	// handler: it is a difference between two counts, so the handler's fixed
-	// cost would cancel out of it anyway, and the encoder is where the escaping
-	// happens.
+	// `series` series of valueLen bytes of fill. On the escaped path the fill
+	// is a quote, so every byte needs escaping, the worst case. Measuring
+	// collect+encode rather than the handler is enough: the result is a
+	// difference, and the handler's fixed cost cancels out.
 	buildRegistry := func(fill string, valueLen int) *Registry {
 		r := NewRegistry("escapecost")
 		lc := NewLabeledCounter("content_total", "escaping cost contract", UnitCount, []string{"v"})

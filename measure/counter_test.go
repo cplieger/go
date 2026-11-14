@@ -569,35 +569,13 @@ func TestCounterRecordPathIsAllocationFree(t *testing.T) {
 	}
 }
 
-// TestLabeledCounterNewSeriesCostIsConstant pins the bounded half of the cost
-// model, and this is the half the weekly tracker cannot police: a count that
-// drifts from 1 to 2 is a ratio of 2 and would alert, but one that starts
-// tracking a per-call quantity is a design change the chart reads as ordinary
-// growth. Creating a label set measures ONE allocation (the series' own
-// atomic.Int64) and the property that matters is what that number is
-// independent OF.
-//
-// Nor does anything else in this package measure the path:
-// BenchmarkLabeledCounterInc_DynamicLabel cycles through eight label values, so
-// from its ninth iteration on every series already exists and what it charts is
-// the fixture's own string building against the loaded fast path (17 B/op, 1
-// alloc/op measured — the concatenation, not a series).
-//
-// Three axes, each a different regression class:
-//
-//   - label arity, because a per-label allocation would multiply by a metric's
-//     label count for every new series;
-//   - label value LENGTH, because label values are caller-owned and can carry
-//     upstream text, so a count that tracks bytes is an amplification vector
-//     in exactly the place the README already warns about cardinality;
-//   - how many series the metric ALREADY holds, which is the expensive one. A
-//     per-existing-key cost (a scan to check for a match, a re-sort, a
-//     rebuild) makes series creation quadratic over the life of a
-//     long-running process, and every consuming app is long-running.
-//
-// Each run of a measured closure creates a NEW series, which is the cold path
-// on purpose; the label-value slices come pre-built so the fixture's own
-// allocations are not counted as the library's.
+// TestLabeledCounterNewSeriesCostIsConstant pins series creation at one
+// allocation (the series' atomic.Int64), independent of label arity, label
+// value length and how many series the metric already holds: a per-label or
+// per-byte cost multiplies on every new series, and a per-existing-key cost
+// makes creation quadratic over a long-running process. The weekly tracker
+// alerts on ratios, so it cannot see such a bounded count drift. Each run
+// creates a new series from pre-built values.
 func TestLabeledCounterNewSeriesCostIsConstant(t *testing.T) {
 	// The 20k-series case crosses cardinalityWarnThreshold during its
 	// pre-fill; capture the warning so it stays out of the test output. The

@@ -392,14 +392,10 @@ func TestGaugeRecordPathIsAllocationFree(t *testing.T) {
 }
 
 // TestLabeledGaugeNewSeriesCostIsConstant is the gauge half of the
-// series-creation contract. LabeledGauge stores an *atomic.Uint64 where the
-// counter stores an *atomic.Int64, so the constant is its own measurement
-// rather than one inherited from the counter, and the two axes asserted here
-// are the ones a gauge is exposed to: caller-owned label values whose length
-// it does not choose, and a series map that only grows in a long-running
-// process. Arity independence is pinned once, on the counter.
-//
-// Each run creates a NEW series; the label values are pre-built.
+// series-creation contract: its *atomic.Uint64 is its own measurement, along
+// the two axes a gauge meets, label value length and a series map that only
+// grows. Arity independence is pinned once, on the counter. Each run creates
+// a new series from pre-built values.
 func TestLabeledGaugeNewSeriesCostIsConstant(t *testing.T) {
 	// The 20k-series pre-fill crosses cardinalityWarnThreshold; keep its
 	// warning out of the test output. The crossing is in setup.

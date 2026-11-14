@@ -178,13 +178,12 @@ func (m *declMeta) declaration() Declaration {
 type Option func(*options)
 
 type options struct {
-	buckets      []float64
-	unbounded    []string
-	seeds        [][]string
-	export       Export
-	bucketsSet   bool
-	unboundedSet bool
-	seedsSet     bool
+	buckets    []float64
+	unbounded  []string
+	seeds      [][]string
+	export     Export
+	bucketsSet bool
+	seedsSet   bool
 }
 
 // WithBuckets sets a histogram instrument's bucket bounds, a strictly
@@ -211,7 +210,6 @@ func WithExport(e Export) Option {
 func WithUnbounded(labels ...string) Option {
 	return func(o *options) {
 		o.unbounded = slices.Clone(labels)
-		o.unboundedSet = true
 	}
 }
 

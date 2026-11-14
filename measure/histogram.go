@@ -24,17 +24,10 @@ func APIBuckets() []float64 {
 	return []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 }
 
-// checkBuckets enforces the histogram bucket contract: bounds must be a
-// strictly increasing sequence of finite values. The writers append the
-// implicit le="+Inf" bucket, so callers must not include +Inf (nor any other
-// non-finite value), and duplicate or out-of-order bounds would emit duplicate
-// or non-monotonic le series that Prometheus parsers reject, dropping the
-// whole scrape. metric names the owning metric in each error, so a
-// registration failure out of a multi-metric MustRegister block identifies
-// which declaration carried the bad buckets. A violation is returned as an
-// error that the constructor captures into the histogram, surfacing at
-// registration, consistent with checkMetricName. The empty bound set is
-// valid: it yields a histogram with only the implicit +Inf bucket.
+// checkBuckets requires finite, strictly increasing bounds, since le="+Inf"
+// is implicit and a duplicate or falling bound makes a parser reject the
+// whole scrape. The error names metric, so a MustRegister of many metrics
+// says which one. An empty set is valid: only the +Inf bucket.
 func checkBuckets(metric string, bounds []float64) error {
 	for i, b := range bounds {
 		if math.IsNaN(b) || math.IsInf(b, 0) {
@@ -166,14 +159,11 @@ type LabeledHistogram struct {
 }
 
 // NewLabeledHistogram creates a labeled histogram with the given label
-// names, its observations in unit. By default it uses DefaultBuckets; use
-// WithBuckets to override, and [WithSeed] to create label sets with no
-// observations. Construction through NewLabeledHistogram is mandatory: the
-// zero LabeledHistogram has a nil series map and panics on the first record.
-// An invalid declaration, the reserved "le" label, more than 8 labels, or a
-// bucket-contract violation is captured into the histogram rather than
-// panicking: the histogram records nothing and the error surfaces at
-// registration.
+// names, its observations in unit. It uses DefaultBuckets unless WithBuckets
+// sets others, and [WithSeed] creates label sets with no observations.
+// Construction through it is mandatory: the zero LabeledHistogram panics on
+// the first record. An invalid declaration, including the reserved "le"
+// label and bad buckets, is captured and surfaces at registration.
 func NewLabeledHistogram(name, help string, unit Unit, labels []string, opts ...Option) *LabeledHistogram {
 	help = sanitizeHelp(name, help)
 	o := applyOptions(opts)

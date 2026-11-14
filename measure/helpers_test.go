@@ -80,17 +80,11 @@ func (*failWriter) Write([]byte) (int, error) {
 
 func (*failWriter) WriteHeader(int) {}
 
-// captureDebugLogs redirects the default slog logger to an in-memory buffer at
-// Debug level for the duration of the test and returns that buffer. Callers
-// must be serial (no t.Parallel): the default logger is a process global.
-//
-// slog.SetDefault also points the standard log package at the installed
-// handler, and it skips that redirect when the logger being installed carries
-// slog's own default handler. Reinstalling the previous logger therefore does
-// not undo the redirect, so the writer and flags are saved and restored
-// explicitly. slog goes back first: reinstalling a previous handler that is not
-// slog's default re-runs the redirect and would overwrite a log restore done
-// before it.
+// captureDebugLogs points the default slog logger at an in-memory buffer at
+// Debug level for the test and returns the buffer; callers stay serial.
+// slog.SetDefault also redirects the standard log package and does not undo
+// that when the previous logger is reinstalled, so log's writer and flags
+// are restored explicitly, after slog, which would otherwise redo it.
 func captureDebugLogs(t *testing.T) *strings.Builder {
 	t.Helper()
 	var buf strings.Builder
@@ -166,34 +160,13 @@ func checkLabelQuoting(t *testing.T, inner string) {
 	}
 }
 
-// The shared machinery for this package's allocation contracts, which live in
-// counter_test.go, gauge_test.go, histogram_test.go, measure_test.go and
-// exposition_test.go — each beside the source file whose cost it pins.
-//
-// The library's cost model has two halves and both are now measured: recording
-// into an EXISTING series allocates nothing, and creating a new series costs a
-// bounded constant. The weekly benchmark tracker cannot stand in for either.
-// It alerts on the ratio between consecutive runs, so it catches a 0 -> n
-// regression (an infinite ratio, at any threshold) but is structurally blind
-// to a bounded count drifting: 260 -> 380 allocations per scrape is a ratio of
-// 1.46, and 2 -> 3 is exactly 1.5. The bounded counts are therefore where
-// these contracts earn their keep, and the exposition ones bound a per-metric
-// RATE rather than a total, because a scrape's total cost is legitimately
-// proportional to how many metrics the registry holds.
-//
-// Three rules every contract here follows, each of which is a way to measure
-// the wrong thing:
-//
-//   - Fixtures are built OUTSIDE the measured closure. Registering a metric,
-//     constructing a registry and building a label-value slice all allocate,
-//     and inside the closure that cost is reported as the library's.
-//   - The closure is deliberate about which path it takes. A registry is
-//     stateful and [testing.AllocsPerRun] runs the closure runs+1 times, so a
-//     closure touching ONE label set measures the loaded fast path on every
-//     run after the first, while one touching a FRESH label set per run
-//     measures series creation. Each contract's comment says which it is.
-//   - No t.Parallel. AllocsPerRun reads process-wide malloc counters and
-//     panics outright when called from a parallel test.
+// The shared machinery for the allocation contracts beside each source file.
+// Recording into an existing series allocates nothing and creating one costs
+// a bounded constant; the weekly tracker alerts on ratios and cannot see a
+// bounded count drift. Every contract builds its fixtures outside the
+// measured closure, says whether it measures the loaded path or series
+// creation (AllocsPerRun runs the closure runs+1 times), and stays off
+// t.Parallel, since AllocsPerRun reads process-wide counters.
 
 // allocRuns is the AllocsPerRun run count for the record-path contracts.
 // AllocsPerRun divides as integers, so the average of a path that allocates

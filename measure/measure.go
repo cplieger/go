@@ -148,18 +148,11 @@ func (r *Registry) instrumentCount() int {
 	return n
 }
 
-// NewRegistry creates a new metrics registry. Construction through
-// NewRegistry is mandatory: the zero Registry has a nil name table and
-// panics on the first registration.
-//
-// An invalid prefix (one that does not match the metric-name grammar) is
-// CAPTURED, not panicked, and surfaces at the first [Registry.Register] or
-// [Registry.MustRegister] — the same door every other construction error uses.
-// A prefix that cannot make a valid metric name makes every metric registered
-// through it invalid, so reporting it once at the door beats reporting it at
-// construction: it keeps this package to ONE error model with no exception,
-// and for a caller registering through MustRegister the failure still lands at
-// init, where a package-level registry is built.
+// NewRegistry creates a registry that prefixes every metric name it
+// registers with prefix and "_". Construction through NewRegistry is
+// mandatory: the zero Registry panics on the first registration. An invalid
+// prefix is captured and returned by every Register and MustRegister, the
+// door every other construction error uses.
 func NewRegistry(prefix string, opts ...RegistryOption) *Registry {
 	r := &Registry{
 		prefix:  prefix,
@@ -243,18 +236,13 @@ type Metric interface {
 var errNilMetric = errors.New("measure: Register called with nil metric")
 
 // Register adds a metric to the registry. It returns the error the metric
-// captured at construction: an invalid metric name; an invalid, reserved or
-// duplicate label name; more than 8 labels on an instrument; bad histogram
-// buckets; a unit off the list or one the name's suffix contradicts; _total
-// on anything but a counter; an unbounded label on a series served on the
-// page; or an option the declaration cannot take. It also returns an error
-// when the metric is already registered, when its family name collides with
-// a registered one, and when m is nil. A collector returns the errors
-// [NewCollector] captured, and a Collector not built with NewCollector is
-// refused. On error the metric is not attached and the registry is
-// unchanged. A metric refused for a name collision stays intact and can be
-// registered elsewhere; a construction error is permanent, so such a metric
-// can only be rebuilt.
+// captured at construction (an invalid name, label set or buckets, or a
+// declaration that contradicts itself, as docs/declarations.md lists), and an
+// error when m is nil, already registered, or its family name collides with
+// one the registry holds. A collector returns the errors [NewCollector]
+// captured. On error the registry is unchanged; a metric refused for a name
+// collision can be registered elsewhere, while a construction error is
+// permanent.
 func (r *Registry) Register(m Metric) error {
 	if m == nil {
 		return errNilMetric
@@ -275,16 +263,11 @@ func (r *Registry) MustRegister(ms ...Metric) {
 	}
 }
 
-// register runs the shared registration flow: reject a metric that captured a
-// construction error, claim the metric's registered flag, reserve the
-// prefixed family name(s) via reserve, and hand the final name to rename,
-// which writes it under the metric's own lock where it has one. The metric is
-// then appended to its page group. The CAS is the only order between two
-// registries registering one value concurrently (their locks are
-// independent), so only its winner may write the name; for the same reason
-// the loser's already-registered error cannot include the name. On a
-// reservation failure the registered flag is rolled back, so a metric refused
-// for a name collision stays registrable elsewhere. Callers must hold r.mu.
+// register runs the shared registration flow and appends the metric to its
+// page group. The CAS on registered is the only order between two registries
+// registering one value at once (their locks are independent), so only its
+// winner reads or writes the name, and the loser's error cannot name it. A
+// reservation failure rolls the flag back. Callers must hold r.mu.
 func (r *Registry) register(m instrument, group int, mErr error, registered *atomic.Bool, kind string,
 	reserve func(name, kind string) error, rename func(name string),
 ) error {
