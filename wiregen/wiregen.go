@@ -320,7 +320,8 @@ type generator struct {
 }
 
 // enumDef is one registered enum's package and wire members, in declaration
-// order; consts[i] is the Go constant values[i] comes from.
+// order; consts are the Go constants on the wire, a repeated value's
+// included.
 type enumDef struct {
 	pkgPath string
 	values  []string

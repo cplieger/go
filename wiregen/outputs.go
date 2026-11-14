@@ -51,7 +51,7 @@ func (g *generator) outputs() ([]genFile, error) {
 		out = append(out, genFile{role: roleOpenAPI, name: p})
 	}
 	if g.o.deadsetRoot != "" {
-		out = append(out, genFile{role: roleDeadsetEdges, name: filepath.Join(g.o.deadsetRoot, deadsetEdgesFile)})
+		out = append(out, genFile{role: roleDeadsetEdges, name: g.o.deadsetRoot + string(filepath.Separator) + deadsetEdgesFile})
 	}
 	tsDir, err := locate(g.o.tsDir)
 	if err != nil {
