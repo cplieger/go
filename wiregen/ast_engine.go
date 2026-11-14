@@ -671,8 +671,8 @@ func isValidJSONName(s string) bool {
 // embedded field: an untagged struct embed, exported or not, is flattened
 // into the parent; an unexported non-struct embed is skipped; any other embed
 // is a field named by its tag or its type name. A flattened embed is
-// returned with the embeds below it, each unowned until its declaring struct
-// claims it.
+// returned with the embeds below it; it alone is unowned until its declaring
+// struct claims it.
 func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package, visited map[*types.Struct]bool) ([]fieldInfo, []embedInfo) {
 	declared := f.Type()
 	ptr, viaPtr := types.Unalias(declared).(*types.Pointer)
