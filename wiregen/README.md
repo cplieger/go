@@ -97,7 +97,7 @@ export const decodeUser: Decoder<User> = (v) => {
 
 - A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. A type that an endpoint, event or union names is generated without being listed.
 - Register an enum by its type: `StringEnum[T]()` for a string type, `TextEnum[T]()` for a `uint8` type whose `MarshalText` names its members.
-- `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
+- `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithDeadsetEdges(targetRoot)` writes a deadset [edges document](https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md), `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
 
 `Generate` returns an error for a configuration problem, a nil `Registry` or a nil context, and nothing exported panics. [Options and fields](docs/configuration.md) lists each option with its default, and the full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/wiregen/v2).
 
@@ -129,7 +129,7 @@ wiregen reads your types from source with `go/packages` and applies the field ru
 
 - [Options and fields](docs/configuration.md) lists every option, registry field and helper type, with defaults.
 - [Type mapping](docs/type-mapping.md) shows how each Go type becomes TypeScript and a schema, with strict mode, enums, bounds, unions and mappings.
-- [Generated files](docs/generated-files.md) covers which files `Generate` writes, its errors, and the validators and events modules.
+- [Generated files](docs/generated-files.md) covers the files `Generate` writes, its errors, the validators and events modules and the deadset edges.
 - [Typed HTTP client](docs/http-client.md) covers the endpoint table, the generated client, the transport module and the OpenAPI document.
 - [Property-test arbitraries](docs/arbitraries.md) describes the fast-check module and how its values are drawn.
 

@@ -29,9 +29,18 @@ type typeInfo struct {
 	Name   string
 	Doc    string
 	Fields []fieldInfo
+	// Embeds are the struct embeds Fields are flattened from, at any depth.
+	Embeds []embedInfo
 	// InRefusals are why encoding/json cannot decode the type itself, which
 	// refuse it wherever a request reaches it.
 	InRefusals []string
+}
+
+// embedInfo is one flattened struct embed.
+type embedInfo struct {
+	// Owner is the struct declaration holding the embed.
+	Owner  *Type
+	GoName string // the selector from the registered type, through embeds
 }
 
 // fieldInfo is one field's wire plan, decided once from encoding/json's
@@ -47,6 +56,9 @@ type fieldInfo struct {
 	// Refusals are why this field cannot cross the wire; Generate fails
 	// listing every one.
 	Refusals []string
+	// Owner is the struct declaration holding the field: the registered type,
+	// or the embedded struct a promoted field comes from.
+	Owner    *Type
 	WireName string
 	GoName   string // the Go selector a refusal's path names, through embeds
 	TSType   string
@@ -316,37 +328,38 @@ func indexPackages(pkgs []*packages.Package) map[string]*packages.Package {
 func (g *generator) discoverEnums(allPkgs map[string]*packages.Package) error {
 	var errs []error
 	for _, ref := range g.Enums {
-		values, err := enumMembers(ref, allPkgs[ref.Type.PkgPath])
+		values, consts, err := enumMembers(ref, allPkgs[ref.Type.PkgPath])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("wiregen: enum %s.%s: %w", ref.Type.PkgPath, ref.Type.Name, err))
 			continue
 		}
-		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath, values: values}
+		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath, values: values, consts: consts}
 	}
 	return errors.Join(errs...)
 }
 
 // enumMembers returns ref's wire members: the constants of exactly ref's type
-// in pkg, in declaration order, each named by its value or by ref.Wire.
-func enumMembers(ref EnumRef, pkg *packages.Package) ([]string, error) {
+// in pkg, in declaration order, each named by its value or by ref.Wire, and
+// the Go constants on the wire.
+func enumMembers(ref EnumRef, pkg *packages.Package) (names, consts []string, err error) {
 	if pkg == nil || pkg.Types == nil {
-		return nil, errors.New("package not loaded")
+		return nil, nil, errors.New("package not loaded")
 	}
 	tn, ok := pkg.Types.Scope().Lookup(ref.Type.Name).(*types.TypeName)
 	if !ok {
-		return nil, errors.New("no such type")
+		return nil, nil, errors.New("no such type")
 	}
-	if err := checkEnumKind(ref, tn.Type()); err != nil {
-		return nil, err
+	if kindErr := checkEnumKind(ref, tn.Type()); kindErr != nil {
+		return nil, nil, kindErr
 	}
-	names, err := memberNames(ref, typedConsts(pkg.Types.Scope(), tn.Type()))
+	names, consts, err = memberNames(ref, typedConsts(pkg.Types.Scope(), tn.Type()))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(names) == 0 {
-		return nil, errors.New("declares no constant with a wire name")
+		return nil, nil, errors.New("declares no constant with a wire name")
 	}
-	return names, nil
+	return names, consts, nil
 }
 
 // checkEnumKind rejects an enum type whose kind ref cannot name: a string
@@ -378,30 +391,35 @@ func checkEnumKind(ref EnumRef, t types.Type) error {
 
 // memberNames names consts on the wire, skipping a repeated value and a
 // constant Wire refuses, and rejects two values encoding alike, which no
-// decoder could tell apart.
-func memberNames(ref EnumRef, consts []*types.Const) ([]string, error) {
+// decoder could tell apart. goNames holds every constant on the wire, a
+// repeated value's included.
+func memberNames(ref EnumRef, consts []*types.Const) (names, goNames []string, err error) {
 	byName := map[string]string{}
-	seenVal := map[string]bool{}
-	var names []string
+	onWire := map[string]bool{} // by value: whether its first constant is
 	for _, c := range consts {
-		if seenVal[c.Val().ExactString()] {
+		val := c.Val().ExactString()
+		if wired, seen := onWire[val]; seen {
+			if wired {
+				goNames = append(goNames, c.Name())
+			}
 			continue
 		}
-		seenVal[c.Val().ExactString()] = true
 		name, member, err := wireName(ref, c)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		onWire[val] = member
 		if !member {
 			continue
 		}
 		if prev, dup := byName[name]; dup {
-			return nil, fmt.Errorf("constants %s and %s both encode as %q", prev, c.Name(), name)
+			return nil, nil, fmt.Errorf("constants %s and %s both encode as %q", prev, c.Name(), name)
 		}
 		byName[name] = c.Name()
 		names = append(names, name)
+		goNames = append(goNames, c.Name())
 	}
-	return names, nil
+	return names, goNames, nil
 }
 
 // typedConsts returns the constants of exactly type t declared at scope, in
@@ -500,7 +518,9 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 		e.resolveMapTypeInfo(ti, mp, wt)
 		return ti, nil
 	}
-	ti.Fields = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
+	ti.Fields, ti.Embeds = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
+	ownFields(ti.Fields, wt)
+	ownEmbeds(ti.Embeds, wt)
 	for i := range ti.Fields {
 		for _, why := range ti.Fields[i].Refusals {
 			e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+"."+ti.Fields[i].GoName+": "+why)
@@ -564,12 +584,12 @@ func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, wt Type
 	ti.Map = &fi
 }
 
-func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package, allPkgs map[string]*packages.Package, depth int, visited map[*types.Struct]bool) []fieldInfo {
+func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package, allPkgs map[string]*packages.Package, depth int, visited map[*types.Struct]bool) ([]fieldInfo, []embedInfo) {
 	if visited == nil {
 		visited = make(map[*types.Struct]bool)
 	}
 	if visited[st] {
-		return nil
+		return nil, nil
 	}
 	visited[st] = true
 	// Scope visited to the current ancestry path: a struct on its own path is
@@ -579,18 +599,21 @@ func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package,
 	defer delete(visited, st)
 
 	var raw []fieldInfo
+	var embeds []embedInfo
 	for i := range st.NumFields() {
 		f := st.Field(i)
 		tag := parseJSONTag(st.Tag(i))
 		if f.Anonymous() {
-			raw = append(raw, e.resolveEmbeddedField(f, tag, depth, pkg, allPkgs, visited)...)
+			fields, inner := e.resolveEmbeddedField(f, tag, depth, pkg, allPkgs, visited)
+			raw = append(raw, fields...)
+			embeds = append(embeds, inner...)
 			continue
 		}
 		if f.Exported() && !tag.skip {
 			raw = append(raw, e.resolveNamedField(f, tag, depth, pkg, allPkgs))
 		}
 	}
-	return dedupJSONFields(raw)
+	return dedupJSONFields(raw), embeds
 }
 
 // jsonTag is a struct field's json tag as encoding/json's typeFields reads
@@ -647,21 +670,27 @@ func isValidJSONName(s string) bool {
 // resolveEmbeddedField applies encoding/json's typeFields rules to an
 // embedded field: an untagged struct embed, exported or not, is flattened
 // into the parent; an unexported non-struct embed is skipped; any other embed
-// is a field named by its tag or its type name.
-func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package, visited map[*types.Struct]bool) []fieldInfo {
-	embType := types.Unalias(f.Type())
-	ptr, viaPtr := embType.(*types.Pointer)
+// is a field named by its tag or its type name. A flattened embed is
+// returned with the embeds below it; it alone is unowned until its declaring
+// struct claims it.
+func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package, visited map[*types.Struct]bool) ([]fieldInfo, []embedInfo) {
+	declared := f.Type()
+	ptr, viaPtr := types.Unalias(declared).(*types.Pointer)
 	if viaPtr {
-		embType = types.Unalias(ptr.Elem())
+		declared = ptr.Elem()
 	}
+	embType := types.Unalias(declared)
 	embSt, isStruct := embType.Underlying().(*types.Struct)
 	if (!f.Exported() && !isStruct) || tag.skip {
-		return nil
+		return nil, nil
 	}
 	if tag.name != "" || tag.badName != "" || !isStruct {
-		return []fieldInfo{e.resolveNamedField(f, tag, depth, pkg, allPkgs)}
+		return []fieldInfo{e.resolveNamedField(f, tag, depth, pkg, allPkgs)}, nil
 	}
-	promoted := e.resolveStructFields(embSt, pkg, allPkgs, depth+1, visited)
+	promoted, inner := e.resolveStructFields(embSt, pkg, allPkgs, depth+1, visited)
+	owner := structDeclaration(declared)
+	ownFields(promoted, owner)
+	ownEmbeds(inner, owner)
 	for i := range promoted {
 		p := &promoted[i]
 		p.GoName = f.Name() + "." + p.GoName
@@ -670,7 +699,45 @@ func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, p
 			p.InRefusals = append(p.InRefusals, "is promoted through the embedded pointer to unexported "+embType.String()+", which encoding/json cannot allocate to decode into")
 		}
 	}
-	return promoted
+	embeds := []embedInfo{{GoName: f.Name()}}
+	for _, in := range inner {
+		embeds = append(embeds, embedInfo{Owner: in.Owner, GoName: f.Name() + "." + in.GoName})
+	}
+	return promoted, embeds
+}
+
+// structDeclaration is the type declaration an embedded struct type name t
+// reaches its fields through, as deadset-go records them: the alias whose
+// right-hand side is the struct literal, else the named struct. The origin
+// names a generic one.
+func structDeclaration(t types.Type) Type {
+	for a, ok := t.(*types.Alias); ok; a, ok = a.Rhs().(*types.Alias) {
+		if _, literal := a.Rhs().(*types.Struct); literal {
+			obj := a.Origin().Obj()
+			return Type{PkgPath: obj.Pkg().Path(), Name: obj.Name()}
+		}
+	}
+	obj := types.Unalias(t).(*types.Named).Origin().Obj() //nolint:errcheck // an embedded field is a type name, so one ending at no literal is a defined type
+	return Type{PkgPath: obj.Pkg().Path(), Name: obj.Name()}
+}
+
+// ownFields gives owner to each of fields an embedded struct deeper down has
+// not already claimed.
+func ownFields(fields []fieldInfo, owner Type) {
+	for i := range fields {
+		if fields[i].Owner == nil {
+			fields[i].Owner = &owner
+		}
+	}
+}
+
+// ownEmbeds is ownFields for embeds.
+func ownEmbeds(embeds []embedInfo, owner Type) {
+	for i := range embeds {
+		if embeds[i].Owner == nil {
+			embeds[i].Owner = &owner
+		}
+	}
 }
 
 func (e *astEngine) resolveNamedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package) fieldInfo {

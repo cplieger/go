@@ -37,3 +37,25 @@ func TestGenerate_ClimbingOutOfASymlinkIsLexicalOnWindows(t *testing.T) {
 		t.Fatalf("the TS directory's types.gen.ts = %.40q, %v; want the TypeScript output", got, err)
 	}
 }
+
+// A deadset target root that climbs out of a symlink, src\hop\.., is src, the
+// lexical parent, so the edges file lands there and not where hop points.
+func TestDeadsetEdges_RootClimbingOutOfASymlinkIsLexicalOnWindows(t *testing.T) {
+	root, pkg := edgesProject(t, `{"name": "app"}`)
+	src := filepath.Join(root, "web", "src")
+	hop := filepath.Join(src, "hop")
+	if err := os.Symlink(filepath.Join(root, "web"), hop); err != nil {
+		t.Fatal(err)
+	}
+	err := wireRegistry(pkg, "User").Generate(t.Context(), wiregen.WithTSDir(filepath.Join(src, "wire")),
+		wiregen.WithDeadsetEdges(hop+`\..`))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(src, "deadset-edges.json")); err != nil {
+		t.Errorf("no edges document at the lexical parent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "deadset-edges.json")); err == nil {
+		t.Error("an edges document was written where the physical parent would put it")
+	}
+}

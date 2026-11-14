@@ -230,7 +230,7 @@ func (g *generator) emitEnumConsts(w *strings.Builder, used *usedIdents) {
 	emitted := map[string]bool{}
 	for _, name := range enumNamesSlice(g.enums) {
 		constN := g.enumConstName(name)
-		if emitted[constN] || (!used.enums[name] && !used.opaqueRefs(constN)) {
+		if emitted[constN] || !g.emitsEnumConst(used, name) {
 			continue
 		}
 		emitted[constN] = true
@@ -247,6 +247,12 @@ func (g *generator) emitEnumConsts(w *strings.Builder, used *usedIdents) {
 	if len(emitted) > 0 {
 		w.WriteString("\n")
 	}
+}
+
+// emitsEnumConst reports whether the decoders module declares enum name's
+// value array, which it does only where a decoder or mapping reads it.
+func (g *generator) emitsEnumConst(used *usedIdents, name string) bool {
+	return used.enums[name] || used.opaqueRefs(g.enumConstName(name))
 }
 
 func (g *generator) emitDecoder(w *strings.Builder, ti *typeInfo, used *usedIdents) {

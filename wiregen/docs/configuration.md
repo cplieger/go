@@ -22,6 +22,7 @@ Options apply in the order you pass them, and a later option for the same settin
 | `WithArbitrariesFile(name string)` | _(unset)_ | Writes the fast-check arbitraries module at this path. See [Property-test arbitraries](arbitraries.md). |
 | `WithArbitrariesImport(module string)` | `"fast-check"` | Specifier the arbitraries module imports fast-check's default export from. |
 | `WithOpenAPIFiles(paths ...string)` | _(unset)_ | Writes the OpenAPI 3.1 document at each path, relative to the working directory and outside the TS directory's confinement, in the same pass as the TypeScript files. `Registry.OpenAPI` must name a title and a version. |
+| `WithDeadsetEdges(targetRoot string)` | _(unset)_ | Writes the [deadset](https://github.com/cplieger/deadset) edges file in `targetRoot`, relative to the working directory, which must contain the TS directory. See [Deadset edges file](generated-files.md#deadset-edges-file). |
 | `WithRequireJSONTags(require bool)` | off | With `true`, makes an exported field without a `json` tag a generation error naming its path. Otherwise such a field takes its Go name, as `encoding/json` gives it. |
 
 The generated files import each other by their paths relative to one another, so a module in a subdirectory imports `../types.gen.js`. Two outputs that are one file, however spelled, through a symlink or differing only in case, are refused before anything is written. The final extension is rewritten the way TypeScript rewrites it, so `.mts` becomes `.mjs`, `.cts` becomes `.cjs` and any other extension becomes `.js`.
