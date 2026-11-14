@@ -24,6 +24,13 @@ const (
 	typeSummary   = "summary"
 )
 
+// The series suffixes of a histogram's or summary's lines.
+const (
+	suffixBucket = "_bucket"
+	suffixSum    = "_sum"
+	suffixCount  = "_count"
+)
+
 // metricFamily is one "# TYPE"/"# HELP" block: a metric name, its type, its
 // HELP text (raw, escaped by the encoder), and the samples it emits.
 type metricFamily struct {
@@ -159,15 +166,15 @@ func histogramSamples(h *Histogram, labelStr string) []sample {
 	samples := make([]sample, 0, len(h.bounds)+3)
 	for i, bound := range h.bounds {
 		samples = append(samples, sample{
-			nameSuffix: "_bucket",
+			nameSuffix: suffixBucket,
 			labels:     withLabel(labelStr, "le", formatValue(bound)),
 			value:      strconv.FormatInt(bucketVals[i], 10),
 		})
 	}
 	samples = append(samples,
-		sample{nameSuffix: "_bucket", labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatInt(bucketVals[len(h.bounds)], 10)},
-		sample{nameSuffix: "_sum", labels: labelStr, value: formatValue(sum)},
-		sample{nameSuffix: "_count", labels: labelStr, value: strconv.FormatInt(count, 10)},
+		sample{nameSuffix: suffixBucket, labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatInt(bucketVals[len(h.bounds)], 10)},
+		sample{nameSuffix: suffixSum, labels: labelStr, value: formatValue(sum)},
+		sample{nameSuffix: suffixCount, labels: labelStr, value: strconv.FormatInt(count, 10)},
 	)
 	return samples
 }
@@ -190,8 +197,21 @@ func summarySamples(samples []sample, labelStr string, v *SummaryValue) []sample
 		samples = append(samples, sample{labels: withLabel(labelStr, "quantile", formatValue(q.Quantile)), value: formatValue(q.Value)})
 	}
 	return append(samples,
-		sample{nameSuffix: "_sum", labels: labelStr, value: formatValue(v.Sum)},
-		sample{nameSuffix: "_count", labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
+		sample{nameSuffix: suffixSum, labels: labelStr, value: formatValue(v.Sum)},
+		sample{nameSuffix: suffixCount, labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
+	)
+}
+
+// histogramValueSamples expands one collector histogram series in the order
+// histogramSamples gives an instrument's.
+func histogramValueSamples(samples []sample, labelStr string, v *HistogramValue) []sample {
+	for _, b := range v.Buckets {
+		samples = append(samples, sample{nameSuffix: suffixBucket, labels: withLabel(labelStr, "le", formatValue(b.UpperBound)), value: strconv.FormatUint(b.Count, 10)})
+	}
+	return append(samples,
+		sample{nameSuffix: suffixBucket, labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatUint(v.Count, 10)},
+		sample{nameSuffix: suffixSum, labels: labelStr, value: formatValue(v.Sum)},
+		sample{nameSuffix: suffixCount, labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
 	)
 }
 

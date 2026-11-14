@@ -75,7 +75,7 @@ var processFamilyNames = func() []string {
 
 // processSummarySeries are the series names the go_gc_duration_seconds
 // summary writes beside its quantiles.
-var processSummarySeries = []string{pmGCDuration + "_sum", pmGCDuration + "_count"}
+var processSummarySeries = []string{pmGCDuration + suffixSum, pmGCDuration + suffixCount}
 
 // Go and process HELP text for the families built outside runtimeFamilies.
 const (
@@ -183,7 +183,7 @@ func (r *Registry) reserveName(family, kind string) error {
 // this call are released, so a failed registration leaves the registry's
 // name table exactly as it was. Callers must hold r.mu.
 func (r *Registry) reserveHistogramFamily(name, kind string) error {
-	families := [4]string{name, name + "_bucket", name + "_sum", name + "_count"}
+	families := [4]string{name, name + suffixBucket, name + suffixSum, name + suffixCount}
 	for i, f := range families {
 		if err := r.reserveName(f, kind); err != nil {
 			for _, claimed := range families[:i] {
