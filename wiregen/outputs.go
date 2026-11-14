@@ -50,8 +50,12 @@ func (g *generator) outputs() ([]genFile, error) {
 	for _, p := range g.o.openAPIFiles {
 		out = append(out, genFile{role: roleOpenAPI, name: p})
 	}
-	if g.o.deadsetRoot != "" {
-		out = append(out, genFile{role: roleDeadsetEdges, name: g.o.deadsetRoot + string(filepath.Separator) + deadsetEdgesFile})
+	edges, on, err := g.o.edgesOutput()
+	if err != nil {
+		return nil, err
+	}
+	if on {
+		out = append(out, edges)
 	}
 	tsDir, err := locate(g.o.tsDir)
 	if err != nil {
