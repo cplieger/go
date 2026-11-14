@@ -47,6 +47,9 @@ type fieldInfo struct {
 	// Refusals are why this field cannot cross the wire; Generate fails
 	// listing every one.
 	Refusals []string
+	// Owner is the named struct declaring the field: the registered type, or
+	// the embedded struct a promoted field comes from; zero when none does.
+	Owner    *Type
 	WireName string
 	GoName   string // the Go selector a refusal's path names, through embeds
 	TSType   string
@@ -316,37 +319,38 @@ func indexPackages(pkgs []*packages.Package) map[string]*packages.Package {
 func (g *generator) discoverEnums(allPkgs map[string]*packages.Package) error {
 	var errs []error
 	for _, ref := range g.Enums {
-		values, err := enumMembers(ref, allPkgs[ref.Type.PkgPath])
+		values, consts, err := enumMembers(ref, allPkgs[ref.Type.PkgPath])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("wiregen: enum %s.%s: %w", ref.Type.PkgPath, ref.Type.Name, err))
 			continue
 		}
-		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath, values: values}
+		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath, values: values, consts: consts}
 	}
 	return errors.Join(errs...)
 }
 
 // enumMembers returns ref's wire members: the constants of exactly ref's type
-// in pkg, in declaration order, each named by its value or by ref.Wire.
-func enumMembers(ref EnumRef, pkg *packages.Package) ([]string, error) {
+// in pkg, in declaration order, each named by its value or by ref.Wire, and
+// beside them the Go constants they come from.
+func enumMembers(ref EnumRef, pkg *packages.Package) (names, consts []string, err error) {
 	if pkg == nil || pkg.Types == nil {
-		return nil, errors.New("package not loaded")
+		return nil, nil, errors.New("package not loaded")
 	}
 	tn, ok := pkg.Types.Scope().Lookup(ref.Type.Name).(*types.TypeName)
 	if !ok {
-		return nil, errors.New("no such type")
+		return nil, nil, errors.New("no such type")
 	}
-	if err := checkEnumKind(ref, tn.Type()); err != nil {
-		return nil, err
+	if kindErr := checkEnumKind(ref, tn.Type()); kindErr != nil {
+		return nil, nil, kindErr
 	}
-	names, err := memberNames(ref, typedConsts(pkg.Types.Scope(), tn.Type()))
+	names, consts, err = memberNames(ref, typedConsts(pkg.Types.Scope(), tn.Type()))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(names) == 0 {
-		return nil, errors.New("declares no constant with a wire name")
+		return nil, nil, errors.New("declares no constant with a wire name")
 	}
-	return names, nil
+	return names, consts, nil
 }
 
 // checkEnumKind rejects an enum type whose kind ref cannot name: a string
@@ -378,11 +382,10 @@ func checkEnumKind(ref EnumRef, t types.Type) error {
 
 // memberNames names consts on the wire, skipping a repeated value and a
 // constant Wire refuses, and rejects two values encoding alike, which no
-// decoder could tell apart.
-func memberNames(ref EnumRef, consts []*types.Const) ([]string, error) {
+// decoder could tell apart. goNames holds each member's constant.
+func memberNames(ref EnumRef, consts []*types.Const) (names, goNames []string, err error) {
 	byName := map[string]string{}
 	seenVal := map[string]bool{}
-	var names []string
 	for _, c := range consts {
 		if seenVal[c.Val().ExactString()] {
 			continue
@@ -390,18 +393,19 @@ func memberNames(ref EnumRef, consts []*types.Const) ([]string, error) {
 		seenVal[c.Val().ExactString()] = true
 		name, member, err := wireName(ref, c)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !member {
 			continue
 		}
 		if prev, dup := byName[name]; dup {
-			return nil, fmt.Errorf("constants %s and %s both encode as %q", prev, c.Name(), name)
+			return nil, nil, fmt.Errorf("constants %s and %s both encode as %q", prev, c.Name(), name)
 		}
 		byName[name] = c.Name()
 		names = append(names, name)
+		goNames = append(goNames, c.Name())
 	}
-	return names, nil
+	return names, goNames, nil
 }
 
 // typedConsts returns the constants of exactly type t declared at scope, in
@@ -501,6 +505,7 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 		return ti, nil
 	}
 	ti.Fields = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
+	ownFields(ti.Fields, wt)
 	for i := range ti.Fields {
 		for _, why := range ti.Fields[i].Refusals {
 			e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+"."+ti.Fields[i].GoName+": "+why)
@@ -662,6 +667,11 @@ func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, p
 		return []fieldInfo{e.resolveNamedField(f, tag, depth, pkg, allPkgs)}
 	}
 	promoted := e.resolveStructFields(embSt, pkg, allPkgs, depth+1, visited)
+	owner := Type{}
+	if n, ok := embType.(*types.Named); ok && n.Obj().Pkg() != nil {
+		owner = Type{PkgPath: n.Obj().Pkg().Path(), Name: n.Origin().Obj().Name()}
+	}
+	ownFields(promoted, owner)
 	for i := range promoted {
 		p := &promoted[i]
 		p.GoName = f.Name() + "." + p.GoName
@@ -671,6 +681,16 @@ func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, p
 		}
 	}
 	return promoted
+}
+
+// ownFields gives owner to each of fields an embedded struct deeper down has
+// not already claimed.
+func ownFields(fields []fieldInfo, owner Type) {
+	for i := range fields {
+		if fields[i].Owner == nil {
+			fields[i].Owner = &owner
+		}
+	}
 }
 
 func (e *astEngine) resolveNamedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package) fieldInfo {
