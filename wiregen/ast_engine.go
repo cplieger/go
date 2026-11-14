@@ -38,7 +38,7 @@ type typeInfo struct {
 
 // embedInfo is one flattened struct embed.
 type embedInfo struct {
-	// Owner is the named struct declaring the embed; zero when none does.
+	// Owner is the struct declaration holding the embed.
 	Owner  *Type
 	GoName string // the selector from the registered type, through embeds
 }
@@ -56,8 +56,8 @@ type fieldInfo struct {
 	// Refusals are why this field cannot cross the wire; Generate fails
 	// listing every one.
 	Refusals []string
-	// Owner is the named struct declaring the field: the registered type, or
-	// the embedded struct a promoted field comes from; zero when none does.
+	// Owner is the struct declaration holding the field: the registered type,
+	// or the embedded struct a promoted field comes from.
 	Owner    *Type
 	WireName string
 	GoName   string // the Go selector a refusal's path names, through embeds
@@ -674,11 +674,12 @@ func isValidJSONName(s string) bool {
 // returned with the embeds below it, each unowned until its declaring struct
 // claims it.
 func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package, visited map[*types.Struct]bool) ([]fieldInfo, []embedInfo) {
-	embType := types.Unalias(f.Type())
-	ptr, viaPtr := embType.(*types.Pointer)
+	declared := f.Type()
+	ptr, viaPtr := types.Unalias(declared).(*types.Pointer)
 	if viaPtr {
-		embType = types.Unalias(ptr.Elem())
+		declared = ptr.Elem()
 	}
+	embType := types.Unalias(declared)
 	embSt, isStruct := embType.Underlying().(*types.Struct)
 	if (!f.Exported() && !isStruct) || tag.skip {
 		return nil, nil
@@ -687,10 +688,7 @@ func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, p
 		return []fieldInfo{e.resolveNamedField(f, tag, depth, pkg, allPkgs)}, nil
 	}
 	promoted, inner := e.resolveStructFields(embSt, pkg, allPkgs, depth+1, visited)
-	owner := Type{}
-	if n, ok := embType.(*types.Named); ok && n.Obj().Pkg() != nil {
-		owner = Type{PkgPath: n.Obj().Pkg().Path(), Name: n.Origin().Obj().Name()}
-	}
+	owner := structDeclaration(declared)
 	ownFields(promoted, owner)
 	ownEmbeds(inner, owner)
 	for i := range promoted {
@@ -706,6 +704,21 @@ func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, p
 		embeds = append(embeds, embedInfo{Owner: in.Owner, GoName: f.Name() + "." + in.GoName})
 	}
 	return promoted, embeds
+}
+
+// structDeclaration is the type declaration an embedded struct type name t
+// reaches its fields through, as deadset-go records them: the alias whose
+// right-hand side is the struct literal, else the named struct. The origin
+// names a generic one.
+func structDeclaration(t types.Type) Type {
+	for a, ok := t.(*types.Alias); ok; a, ok = a.Rhs().(*types.Alias) {
+		if _, literal := a.Rhs().(*types.Struct); literal {
+			obj := a.Origin().Obj()
+			return Type{PkgPath: obj.Pkg().Path(), Name: obj.Name()}
+		}
+	}
+	obj := types.Unalias(t).(*types.Named).Origin().Obj() //nolint:errcheck // an embedded field is a type name, so one ending at no literal is a defined type
+	return Type{PkgPath: obj.Pkg().Path(), Name: obj.Name()}
 }
 
 // ownFields gives owner to each of fields an embedded struct deeper down has
