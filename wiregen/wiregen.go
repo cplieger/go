@@ -247,22 +247,22 @@ func WithOpenAPIFiles(paths ...string) Option {
 // WithDeadsetEdges makes Generate write deadset-edges.json at targetRoot, the
 // directory deadset analyses, relative to the working directory
 // (https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md). It pairs
-// each generated Go symbol with its TS symbol under identifiers starting
-// "wiregen/", keeps every other edge and refuses a hand-written one under that
-// prefix. Only registered Go packages below targetRoot get edges, and none
-// there is an error. The TS directory must lie below the edges file's
-// directory ([WithDeadsetEdgesFile]). Empty, the default, writes no file.
+// each generated Go symbol with its TS symbol under "wiregen/" identifiers,
+// keeps every other edge and refuses a hand-written one under that prefix.
+// Only Go packages below targetRoot get edges, and a root holding none of the
+// registered types' and enums' packages is an error. The TS directory must lie
+// below the edges file's directory ([WithDeadsetEdgesFile]). Empty writes no file.
 func WithDeadsetEdges(targetRoot string) Option {
 	return func(o *options) { o.deadsetRoot = targetRoot }
 }
 
 // WithDeadsetEdgesFile makes Generate write the [WithDeadsetEdges] file at
 // path, relative to the working directory, instead of
-// targetRoot/deadset-edges.json, merging into the file there. The outputs
-// resolve against that file's directory, which must hold the TS directory
-// and roots the TS scopes; the Go packages still resolve against targetRoot,
-// so a mirrored output tree is generated as in place. Empty, the default,
-// keeps targetRoot/deadset-edges.json.
+// targetRoot/deadset-edges.json, merging into the file there. The TS
+// directory must lie below that file's directory, which roots the TS scopes;
+// the Go packages still resolve against targetRoot, so a mirrored output tree
+// generates as in place. Empty, the default, keeps
+// targetRoot/deadset-edges.json.
 func WithDeadsetEdgesFile(path string) Option {
 	return func(o *options) { o.deadsetEdgesFile = path }
 }

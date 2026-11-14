@@ -111,7 +111,7 @@ The file is written with the other outputs, edge identifiers and the members of 
 
 ### Writing into another tree
 
-wiregen reads its input, the registered Go packages, from the target root. Its outputs, the TypeScript files and the edges file, resolve together against the output tree, the directory holding the edges file. By default that directory is the target root, so the two are one. `WithDeadsetEdgesFile(path)` moves the edges file, and with it the output tree: the TS directory must lie below the file's directory, the `package.json` walk stops there, and the existing file read for hand-written edges is the one at `path`.
+Only the registered Go packages whose files lie below the target root get edges, wherever wiregen generates. The TypeScript side is scoped from the output tree, the directory holding the edges file, which by default is the target root. `WithDeadsetEdgesFile(path)` moves the edges file, and with it the output tree: the TS directory must lie below the file's directory, the `package.json` walk stops there, and the existing file read for hand-written edges is the one at `path`.
 
 Generating into a copy of the output tree therefore writes what generating in place writes, the edges file included, so a CI check can regenerate into a temporary directory and compare it with the committed files. Copy into it each `package.json` that lies between the edges file and the TS directory, since it names the TypeScript side's package, and the committed edges file, whose hand-written edges are kept.
 

@@ -736,8 +736,9 @@ func TestDeadsetEdges_ResolvesTheRootPhysically(t *testing.T) {
 	}
 }
 
-// deadset reads TypeScript only below its target root, and the edges file is
-// one of Generate's outputs, so neither may be misplaced.
+// The TS directory must lie below the edges file's directory, which roots its
+// ts:// scopes, and the edges file must be a regular file at a path naming
+// one, so a misplaced layout is refused.
 func TestDeadsetEdges_RefusesAMisplacedLayout(t *testing.T) {
 	t.Run("a TS directory outside the root", func(t *testing.T) {
 		root, pkg := edgesProject(t, `{"name": "app"}`)
