@@ -113,15 +113,45 @@ The file is written with the other outputs, edge identifiers and the members of 
 
 Only the Go packages whose files lie below the target root get edges, wherever wiregen generates. The TypeScript side is scoped from the output tree, the directory holding the edges file, which by default is the target root. `WithDeadsetEdgesFile(path)` moves the edges file, and with it the output tree: the TS directory must lie below the file's directory, the `package.json` walk stops there, and the existing file read for hand-written edges is the one at `path`.
 
-Generating into a copy of the output tree therefore writes what generating in place writes, the edges file included, so a CI check can regenerate into a temporary directory and compare it with the committed files. Copy into it each `package.json` that lies between the edges file and the TS directory, since it names the TypeScript side's package, and the committed edges file, whose hand-written edges are kept.
+Generating into another tree that holds the same `package.json` files and hand-written edges therefore writes what generating in place writes, so a CI check can regenerate into a temporary directory and compare the result with the committed files. Copy into it each `package.json` that lies between the edges file and the TS directory, since it names the TypeScript side's package.
+
+Do not copy the committed edges file. Generate merges into the file at the path, so a copy already holds the committed generated edges, and the comparison still passes when the edges are no longer written. With no hand-written edges and wiregen's default `description`, copy nothing, so Generate writes the whole file. Otherwise, seed the temporary file with the committed file's `description` and its edges outside `wiregen/`. Each edge under `wiregen/` is one Generate wrote, since it refuses one without its `because`, so dropping them leaves exactly the hand-written ones. Keep their bytes as written, as `jsontext.PreserveRawStrings` does below, since Generate writes them back as read and the comparison is byte for byte.
 
 ```go
-// tmp holds a copy of web/package.json and deadset-edges.json; repoRoot
-// is the directory deadset analyses.
+// tmp holds a copy of web/package.json; repoRoot is the directory deadset
+// analyses. seedHandEdges is only needed with hand-written edges or a
+// description of your own.
+if err := seedHandEdges(filepath.Join(repoRoot, "deadset-edges.json"), filepath.Join(tmp, "deadset-edges.json")); err != nil {
+    return err
+}
 err := r.Generate(ctx,
     wiregen.WithTSDir(filepath.Join(tmp, "web", "src", "wire")),
     wiregen.WithDeadsetEdges(repoRoot),
     wiregen.WithDeadsetEdgesFile(filepath.Join(tmp, "deadset-edges.json")))
+
+// seedHandEdges writes the edges document at committed to seed without the
+// edges under wiregen/. json is encoding/json/v2.
+func seedHandEdges(committed, seed string) error {
+    data, err := os.ReadFile(committed)
+    if err != nil {
+        return err
+    }
+    var doc struct {
+        Description jsontext.Value            `json:"description,omitzero"`
+        Edges       map[string]jsontext.Value `json:"edges"`
+    }
+    if err := json.Unmarshal(data, &doc); err != nil {
+        return err
+    }
+    maps.DeleteFunc(doc.Edges, func(id string, _ jsontext.Value) bool {
+        return strings.HasPrefix(id, "wiregen/")
+    })
+    out, err := json.Marshal(doc, jsontext.PreserveRawStrings(true))
+    if err != nil {
+        return err
+    }
+    return os.WriteFile(seed, out, 0o644)
+}
 ```
 
 The path is relative to the working directory, and its directory is resolved as the operating system opens it. A path whose last element is empty, `.` or `..` names no file and is refused, and so is `WithDeadsetEdgesFile` without `WithDeadsetEdges`.
