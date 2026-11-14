@@ -39,10 +39,16 @@ func TestGenerate_ClimbingOutOfASymlinkIsLexicalOnWindows(t *testing.T) {
 }
 
 // A deadset target root that climbs out of a symlink, src\hop\.., is src, the
-// lexical parent, so the edges file lands there and not where hop points.
+// lexical parent, so the edges file lands there and not where hop points. The
+// Go package lies below src, so the root yields an edge.
 func TestDeadsetEdges_RootClimbingOutOfASymlinkIsLexicalOnWindows(t *testing.T) {
-	root, pkg := edgesProject(t, `{"name": "app"}`)
+	root, _ := edgesProject(t, `{"name": "app"}`)
 	src := filepath.Join(root, "web", "src")
+	if err := os.Mkdir(filepath.Join(src, "gowire"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(src, "gowire", "wire.go"), wireSource)
+	pkg := "github.com/cplieger/go/wiregen/v2/" + filepath.Base(root) + "/web/src/gowire"
 	hop := filepath.Join(src, "hop")
 	if err := os.Symlink(filepath.Join(root, "web"), hop); err != nil {
 		t.Fatal(err)
@@ -52,8 +58,10 @@ func TestDeadsetEdges_RootClimbingOutOfASymlinkIsLexicalOnWindows(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(src, "deadset-edges.json")); err != nil {
+	if data, err := os.ReadFile(filepath.Join(src, "deadset-edges.json")); err != nil {
 		t.Errorf("no edges document at the lexical parent: %v", err)
+	} else if !strings.Contains(string(data), `"wiregen/User"`) {
+		t.Errorf("the edges document at the lexical parent holds no wiregen/User edge:\n%s", data)
 	}
 	if _, err := os.Stat(filepath.Join(root, "deadset-edges.json")); err == nil {
 		t.Error("an edges document was written where the physical parent would put it")
