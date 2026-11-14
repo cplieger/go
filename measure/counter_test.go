@@ -10,7 +10,7 @@ import (
 )
 
 func TestCounterInc(t *testing.T) {
-	c := NewCounter("test_counter", "test")
+	c := NewCounter("test_counter", "test", UnitCount)
 	c.Inc()
 	c.Inc()
 	if got := c.val.Load(); got != 2 {
@@ -19,7 +19,7 @@ func TestCounterInc(t *testing.T) {
 }
 
 func TestCounterAdd(t *testing.T) {
-	c := NewCounter("test_counter_add", "test")
+	c := NewCounter("test_counter_add", "test", UnitCount)
 	c.Add(5)
 	c.Add(3)
 	if got := c.val.Load(); got != 8 {
@@ -30,7 +30,7 @@ func TestCounterAdd(t *testing.T) {
 func TestCounterSaturatesAtMaxInt64(t *testing.T) {
 	// A counter pushed past MaxInt64 pins to MaxInt64 instead of wrapping to a
 	// negative value, preserving the monotonic contract in the exposed series.
-	c := NewCounter("test_counter_saturate_total", "test")
+	c := NewCounter("test_counter_saturate_total", "test", UnitCount)
 	c.Add(math.MaxInt64)
 	c.Add(math.MaxInt64) // would wrap negative without saturation
 	if got := c.val.Load(); got != math.MaxInt64 {
@@ -41,7 +41,7 @@ func TestCounterSaturatesAtMaxInt64(t *testing.T) {
 		t.Errorf("Counter saturation after Inc: got %d, want MaxInt64", got)
 	}
 
-	lc := NewLabeledCounter("test_lcounter_saturate_total", "test", []string{"k"})
+	lc := NewLabeledCounter("test_lcounter_saturate_total", "test", UnitCount, []string{"k"})
 	lc.Add(math.MaxInt64, "v")
 	lc.Add(math.MaxInt64, "v")
 	lc.mu.RLock()
@@ -58,14 +58,14 @@ func TestCounterAddNegativePanics(t *testing.T) {
 			t.Error("expected panic for negative Add")
 		}
 	}()
-	c := NewCounter("test_counter_neg", "test")
+	c := NewCounter("test_counter_neg", "test", UnitCount)
 	c.Add(-1)
 }
 
 // TestCounterAdd_ZeroIsAllowedNoPanic pins the negative guard at its inclusive
 // boundary: Add(0) is a legal no-op (the guard is n < 0, not n <= 0).
 func TestCounterAdd_ZeroIsAllowedNoPanic(t *testing.T) {
-	c := NewCounter("mk_counter_add0", "test")
+	c := NewCounter("mk_counter_add0", "test", UnitCount)
 	c.Add(0) // must not panic
 	if got := c.val.Load(); got != 0 {
 		t.Errorf("Counter.Add(0) value = %d, want 0", got)
@@ -77,7 +77,7 @@ func TestCounterAdd_ZeroIsAllowedNoPanic(t *testing.T) {
 }
 
 func TestLabeledCounterInc(t *testing.T) {
-	lc := NewLabeledCounter("test_lc", "test", []string{"method", "status"})
+	lc := NewLabeledCounter("test_lc", "test", UnitCount, []string{"method", "status"})
 	lc.Inc("GET", "200")
 	lc.Inc("GET", "200")
 	lc.Inc("POST", "201")
@@ -98,21 +98,21 @@ func TestLabeledCounterArityPanic(t *testing.T) {
 			t.Error("expected panic for arity mismatch")
 		}
 	}()
-	lc := NewLabeledCounter("test_lc_arity", "test", []string{"method", "status"})
+	lc := NewLabeledCounter("test_lc_arity", "test", UnitCount, []string{"method", "status"})
 	lc.Inc("GET") // wrong arity
 }
 
 // TestNewLabeledCounter_TooManyLabelsErrorsAtRegister pins the maxLabels cap:
 // a ninth label is captured at construction and surfaces at registration.
 func TestNewLabeledCounter_TooManyLabelsErrorsAtRegister(t *testing.T) {
-	lc := NewLabeledCounter("test_lc_many", "test", []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
+	lc := NewLabeledCounter("test_lc_many", "test", UnitCount, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
 	mustRegisterError(t, NewRegistry(""), lc, `LabeledCounter "test_lc_many" supports at most 8 labels`)
 }
 
 // TestNewLabeledCounter_ExactlyMaxLabelsAllowed pins the arity guard at its
 // inclusive maximum: eight labels is the legal maximum (the guard is > 8).
 func TestNewLabeledCounter_ExactlyMaxLabelsAllowed(t *testing.T) {
-	lc := NewLabeledCounter("mk_lc8_total", "test", []string{"a", "b", "c", "d", "e", "f", "g", "h"})
+	lc := NewLabeledCounter("mk_lc8_total", "test", UnitCount, []string{"a", "b", "c", "d", "e", "f", "g", "h"})
 	lc.Inc("1", "2", "3", "4", "5", "6", "7", "8") // must not panic with eight labels
 	if got := lc.vals[labelKey{"1", "2", "3", "4", "5", "6", "7", "8"}].Load(); got != 1 {
 		t.Errorf("LabeledCounter[8 labels] = %d, want 1", got)
@@ -120,7 +120,7 @@ func TestNewLabeledCounter_ExactlyMaxLabelsAllowed(t *testing.T) {
 }
 
 func TestLabeledCounterAdd(t *testing.T) {
-	lc := NewLabeledCounter("test_lc_add", "test", []string{"method", "status"})
+	lc := NewLabeledCounter("test_lc_add", "test", UnitCount, []string{"method", "status"})
 	lc.Add(5, "GET", "200") // new key: Store(5)
 	lc.Add(3, "GET", "200") // existing key: Add(3) -> 8
 	lc.Add(10, "POST", "201")
@@ -136,7 +136,7 @@ func TestLabeledCounterAdd(t *testing.T) {
 }
 
 func TestLabeledCounterAdd_zeroOnNewKey(t *testing.T) {
-	lc := NewLabeledCounter("test_lc_add_zero", "test", []string{"k"})
+	lc := NewLabeledCounter("test_lc_add_zero", "test", UnitCount, []string{"k"})
 	lc.Add(0, "a")
 	key := labelKey{"a", "", "", ""}
 	v, ok := lc.vals[key]
@@ -154,7 +154,7 @@ func TestLabeledCounterAdd_negativePanics(t *testing.T) {
 			t.Error("expected panic for negative Add")
 		}
 	}()
-	lc := NewLabeledCounter("test_lc_add_neg", "test", []string{"k"})
+	lc := NewLabeledCounter("test_lc_add_neg", "test", UnitCount, []string{"k"})
 	lc.Add(-1, "a") // correct arity: hits the negative guard, not the arity guard
 }
 
@@ -164,31 +164,31 @@ func TestLabeledCounterAdd_arityMismatchPanics(t *testing.T) {
 			t.Error("expected panic for arity mismatch")
 		}
 	}()
-	lc := NewLabeledCounter("test_lc_add_arity", "test", []string{"method", "status"})
+	lc := NewLabeledCounter("test_lc_add_arity", "test", UnitCount, []string{"method", "status"})
 	lc.Add(1, "GET") // n>=0 passes negative guard, then arity guard fires
 }
 
 func TestLabeledCounter_Reset(t *testing.T) {
-	lc := NewLabeledCounter("lc_reset_total", "test", []string{"host"})
+	lc := NewLabeledCounter("lc_reset_total", "test", UnitCount, []string{"host"})
 	lc.Inc("a")
 	lc.Inc("b")
 	lc.Reset()
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	if b.Len() != 0 {
 		t.Errorf("expected empty output after Reset, got: %s", b.String())
 	}
 }
 
 func TestLabeledCounter_Delete(t *testing.T) {
-	lc := NewLabeledCounter("lc_delete_total", "test", []string{"host"})
+	lc := NewLabeledCounter("lc_delete_total", "test", UnitCount, []string{"host"})
 	lc.Inc("a")
 	lc.Inc("b")
 	lc.Delete("a")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 	if strings.Contains(out, `host="a"`) {
 		t.Errorf("deleted key still present: %s", out)
@@ -204,7 +204,7 @@ func TestLabeledCounter_DeleteArityPanic(t *testing.T) {
 			t.Error("expected panic for arity mismatch")
 		}
 	}()
-	lc := NewLabeledCounter("lc_del_panic_total", "test", []string{"a", "b"})
+	lc := NewLabeledCounter("lc_del_panic_total", "test", UnitCount, []string{"a", "b"})
 	lc.Delete("only_one")
 }
 
@@ -216,12 +216,12 @@ func TestLabeledCounter_emptyLabelSet(t *testing.T) {
 			t.Fatalf("zero-label counter panicked: %v", r)
 		}
 	}()
-	lc := NewLabeledCounter("rt6_empty_labels", "test", []string{})
+	lc := NewLabeledCounter("rt6_empty_labels", "test", UnitCount, []string{})
 	lc.Inc()
 	lc.Inc()
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, "rt6_empty_labels") {
 		t.Errorf("empty label counter missing: %s", out)
@@ -229,13 +229,13 @@ func TestLabeledCounter_emptyLabelSet(t *testing.T) {
 }
 
 func TestWriteCounterFormat(t *testing.T) {
-	c := NewCounter("http_requests_total", "Total HTTP requests")
+	c := NewCounter("http_requests_total", "Total HTTP requests", UnitCount)
 	c.Inc()
 	c.Inc()
 	c.Inc()
 
 	var b strings.Builder
-	writeCounter(&b, c)
+	writeFamily(&b, c)
 	out := b.String()
 
 	if !strings.Contains(out, "# HELP http_requests_total Total HTTP requests") {
@@ -250,11 +250,11 @@ func TestWriteCounterFormat(t *testing.T) {
 }
 
 func TestWriteCounter_helpCarriageReturnRaw(t *testing.T) {
-	c := NewCounter("cr_counter", "line1\rline2")
+	c := NewCounter("cr_counter", "line1\rline2", UnitCount)
 	c.Inc()
 
 	var b strings.Builder
-	writeCounter(&b, c)
+	writeFamily(&b, c)
 	out := b.String()
 
 	// Carriage return is not a defined escape in the Prometheus text format
@@ -269,12 +269,12 @@ func TestWriteCounter_helpCarriageReturnRaw(t *testing.T) {
 }
 
 func TestWriteLabeledCounterSorted(t *testing.T) {
-	lc := NewLabeledCounter("sorted_lc", "test", []string{"method", "path", "status"})
+	lc := NewLabeledCounter("sorted_lc", "test", UnitCount, []string{"method", "path", "status"})
 	lc.Inc("POST", "/b", "201")
 	lc.Inc("GET", "/a", "200")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, `method="GET",path="/a",status="200"`) {
 		t.Errorf("labels not sorted: %s", out)
@@ -282,11 +282,11 @@ func TestWriteLabeledCounterSorted(t *testing.T) {
 }
 
 func TestLabelValueEscaping(t *testing.T) {
-	lc := NewLabeledCounter("esc_lc", "test", []string{"path"})
+	lc := NewLabeledCounter("esc_lc", "test", UnitCount, []string{"path"})
 	lc.Inc("C:\\DIR\\FILE.TXT")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 
 	if !strings.Contains(out, `path="C:\\DIR\\FILE.TXT"`) {
@@ -295,11 +295,11 @@ func TestLabelValueEscaping(t *testing.T) {
 }
 
 func TestLabelValueEscapingNewlineAndQuote(t *testing.T) {
-	lc := NewLabeledCounter("esc_lc2", "test", []string{"msg"})
+	lc := NewLabeledCounter("esc_lc2", "test", UnitCount, []string{"msg"})
 	lc.Inc("hello\n\"world\"")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 
 	if !strings.Contains(out, `msg="hello\n\"world\""`) {
@@ -308,11 +308,11 @@ func TestLabelValueEscapingNewlineAndQuote(t *testing.T) {
 }
 
 func TestLabelValueTabNotOverEscaped(t *testing.T) {
-	lc := NewLabeledCounter("esc_lc3", "test", []string{"msg"})
+	lc := NewLabeledCounter("esc_lc3", "test", UnitCount, []string{"msg"})
 	lc.Inc("a\tb") // tab should NOT be escaped
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 
 	if !strings.Contains(out, "msg=\"a\tb\"") {
@@ -321,11 +321,11 @@ func TestLabelValueTabNotOverEscaped(t *testing.T) {
 }
 
 func TestLabelValueCarriageReturnPassthrough(t *testing.T) {
-	lc := NewLabeledCounter("esc_cr_lc", "test", []string{"msg"})
+	lc := NewLabeledCounter("esc_cr_lc", "test", UnitCount, []string{"msg"})
 	lc.Inc("a\rb")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 
 	// CR is not a Prometheus escape, so a raw CR passes through the label value
@@ -366,7 +366,7 @@ func TestSortedLabelKeys_empty(t *testing.T) {
 }
 
 func TestLabeledCounterConcurrent(t *testing.T) {
-	lc := NewLabeledCounter("conc_lc", "test", []string{"method", "status"})
+	lc := NewLabeledCounter("conc_lc", "test", UnitCount, []string{"method", "status"})
 	var wg sync.WaitGroup
 	for range 100 {
 		wg.Go(func() { lc.Inc("GET", "200") })
@@ -381,7 +381,7 @@ func TestLabeledCounterConcurrent(t *testing.T) {
 // TestCounter_Inc_Concurrent asserts the unlabeled atomic counter totals every
 // concurrent increment without loss.
 func TestCounter_Inc_Concurrent(t *testing.T) {
-	c := NewCounter("rt6_counter_hot", "hot path")
+	c := NewCounter("rt6_counter_hot", "hot path", UnitCount)
 	const n = 100
 	const iters = 1000
 	var wg sync.WaitGroup
@@ -404,7 +404,7 @@ func TestCounter_Inc_Concurrent(t *testing.T) {
 // captures slog.Default().
 func TestLabeledMetricCardinalityWarning(t *testing.T) {
 	buf := captureDebugLogs(t)
-	lc := NewLabeledCounter("cardinality_warn_total", "test", []string{"path"})
+	lc := NewLabeledCounter("cardinality_warn_total", "test", UnitCount, []string{"path"})
 
 	for i := range cardinalityWarnThreshold {
 		lc.Inc(string(rune('A' + i)))
@@ -438,7 +438,7 @@ func TestLabeledMetricCardinalityWarning(t *testing.T) {
 }
 
 func BenchmarkLabeledCounterInc(b *testing.B) {
-	lc := NewLabeledCounter("bench_lc", "bench", []string{"method", "path", "status"})
+	lc := NewLabeledCounter("bench_lc", "bench", UnitCount, []string{"method", "path", "status"})
 	lc.Inc("GET", "/api", "200")
 	b.ReportAllocs()
 	for b.Loop() {
@@ -453,7 +453,7 @@ func BenchmarkLabeledCounterInc(b *testing.B) {
 // building, not series creation — that is TestLabeledCounterNewSeriesCostIsConstant,
 // which can control the fixture where a benchmark loop cannot.
 func BenchmarkLabeledCounterInc_DynamicLabel(b *testing.B) {
-	lc := NewLabeledCounter("bench_lc_dynamic", "bench", []string{"method", "path", "status"})
+	lc := NewLabeledCounter("bench_lc_dynamic", "bench", UnitCount, []string{"method", "path", "status"})
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
 		lc.Inc("GET", "/api/"+strings.Repeat("x", i%8), "200")
@@ -461,7 +461,7 @@ func BenchmarkLabeledCounterInc_DynamicLabel(b *testing.B) {
 }
 
 func BenchmarkLabeledCounterInc_Parallel(b *testing.B) {
-	lc := NewLabeledCounter("bench_lc_par", "bench", []string{"method", "path", "status"})
+	lc := NewLabeledCounter("bench_lc_par", "bench", UnitCount, []string{"method", "path", "status"})
 	lc.Inc("GET", "/api", "200")
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -518,11 +518,11 @@ func TestStoreNewSeries_doubleCheckLoadsExistingWithoutWarn(t *testing.T) {
 func TestLabeledCounterDelete_SanitizesLabelValues(t *testing.T) {
 	captureDebugLogs(t)
 	bad := "\xff\xfe"
-	lc := NewLabeledCounter("del_sanval_counter_total", "test", []string{"m"})
+	lc := NewLabeledCounter("del_sanval_counter_total", "test", UnitCount, []string{"m"})
 	lc.Inc(bad)
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	if out := b.String(); !strings.Contains(out, "\uFFFD") {
 		t.Fatalf("exposition missing sanitized series before Delete: %q", out)
 	}
@@ -530,7 +530,7 @@ func TestLabeledCounterDelete_SanitizesLabelValues(t *testing.T) {
 	lc.Delete(bad)
 
 	b.Reset()
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	if out := b.String(); strings.Contains(out, "\uFFFD") {
 		t.Errorf("exposition still contains sanitized series after Delete with raw values: %q", out)
 	}
@@ -545,8 +545,8 @@ func TestLabeledCounterDelete_SanitizesLabelValues(t *testing.T) {
 // The label set is created in setup, so the measured closure takes loadOrStore's
 // RLock fast path. TestLabeledCounterNewSeriesCostIsConstant measures CREATION.
 func TestCounterRecordPathIsAllocationFree(t *testing.T) {
-	c := NewCounter("alloc_counter_total", "allocation contract")
-	lc := NewLabeledCounter("alloc_labeled_counter_total", "allocation contract",
+	c := NewCounter("alloc_counter_total", "allocation contract", UnitCount)
+	lc := NewLabeledCounter("alloc_labeled_counter_total", "allocation contract", UnitCount,
 		[]string{"method", "path", "status"})
 	lc.Inc("GET", "/api", "200")
 
@@ -609,7 +609,7 @@ func TestLabeledCounterNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(arities))
 		for i, n := range arities {
 			keys := newSeriesLabelValues(allocRuns, n, 8)
-			lc := NewLabeledCounter("alloc_arity_total", "allocation contract", labelNames(n))
+			lc := NewLabeledCounter("alloc_arity_total", "allocation contract", UnitCount, labelNames(n))
 			next := 0
 			counts[i] = testing.AllocsPerRun(allocRuns, func() {
 				lc.Inc(keys[next]...)
@@ -630,7 +630,7 @@ func TestLabeledCounterNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(lengths))
 		for i, n := range lengths {
 			keys := newSeriesLabelValues(allocRuns, 3, n)
-			lc := NewLabeledCounter("alloc_vallen_total", "allocation contract", []string{"a", "b", "c"})
+			lc := NewLabeledCounter("alloc_vallen_total", "allocation contract", UnitCount, []string{"a", "b", "c"})
 			next := 0
 			counts[i] = testing.AllocsPerRun(allocRuns, func() {
 				lc.Inc(keys[next]...)
@@ -651,7 +651,7 @@ func TestLabeledCounterNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(existing))
 		for i, n := range existing {
 			keys := newSeriesLabelValues(allocRuns, 3, 8)
-			lc := NewLabeledCounter("alloc_existing_total", "allocation contract", []string{"a", "b", "c"})
+			lc := NewLabeledCounter("alloc_existing_total", "allocation contract", UnitCount, []string{"a", "b", "c"})
 			for k := range n {
 				lc.Inc("pre", strconv.Itoa(k), "x")
 			}

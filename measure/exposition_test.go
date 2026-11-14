@@ -21,7 +21,7 @@ func countFamiliesWithPrefix(fams []metricFamily, prefix string) int {
 }
 
 func TestLabeledCounterFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
-	lc := NewLabeledCounter("nilguard_total", "help", []string{"k"})
+	lc := NewLabeledCounter("nilguard_total", "help", UnitCount, []string{"k"})
 	lc.Add(5, "live")
 	// A concurrent Delete/Reset can null a map slot between family()'s key
 	// snapshot and its value load; inject that state to exercise the guard
@@ -42,7 +42,7 @@ func TestLabeledCounterFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
 }
 
 func TestLabeledHistogramFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
-	lh := NewLabeledHistogram("nilguard_seconds", "help", []string{"k"})
+	lh := NewLabeledHistogram("nilguard_seconds", "help", UnitSeconds, []string{"k"})
 	lh.Observe(0.5, "live")
 	// Same concurrent-Delete race as the labeled counter: a nil map slot must be
 	// skipped, not dereferenced (h.snapshot() on a nil *Histogram panics). "ghost"
@@ -67,7 +67,7 @@ func TestLabeledHistogramFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
 // malformed exposition that both parsers reject.
 
 func TestLabeledCounterFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.T) {
-	lc := NewLabeledCounter("allnil_total", "help", []string{"k"})
+	lc := NewLabeledCounter("allnil_total", "help", UnitCount, []string{"k"})
 	// The sole observed key, nulled between family()'s key snapshot and its
 	// value load. keys stays non-empty (so the len(keys)==0 early-out does not
 	// fire), but the guarded loop appends nothing.
@@ -83,7 +83,7 @@ func TestLabeledCounterFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testin
 }
 
 func TestLabeledGaugeFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.T) {
-	lg := NewLabeledGauge("allnil", "help", []string{"k"})
+	lg := NewLabeledGauge("allnil", "help", UnitNone, []string{"k"})
 	lg.vals[labelKey{"ghost"}] = nil
 
 	fam, ok := lg.family()
@@ -96,7 +96,7 @@ func TestLabeledGaugeFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.
 }
 
 func TestLabeledHistogramFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.T) {
-	lh := NewLabeledHistogram("allnil_seconds", "help", []string{"k"})
+	lh := NewLabeledHistogram("allnil_seconds", "help", UnitSeconds, []string{"k"})
 	lh.vals[labelKey{"ghost"}] = nil
 
 	fam, ok := lh.family()
@@ -117,7 +117,7 @@ func TestCollect_capacityCounters(t *testing.T) {
 	const prefix = "capctr_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		reg.MustRegister(NewCounter(prefix+strconv.Itoa(i)+"_total", "h"))
+		reg.MustRegister(NewCounter(prefix+strconv.Itoa(i)+"_total", "h", UnitCount))
 	}
 
 	fams := reg.collect(context.Background())
@@ -131,7 +131,7 @@ func TestCollect_capacityLabeledGauges(t *testing.T) {
 	const prefix = "caplg_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		lg := NewLabeledGauge(prefix+strconv.Itoa(i), "h", []string{"k"})
+		lg := NewLabeledGauge(prefix+strconv.Itoa(i), "h", UnitNone, []string{"k"})
 		reg.MustRegister(lg)
 		lg.Set(1, "v") // a labeled metric only emits a family once a combo is set
 	}
@@ -147,7 +147,7 @@ func TestCollect_capacityHistograms(t *testing.T) {
 	const prefix = "caphist_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		reg.MustRegister(NewHistogram(prefix+strconv.Itoa(i), "h"))
+		reg.MustRegister(NewHistogram(prefix+strconv.Itoa(i), "h", UnitNone))
 	}
 
 	fams := reg.collect(context.Background())
@@ -161,7 +161,7 @@ func TestCollect_capacityLabeledHistograms(t *testing.T) {
 	const prefix = "caplh_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		lh := NewLabeledHistogram(prefix+strconv.Itoa(i), "h", []string{"k"})
+		lh := NewLabeledHistogram(prefix+strconv.Itoa(i), "h", UnitNone, []string{"k"})
 		reg.MustRegister(lh)
 		lh.Observe(0.1, "v")
 	}
@@ -177,7 +177,7 @@ func TestCollect_capacityGauges(t *testing.T) {
 	const prefix = "capg_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		reg.MustRegister(NewGauge(prefix+strconv.Itoa(i), "h"))
+		reg.MustRegister(NewGauge(prefix+strconv.Itoa(i), "h", UnitNone))
 	}
 
 	fams := reg.collect(context.Background())
@@ -201,25 +201,25 @@ func TestHandler_ErroredMetricNeverReachesTheOutput(t *testing.T) {
 		family string
 		metric func() Metric
 	}{
-		{"counter, invalid name", "bad-name", func() Metric { c := NewCounter("bad-name", "x"); c.Inc(); return c }},
-		{"gauge, invalid name", "bad-name", func() Metric { g := NewGauge("bad-name", "x"); g.Set(4); return g }},
+		{"counter, invalid name", "bad-name", func() Metric { c := NewCounter("bad-name", "x", UnitCount); c.Inc(); return c }},
+		{"gauge, invalid name", "bad-name", func() Metric { g := NewGauge("bad-name", "x", UnitNone); g.Set(4); return g }},
 		{"labeled counter, invalid label name", "wn_ok_total", func() Metric {
-			lc := NewLabeledCounter("wn_ok_total", "x", []string{"bad-label"})
+			lc := NewLabeledCounter("wn_ok_total", "x", UnitCount, []string{"bad-label"})
 			lc.Inc("v")
 			return lc
 		}},
 		{"labeled gauge, reserved label prefix", "wn_ok_gauge", func() Metric {
-			lg := NewLabeledGauge("wn_ok_gauge", "x", []string{"__rsv"})
+			lg := NewLabeledGauge("wn_ok_gauge", "x", UnitNone, []string{"__rsv"})
 			lg.Set(1, "v")
 			return lg
 		}},
 		{"histogram, unordered buckets", "wn_ok_hist", func() Metric {
-			h := NewHistogram("wn_ok_hist", "x", WithBuckets([]float64{2, 1}))
+			h := NewHistogram("wn_ok_hist", "x", UnitNone, WithBuckets([]float64{2, 1}))
 			h.Observe(0.5)
 			return h
 		}},
 		{"labeled histogram, reserved le label", "wn_ok_seconds", func() Metric {
-			lh := NewLabeledHistogram("wn_ok_seconds", "x", []string{"le"})
+			lh := NewLabeledHistogram("wn_ok_seconds", "x", UnitSeconds, []string{"le"})
 			lh.Observe(0.5, "v")
 			return lh
 		}},
@@ -247,12 +247,12 @@ func TestHandler_ErroredMetricNeverReachesTheOutput(t *testing.T) {
 // exposition and that no OpenMetrics-style "# EOF" trailer is emitted.
 func TestEncoders_bothFormats_allTypes(t *testing.T) {
 	r := NewRegistry("")
-	c := NewCounter("parity_counter", "A counter")
-	g := NewGauge("parity_gauge", "A gauge")
-	h := NewHistogram("parity_hist", "A histogram", WithBuckets([]float64{0.1, 1}))
-	lc := NewLabeledCounter("parity_lc", "Labeled counter", []string{"k"})
-	lg := NewLabeledGauge("parity_lg", "Labeled gauge", []string{"k"})
-	lh := NewLabeledHistogram("parity_lh", "Labeled histogram", []string{"k"}, WithBuckets([]float64{0.5}))
+	c := NewCounter("parity_counter", "A counter", UnitCount)
+	g := NewGauge("parity_gauge", "A gauge", UnitNone)
+	h := NewHistogram("parity_hist", "A histogram", UnitNone, WithBuckets([]float64{0.1, 1}))
+	lc := NewLabeledCounter("parity_lc", "Labeled counter", UnitCount, []string{"k"})
+	lg := NewLabeledGauge("parity_lg", "Labeled gauge", UnitNone, []string{"k"})
+	lh := NewLabeledHistogram("parity_lh", "Labeled histogram", UnitNone, []string{"k"}, WithBuckets([]float64{0.5}))
 
 	r.MustRegister(c, g, h, lc, lg, lh)
 
@@ -283,11 +283,11 @@ func TestEncoders_bothFormats_allTypes(t *testing.T) {
 // escapes backslash and newline but leaves the double-quote raw.
 func TestHelpEscaping_Prometheus(t *testing.T) {
 	help := "line1\\line2\nline3\"quoted\""
-	c := NewCounter("help_esc", help)
+	c := NewCounter("help_esc", help, UnitCount)
 	c.Inc()
 
 	var b strings.Builder
-	writeCounter(&b, c)
+	writeFamily(&b, c)
 	if out := b.String(); !strings.Contains(out, `# HELP help_esc line1\\line2\nline3"quoted"`) {
 		t.Errorf("Prometheus HELP escaping wrong:\n%s", out)
 	}
@@ -338,7 +338,7 @@ func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
 	// happens.
 	buildRegistry := func(fill string, valueLen int) *Registry {
 		r := NewRegistry("escapecost")
-		lc := NewLabeledCounter("content_total", "escaping cost contract", []string{"v"})
+		lc := NewLabeledCounter("content_total", "escaping cost contract", UnitCount, []string{"v"})
 		r.MustRegister(lc)
 		for i := range series {
 			lc.Inc(strings.Repeat(fill, valueLen) + strconv.Itoa(i))

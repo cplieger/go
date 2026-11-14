@@ -10,17 +10,35 @@ type Gauge struct {
 	err        error // construction-time validation error; surfaces at registration
 	name       string
 	help       string
+	meta       declMeta
 	bits       atomic.Uint64
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewGauge creates a named gauge. An invalid name is captured into the gauge
-// rather than panicking: the gauge records nothing, Handler never emits it,
-// and the error surfaces at registration.
-func NewGauge(name, help string) *Gauge {
+// NewGauge creates a named gauge whose value is in unit. An invalid
+// declaration is captured into the gauge rather than panicking: the gauge
+// records nothing, Handler never emits it, and the error surfaces at
+// registration. A gauge that must leave the page is a [LabeledGauge] with
+// no labels, whose Delete removes its one series.
+func NewGauge(name, help string, unit Unit, opts ...Option) *Gauge {
 	help = sanitizeHelp(name, help)
-	return &Gauge{name: name, help: help, err: checkMetricName(name)}
+	o := applyOptions(opts)
+	g := &Gauge{name: name, help: help}
+	g.meta.fill(name, help, KindGauge, unit, nil, &o)
+	g.err = firstErr(checkMetricName(name), checkOptionFits(name, &o, false, -1),
+		checkDeclaration(name, KindGauge, unit, nil, &o))
+	return g
+}
+
+// Declaration returns the gauge's metadata.
+func (g *Gauge) Declaration() Declaration { return g.meta.declaration() }
+
+func (g *Gauge) declared() *declMeta {
+	if g == nil {
+		return nil
+	}
+	return &g.meta
 }
 
 // Set sets the gauge to an arbitrary float64 value. A gauge carrying a
@@ -73,27 +91,48 @@ type LabeledGauge struct {
 	help   string
 	err    error // construction-time validation error; surfaces at registration
 	labels []string
+	meta   declMeta
 	series
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewLabeledGauge creates a labeled gauge. Construction through
+// NewLabeledGauge creates a labeled gauge whose values are in unit.
+// [WithSeed] creates label sets at 0. With no labels it holds at most one
+// series, which Delete takes off the page. Construction through
 // NewLabeledGauge is mandatory: the zero LabeledGauge has a nil series map
-// and panics on the first record. An invalid metric name, an
-// invalid/reserved/duplicate label name, or more than 8 labels is captured
-// into the gauge rather than panicking: the gauge records nothing and the
-// error surfaces at registration.
-func NewLabeledGauge(name, help string, labels []string) *LabeledGauge {
+// and panics on the first record. An invalid declaration, including more
+// than 8 labels, is captured into the gauge rather than panicking: the gauge
+// records nothing and the error surfaces at registration.
+func NewLabeledGauge(name, help string, unit Unit, labels []string, opts ...Option) *LabeledGauge {
 	help = sanitizeHelp(name, help)
+	o := applyOptions(opts)
 	owned, err := checkNameAndLabels("LabeledGauge", name, labels)
-	return &LabeledGauge{
-		name:   name,
+	lg := &LabeledGauge{
 		help:   help,
-		err:    err,
 		labels: owned,
 		vals:   make(map[labelKey]*atomic.Uint64),
 	}
+	lg.name = name
+	lg.meta.fill(name, help, KindGauge, unit, owned, &o)
+	lg.err = firstErr(err, checkOptionFits(name, &o, false, len(owned)),
+		checkDeclaration(name, KindGauge, unit, owned, &o))
+	if lg.err == nil {
+		for _, set := range o.seeds {
+			lg.Set(0, set...)
+		}
+	}
+	return lg
+}
+
+// Declaration returns the gauge's metadata.
+func (lg *LabeledGauge) Declaration() Declaration { return lg.meta.declaration() }
+
+func (lg *LabeledGauge) declared() *declMeta {
+	if lg == nil {
+		return nil
+	}
+	return &lg.meta
 }
 
 // Set sets the gauge for the given label values. It panics on a label-arity

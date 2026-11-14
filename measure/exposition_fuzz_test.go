@@ -23,7 +23,7 @@ func FuzzPrometheusHelpExposition(f *testing.F) {
 	f.Fuzz(func(t *testing.T, help string) {
 		c := &Counter{name: "test_counter", help: help}
 		var b strings.Builder
-		writeCounter(&b, c)
+		writeFamily(&b, c)
 		out := b.String()
 		for line := range strings.SplitSeq(out, "\n") {
 			if !strings.HasPrefix(line, "# HELP ") {
@@ -65,16 +65,16 @@ func FuzzRegistryFullExposition(f *testing.F) {
 			t.Skip()
 		}
 		reg := NewRegistry("")
-		c := NewCounter("fuzz_counter", "counter help")
+		c := NewCounter("fuzz_counter", "counter help", UnitCount)
 		c.Inc()
 		reg.MustRegister(c)
-		g := NewGauge("fuzz_gauge", "gauge help")
+		g := NewGauge("fuzz_gauge", "gauge help", UnitNone)
 		g.Set(42)
 		reg.MustRegister(g)
-		h := NewHistogram("fuzz_histogram", "hist help")
+		h := NewHistogram("fuzz_histogram", "hist help", UnitNone)
 		h.Observe(0.1)
 		reg.MustRegister(h)
-		lc := NewLabeledCounter("fuzz_labeled", "labeled help", []string{"a", "b"})
+		lc := NewLabeledCounter("fuzz_labeled", "labeled help", UnitCount, []string{"a", "b"})
 		lc.Inc(lv1, lv2)
 		reg.MustRegister(lc)
 
@@ -137,17 +137,17 @@ func FuzzLabeledExposition_balanced(f *testing.F) {
 		if !utf8.ValidString(val) {
 			t.Skip()
 		}
-		lc := NewLabeledCounter("fuzz_counter", "fuzz help", []string{"v"})
+		lc := NewLabeledCounter("fuzz_counter", "fuzz help", UnitCount, []string{"v"})
 		lc.Inc(val)
-		lg := NewLabeledGauge("fuzz_gauge", "fuzz help", []string{"v"})
+		lg := NewLabeledGauge("fuzz_gauge", "fuzz help", UnitNone, []string{"v"})
 		lg.Set(gaugeVal, val)
 
 		var b strings.Builder
-		writeLabeledCounter(&b, lc)
+		writeFamily(&b, lc)
 		assertExpositionLabelsBalanced(t, b.String())
 
 		b.Reset()
-		writeLabeledGauge(&b, lg)
+		writeFamily(&b, lg)
 		assertExpositionLabelsBalanced(t, b.String())
 	})
 }

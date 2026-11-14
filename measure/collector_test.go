@@ -33,9 +33,9 @@ func findFamily(t *testing.T, fams []Family, name string) Family {
 
 func TestCollectorServesItsFamiliesOnThePage(t *testing.T) {
 	r := NewRegistry("app")
-	queue := NewGaugeDesc("queue_depth", "Items waiting", []string{"queue"})
-	done := NewCounterDesc("jobs_done_total", "Jobs finished", nil)
-	r.MustRegister(NewGauge("instrument", "h"), staticCollector(func(e *Emitter) {
+	queue := NewGaugeDesc("queue_depth", "Items waiting", UnitNone, []string{"queue"})
+	done := NewCounterDesc("jobs_done_total", "Jobs finished", UnitCount, nil)
+	r.MustRegister(NewGauge("instrument", "h", UnitNone), staticCollector(func(e *Emitter) {
 		e.Emit(queue, 3, "b")
 		e.Emit(queue, 1.5, "a")
 		e.Emit(done, 42)
@@ -55,7 +55,7 @@ func TestCollectorServesItsFamiliesOnThePage(t *testing.T) {
 
 func TestCollectorPageSortsLabelsByNameAndEscapesValues(t *testing.T) {
 	r := NewRegistry("")
-	d := NewGaugeDesc("g", "h", []string{"zone", "app"})
+	d := NewGaugeDesc("g", "h", UnitNone, []string{"zone", "app"})
 	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(d, 1, "a\"b\\c\nd", "x") }, d))
 	if out := body(t, r); !strings.Contains(out, "g{app=\"x\",zone=\"a\\\"b\\\\c\\nd\"} 1\n") {
 		t.Errorf("page = %q, want labels sorted by name and escaped", out)
@@ -69,7 +69,7 @@ func TestCollectorTakesAnyNumberOfLabels(t *testing.T) {
 		vals[i] = fmt.Sprintf("v%d", i)
 	}
 	r := NewRegistry("")
-	d := NewGaugeDesc("plays", "Plays", names)
+	d := NewGaugeDesc("plays", "Plays", UnitNone, names)
 	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(d, 1, vals...) }, d))
 	fams, err := r.Gather(t.Context())
 	if err != nil {
@@ -81,11 +81,11 @@ func TestCollectorTakesAnyNumberOfLabels(t *testing.T) {
 	if !strings.Contains(body(t, r), "plays{") {
 		t.Error("the 21-label family is missing from the page")
 	}
-	mustRegisterError(t, NewRegistry(""), NewLabeledGauge("wide", "h", labelNames(9)), "at most 8 labels")
+	mustRegisterError(t, NewRegistry(""), NewLabeledGauge("wide", "h", UnitNone, labelNames(9)), "at most 8 labels")
 }
 
 func TestCollectorConstructionErrorsSurfaceAtRegister(t *testing.T) {
-	ok := func() *Desc { return NewGaugeDesc("ok", "h", nil) }
+	ok := func() *Desc { return NewGaugeDesc("ok", "h", UnitNone, nil) }
 	shared := ok()
 	NewCollector(func(context.Context, *Emitter) {}, shared)
 	twice := ok()
@@ -93,16 +93,16 @@ func TestCollectorConstructionErrorsSurfaceAtRegister(t *testing.T) {
 		c    *Collector
 		want string
 	}{
-		"bad name":       {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("1bad", "h", nil)), "invalid metric name"},
-		"bad label":      {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("g", "h", []string{"__x"})), "reserved"},
-		"dup label":      {NewCollector(func(context.Context, *Emitter) {}, NewCounterDesc("c", "h", []string{"a", "a"})), "duplicate label"},
+		"bad name":       {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("1bad", "h", UnitNone, nil)), "invalid metric name"},
+		"bad label":      {NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("g", "h", UnitNone, []string{"__x"})), "reserved"},
+		"dup label":      {NewCollector(func(context.Context, *Emitter) {}, NewCounterDesc("c", "h", UnitCount, []string{"a", "a"})), "duplicate label"},
 		"no descs":       {NewCollector(func(context.Context, *Emitter) {}), "no descs"},
 		"nil desc":       {NewCollector(func(context.Context, *Emitter) {}, nil), "nil desc"},
 		"nil collect":    {NewCollector(nil, ok()), "nil collect"},
 		"same name":      {NewCollector(func(context.Context, *Emitter) {}, ok(), ok()), "declares \"ok\" twice"},
 		"shared desc":    {NewCollector(func(context.Context, *Emitter) {}, shared), "another collector"},
 		"desc repeated":  {NewCollector(func(context.Context, *Emitter) {}, twice, twice), "twice"},
-		"zero desc":      {NewCollector(func(context.Context, *Emitter) {}, &Desc{}), "not built with NewGaugeDesc"},
+		"zero desc":      {NewCollector(func(context.Context, *Emitter) {}, &Desc{}), "not built by a NewXDesc constructor"},
 		"zero collector": {&Collector{}, "not built with NewCollector"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -118,11 +118,11 @@ func TestCollectorConstructionErrorsSurfaceAtRegister(t *testing.T) {
 
 func TestCollectorNamesCollideWithEveryOtherFamily(t *testing.T) {
 	newC := func(name string) *Collector {
-		return NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("other", "h", nil), NewGaugeDesc(name, "h", nil))
+		return NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("other", "h", UnitNone, nil), NewGaugeDesc(name, "h", UnitNone, nil))
 	}
 	t.Run("an instrument holds the name", func(t *testing.T) {
 		r := NewRegistry("p")
-		r.MustRegister(NewGauge("taken", "h"))
+		r.MustRegister(NewGauge("taken", "h", UnitNone))
 		mustRegisterError(t, r, newC("taken"), "collides")
 		if _, held := r.names["p_other"]; held {
 			t.Error("a refused collector kept the names it reserved before the collision")
@@ -130,8 +130,8 @@ func TestCollectorNamesCollideWithEveryOtherFamily(t *testing.T) {
 	})
 	t.Run("a collector holds the name", func(t *testing.T) {
 		r := NewRegistry("")
-		r.MustRegister(NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("taken", "h", nil)))
-		mustRegisterError(t, r, NewCounter("taken", "h"), "collides")
+		r.MustRegister(NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("taken", "h", UnitNone, nil)))
+		mustRegisterError(t, r, NewCounter("taken", "h", UnitCount), "collides")
 		mustRegisterError(t, r, newC("taken"), "collides")
 	})
 	t.Run("a process family holds the name", func(t *testing.T) {
@@ -146,7 +146,7 @@ func TestCollectorNamesCollideWithEveryOtherFamily(t *testing.T) {
 	})
 	t.Run("refused, then registered elsewhere", func(t *testing.T) {
 		r := NewRegistry("")
-		r.MustRegister(NewGauge("taken", "h"))
+		r.MustRegister(NewGauge("taken", "h", UnitNone))
 		c := newC("taken")
 		mustRegisterError(t, r, c, "collides")
 		if err := NewRegistry("").Register(c); err != nil {
@@ -156,7 +156,7 @@ func TestCollectorNamesCollideWithEveryOtherFamily(t *testing.T) {
 }
 
 func TestCollectorDropsBadSamplesAndReportsThem(t *testing.T) {
-	other := NewGaugeDesc("other", "h", nil)
+	other := NewGaugeDesc("other", "h", UnitNone, nil)
 	NewCollector(func(context.Context, *Emitter) {}, other)
 	for name, tc := range map[string]struct {
 		emit func(e *Emitter, g, c *Desc)
@@ -174,8 +174,8 @@ func TestCollectorDropsBadSamplesAndReportsThem(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			logs := captureDebugLogs(t)
-			g := NewGaugeDesc("g", "h", []string{"k"})
-			c := NewCounterDesc("c_total", "h", nil)
+			g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
+			c := NewCounterDesc("c_total", "h", UnitCount, nil)
 			r := NewRegistry("")
 			r.MustRegister(staticCollector(func(e *Emitter) { tc.emit(e, g, c) }, g, c))
 			for range 3 {
@@ -216,7 +216,7 @@ func droppedWarnings(logs string) int {
 
 func TestCollectorLogsAProblemOnceAndItsClearingOnce(t *testing.T) {
 	logs := captureDebugLogs(t)
-	g := NewGaugeDesc("g", "h", []string{"k"})
+	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
 	var mu sync.Mutex
 	bad := true
 	r := NewRegistry("")
@@ -248,7 +248,7 @@ func TestCollectorLogsAProblemOnceAndItsClearingOnce(t *testing.T) {
 
 func TestCollectorWarnsOnceAtTheSeriesThreshold(t *testing.T) {
 	logs := captureDebugLogs(t)
-	g := NewGaugeDesc("wide", "h", []string{"k"})
+	g := NewGaugeDesc("wide", "h", UnitNone, []string{"k"})
 	var mu sync.Mutex
 	n := cardinalityWarnThreshold
 	r := NewRegistry("")
@@ -276,7 +276,7 @@ func TestCollectorWarnsOnceAtTheSeriesThreshold(t *testing.T) {
 
 func TestCollectorSanitizesLabelValues(t *testing.T) {
 	logs := captureDebugLogs(t)
-	g := NewGaugeDesc("g", "h", []string{"k"})
+	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
 	r := NewRegistry("")
 	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(g, 1, "a\xffb") }, g))
 	fams, err := r.Gather(t.Context())
@@ -293,7 +293,7 @@ func TestCollectorSanitizesLabelValues(t *testing.T) {
 
 func TestCollectorReceivesTheRequestContext(t *testing.T) {
 	type key struct{}
-	g := NewGaugeDesc("g", "h", nil)
+	g := NewGaugeDesc("g", "h", UnitNone, nil)
 	var mu sync.Mutex
 	var seen []error
 	var tagged []any
@@ -318,7 +318,7 @@ func TestCollectorReceivesTheRequestContext(t *testing.T) {
 }
 
 func TestEmitAfterCollectReturnedRecordsNothing(t *testing.T) {
-	g := NewGaugeDesc("g", "h", nil)
+	g := NewGaugeDesc("g", "h", UnitNone, nil)
 	var kept *Emitter
 	r := NewRegistry("")
 	r.MustRegister(NewCollector(func(_ context.Context, e *Emitter) { kept = e }, g))
@@ -333,12 +333,12 @@ func TestEmitAfterCollectReturnedRecordsNothing(t *testing.T) {
 
 func TestGatherListsDeclaredFamiliesWithNoSamples(t *testing.T) {
 	r := NewRegistry("")
-	d := NewGaugeDesc("alerts_active", "h", []string{"kind", "id"})
+	d := NewGaugeDesc("alerts_active", "h", UnitNone, []string{"kind", "id"})
 	r.MustRegister(
 		NewCollector(func(context.Context, *Emitter) {}, d),
-		NewLabeledCounter("errors_total", "h", []string{"kind"}),
-		NewLabeledGauge("lg", "h", []string{"k"}),
-		NewLabeledHistogram("lh", "h", []string{"k"}),
+		NewLabeledCounter("errors_total", "h", UnitCount, []string{"kind"}),
+		NewLabeledGauge("lg", "h", UnitNone, []string{"k"}),
+		NewLabeledHistogram("lh", "h", UnitNone, []string{"k"}),
 	)
 	fams, err := r.Gather(t.Context())
 	if err != nil {
@@ -359,12 +359,12 @@ func TestGatherListsDeclaredFamiliesWithNoSamples(t *testing.T) {
 
 func TestGatherReadsEveryInstrumentAsStructuredValues(t *testing.T) {
 	r := NewRegistry("p")
-	c := NewCounter("c_total", "C")
-	g := NewGauge("g", "G")
-	lc := NewLabeledCounter("lc_total", "LC", []string{"b", "a"})
-	lg := NewLabeledGauge("lg", "LG", []string{"k"})
-	h := NewHistogram("h_seconds", "H", WithBuckets([]float64{0.5, 1}))
-	lh := NewLabeledHistogram("lh_seconds", "LH", []string{"k"}, WithBuckets([]float64{2}))
+	c := NewCounter("c_total", "C", UnitCount)
+	g := NewGauge("g", "G", UnitNone)
+	lc := NewLabeledCounter("lc_total", "LC", UnitCount, []string{"b", "a"})
+	lg := NewLabeledGauge("lg", "LG", UnitNone, []string{"k"})
+	h := NewHistogram("h_seconds", "H", UnitSeconds, WithBuckets([]float64{0.5, 1}))
+	lh := NewLabeledHistogram("lh_seconds", "LH", UnitSeconds, []string{"k"}, WithBuckets([]float64{2}))
 	r.MustRegister(c, g, lc, lg, h, lh)
 	c.Add(5)
 	g.Set(-2.5)
@@ -404,11 +404,11 @@ func TestGatherReadsEveryInstrumentAsStructuredValues(t *testing.T) {
 
 func TestGatherListsTheSameFamiliesInThePagesOrder(t *testing.T) {
 	r := NewRegistry("")
-	lc := NewLabeledCounter("lc_total", "h", []string{"k"})
-	lg := NewLabeledGauge("lg", "h", []string{"k"})
-	lh := NewLabeledHistogram("lh", "h", []string{"k"})
-	d := NewGaugeDesc("coll", "h", nil)
-	r.MustRegister(NewCounter("c_total", "h"), NewGauge("g", "h"), NewHistogram("h", "h"), lc, lg, lh,
+	lc := NewLabeledCounter("lc_total", "h", UnitCount, []string{"k"})
+	lg := NewLabeledGauge("lg", "h", UnitNone, []string{"k"})
+	lh := NewLabeledHistogram("lh", "h", UnitNone, []string{"k"})
+	d := NewGaugeDesc("coll", "h", UnitNone, nil)
+	r.MustRegister(NewCounter("c_total", "h", UnitCount), NewGauge("g", "h", UnitNone), NewHistogram("h", "h", UnitNone), lc, lg, lh,
 		staticCollector(func(e *Emitter) { e.Emit(d, 1) }, d))
 	lc.Inc("a")
 	lg.Set(1, "a")
@@ -434,8 +434,8 @@ func TestGatherListsTheSameFamiliesInThePagesOrder(t *testing.T) {
 }
 
 func TestGatherJoinsEveryCollectorsDrops(t *testing.T) {
-	a := NewGaugeDesc("a", "h", []string{"k"})
-	b := NewGaugeDesc("b", "h", nil)
+	a := NewGaugeDesc("a", "h", UnitNone, []string{"k"})
+	b := NewGaugeDesc("b", "h", UnitNone, nil)
 	r := NewRegistry("")
 	r.MustRegister(
 		staticCollector(func(e *Emitter) { e.Emit(a, 1) }, a),
@@ -452,8 +452,8 @@ func TestGatherJoinsEveryCollectorsDrops(t *testing.T) {
 }
 
 func TestCollectorRaceWithScrapesAndRecording(t *testing.T) {
-	g := NewGaugeDesc("g", "h", []string{"k"})
-	lc := NewLabeledCounter("lc_total", "h", []string{"k"})
+	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
+	lc := NewLabeledCounter("lc_total", "h", UnitCount, []string{"k"})
 	r := NewRegistry("")
 	var runs atomic.Int32
 	r.MustRegister(lc, NewCollector(func(_ context.Context, e *Emitter) {
@@ -527,7 +527,7 @@ func (h *gatherOnLog) Handle(ctx context.Context, _ slog.Record) error {
 
 func TestCollectorLogsOutsideItsLock(t *testing.T) {
 	captureDebugLogs(t) // restores the default logger after the test
-	g := NewGaugeDesc("g", "h", []string{"k"})
+	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
 	r := NewRegistry("")
 	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(g, 1) }, g))
 	slog.SetDefault(slog.New(&gatherOnLog{r: r}))
@@ -544,9 +544,9 @@ func TestCollectorLogsOutsideItsLock(t *testing.T) {
 }
 
 func TestEmitOfAnotherCollectorsDescRacesNothing(t *testing.T) {
-	foreign := NewGaugeDesc("foreign", "h", nil)
+	foreign := NewGaugeDesc("foreign", "h", UnitNone, nil)
 	owner := NewCollector(func(context.Context, *Emitter) {}, foreign)
-	g := NewGaugeDesc("g", "h", nil)
+	g := NewGaugeDesc("g", "h", UnitNone, nil)
 	r := NewRegistry("")
 	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(foreign, 1) }, g))
 	var wg sync.WaitGroup
@@ -590,7 +590,7 @@ type badScrape struct{}
 // state ends cleared, so the clearing must be logged after the warning.
 func TestCollectorLogsTransitionsInStateOrder(t *testing.T) {
 	captureDebugLogs(t) // restores the default logger after the test
-	g := NewGaugeDesc("g", "h", []string{"k"})
+	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
 	r := NewRegistry("")
 	r.MustRegister(NewCollector(func(ctx context.Context, e *Emitter) {
 		e.Emit(g, 1, "a")
@@ -638,8 +638,8 @@ func (h *panicOnFirstWarn) Handle(_ context.Context, r slog.Record) error {
 // rest of its batch is logged by the next run, and the queue is not left owned.
 func TestCollectorRecoversFromAPanickingLogHandler(t *testing.T) {
 	captureDebugLogs(t)
-	g1 := NewGaugeDesc("g1", "h", []string{"k"})
-	g2 := NewGaugeDesc("g2", "h", []string{"k"})
+	g1 := NewGaugeDesc("g1", "h", UnitNone, []string{"k"})
+	g2 := NewGaugeDesc("g2", "h", UnitNone, []string{"k"})
 	var mu sync.Mutex
 	bad := true
 	r := NewRegistry("")
@@ -682,7 +682,7 @@ func TestCollectorRecoversFromAPanickingLogHandler(t *testing.T) {
 func TestCollect_capacityCollectors(t *testing.T) {
 	r := NewRegistry("")
 	for i := range 20 {
-		d := NewGaugeDesc(fmt.Sprintf("capcoll_%d", i), "h", nil)
+		d := NewGaugeDesc(fmt.Sprintf("capcoll_%d", i), "h", UnitNone, nil)
 		r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(d, 1) }, d))
 	}
 	fams := r.collect(t.Context())
@@ -699,13 +699,13 @@ func TestCollect_capacityCollectors(t *testing.T) {
 }
 
 func TestNewCollectorClaimsADescOnce(t *testing.T) {
-	d := NewGaugeDesc("d", "h", nil)
+	d := NewGaugeDesc("d", "h", UnitNone, nil)
 	owner := NewCollector(func(context.Context, *Emitter) {}, d)
 	var wg sync.WaitGroup
 	wins := atomic.Int32{}
 	for range 8 {
 		wg.Go(func() {
-			if NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("other", "h", nil), d).err == nil {
+			if NewCollector(func(context.Context, *Emitter) {}, NewGaugeDesc("other", "h", UnitNone, nil), d).err == nil {
 				wins.Add(1)
 			}
 		})
@@ -715,14 +715,14 @@ func TestNewCollectorClaimsADescOnce(t *testing.T) {
 	if wins.Load() != 0 {
 		t.Errorf("%d collectors claimed a desc another collector holds", wins.Load())
 	}
-	a := NewGaugeDesc("a", "h", nil)
+	a := NewGaugeDesc("a", "h", UnitNone, nil)
 	if NewCollector(func(context.Context, *Emitter) {}, a, d).err == nil {
 		t.Fatal("a collector claimed a desc another collector holds")
 	}
 	if err := NewCollector(func(context.Context, *Emitter) {}, a).err; err != nil {
 		t.Errorf("the refused collector did not release %q: %v", "a", err)
 	}
-	free := NewGaugeDesc("free", "h", nil)
+	free := NewGaugeDesc("free", "h", UnitNone, nil)
 	for range 8 {
 		wg.Go(func() {
 			if NewCollector(func(context.Context, *Emitter) {}, free).err == nil {
@@ -741,7 +741,7 @@ func TestNewCollectorClaimsADescOnce(t *testing.T) {
 func TestRegistryWithLogger_routesCollectorProblems(t *testing.T) {
 	var buf bytes.Buffer
 	l := slog.New(slog.NewTextHandler(&buf, nil)).With("reg", "r1")
-	d := NewGaugeDesc("widgets", "Widgets.", []string{"kind"})
+	d := NewGaugeDesc("widgets", "Widgets.", UnitNone, []string{"kind"})
 	c := NewCollector(func(_ context.Context, e *Emitter) {
 		e.Emit(d, 1) // wrong arity: one label declared, none given
 	}, d)

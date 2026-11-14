@@ -57,7 +57,7 @@ func FuzzLabelValueValidation(f *testing.F) {
 	f.Add("\xff\xfe")
 	f.Add("\xc3\x28")
 	f.Fuzz(func(t *testing.T, s string) {
-		lc := NewLabeledCounter("fuzz_val_total", "test", []string{"m"})
+		lc := NewLabeledCounter("fuzz_val_total", "test", UnitCount, []string{"m"})
 		func() {
 			defer func() {
 				if r := recover(); r != nil {

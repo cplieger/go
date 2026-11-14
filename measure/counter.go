@@ -37,18 +37,35 @@ type Counter struct {
 	err        error // construction-time validation error; surfaces at registration
 	name       string
 	help       string
+	meta       declMeta
 	val        atomic.Int64
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewCounter creates a named counter. Per Prometheus convention the name
-// should end in `_total` (e.g. "http_requests_total"). An invalid name is
-// captured into the counter rather than panicking: the counter records
-// nothing, Handler never emits it, and the error surfaces at registration.
-func NewCounter(name, help string) *Counter {
+// NewCounter creates a named counter whose values are in unit. Per
+// Prometheus convention the name should end in `_total` (e.g.
+// "http_requests_total"). An invalid declaration is captured into the
+// counter rather than panicking: the counter records nothing, Handler never
+// emits it, and the error surfaces at registration.
+func NewCounter(name, help string, unit Unit, opts ...Option) *Counter {
 	help = sanitizeHelp(name, help)
-	return &Counter{name: name, help: help, err: checkMetricName(name)}
+	o := applyOptions(opts)
+	c := &Counter{name: name, help: help}
+	c.meta.fill(name, help, KindCounter, unit, nil, &o)
+	c.err = firstErr(checkMetricName(name), checkOptionFits(name, &o, false, -1),
+		checkDeclaration(name, KindCounter, unit, nil, &o))
+	return c
+}
+
+// Declaration returns the counter's metadata.
+func (c *Counter) Declaration() Declaration { return c.meta.declaration() }
+
+func (c *Counter) declared() *declMeta {
+	if c == nil {
+		return nil
+	}
+	return &c.meta
 }
 
 // Inc increments the counter by 1. The counter saturates at math.MaxInt64
@@ -129,28 +146,49 @@ type LabeledCounter struct {
 	help   string
 	err    error // construction-time validation error; surfaces at registration
 	labels []string
+	meta   declMeta
 	series
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewLabeledCounter creates a labeled counter with the given label names. As
-// with NewCounter, the name should end in `_total` per Prometheus convention.
+// NewLabeledCounter creates a labeled counter with the given label names,
+// its values in unit. As with NewCounter, the name should end in `_total`
+// per Prometheus convention. [WithSeed] creates label sets at 0.
 // Construction through NewLabeledCounter is mandatory: the zero
 // LabeledCounter has a nil series map and panics on the first record. An
-// invalid metric name, an invalid/reserved/duplicate label name, or more than
-// 8 labels is captured into the counter rather than panicking: the counter
-// records nothing and the error surfaces at registration.
-func NewLabeledCounter(name, help string, labels []string) *LabeledCounter {
+// invalid declaration, including more than 8 labels, is captured into the
+// counter rather than panicking: the counter records nothing and the error
+// surfaces at registration.
+func NewLabeledCounter(name, help string, unit Unit, labels []string, opts ...Option) *LabeledCounter {
 	help = sanitizeHelp(name, help)
+	o := applyOptions(opts)
 	owned, err := checkNameAndLabels("LabeledCounter", name, labels)
-	return &LabeledCounter{
-		name:   name,
+	lc := &LabeledCounter{
 		help:   help,
-		err:    err,
 		labels: owned,
 		vals:   make(map[labelKey]*atomic.Int64),
 	}
+	lc.name = name
+	lc.meta.fill(name, help, KindCounter, unit, owned, &o)
+	lc.err = firstErr(err, checkOptionFits(name, &o, false, len(owned)),
+		checkDeclaration(name, KindCounter, unit, owned, &o))
+	if lc.err == nil {
+		for _, set := range o.seeds {
+			lc.Add(0, set...)
+		}
+	}
+	return lc
+}
+
+// Declaration returns the counter's metadata.
+func (lc *LabeledCounter) Declaration() Declaration { return lc.meta.declaration() }
+
+func (lc *LabeledCounter) declared() *declMeta {
+	if lc == nil {
+		return nil
+	}
+	return &lc.meta
 }
 
 // Inc increments the counter for the given label values.

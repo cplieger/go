@@ -13,7 +13,7 @@ import (
 // A collector reads its values when Prometheus scrapes. Here the queue depths
 // come from a map; in an app they come from a store, a file or a socket.
 func ExampleNewCollector() {
-	depth := measure.NewGaugeDesc("queue_depth", "Items waiting in each queue.", []string{"queue"})
+	depth := measure.NewGaugeDesc("queue_depth", "Items waiting in each queue.", measure.UnitNone, []string{"queue"})
 	queues := map[string]int{"mail": 3, "push": 0}
 
 	r := measure.NewRegistry("app")
@@ -40,7 +40,7 @@ func ExampleNewCollector() {
 // A collector histogram re-serves a distribution counted elsewhere, such as
 // another process's latency buckets read from its status endpoint.
 func ExampleEmitter_EmitHistogram() {
-	start := measure.NewHistogramDesc("start_seconds", "Container start latency.", []string{"host"}, []float64{1, 10})
+	start := measure.NewHistogramDesc("start_seconds", "Container start latency.", measure.UnitSeconds, []string{"host"}, []float64{1, 10})
 
 	r := measure.NewRegistry("app")
 	r.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
@@ -67,7 +67,7 @@ func ExampleEmitter_EmitHistogram() {
 // without parsing the page.
 func ExampleRegistry_Gather() {
 	r := measure.NewRegistry("app")
-	errs := measure.NewLabeledCounter("errors_total", "Errors by kind.", []string{"kind"})
+	errs := measure.NewLabeledCounter("errors_total", "Errors by kind.", measure.UnitCount, []string{"kind"})
 	r.MustRegister(errs)
 	errs.Inc("timeout")
 	errs.Add(2, "refused")

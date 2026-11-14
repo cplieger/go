@@ -21,43 +21,43 @@ func goldenFixtureRegistry() *Registry {
 	// Labeled counter, including a _total-suffixed name (the common convention)
 	// and a label value containing backslash, quote, and newline to lock label
 	// escaping.
-	lc := NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"method", "path", "status"})
+	lc := NewLabeledCounter("http_requests_total", "Total HTTP requests", UnitCount, []string{"method", "path", "status"})
 	r.MustRegister(lc)
 	lc.Add(3, "GET", "/api", "200")
 	lc.Add(1, "POST", `/a"b\c`, "500")
 	lc.Add(7, "GET", "/health", "200")
 
 	// Unlabeled counter WITH _total suffix.
-	tasks := NewCounter("tasks_total", "Total tasks processed")
+	tasks := NewCounter("tasks_total", "Total tasks processed", UnitCount)
 	r.MustRegister(tasks)
 	tasks.Add(42)
 
 	// Unlabeled counter WITHOUT _total suffix — locks the raw-name rendering
 	// (no suffix is appended or stripped).
-	events := NewCounter("events", "Total events")
+	events := NewCounter("events", "Total events", UnitCount)
 	r.MustRegister(events)
 	events.Add(5)
 
 	// Labeled gauge.
-	lg := NewLabeledGauge("queue_depth", "Items queued", []string{"queue"})
+	lg := NewLabeledGauge("queue_depth", "Items queued", UnitNone, []string{"queue"})
 	r.MustRegister(lg)
 	lg.Set(12, "ingest")
 	lg.Set(0.5, "egress")
 
 	// Unlabeled gauge, fractional value (shortest round-trip rendering).
-	temp := NewGauge("temperature_celsius", "Ambient temperature")
+	temp := NewGauge("temperature_celsius", "Ambient temperature", UnitNone)
 	r.MustRegister(temp)
 	temp.Set(23.5)
 
 	// Unlabeled gauge, whole value (bare-integer rendering).
-	conns := NewGauge("active_connections", "Active connections")
+	conns := NewGauge("active_connections", "Active connections", UnitNone)
 	r.MustRegister(conns)
 	conns.Set(8)
 
 	// Unlabeled histogram with HELP text containing backslash, newline, and a
 	// double-quote — locks the HELP escaping rule (backslash and newline
 	// escaped, the double-quote left raw).
-	hist := NewHistogram("request_duration_seconds", "Request latency in \"seconds\"\nline2\\end", WithBuckets([]float64{0.1, 0.5, 1}))
+	hist := NewHistogram("request_duration_seconds", "Request latency in \"seconds\"\nline2\\end", UnitSeconds, WithBuckets([]float64{0.1, 0.5, 1}))
 	r.MustRegister(hist)
 	hist.Observe(0.05)
 	hist.Observe(0.1) // exactly on a bound
@@ -65,7 +65,7 @@ func goldenFixtureRegistry() *Registry {
 	hist.Observe(2.0)
 
 	// Labeled histogram.
-	lh := NewLabeledHistogram("api_latency_seconds", "API latency", []string{"endpoint"}, WithBuckets([]float64{0.25, 1}))
+	lh := NewLabeledHistogram("api_latency_seconds", "API latency", UnitSeconds, []string{"endpoint"}, WithBuckets([]float64{0.25, 1}))
 	r.MustRegister(lh)
 	lh.Observe(0.1, "list")
 	lh.Observe(5.0, "create")

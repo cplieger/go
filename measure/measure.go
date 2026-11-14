@@ -106,16 +106,42 @@ type Registry struct {
 	// produce a valid metric name refuses rather than emitting one.
 	err               error
 	logger            *slog.Logger
+	members           map[*declMeta]struct{}
 	prefix            string
-	counters          []*Counter
-	gauges            []*Gauge
-	labeledCounters   []*LabeledCounter
-	labeledGauges     []*LabeledGauge
-	histograms        []*Histogram
-	labeledHistograms []*LabeledHistogram
+	groups            [groupCount][]instrument
 	collectors        []*Collector
 	collectorFamilies int // descs across collectors, for slice capacities
 	mu                sync.RWMutex
+}
+
+// The page's family groups, in page order; each holds its instruments in
+// registration order.
+const (
+	groupLabeledCounters = iota
+	groupCounters
+	groupLabeledGauges // with the state sets and info series, which render as gauges
+	groupGauges
+	groupHistograms
+	groupLabeledHistograms
+	groupCount
+)
+
+// instrument is a recorded declaration the registry holds.
+type instrument interface {
+	Declared
+	// family renders the instrument for the page; ok is false when it has
+	// no series.
+	family() (fam metricFamily, ok bool)
+	gather() Family
+}
+
+// instrumentCount is the number of instruments registered. Callers hold r.mu.
+func (r *Registry) instrumentCount() int {
+	n := 0
+	for _, g := range r.groups {
+		n += len(g)
+	}
+	return n
 }
 
 // NewRegistry creates a new metrics registry. Construction through
@@ -132,8 +158,9 @@ type Registry struct {
 // init, where a package-level registry is built.
 func NewRegistry(prefix string, opts ...RegistryOption) *Registry {
 	r := &Registry{
-		prefix: prefix,
-		names:  make(map[string]string),
+		prefix:  prefix,
+		names:   make(map[string]string),
+		members: make(map[*declMeta]struct{}),
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -196,10 +223,10 @@ func (r *Registry) reserveHistogramFamily(name, kind string) error {
 }
 
 // Metric is implemented by every metric type in this package: *Counter,
-// *Gauge, *LabeledCounter, *LabeledGauge, *Histogram, *LabeledHistogram and
-// *Collector. The interface is sealed (its method is unexported), so those
-// seven are the only implementations: a scrape-time value comes from a
-// function given to NewCollector, not from a type implementing an interface.
+// *Gauge, *LabeledCounter, *LabeledGauge, *StateSet, *Info, *Histogram,
+// *LabeledHistogram and *Collector. The interface is sealed (its method is
+// unexported): a scrape-time value comes from a function given to
+// NewCollector, not from a type implementing an interface.
 type Metric interface {
 	// registerInto validates and attaches the metric to r. Callers hold r.mu.
 	registerInto(r *Registry) error
@@ -212,21 +239,18 @@ type Metric interface {
 var errNilMetric = errors.New("measure: Register called with nil metric")
 
 // Register adds a metric to the registry. It returns the error the metric
-// captured at construction (invalid metric name, invalid/reserved/duplicate
-// label name, more than 8 labels on a labeled instrument, bad histogram buckets), an error when the
-// metric is already registered, an error when the metric's exposition
-// family name collides with an already-registered one, or an error when m is
-// nil. A collector also returns the errors NewCollector captured (no descs, a
-// nil desc, a nil collect, a repeated family name, a desc another collector
-// holds, a desc not built with NewGaugeDesc or NewCounterDesc, or a desc's
-// invalid name or label), and a Collector not built with NewCollector is
-// refused. On error the metric is not attached and the registry is unchanged.
-// After a family-name collision the metric itself is left unregistered and
-// intact, so it can still be registered with a different registry (or with
-// this one once the colliding name is freed); a construction error is
-// immutable, so such a metric cannot be repaired, only rebuilt with a valid
-// name, label set, or buckets. MustRegister is the panicking sibling for
-// callers that cannot handle an error.
+// captured at construction: an invalid metric name; an invalid, reserved or
+// duplicate label name; more than 8 labels on an instrument; bad histogram
+// buckets; a unit off the list or one the name's suffix contradicts; _total
+// on anything but a counter; an unbounded label on a series served on the
+// page; or an option the declaration cannot take. It also returns an error
+// when the metric is already registered, when its family name collides with
+// a registered one, and when m is nil. A collector returns the errors
+// [NewCollector] captured, and a Collector not built with NewCollector is
+// refused. On error the metric is not attached and the registry is
+// unchanged. A metric refused for a name collision stays intact and can be
+// registered elsewhere; a construction error is permanent, so such a metric
+// can only be rebuilt.
 func (r *Registry) Register(m Metric) error {
 	if m == nil {
 		return errNilMetric
@@ -248,18 +272,17 @@ func (r *Registry) MustRegister(ms ...Metric) {
 }
 
 // register runs the shared registration flow: reject a metric that captured a
-// construction error, claim the metric's registered flag, resolve the
-// metric's name via base, reserve the prefixed family name(s) via reserve,
-// and hand the final name to attach, which links the metric into the
-// registry. base runs only AFTER the CAS is won: the winner's attach renames
-// the metric, and nothing but the CAS orders a concurrent cross-registry
-// registration of the same value (the registries' locks are independent), so
-// only the CAS winner may read or write the name field. For the same reason
-// the loser's already-registered error cannot include the metric name. On a
+// construction error, claim the metric's registered flag, reserve the
+// prefixed family name(s) via reserve, and hand the final name to rename,
+// which writes it under the metric's own lock where it has one. The metric is
+// then appended to its page group. The CAS is the only order between two
+// registries registering one value concurrently (their locks are
+// independent), so only its winner may write the name; for the same reason
+// the loser's already-registered error cannot include the name. On a
 // reservation failure the registered flag is rolled back, so a metric refused
 // for a name collision stays registrable elsewhere. Callers must hold r.mu.
-func (r *Registry) register(mErr error, registered *atomic.Bool, kind string, base func() string,
-	reserve func(name, kind string) error, attach func(name string),
+func (r *Registry) register(m instrument, group int, mErr error, registered *atomic.Bool, kind string,
+	reserve func(name, kind string) error, rename func(name string),
 ) error {
 	if r.err != nil {
 		return r.err
@@ -270,12 +293,16 @@ func (r *Registry) register(mErr error, registered *atomic.Bool, kind string, ba
 	if !registered.CompareAndSwap(false, true) {
 		return errors.New("measure: " + kind + " already registered")
 	}
-	name := r.prefixed(base())
+	meta := m.declared()
+	name := r.prefixed(meta.base)
 	if err := reserve(name, kind); err != nil {
 		registered.Store(false)
 		return err
 	}
-	attach(name)
+	rename(name)
+	meta.final.Store(&name)
+	r.members[meta] = struct{}{}
+	r.groups[group] = append(r.groups[group], m)
 	return nil
 }
 
@@ -283,66 +310,67 @@ func (c *Counter) registerInto(r *Registry) error {
 	if c == nil {
 		return errNilMetric
 	}
-	return r.register(c.err, &c.registered, "counter", func() string { return c.name }, r.reserveName, func(name string) {
-		c.name = name
-		r.counters = append(r.counters, c)
-	})
+	return r.register(c, groupCounters, c.err, &c.registered, "counter", r.reserveName,
+		func(name string) { c.name = name })
 }
 
 func (g *Gauge) registerInto(r *Registry) error {
 	if g == nil {
 		return errNilMetric
 	}
-	return r.register(g.err, &g.registered, "gauge", func() string { return g.name }, r.reserveName, func(name string) {
-		g.name = name
-		r.gauges = append(r.gauges, g)
-	})
+	return r.register(g, groupGauges, g.err, &g.registered, "gauge", r.reserveName,
+		func(name string) { g.name = name })
 }
 
 func (lc *LabeledCounter) registerInto(r *Registry) error {
 	if lc == nil {
 		return errNilMetric
 	}
-	return r.register(lc.err, &lc.registered, "labeled counter", func() string { return lc.name }, r.reserveName, func(name string) {
-		lc.mu.Lock()
-		lc.name = name
-		lc.mu.Unlock()
-		r.labeledCounters = append(r.labeledCounters, lc)
-	})
+	return r.register(lc, groupLabeledCounters, lc.err, &lc.registered, "labeled counter", r.reserveName, lc.rename)
 }
 
 func (lg *LabeledGauge) registerInto(r *Registry) error {
 	if lg == nil {
 		return errNilMetric
 	}
-	return r.register(lg.err, &lg.registered, "labeled gauge", func() string { return lg.name }, r.reserveName, func(name string) {
-		lg.mu.Lock()
-		lg.name = name
-		lg.mu.Unlock()
-		r.labeledGauges = append(r.labeledGauges, lg)
-	})
+	return r.register(lg, groupLabeledGauges, lg.err, &lg.registered, "labeled gauge", r.reserveName, lg.rename)
+}
+
+func (s *StateSet) registerInto(r *Registry) error {
+	if s == nil {
+		return errNilMetric
+	}
+	return r.register(s, groupLabeledGauges, s.err, &s.registered, "state set", r.reserveName, s.rename)
+}
+
+func (i *Info) registerInto(r *Registry) error {
+	if i == nil {
+		return errNilMetric
+	}
+	return r.register(i, groupLabeledGauges, i.err, &i.registered, "info series", r.reserveName, i.rename)
 }
 
 func (h *Histogram) registerInto(r *Registry) error {
 	if h == nil {
 		return errNilMetric
 	}
-	return r.register(h.err, &h.registered, "histogram", func() string { return h.name }, r.reserveHistogramFamily, func(name string) {
-		h.name = name
-		r.histograms = append(r.histograms, h)
-	})
+	return r.register(h, groupHistograms, h.err, &h.registered, "histogram", r.reserveHistogramFamily,
+		func(name string) { h.name = name })
 }
 
 func (lh *LabeledHistogram) registerInto(r *Registry) error {
 	if lh == nil {
 		return errNilMetric
 	}
-	return r.register(lh.err, &lh.registered, "labeled histogram", func() string { return lh.name }, r.reserveHistogramFamily, func(name string) {
-		lh.mu.Lock()
-		lh.name = name
-		lh.mu.Unlock()
-		r.labeledHistograms = append(r.labeledHistograms, lh)
-	})
+	return r.register(lh, groupLabeledHistograms, lh.err, &lh.registered, "labeled histogram", r.reserveHistogramFamily, lh.rename)
+}
+
+// rename writes the registered name under the series lock, which guards
+// every read of it on the record paths.
+func (s *series) rename(name string) {
+	s.mu.Lock()
+	s.name = name
+	s.mu.Unlock()
 }
 
 // Handler returns an HTTP handler serving Prometheus text format. Each request

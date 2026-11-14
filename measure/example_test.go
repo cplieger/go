@@ -13,8 +13,8 @@ import (
 
 func Example() {
 	r := measure.NewRegistry("myapp") // prefixes every registered metric name with "myapp_"
-	reqs := measure.NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"method", "route", "code"})
-	dur := measure.NewHistogram("http_request_duration_seconds", "Request latency", measure.WithBuckets([]float64{0.01, 0.05, 0.1, 0.5, 1, 5}))
+	reqs := measure.NewLabeledCounter("http_requests_total", "Total HTTP requests", measure.UnitCount, []string{"method", "route", "code"})
+	dur := measure.NewHistogram("http_request_duration_seconds", "Request latency", measure.UnitSeconds, measure.WithBuckets([]float64{0.01, 0.05, 0.1, 0.5, 1, 5}))
 	// Exposed as myapp_http_requests_total and myapp_http_request_duration_seconds.
 	// MustRegister panics on a bad metric; Register returns the error instead.
 	r.MustRegister(reqs, dur)
@@ -32,7 +32,7 @@ func Example() {
 // tell "no failures" from "no series". Seed each label set you know of at 0
 // when the program starts, so the first failure shows as an increase.
 func ExampleLabeledCounter_Add_seed() {
-	failures := measure.NewLabeledCounter("sync_failures_total", "Sync failures by source.", []string{"source"})
+	failures := measure.NewLabeledCounter("sync_failures_total", "Sync failures by source.", measure.UnitCount, []string{"source"})
 	for _, source := range []string{"plex", "sonarr"} {
 		failures.Add(0, source)
 	}
@@ -55,7 +55,7 @@ func ExampleLabeledCounter_Add_seed() {
 // scrape between the two sees an empty family, and every alert on it
 // resolves. A gauge cannot list its series, so keep the previous keys.
 func ExampleLabeledGauge_Delete() {
-	active := measure.NewLabeledGauge("alerts_active", "Open alerts by source.", []string{"source"})
+	active := measure.NewLabeledGauge("alerts_active", "Open alerts by source.", measure.UnitNone, []string{"source"})
 	prev := map[string]bool{}
 	refresh := func(open map[string]float64) {
 		for source, n := range open {
@@ -91,8 +91,8 @@ func ExampleLabeledGauge_Delete() {
 // labeled histogram in the same middleware, beside RecordHTTP, and pass nil for
 // RecordHTTP's histogram.
 func ExampleRecordHTTP_routeDuration() {
-	reqs := measure.NewLabeledCounter("http_requests_total", "HTTP requests by method, route and code.", []string{"method", "route", "code"})
-	byRoute := measure.NewLabeledHistogram("http_request_duration_seconds", "Request latency by route.",
+	reqs := measure.NewLabeledCounter("http_requests_total", "HTTP requests by method, route and code.", measure.UnitCount, []string{"method", "route", "code"})
+	byRoute := measure.NewLabeledHistogram("http_request_duration_seconds", "Request latency by route.", measure.UnitSeconds,
 		[]string{"route"}, measure.WithBuckets([]float64{0.1, 1}))
 	record := func(method, route string, code int, elapsed time.Duration) {
 		measure.RecordHTTP(reqs, nil, elapsed, method, route, strconv.Itoa(code))
@@ -126,7 +126,7 @@ func ExampleRecordHTTP_routeDuration() {
 // can join it onto any other series of the app.
 func Example_buildInfo() {
 	version := "v1.4.0" // in an app, set at build time with -ldflags "-X main.version=..."
-	info := measure.NewLabeledGauge("build_info", "Build information, always 1.", []string{"version"})
+	info := measure.NewLabeledGauge("build_info", "Build information, always 1.", measure.UnitNone, []string{"version"})
 	info.Set(1, version)
 
 	r := measure.NewRegistry("")

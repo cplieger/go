@@ -24,7 +24,7 @@ func FuzzHistogram_BucketPlacementInvariant(f *testing.F) {
 			return
 		}
 		bounds := []float64{b1, b2, b3}
-		h := NewHistogram("fuzz_placement", "fuzz", WithBuckets(bounds))
+		h := NewHistogram("fuzz_placement", "fuzz", UnitNone, WithBuckets(bounds))
 		h.Observe(obs)
 
 		_, count, bucketVals := h.snapshot()
@@ -67,7 +67,7 @@ func FuzzHistogramObserve(f *testing.F) {
 	f.Add(-1.0)
 
 	f.Fuzz(func(t *testing.T, val float64) {
-		h := NewHistogram("fuzz_test", "fuzz")
+		h := NewHistogram("fuzz_test", "fuzz", UnitNone)
 		h.Observe(val)
 
 		sum, count, bucketVals := h.snapshot()
