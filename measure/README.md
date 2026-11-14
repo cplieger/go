@@ -1,6 +1,6 @@
 # measure
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/measure.svg)](https://pkg.go.dev/github.com/cplieger/go/measure) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=measure%2Fgo.mod)](https://github.com/cplieger/go/blob/main/measure/go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/measure/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/measure/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=measure%2Fgo.mod)](https://github.com/cplieger/go/blob/main/measure/go.mod)
 
 measure gives your Go service a Prometheus `/metrics` endpoint with counters, gauges, histograms and process metrics, using only the standard library.
 
@@ -24,7 +24,7 @@ Consider [prometheus/client_golang](https://github.com/prometheus/client_golang)
 ## Install
 
 ```sh
-go get github.com/cplieger/go/measure@latest
+go get github.com/cplieger/go/measure/v2@latest
 ```
 
 ## Usage
@@ -36,7 +36,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/cplieger/go/measure"
+	"github.com/cplieger/go/measure/v2"
 )
 
 var (
@@ -123,7 +123,7 @@ func init() {
 
 ## Patterns
 
-The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a runnable example of each pattern except serving `Handler` alone, which a test checks, so `go test` keeps them true.
+The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) has a runnable example of each pattern except serving `Handler` alone, which a test checks, so `go test` keeps them true.
 
 - Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Call `Add(0, labels...)` for each label set you know of at startup. The HTTP request counter is the exception. Its status codes are not known at startup, so it stays unseeded. `increase()` misses the request that creates each of its series, so a rule that must see a single request adds the series that appeared within the window, as in `increase(c[15m]) > 0 or (c unless c offset 15m) > 0`. A rule on sustained volume can ignore the miss.
 - Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
@@ -140,7 +140,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure) has a
 - Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewHistogramDesc`, `NewCollector`, `(*Emitter).Emit` and `(*Emitter).EmitHistogram`.
 - Reading: `Gather`, which returns `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`.
 
-The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure/v2). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
 
 ## Errors surface at registration
 
