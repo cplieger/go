@@ -149,7 +149,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) ha
 - Declarations: `Unit`, `Kind`, `Export` and `Source` with their constants, the `Option` functions `WithExport`, `WithUnbounded`, `WithSeed` and `WithBuckets`, and `Declaration`, which every instrument and `Desc` returns through the sealed `Declared` interface.
 - Buckets: `DefaultBuckets` and `APIBuckets`.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.
-- Registry: `NewRegistry` with its `WithLogger` option (`RegistryOption`), `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement.
+- Registry: `NewRegistry` with its `WithLogger` option (`RegistryOption`), `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement. An `ExportChartdata` `Desc` registers on its own too, reserving its name for a series only charts draw.
 - Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewHistogramDesc`, `NewStateSetDesc`, `NewInfoDesc`, `NewCollector`, `(*Emitter).Emit`, `(*Emitter).EmitHistogram` and `(*Emitter).EmitState`.
 - Reading: `Gather` and `GatherOf`, which return `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`; `Find` and `(*Family).Sample` pick a family and a series.
 

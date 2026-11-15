@@ -11,6 +11,12 @@
 # knell	a7b27ce5494e1476f2558da1a6087dc8adb6df0e	14
 # subflux	1933f19ebaabb91e4868bd19ea5a9c6f93cb2d1c	21
 # plex-exporter	170e4ae2c47419c45a19e666c63f7f5c0f705d69	49
+# pg-autodump	6b49c708ca0ff947b47843d6989539df9739bbb7	10
+# docker-fclones-scheduler	6b6df8eedd9efa08b166f08ad09c0346c1a130a3	15
+# plex-language-sync	511a81beed9b697e6ee3f3c42b3da72c9ee6e6ad	12
+# docker-renovate-scheduler	83e94ba5160c209c1d1d1cf7ce18e6ca4ac2235d	12
+# cert-converter	9286787c2c44abb7f1af0663573840d96d0e0056	10
+# docker-nut-upsd	ca747c71e2a784aa9018d00a6ddc42dfb408e696	25
 #
 # app	path	prefix	name	kind	unit	source	labels
 grelot	internal/obs/obs.go	grelot	sweep_last_success_timestamp_seconds	gauge	seconds	instrument	
@@ -164,3 +170,87 @@ plex-exporter	internal/metrics/descs.go		plex_server_update_available	gauge	none
 plex-exporter	internal/metrics/descs.go		plex_server_update_checked_timestamp_seconds	gauge	seconds	collector	server,server_id
 plex-exporter	internal/metrics/descs.go		plex_server_scheduled_scan_interval_seconds	gauge	seconds	collector	server,server_id
 plex-exporter	internal/metrics/descs.go		plex_session_video_transcode	gauge	none	collector	server,server_id,session,decode,encode,source_codec,target_codec
+pg-autodump	internal/obs/metrics.go	pg_autodump	dumps_total	counter	count	instrument	server,db,result
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_ok	gauge	none	instrument	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_duration_seconds	gauge	seconds	instrument	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	last_cycle_timestamp_seconds	gauge	seconds	instrument	
+pg-autodump	internal/obs/metrics.go	pg_autodump	last_cycle_ok	gauge	none	instrument	
+pg-autodump	internal/obs/metrics.go	pg_autodump	cycle_deadline_timestamp_seconds	gauge	seconds	instrument	
+pg-autodump	internal/obs/metrics.go	pg_autodump	build_info	gauge	none	instrument	version
+pg-autodump	internal/obs/metrics.go	pg_autodump	newest_dump_timestamp_seconds	gauge	seconds	collector	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_bytes	gauge	bytes	collector	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_dir_free_bytes	gauge	bytes	collector	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	runs_total	counter	count	instrument	result
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_run_result	gauge	none	instrument	result
+docker-fclones-scheduler	metrics.go	fclones_scheduler	phase_duration_seconds	gauge	seconds	instrument	phase
+docker-fclones-scheduler	metrics.go	fclones_scheduler	info	gauge	none	instrument	mode,action
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_run_ok	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_run_timestamp_seconds	gauge	seconds	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_success_timestamp_seconds	gauge	seconds	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	duplicate_groups	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	duplicate_files	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	redundant_bytes	gauge	bytes	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	action_summary_recognized	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	files_processed_total	counter	count	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	reclaimed_bytes_total	counter	bytes	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	run_deadline_timestamp_seconds	gauge	seconds	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	build_info	gauge	none	instrument	version
+plex-language-sync	internal/obs/obs.go	plex_language_sync	build_info	gauge	none	instrument	version
+plex-language-sync	internal/obs/obs.go	plex_language_sync	websocket_connected	gauge	none	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	websocket_reconnects_total	counter	count	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_last_success_timestamp_seconds	gauge	seconds	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_interval_seconds	gauge	seconds	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_deadline_timestamp_seconds	gauge	seconds	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_runs_total	counter	count	instrument	result
+plex-language-sync	internal/obs/obs.go	plex_language_sync	user_resolution_stalled	gauge	none	instrument	cause
+plex-language-sync	internal/obs/obs.go	plex_language_sync	play_events_total	counter	count	instrument	outcome
+plex-language-sync	internal/obs/obs.go	plex_language_sync	track_updates_total	counter	count	instrument	kind,result
+plex-language-sync	internal/obs/obs.go	plex_language_sync	cache_save_failures_total	counter	count	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	shared_users	gauge	none	instrument	
+docker-renovate-scheduler	metrics.go	renovate_scheduler	runs_total	counter	count	instrument	scope,result
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_ok	gauge	none	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_result	gauge	none	instrument	scope,result
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_exit_code	gauge	none	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_timestamp_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_success_timestamp_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_duration_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	failing_since_timestamp_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	trigger_rejected_total	counter	count	instrument	reason
+docker-renovate-scheduler	metrics.go	renovate_scheduler	info	gauge	none	instrument	mode,auth
+docker-renovate-scheduler	metrics.go	renovate_scheduler	run_deadline_timestamp_seconds	gauge	seconds	instrument	
+docker-renovate-scheduler	metrics.go	renovate_scheduler	build_info	gauge	none	instrument	version
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_sources	gauge	none	instrument	outcome
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_sources_found	gauge	none	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_timestamp_seconds	gauge	seconds	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_outcome	gauge	none	instrument	outcome
+cert-converter	internal/scanreport/scanreport.go	cert_converter	change_detection_mode	gauge	none	instrument	mode
+cert-converter	internal/scanreport/scanreport.go	cert_converter	condition	gauge	none	instrument	condition
+cert-converter	internal/scanreport/scanreport.go	cert_converter	removed_artifacts_total	counter	count	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	scan_deadline_timestamp_seconds	gauge	seconds	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_success_timestamp_seconds	gauge	seconds	instrument	
+cert-converter	main.go	cert_converter	build_info	gauge	none	instrument	version
+docker-nut-upsd	collector.go	nut_upsd	upsd_up	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_data_fresh	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_status	gauge	none	collector	flag
+docker-nut-upsd	collector.go	nut_upsd	driver_restarts_total	counter	count	collector	
+docker-nut-upsd	collector.go	nut_upsd	upsmon_parent_alive	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	host_poweroff_enabled	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	poweroff_path_ok	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	poweroff_path_probe_timestamp_seconds	gauge	seconds	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_charge_ratio	gauge	ratio	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_charge_low_ratio	gauge	ratio	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_runtime_seconds	gauge	seconds	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_runtime_low_seconds	gauge	seconds	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_voltage_volts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_temperature_celsius	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	input_voltage_volts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	input_frequency_hertz	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	output_voltage_volts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	output_frequency_hertz	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_load_ratio	gauge	ratio	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_realpower_watts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_realpower_nominal_watts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_power_voltamperes	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_power_nominal_voltamperes	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_temperature_celsius	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	build_info	gauge	none	instrument	version,nut_version

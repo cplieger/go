@@ -68,7 +68,7 @@ A collector serves values your code reads when Prometheus scrapes, such as rows 
 
 `Gather(ctx)` returns every family as a `Family`: its name, HELP text, `Type` and samples, with numbers rather than rendered text. A test can check a metric without parsing the page.
 
-- Families come in the page's order. A declared family with no series yet, a labeled metric or a collector family, is listed with no samples, which the page omits. An `ExportChartdata` family, which the page never serves, is listed too.
+- Families come in the page's order, with each `Desc` registered on its own after the collectors' families. A declared family with no series yet, a labeled metric, a collector family or a `Desc` registered on its own, is listed with no samples, which the page omits. An `ExportChartdata` family, which the page never serves, is listed too.
 - A state set and an info family have `Type` gauge, as on the page.
 - Each `Sample` has its labels in declared order. A counter or gauge sets `Value`, which for a counter is its `int64` count converted to `float64`, exact up to 2^53. A histogram sets `Histogram`, with cumulative buckets in ascending order; the `+Inf` bucket's count is `Count`. A summary sets `Summary`, with its quantiles in ascending order; only the Go runtime's `go_gc_duration_seconds` is one.
 - `Gather` runs every collector with `ctx`, and returns every sample a collector dropped as one error naming each family. The families it returns hold what survived.
