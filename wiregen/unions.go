@@ -222,7 +222,7 @@ func (e *astEngine) rankEnds() error {
 
 // endsWith reports whether ti's value can end given the types in ended,
 // setting a union's end to its first case that can.
-func (e *astEngine) endsWith(ti *typeInfo, ended map[string]bool) bool {
+func (*astEngine) endsWith(ti *typeInfo, ended map[string]bool) bool {
 	if ti.Union == nil {
 		fields := make([]*fieldInfo, 0, len(ti.Fields))
 		for i := range ti.Fields {
