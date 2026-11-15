@@ -47,6 +47,9 @@ func TestMapType_Decoder(t *testing.T) {
 	for _, want := range []string{
 		`export const decodeLabels: Decoder<Labels> = (v) => v === null ? {} : decodeRecord(v, decodeItem, "$.labels");`,
 		`export const decodeSettings: Decoder<Settings> = (v) => v === null ? {} : decodeRecord(v, (v) => v as unknown, "$.settings");`,
+		// A required field of a named map type is checked present; the map's
+		// decoder reads null as {}.
+		`labels: decodeLabels(reqRaw(o, "labels", "$.holder")),`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("decoders file missing %q, got:\n%s", want, out)

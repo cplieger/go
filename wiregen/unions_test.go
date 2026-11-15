@@ -103,7 +103,8 @@ func TestUnion_Decoder(t *testing.T) {
 		`      refuseKeys(o, ["scale", "offset_ms"], "$.timing");`,
 		`      const out: globalThis.Extract<Timing, { kind: "shift" }> = {`,
 		`      refuseKeys(o, ["side"], "$.shape");`,
-		"import { own, asObject, reqNum, reqOneOf, decodeArray, refuseKeys, type Decoder }",
+		"import { own, asObject, reqNum, reqRaw, reqOneOf, decodeArray, refuseKeys, type Decoder }",
+		`timing: decodeTiming(reqRaw(o, "timing", "$.holder")),`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("decoders missing %q, got:\n%s", want, out)

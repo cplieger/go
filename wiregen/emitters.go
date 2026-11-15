@@ -343,25 +343,19 @@ func ownRead(wn string, used *usedIdents) string {
 // null is refused (presence.go); otherwise null reaches a required field
 // only as raw JSON, kept as data, or as encoding/json's nil collection or
 // []byte, which reads as empty. A mapped field is judged by its Decoder, or
-// with none only checked present when CaseRequired.
+// with none only checked present.
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
-	// own is imported only when a branch reads through it.
-	read := func() string { return ownRead(wn, used) }
 	at := ", \"" + path + "\")"
 	switch f.Kind {
 	case kindRaw:
-		if f.CaseRequired {
-			used.helper(helperReqRaw)
-			return helperReqRaw + "(o, \"" + wn + "\"" + at
-		}
-		return read() + " as unknown"
+		return wholeRead(f, wn, path, used)
 	case kindBytes:
 		used.helper(helperReqStr)
 		if f.refusesNull() {
 			return "reqStr(o, \"" + wn + "\"" + at
 		}
-		return read() + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
+		return ownRead(wn, used) + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
 	case kindSlice, kindMap:
 		return g.collectionDecode(f, wn, path, used)
 	case kindMapped:
@@ -370,40 +364,46 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 			return f.Mapping.Decoder + "(o, \"" + wn + "\"" + at
 		}
 		used.opaqueExpr(f.TSType)
-		if f.CaseRequired {
-			used.helper(helperReqRaw)
-			return helperReqRaw + "(o, \"" + wn + "\"" + at + " as " + f.TSType
-		}
-		return read() + " as " + f.TSType
+		return wholeRead(f, wn, path, used) + " as " + f.TSType
 	case kindEnum:
 		used.helper("reqOneOf")
 		used.enumUse(f.GoTypeName)
 		return "reqOneOf(o, \"" + wn + "\", " + g.enumConstName(f.GoTypeName) + at
 	case kindStruct:
-		if f.CaseRequired {
-			// reqRaw names the absent field; the decoder refuses null.
-			used.helper(helperReqRaw)
-			return g.decoderName(f.GoTypeName) + "(" + helperReqRaw + "(o, \"" + wn + "\"" + at + ")"
-		}
-		return g.decoderName(f.GoTypeName) + "(" + read() + ")"
+		return g.decoderName(f.GoTypeName) + "(" + wholeRead(f, wn, path, used) + ")"
 	}
 	helper := primHelpers[f.Kind]
 	used.helper(helper)
 	return helper + "(o, \"" + wn + "\"" + at
 }
 
+// wholeRead reads f's value for a decode that takes it whole: checked
+// present at f's path when f is required, as nothing after it names the
+// field, and read bare when optional, whose guard already did.
+func wholeRead(f *fieldInfo, wn, path string, used *usedIdents) string {
+	if f.optional() {
+		return ownRead(wn, used)
+	}
+	return presentRead(wn, path, used)
+}
+
+func presentRead(wn, path string, used *usedIdents) string {
+	used.helper(helperReqRaw)
+	return helperReqRaw + "(o, \"" + wn + "\", \"" + path + "\")"
+}
+
 // collectionDecode is reqDecode for a slice or map field; null reads as
 // empty unless f refusesNull.
 func (g *generator) collectionDecode(f *fieldInfo, wn, path string, used *usedIdents) string {
-	read := ownRead(wn, used)
 	if f.mapRef() {
 		if f.refusesNull() {
 			used.helper("asObject")
-			return g.decoderName(f.GoTypeName) + "(asObject(" + read + ", \"" + path + "." + wn + "\"))"
+			return g.decoderName(f.GoTypeName) + "(asObject(" + ownRead(wn, used) + ", \"" + path + "." + wn + "\"))"
 		}
 		// The named map's own decoder reads null as empty.
-		return g.decoderName(f.GoTypeName) + "(" + read + ")"
+		return g.decoderName(f.GoTypeName) + "(" + wholeRead(f, wn, path, used) + ")"
 	}
+	read := ownRead(wn, used)
 	helper, empty := helperDecodeArray, "[]"
 	if f.Kind == kindMap {
 		helper, empty = helperDecodeRecord, "{}"
@@ -850,7 +850,7 @@ func arbBoundedPrim(tsType string, b *bounds) string {
 // primitive TS type is honoured exactly; anything else is opaque, because the
 // mapping's shape lives in the consumer's TS expression and not in wiregen's
 // parsed model — so the value is an arbitrary JSON one and the annotation is a
-// cast, the same trust the emitted `o[k] as T` decoder already extends.
+// cast, the same trust the emitted decoder's cast to T already extends.
 func arbMappedExpr(goTypeName, tsType string) (expr, note string) {
 	switch tsType {
 	case tsString, tsNumber, tsBoolean:
