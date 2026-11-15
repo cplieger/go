@@ -96,10 +96,12 @@ func (m *refSampler) step(edge int64, fam *measure.Family) {
 	for {
 		// A place held with a point is kept, then one whose newest point has
 		// left its ring is freed, then new label sets of held keys take the
-		// places left. The keys whose value is a gap give none of their label
-		// sets a place, and the step starts over without them.
+		// places left. The step starts over without the keys whose value is a
+		// gap and that were refused no place, or else without the first gap
+		// key in key order.
 		m.places = maps.Clone(before)
 		sums = map[string][]float64{}
+		refused := map[string]bool{}
 		for _, p := range pts {
 			if _, ok := m.places[p.set]; ok && !gapKeys[p.key] {
 				take(p)
@@ -107,18 +109,33 @@ func (m *refSampler) step(edge int64, fam *measure.Family) {
 		}
 		release()
 		for _, p := range pts {
-			if _, ok := m.places[p.set]; !ok && held[p.key] && !gapKeys[p.key] && len(m.places) < m.mostSets {
+			if _, ok := m.places[p.set]; ok || !held[p.key] || gapKeys[p.key] {
+				continue
+			}
+			if len(m.places) < m.mostSets {
 				take(p)
+			} else {
+				refused[p.key] = true
 			}
 		}
-		more := false
+		var gaps, final []string
 		for key, sum := range sums {
 			if m.value(sum) == nil {
-				gapKeys[key], more = true, true
+				gaps = append(gaps, key)
+				if !refused[key] {
+					final = append(final, key)
+				}
 			}
 		}
-		if !more {
+		if len(gaps) == 0 {
 			break
+		}
+		if len(final) == 0 {
+			slices.Sort(gaps)
+			final = gaps[:1]
+		}
+		for _, key := range final {
+			gapKeys[key] = true
 		}
 	}
 	m.column--
@@ -294,13 +311,16 @@ func (sc *scenario) collect(_ context.Context, e *measure.Emitter) {
 }
 
 // next picks the label sets read at the next step and their readings:
-// churn, NaN, ±Inf and 1e301, gauges that sum past 1e300, counter and
-// histogram resets, and histograms that stop observing.
+// churn, NaN, ±Inf and 1e301, gauges of keys whose sums pass 1e300 or not by
+// which label sets hold a place, counter and histogram resets, histograms
+// that stop observing, and, past a bound of 1e301, quantiles that are gaps
+// beside quantiles that are not.
 func (sc *scenario) next() {
 	odd := []float64{math.NaN(), math.Inf(1), math.Inf(-1), 1e301}
 	present := []float64{0.2, 0.6, 0.95}[sc.rng.IntN(3)]
 	sc.emit = map[string]float64{}
 	for k := range 4 {
+		huge := sc.rng.IntN(2) == 0
 		for h := range 4 {
 			set := "k" + strconv.Itoa(k) + "h" + strconv.Itoa(h)
 			if sc.rng.Float64() >= present {
@@ -309,11 +329,11 @@ func (sc *scenario) next() {
 			switch sc.kind {
 			case measure.KindGauge:
 				sc.emit[set] = float64(sc.rng.IntN(4))
-				switch sc.rng.IntN(8) {
-				case 0:
+				switch {
+				case sc.rng.IntN(8) == 0:
 					sc.emit[set] = odd[sc.rng.IntN(len(odd))]
-				case 1:
-					sc.emit[set] = 6e299 // usable, but two sum past 1e300
+				case huge:
+					sc.emit[set] = []float64{6e299, 6e299, -6e299}[sc.rng.IntN(3)]
 				}
 			case measure.KindCounter:
 				if sc.rng.IntN(20) == 0 {
@@ -328,8 +348,16 @@ func (sc *scenario) next() {
 				if sc.obs[set] == nil || sc.rng.IntN(20) == 0 {
 					sc.obs[set] = make([]uint64, len(sc.bounds)+1)
 				}
-				for range max(0, sc.rng.IntN(5)-2) {
-					sc.obs[set][sc.rng.IntN(len(sc.bounds)+1)]++
+				n := max(0, sc.rng.IntN(5)-2)
+				if sc.bounds[1] == 1e301 && k < 2 {
+					n = 1 + sc.rng.IntN(3)
+				}
+				for range n {
+					bucket := sc.rng.IntN(len(sc.bounds) + 1)
+					if sc.bounds[1] == 1e301 && k < 2 && bucket == 1 {
+						bucket = 0 // below 1 or past 1e301: a median that is no gap
+					}
+					sc.obs[set][bucket]++
 				}
 				sc.emit[set] = 0
 			}
@@ -359,7 +387,7 @@ func FuzzSampler_matchesItsReference(f *testing.F) {
 			bounds: [][]float64{{1, 2, 4}, {0, 1, 3}}[rng.IntN(2)], every: int(every.Milliseconds()),
 			keepCols: keepCols, capacity: keepCols, mostSets: 2 + rng.IntN(5), by: rng.IntN(5) > 0,
 		}
-		if m.form == formQuantile && rng.IntN(3) == 0 {
+		if m.form == formQuantile && rng.IntN(2) == 0 {
 			m.bounds = []float64{1, 1e301} // a quantile past 1e300 is a gap
 		}
 		m.mostBases = m.mostSets + rng.IntN(6)

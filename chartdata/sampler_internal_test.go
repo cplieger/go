@@ -437,6 +437,37 @@ func TestSamplerGivesNoPlaceForAStepWhoseSumIsAGap(t *testing.T) {
 			gone:     []string{"a/h1", "a/h2", "b/h2"},
 			mostSets: 3,
 		},
+		{
+			name:  "aSeriesBesideAQuantileGap",
+			kind:  measure.KindHistogram,
+			track: []TrackOption{AsQuantile(0.5), By("key")},
+			steps: []map[string][]uint64{
+				{"x/h1": {0, 0, 0}, "y/h1": {0, 0, 0}, "y/h2": {0, 0, 0}},
+				{"x/h1": {1, 1, 1}, "y/h1": {1, 1, 1}, "y/h2": {0, 1, 1}},
+				// x's median is 5e300, a gap; y's increases sum to {1, 2, 2},
+				// a median of 1.
+				{"x/h1": {1, 2, 2}, "y/h1": {2, 2, 2}, "y/h2": {0, 2, 2}},
+			},
+			newest: map[string]float64{"x": math.NaN(), "y": 1},
+			want:   []string{"y/h1", "y/h2"},
+		},
+		{
+			name:  "aGapOnlyForWantOfAPlace",
+			kind:  measure.KindGauge,
+			track: []TrackOption{By("key")},
+			gauges: []map[string]float64{
+				{"a/h1": 1, "a/h2": 1, "g/h1": 1, "g/h2": 1},
+				{"g/h1": 1, "g/h2": 1},
+				{"g/h1": 1, "g/h2": 1},
+				// a sums past 1e300, a gap, and frees its places; g sums past
+				// 1e300 only until g/h3 takes one of them.
+				{"a/h1": 6e299, "a/h2": 6e299, "g/h1": 6e299, "g/h2": 6e299, "g/h3": -6e299},
+			},
+			newest:   map[string]float64{"g": 6e299},
+			want:     []string{"g/h1", "g/h2", "g/h3"},
+			gone:     []string{"a/h1", "a/h2"},
+			mostSets: 4,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

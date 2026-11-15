@@ -494,9 +494,9 @@ func isNoBuckets(v []float64) bool { return v == nil }
 // in Gather's order, and reports whether it dropped a label set or key. It
 // gives places, at most mostSets, first to label sets holding one, then to
 // new label sets of keys holding a ring, then to new keys' label sets, in key
-// order, while fewer than most rings are held. The held keys whose sum is a
-// gap lose their points and the step's places are settled again from the
-// start, until no held key's sum is a gap, so their places go to the others.
+// order, while fewer than most rings are held. While a held key's sum is a
+// gap, the gap keys finalGaps picks lose their points and the step's places
+// are settled again from the start, so their places go to the others.
 func settle[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T], pts []point[P], sh shape[P, T]) bool {
 	var held, fresh []point[P]
 	for _, p := range pts {
@@ -507,12 +507,14 @@ func settle[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T
 		}
 	}
 	before := maps.Clone(ts.places)
-	sums, dropped := placeHeld(ts, column, held, sh.add)
+	sums, refused := placeHeld(ts, column, held, sh.add)
 	for gaps := gapKeys(sums, sh); len(gaps) > 0; gaps = gapKeys(sums, sh) {
-		held = slices.DeleteFunc(held, func(p point[P]) bool { return gaps[p.key] })
+		drop := finalGaps(gaps, refused)
+		held = slices.DeleteFunc(held, func(p point[P]) bool { return drop[p.key] })
 		ts.places = maps.Clone(before)
-		sums, dropped = placeHeld(ts, column, held, sh.add)
+		sums, refused = placeHeld(ts, column, held, sh.add)
 	}
+	dropped := len(refused) > 0
 	for key, r := range rings {
 		v := sh.gap
 		if sum, ok := sums[key]; ok {
@@ -537,11 +539,29 @@ func gapKeys[P, T any](sums map[string]P, sh shape[P, T]) map[string]bool {
 	return gaps
 }
 
+// finalGaps is the gap keys to drop first: those refused no label set, whose
+// sums no freed place can change, or, when every one was refused one, the
+// first in key order, since a place another gap key frees may end its gap.
+func finalGaps(gaps, refused map[string]bool) map[string]bool {
+	final := map[string]bool{}
+	for key := range gaps {
+		if !refused[key] {
+			final[key] = true
+		}
+	}
+	if len(final) == 0 {
+		final[slices.Min(slices.Collect(maps.Keys(gaps)))] = true
+	}
+	return final
+}
+
 // placeHeld sums by key the points of pts, all of keys holding a ring, whose
-// label sets hold or take a place, and reports whether it dropped a label
-// set. Each held place is renewed before release runs, so a place is never
-// freed in the step its label set gives a point, whatever the ring's capacity.
-func placeHeld[P any](ts *tracked, column int, pts []point[P], add func(sum, v P) P) (sums map[string]P, dropped bool) {
+// label sets hold or take a place, and returns the keys it refused a label
+// set a place. Each held place is renewed before release runs, so a place is
+// never freed in the step its label set gives a point, whatever the ring's
+// capacity.
+func placeHeld[P any](ts *tracked, column int, pts []point[P], add func(sum, v P) P) (sums map[string]P, refused map[string]bool) {
+	refused = map[string]bool{}
 	sums = map[string]P{}
 	for _, p := range pts {
 		if _, ok := ts.places[p.set]; ok {
@@ -555,13 +575,13 @@ func placeHeld[P any](ts *tracked, column int, pts []point[P], add func(sum, v P
 			continue
 		}
 		if len(ts.places) >= ts.mostSets {
-			dropped = true
+			refused[p.key] = true
 			continue
 		}
 		ts.places[p.set] = place{key: p.key, last: column}
 		addTo(sums, p, add)
 	}
-	return sums, dropped
+	return sums, refused
 }
 
 // addFresh gives each new key of pts a ring, in key order, while fewer than
@@ -821,12 +841,14 @@ func bucketIncrease(cur, prev []float64) []float64 {
 	return delta
 }
 
-// addBuckets adds v into sum, bucket by bucket.
+// addBuckets is sum plus v, bucket by bucket, in a new slice: a key's sum
+// starts as its first point's slice, and settle sums the same points again.
 func addBuckets(sum, v []float64) []float64 {
-	for k := range sum {
-		sum[k] += v[k]
+	out := slices.Clone(sum)
+	for k := range out {
+		out[k] += v[k]
 	}
-	return sum
+	return out
 }
 
 // cumulative is a histogram reading's cumulative bucket counts, the +Inf
