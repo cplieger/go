@@ -73,22 +73,26 @@ type SummaryValue struct {
 type Quantile struct{ Quantile, Value float64 }
 
 // Gather reads the whole registry as structured families: the instruments,
-// then the collectors' families, then the Go and process families sorted by
-// name, in the order the page shows them. Unlike the page, it lists a
-// declared family that has no series yet, with no samples, and every
-// [ExportChartdata] family. It runs every collector with ctx, and returns
-// every sample a collector dropped as one error naming the family; the
-// families it returns hold what survived. A counter instrument's int64 value
-// becomes a float64, exact up to 2^53.
+// then the collectors' families, then the descs registered on their own,
+// then the Go and process families sorted by name, in the order the page
+// shows them. Unlike the page, it lists a declared family that has no series
+// yet, with no samples, and every [ExportChartdata] family. It runs every
+// collector with ctx, and returns every sample a collector dropped as one
+// error naming the family; the families it returns hold what survived. A
+// counter instrument's int64 value becomes a float64, exact up to 2^53.
 func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 	r.mu.RLock()
-	fams := make([]Family, 0, r.instrumentCount()+r.collectorFamilies+len(processFamilyNames))
+	fams := make([]Family, 0, r.instrumentCount()+r.collectorFamilies+len(r.descs)+len(processFamilyNames))
 	for _, group := range r.groups {
 		for _, m := range group {
 			fams = append(fams, m.gather())
 		}
 	}
 	collectors := r.collectors
+	bare := make([]Family, len(r.descs))
+	for i, d := range r.descs {
+		bare[i] = d.family()
+	}
 	r.mu.RUnlock()
 
 	var errs []error
@@ -99,6 +103,7 @@ func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 			errs = append(errs, err)
 		}
 	}
+	fams = append(fams, bare...)
 	fams = append(fams, processGather()...)
 	return fams, errors.Join(errs...)
 }
@@ -106,10 +111,11 @@ func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 // GatherOf reads only decls, each registered in r, as one [Family] each, in
 // the order given and as [Registry.Gather] reads them, whatever their
 // export: an instrument from its current values, a collector's [Desc] by
-// running its collector with ctx, once for all the decls it serves. It runs
-// no other collector and reads no Go or process family. It returns an error
-// and no families for a nil declaration or one not registered in r, and
-// otherwise the drops of the collectors it ran, as Gather does.
+// running its collector with ctx, once for all the decls it serves, and a
+// Desc registered on its own with no samples. It runs no other collector and
+// reads no Go or process family. It returns an error and no families for a
+// nil declaration or one not registered in r, and otherwise the drops of the
+// collectors it ran, as Gather does.
 func (r *Registry) GatherOf(ctx context.Context, decls ...Declared) ([]Family, error) {
 	fams, runs, err := r.gatherInstruments(decls)
 	if err != nil {
@@ -153,7 +159,10 @@ func (r *Registry) gatherInstruments(decls []Declared) ([]Family, []*Collector, 
 		case instrument:
 			fams[i] = m.gather()
 		case *Desc:
-			if c := m.owner.Load(); !slices.Contains(runs, c) {
+			switch c := m.owner.Load(); {
+			case c == standalone:
+				fams[i] = m.family()
+			case !slices.Contains(runs, c):
 				runs = append(runs, c)
 			}
 		}

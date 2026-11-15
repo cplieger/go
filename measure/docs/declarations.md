@@ -54,6 +54,15 @@ An info series holds one label set at 1. `Set(labels...)` replaces it and `Delet
 
 `ExportChartdata` is for a series only charts read, through the `chartdata` module. Its name is still reserved in the registry, so it cannot collide with a series on the page.
 
+A series that only charts built from your own data draw, such as runs counted in your store, needs no instrument and no collector. Declare it as a `Desc` with `ExportChartdata` and register the `Desc` on its own. It reserves its name and serves nothing: `Gather` and `GatherOf` list it with no samples, and you pass it to the `chartdata` constructors that build its frames. Registration refuses such a `Desc` with any other export, and one a collector holds.
+
+```go
+var runs = measure.NewCounterDesc("runs_total", "Runs by result and host.", measure.UnitCount,
+	[]string{"result", "host"}, measure.WithExport(measure.ExportChartdata))
+
+reg.MustRegister(runs)
+```
+
 ## Labels
 
 Every label is bounded unless you declare it unbounded. A bounded label's values come from a fixed list in the code (`op`, `reason`), from the service's configuration (hosts, profiles), or from the process (`version`). The library needs no list of the values.

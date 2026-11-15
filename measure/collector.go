@@ -16,7 +16,9 @@ import (
 // unit and label names. Build it with [NewGaugeDesc], [NewCounterDesc],
 // [NewHistogramDesc], [NewStateSetDesc] or [NewInfoDesc] and hand it to
 // exactly one [NewCollector]. Its source is [SourceRead], so it is never
-// seeded: it serves what the collector emits at each read.
+// seeded: it serves what the collector emits at each read. An
+// [ExportChartdata] Desc may instead be registered on its own: it reserves
+// its name, serves nothing, and [Registry.GatherOf] reads it with no samples.
 type Desc struct {
 	err    error
 	owner  atomic.Pointer[Collector] // claimed by NewCollector; nil until then
@@ -169,11 +171,59 @@ func (c *Collector) adopt(descs []*Desc) error {
 			for _, claimed := range descs[:i] {
 				claimed.owner.Store(nil)
 			}
+			if d.owner.Load() == standalone {
+				return fmt.Errorf("measure: desc %q is registered on its own", d.meta.base)
+			}
 			return fmt.Errorf("measure: desc %q already belongs to another collector", d.meta.base)
 		}
 	}
 	c.descs = slices.Clone(descs)
 	return nil
+}
+
+// standalone owns every Desc registered on its own, so no collector can
+// adopt it and no registry can register it twice. It is never run.
+var standalone = new(Collector)
+
+func (d *Desc) registerInto(r *Registry) error {
+	switch {
+	case d == nil:
+		return errNilMetric
+	case r.err != nil:
+		return r.err
+	case d.meta.kind == "":
+		return errors.New("measure: desc was not built by a NewXDesc constructor")
+	case d.err != nil:
+		return d.err
+	case d.meta.export != ExportChartdata:
+		return fmt.Errorf("measure: desc %q registered on its own serves nothing, so it must be ExportChartdata; "+
+			"a desc served on the page belongs to a NewCollector", d.meta.base)
+	}
+	if !d.owner.CompareAndSwap(nil, standalone) {
+		if d.owner.Load() == standalone {
+			return fmt.Errorf("measure: desc %q already registered", d.meta.base)
+		}
+		return fmt.Errorf("measure: desc %q belongs to a collector; register the collector", d.meta.base)
+	}
+	name := r.prefixed(d.name)
+	reserve := r.reserveName
+	if d.typ == TypeHistogram {
+		reserve = r.reserveHistogramFamily
+	}
+	if err := reserve(name, "desc"); err != nil {
+		d.owner.Store(nil)
+		return err
+	}
+	d.name = name
+	d.meta.final.Store(&name)
+	r.members[&d.meta] = struct{}{}
+	r.descs = append(r.descs, d)
+	return nil
+}
+
+// family is a Desc registered on its own as Gather reads it: no samples.
+func (d *Desc) family() Family {
+	return Family{Name: d.name, Help: d.help, Type: d.typ, Samples: []Sample{}}
 }
 
 func (c *Collector) registerInto(r *Registry) error {

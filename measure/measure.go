@@ -114,7 +114,8 @@ type Registry struct {
 	prefix            string
 	groups            [groupCount][]instrument
 	collectors        []*Collector
-	collectorFamilies int // descs across collectors, for slice capacities
+	descs             []*Desc // ExportChartdata descs registered on their own
+	collectorFamilies int     // descs across collectors, for slice capacities
 	mu                sync.RWMutex
 }
 
@@ -232,9 +233,10 @@ func (r *Registry) releaseFamily(name string, histogram bool) {
 
 // Metric is implemented by every metric type in this package: *Counter,
 // *Gauge, *LabeledCounter, *LabeledGauge, *StateSet, *Info, *Histogram,
-// *LabeledHistogram and *Collector. The interface is sealed (its method is
-// unexported): a scrape-time value comes from a function given to
-// NewCollector, not from a type implementing an interface.
+// *LabeledHistogram, *Collector, and *Desc, which registers on its own only
+// with [ExportChartdata] and then serves nothing. The interface is sealed
+// (its method is unexported): a scrape-time value comes from a function
+// given to NewCollector, not from a type implementing an interface.
 type Metric interface {
 	// registerInto validates and attaches the metric to r. Callers hold r.mu.
 	registerInto(r *Registry) error
