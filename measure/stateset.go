@@ -77,8 +77,7 @@ func checkStates(name string, labels, states []string) error {
 	}
 	for i, st := range states {
 		if st == "" {
-			// Prometheus treats an empty label value as the label being absent,
-			// so no selector could pick this state out.
+			// Prometheus stores an empty label value as no label, so this state's series would carry no state label.
 			return fmt.Errorf("measure: state set %q declares an empty state", name)
 		}
 		if !utf8.ValidString(st) {

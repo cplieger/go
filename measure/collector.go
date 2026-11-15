@@ -126,9 +126,10 @@ type Collector struct {
 }
 
 // NewCollector returns a collector that runs collect, with the request's
-// context, on every scrape of [Registry.Handler] and every [Registry.Gather],
-// and serves what it emits for descs. Concurrent scrapes run collect
-// concurrently, each with its own [Emitter]. Construction errors surface at
+// context, on every scrape of [Registry.Handler], every [Registry.Gather] and
+// every [Registry.GatherOf] that names one of its descs, and serves what it
+// emits for descs. Concurrent reads run collect concurrently, each with its
+// own [Emitter]. Construction errors surface at
 // [Registry.Register]: no descs, a nil desc or collect, two descs with one
 // name, a desc another collector holds or not built by a NewXDesc
 // constructor, and any desc's own error.
