@@ -316,3 +316,41 @@ func TestSamplerKeepsAtMostMaxBaselinesOfUnobservedLabelSets(t *testing.T) {
 		t.Errorf("%s = %v, want %v: its first observation counts from zero", kept, got, want)
 	}
 }
+
+// At the baseline cap, a label set holding a place keeps its baseline
+// however long ago it changed: only those holding no place are forgotten.
+func TestSamplerNeverForgetsTheBaselineOfALabelSetHoldingAPlace(t *testing.T) {
+	t.Parallel()
+	reg := measure.NewRegistry("", measure.WithLogger(slog.New(slog.DiscardHandler)))
+	runs := measure.NewCounterDesc("runs_total", "h", measure.UnitCount, []string{"agent"},
+		measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+	newer := 0
+	reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+		for i := range MaxLabelSets {
+			e.Emit(runs, 1, "p"+strconv.Itoa(10_000+i)) // idle: an increase of 0 at each step
+		}
+		for i := range newer {
+			e.Emit(runs, 1, "q"+strconv.Itoa(10_000+i))
+		}
+	}, runs))
+	track := Sampled(runs, By("agent"))
+	s, err := NewSampler(Sampling{Registry: reg, Every: time.Minute, Keep: 10 * time.Minute, Logger: slog.New(slog.DiscardHandler)}, track)
+	if err != nil {
+		t.Fatalf("NewSampler: %v", err)
+	}
+	ts := s.tracks[track]
+	for minute, n := range []int{0, MaxBaselines} {
+		newer = n
+		if _, _, err := s.tick(t.Context(), time.Unix(int64(minute+1)*60, 0)); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	}
+	if len(ts.places) != MaxLabelSets || len(ts.bases) != MaxBaselines {
+		t.Fatalf("places = %d, baselines = %d, want %d and %d", len(ts.places), len(ts.bases), MaxLabelSets, MaxBaselines)
+	}
+	for set := range ts.places {
+		if _, ok := ts.bases[set]; !ok {
+			t.Errorf("the placed label set %q lost its baseline", set)
+		}
+	}
+}

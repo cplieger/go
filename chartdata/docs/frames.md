@@ -96,7 +96,7 @@ The rules are stable. The refusal fixtures carry them, so the chart elements ref
 | `MinEvery` | 1 s | a `Sampler`'s shortest step |
 | `MaxPoints` | 10,000 | the points one sampled ring holds, `Keep / Every` |
 | `MaxLabelSets` | 1,000 | the label sets that hold a place in a `Sampler` track, each while its series' ring holds one of its points, and the series it holds per track; a value or quantile track holds at most `MaxValues / (Keep / Every)` series, so its whole ring fits one frame |
-| `MaxBaselines` | 4,000 | the counter or histogram label sets whose last reading a `Sampler` track keeps, place or not; past it, the least recently changed is forgotten and its next reading is a first appearance |
+| `MaxBaselines` | 4,000 | the counter or histogram label sets whose last reading a `Sampler` track keeps, place or not; past it, the least recently changed of those holding no place is forgotten and its next reading is a first appearance |
 
 ## The duration ladder
 

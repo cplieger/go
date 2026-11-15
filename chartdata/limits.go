@@ -41,7 +41,8 @@ const (
 	MaxLabelSets = 1_000
 	// MaxBaselines is the most counter or histogram label sets whose last
 	// reading a track keeps, place or not, to take the next increase from.
-	// Past it, the least recently changed is forgotten, and its next
-	// reading is a first appearance.
+	// Past it, the least recently changed of those holding no place is
+	// forgotten, and its next reading is a first appearance; a label set
+	// holding a place never loses its baseline, since places are fewer.
 	MaxBaselines = 4 * MaxLabelSets
 )

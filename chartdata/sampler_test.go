@@ -519,39 +519,68 @@ func TestSamplerLogsWithItsLockReleased(t *testing.T) {
 }
 
 // A new label set that sorts first must not take the place of one already
-// held: the held set keeps its values, and the new one is dropped.
+// held, whether it is a series of its own or a label set of a held series:
+// the held sets keep their values, and the new one is dropped. With Keep
+// equal to Every, each ring holds one column, so a held place is renewed in
+// the very step its newest point leaves the ring.
 func TestSamplerKeepsTheHeldLabelSetsOverANewOneThatSortsFirst(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		reg := measure.NewRegistry("")
-		held := make([]string, chartdata.MaxLabelSets)
-		for i := range held {
-			held[i] = "m" + strconv.Itoa(10_000+i)
-		}
-		var mu sync.Mutex
-		agents := held
-		turns := churn(reg, func() []string {
-			mu.Lock()
-			defer mu.Unlock()
-			return agents
+	for _, tc := range []struct {
+		name string
+		keep time.Duration
+		by   bool
+	}{
+		{"newSeries", 10 * time.Minute, true},
+		{"newSeriesKeepIsEvery", every, true},
+		{"newLabelSet", 10 * time.Minute, false},
+		{"newLabelSetKeepIsEvery", every, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reg := measure.NewRegistry("")
+				turns := measure.NewGaugeDesc("turns", "h", measure.UnitCount, []string{"agent"},
+					measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+				var mu sync.Mutex
+				newcomer := false
+				reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+					mu.Lock()
+					defer mu.Unlock()
+					if newcomer {
+						e.Emit(turns, 1_000, "a")
+					}
+					for i := range chartdata.MaxLabelSets {
+						e.Emit(turns, 1, "m"+strconv.Itoa(10_000+i))
+					}
+				}, turns))
+				var opts []chartdata.TrackOption
+				if tc.by {
+					opts = append(opts, chartdata.By("agent"))
+				}
+				var logs logCapture
+				track := chartdata.Sampled(turns, opts...)
+				s := sampled(t, reg, tc.keep, &logs, track)
+				mu.Lock()
+				newcomer = true
+				mu.Unlock()
+				step()
+				got := valuesOf(new(seriesOf(t, s, track, every)))
+				if !tc.by {
+					if v := got["turns"]; !sameValues(v, []float64{chartdata.MaxLabelSets}) {
+						t.Errorf("turns = %v, want [%d], the held label sets' sum", v, chartdata.MaxLabelSets)
+					}
+					return
+				}
+				if len(got) != chartdata.MaxLabelSets {
+					t.Errorf("series = %d, want %d", len(got), chartdata.MaxLabelSets)
+				}
+				if _, ok := got["a"]; ok {
+					t.Errorf("the new agent a is held, want it dropped")
+				}
+				if last := got["m10999"]; !sameValues(last, []float64{1}) {
+					t.Errorf("the held agent that sorts last = %v, want [1]", last)
+				}
+			})
 		})
-		var logs logCapture
-		track := chartdata.Sampled(turns, chartdata.By("agent"))
-		s := sampled(t, reg, 10*time.Minute, &logs, track)
-		mu.Lock()
-		agents = append([]string{"a"}, held...)
-		mu.Unlock()
-		step()
-		got := valuesOf(new(seriesOf(t, s, track, 10*time.Minute)))
-		if len(got) != chartdata.MaxLabelSets {
-			t.Errorf("series = %d, want %d", len(got), chartdata.MaxLabelSets)
-		}
-		if _, ok := got["a"]; ok {
-			t.Errorf("the new agent a is held, want it dropped")
-		}
-		if last := got[held[len(held)-1]]; !sameValues(last, []float64{1, 1}) {
-			t.Errorf("the held agent that sorts last = %v, want [1 1]", last)
-		}
-	})
+	}
 }
 
 // A label set gives its place up once its series' ring holds none of its
@@ -599,51 +628,72 @@ func TestSamplerFreesThePlaceOfAnIdleLabelSetInALiveSeries(t *testing.T) {
 }
 
 // A label set of a series past the most a track holds takes no place, so
-// the places stay free for the label sets of the series it holds.
+// the places stay free for the label sets of the series it holds, whether
+// the refused series sorts before or after the held one.
 func TestSamplerGivesNoPlaceToALabelSetOfASeriesPastTheMost(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		reg := measure.NewRegistry("")
-		load := measure.NewGaugeDesc("load", "h", measure.UnitNone, []string{"dc", "host"},
-			measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("dc", "host"))
-		var mu sync.Mutex
-		firstHosts := 5
-		reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
-			mu.Lock()
-			defer mu.Unlock()
-			for dc := range chartdata.MaxLabelSets / 5 { // 5 hosts each
-				hosts := 5
-				if dc == 0 {
-					hosts = firstHosts
+	for _, tc := range []struct {
+		name    string
+		refused string // the prefix of the 100 series that arrive past the most
+		grown   string // the held series that gains a host
+	}{
+		{"refusedSortsAfter", "e", "d1000"},
+		{"refusedSortsBefore", "c", "d1099"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reg := measure.NewRegistry("")
+				load := measure.NewGaugeDesc("load", "h", measure.UnitNone, []string{"dc", "host"},
+					measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("dc", "host"))
+				var mu sync.Mutex
+				second := false
+				reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+					mu.Lock()
+					defer mu.Unlock()
+					for dc := range 100 { // 5 hosts each, 500 label sets
+						for h := range 5 {
+							e.Emit(load, 1, "d"+strconv.Itoa(1_000+dc), "h"+strconv.Itoa(h))
+							if second {
+								e.Emit(load, 1, tc.refused+strconv.Itoa(1_000+dc), "h"+strconv.Itoa(h))
+							}
+						}
+					}
+					if second {
+						e.Emit(load, 1, tc.grown, "h5")
+					}
+				}, load))
+				var logs logCapture
+				track := chartdata.Sampled(load, chartdata.By("dc"))
+				// 10,000 steps hold MaxValues / 10,000 = 100 series.
+				s, err := chartdata.NewSampler(chartdata.Sampling{
+					Registry: reg, Every: time.Second, Keep: chartdata.MaxPoints * time.Second, Logger: logs.logger(),
+				}, track)
+				if err != nil {
+					t.Fatalf("NewSampler: %v", err)
 				}
-				for h := range hosts {
-					e.Emit(load, 1, "d"+strconv.Itoa(1_000+dc), "h"+strconv.Itoa(h))
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go func() { _ = s.Run(ctx) }()
+				time.Sleep(1500 * time.Millisecond)
+				synctest.Wait()
+				mu.Lock()
+				second = true
+				mu.Unlock()
+				time.Sleep(time.Second)
+				synctest.Wait()
+				f := seriesOf(t, s, track, 2*time.Second)
+				got := valuesOf(&f)
+				if v := got[tc.grown]; !sameValues(v, []float64{5, 6}) {
+					t.Errorf("%s = %v, want [5 6]: its new host takes a place the refused series' hosts do not hold", tc.grown, v)
 				}
-			}
-		}, load))
-		var logs logCapture
-		track := chartdata.Sampled(load, chartdata.By("dc"))
-		// 10,000 steps hold MaxValues / 10,000 = 100 of the 200 series.
-		s, err := chartdata.NewSampler(chartdata.Sampling{
-			Registry: reg, Every: time.Second, Keep: chartdata.MaxPoints * time.Second, Logger: logs.logger(),
-		}, track)
-		if err != nil {
-			t.Fatalf("NewSampler: %v", err)
-		}
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go func() { _ = s.Run(ctx) }()
-		time.Sleep(1500 * time.Millisecond)
-		synctest.Wait()
-		mu.Lock()
-		firstHosts = 6
-		mu.Unlock()
-		time.Sleep(time.Second)
-		synctest.Wait()
-		f := seriesOf(t, s, track, 2*time.Second)
-		if got := valuesOf(&f)["d1000"]; !sameValues(got, []float64{5, 6}) {
-			t.Errorf("d1000 = %v, want [5 6]: its new host takes a place the dropped series' hosts do not hold", got)
-		}
-	})
+				if len(got) != 100 {
+					t.Errorf("series = %d, want the 100 held", len(got))
+				}
+				if n := logs.count(dropLog); n != 1 {
+					t.Errorf("logged the drop %d times, want once", n)
+				}
+			})
+		})
+	}
 }
 
 // A value track's whole ring must fit one frame: 10,000 one-second steps
@@ -1048,52 +1098,48 @@ func TestSamplerTakesAKeyOnlyFromItsFirstUsableReading(t *testing.T) {
 }
 
 // A track keeps at most MaxBaselines baselines: past it, the least recently
-// changed is forgotten, one with no place before one with a place, so its
-// next reading is a first appearance, a gap, and only the reading after it
-// gives an increase.
+// changed of those whose label set holds no place is forgotten, so its next
+// reading is a first appearance, a gap, and only the reading after it gives
+// an increase. A label set holding a place, such as an idle counter's,
+// whose increase of 0 is drawn, never loses its baseline.
 func TestSamplerForgetsTheLeastRecentlyChangedBaselinePastTheCap(t *testing.T) {
+	counter := func(name string, labels []string, opts ...measure.Option) *measure.Desc {
+		return measure.NewCounterDesc(name, "h", measure.UnitCount, labels, opts...)
+	}
+	emitCounter := func(e *measure.Emitter, d *measure.Desc, agent string, total float64) {
+		e.Emit(d, total, agent)
+	}
 	for _, tc := range []struct {
-		emit   func(e *measure.Emitter, d *measure.Desc, agent string, total uint64)
+		emit   func(e *measure.Emitter, d *measure.Desc, agent string, total float64)
 		newVec func(name string, labels []string, opts ...measure.Option) *measure.Desc
 		opt    chartdata.TrackOption
 		name   string
-		a      []uint64 // agent a's total or count at each step
+		a      []float64 // agent a's total or count at each step
 		want   []float64
 	}{
 		{
-			name: "counter",
-			newVec: func(name string, labels []string, opts ...measure.Option) *measure.Desc {
-				return measure.NewCounterDesc(name, "h", measure.UnitCount, labels, opts...)
-			},
-			emit: func(e *measure.Emitter, d *measure.Desc, agent string, total uint64) {
-				e.Emit(d, float64(total), agent)
-			},
-			a:    []uint64{10, 10, 15, 20},
-			want: []float64{nan, 0, nan, 5},
+			// a's increase of 0 at the second step gives it a place.
+			name: "idleCounterWithAPlace", newVec: counter, emit: emitCounter,
+			a:    []float64{10, 10, 15, 20},
+			want: []float64{nan, 0, 5, 5},
 		},
 		{
-			// a changes at the second step, as the new label sets appear, and
-			// takes a place with its increase, so one of them is forgotten.
-			name: "counterWithAPlace",
-			newVec: func(name string, labels []string, opts ...measure.Option) *measure.Desc {
-				return measure.NewCounterDesc(name, "h", measure.UnitCount, labels, opts...)
-			},
-			emit: func(e *measure.Emitter, d *measure.Desc, agent string, total uint64) {
-				e.Emit(d, float64(total), agent)
-			},
-			a:    []uint64{1, 2, 3},
-			want: []float64{nan, 1, 1},
+			// a's +Inf at the second step gives no point, so a holds no place.
+			name: "counterWithNoPlace", newVec: counter, emit: emitCounter,
+			a:    []float64{10, inf, 15, 20},
+			want: []float64{nan, nan, nan, 5},
 		},
 		{
 			name: "histogram",
 			newVec: func(name string, labels []string, opts ...measure.Option) *measure.Desc {
 				return measure.NewHistogramDesc(name, "h", measure.UnitSeconds, labels, []float64{1, 2, 4}, opts...)
 			},
-			emit: func(e *measure.Emitter, d *measure.Desc, agent string, n uint64) {
-				e.EmitHistogram(d, []uint64{n, n, n}, n, float64(n)/2, agent) // n observations of 0.5
+			emit: func(e *measure.Emitter, d *measure.Desc, agent string, count float64) {
+				n := uint64(count)
+				e.EmitHistogram(d, []uint64{n, n, n}, n, count/2, agent) // n observations of 0.5
 			},
 			opt:  chartdata.AsQuantile(0.5),
-			a:    []uint64{1, 1, 2, 3},
+			a:    []float64{1, 1, 2, 3},
 			want: []float64{nan, nan, nan, 0.5},
 		},
 	} {
@@ -1111,7 +1157,7 @@ func TestSamplerForgetsTheLeastRecentlyChangedBaselinePastTheCap(t *testing.T) {
 					mu.Lock()
 					defer mu.Unlock()
 					tc.emit(e, d, "a", tc.a[at])
-					if at >= 1 { // MaxBaselines new label sets, newer than a
+					if at == 1 { // MaxBaselines new label sets, newer than a, read once
 						for _, o := range others {
 							tc.emit(e, d, o, 1)
 						}
@@ -1131,7 +1177,7 @@ func TestSamplerForgetsTheLeastRecentlyChangedBaselinePastTheCap(t *testing.T) {
 					step()
 				}
 				if got := valuesOf(new(seriesOf(t, s, track, 10*time.Minute)))["a"]; !sameValues(got, tc.want) {
-					t.Errorf("a = %v, want %v: its baseline forgotten at the second step", got, tc.want)
+					t.Errorf("a = %v, want %v", got, tc.want)
 				}
 			})
 		})

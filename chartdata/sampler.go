@@ -157,6 +157,11 @@ type tracked struct {
 	byAt     int
 	most     int // the most keys the track holds
 	capacity int // a ring's capacity: the sampler's columns, or an AsBins window's
+	// mostSets and mostBases are MaxLabelSets and MaxBaselines. mostSets
+	// must not pass mostBases, or keepBases would have to forget the
+	// baseline of a label set holding a place.
+	mostSets  int
+	mostBases int
 	// rebase makes the next read take no increase, since the steps before
 	// it were missed.
 	rebase bool
@@ -244,7 +249,10 @@ func (s *Sampler) track(t *Track) (*tracked, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts := &tracked{Track: t, kind: decl.Kind, byAt: -1, places: map[string]place{}, bases: map[string]base{}}
+	ts := &tracked{
+		Track: t, kind: decl.Kind, byAt: -1, places: map[string]place{}, bases: map[string]base{},
+		mostSets: MaxLabelSets, mostBases: MaxBaselines,
+	}
 	if t.by != "" {
 		if ts.byAt = slices.Index(decl.Labels, t.by); ts.byAt < 0 {
 			return nil, fmt.Errorf("By(%q) names no label of %s", t.by, decl.Name)
@@ -415,27 +423,180 @@ func (s *Sampler) push(edge time.Time) {
 
 // observe reads ts's samples in fam into its rings, as the newest column.
 func (s *Sampler) observe(ts *tracked, fam *measure.Family) {
+	ts.unplace()
+	next := map[string]base{}
 	earlier := s.cols.n - 1
-	ts.release(s.column)
 	var dropped bool
 	switch ts.form {
 	case formValue:
-		dropped = ts.pushValues(s.observeValues(ts, fam), earlier)
+		dropped = settle(ts, s.column, earlier, ts.values, ts.valuePoints(fam, next, s.column), valueShape)
 	case formQuantile:
-		bounds := ts.decl.Declaration().Buckets
-		sums := map[string]float64{}
-		for key, cum := range s.observeHistograms(ts, fam) {
-			sums[key] = quantile(ts.q, bounds, cum)
-		}
-		dropped = ts.pushValues(sums, earlier)
+		sh := quantileShape(ts.q, ts.decl.Declaration().Buckets)
+		dropped = settle(ts, s.column, earlier, ts.values, ts.bucketPoints(fam, next, s.column), sh)
 	case formBins:
-		dropped = update(ts.hists, s.observeHistograms(ts, fam), ts.capacity, earlier, ts.most, nil, isNoBuckets)
+		dropped = settle(ts, s.column, earlier, ts.hists, ts.bucketPoints(fam, next, s.column), binsShape)
 	}
 	ts.rebase = false
 	ts.unplace()
+	s.keepBases(ts, next) // after settle, so the step's places keep their baselines
 	if dropped {
 		s.dropped(ts)
 	}
+}
+
+// point is a label set's share of its key's newest column.
+type point[P any] struct {
+	v   P
+	set string
+	key string
+}
+
+// shape is how a track's points sum into the value its ring holds.
+type shape[P, T any] struct {
+	gap   T
+	add   func(sum, v P) P
+	value func(sum P) T // the ring's value of a key's sum
+	isGap func(T) bool
+}
+
+// valueShape sums a value track's points, a sum no frame can carry, beyond
+// ±MaxMagnitude, such as a By sum that overflows, a gap.
+var valueShape = shape[float64, float64]{
+	gap: math.NaN(), isGap: math.IsNaN, value: carried,
+	add: func(sum, v float64) float64 { return sum + v },
+}
+
+// binsShape sums an AsBins track's bucket increases.
+var binsShape = shape[[]float64, []float64]{
+	add: addBuckets, value: func(sum []float64) []float64 { return sum }, isGap: isNoBuckets,
+}
+
+// quantileShape sums a quantile track's bucket increases and takes their
+// q-quantile over bounds.
+func quantileShape(q float64, bounds []float64) shape[[]float64, float64] {
+	return shape[[]float64, float64]{
+		gap: math.NaN(), isGap: math.IsNaN, add: addBuckets,
+		value: func(sum []float64) float64 { return carried(quantile(q, bounds, sum)) },
+	}
+}
+
+// carried is v, or NaN, a gap, when no frame carries v.
+func carried(v float64) float64 {
+	if !isWithin(v) {
+		return math.NaN()
+	}
+	return v
+}
+
+func isNoBuckets(v []float64) bool { return v == nil }
+
+// settle pushes the column at column onto rings from pts, the step's points
+// in Gather's order, and reports whether it dropped a label set or key. It
+// gives label sets places, at most mostSets, in this order:
+//  1. a label set holding a place keeps it with its point, and a place whose
+//     newest point has left its key's ring is freed;
+//  2. new label sets of keys holding a ring take places;
+//  3. new keys, in key order, while fewer than most rings are held, take a
+//     ring and places for their label sets.
+func settle[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T], pts []point[P], sh shape[P, T]) bool {
+	var held, fresh []point[P]
+	for _, p := range pts {
+		if _, ok := rings[p.key]; ok {
+			held = append(held, p)
+		} else {
+			fresh = append(fresh, p)
+		}
+	}
+	sums := map[string]P{}
+	dropped := placeHeld(ts, column, held, sums, sh.add)
+	for key, r := range rings {
+		v := sh.gap
+		if sum, ok := sums[key]; ok {
+			v = sh.value(sum)
+		}
+		r.push(v)
+		if sh.isGap(v) && allGaps(r, sh.isGap) {
+			delete(rings, key)
+		}
+	}
+	return addFresh(ts, column, earlier, rings, fresh, sh) || dropped
+}
+
+// placeHeld adds into sums the points of pts, all of keys holding a ring,
+// whose label sets hold or take a place, and reports whether it dropped one.
+// Each held place is renewed before release runs, so a place is never freed
+// in the step its label set gives a point, whatever the ring's capacity.
+func placeHeld[P any](ts *tracked, column int, pts []point[P], sums map[string]P, add func(sum, v P) P) (dropped bool) {
+	for _, p := range pts {
+		if _, ok := ts.places[p.set]; ok {
+			ts.places[p.set] = place{key: p.key, last: column}
+			addTo(sums, p, add)
+		}
+	}
+	ts.release(column)
+	for _, p := range pts {
+		if _, ok := ts.places[p.set]; ok {
+			continue
+		}
+		if len(ts.places) >= ts.mostSets {
+			dropped = true
+			continue
+		}
+		ts.places[p.set] = place{key: p.key, last: column}
+		addTo(sums, p, add)
+	}
+	return dropped
+}
+
+// addFresh gives each new key of pts a ring, in key order, while fewer than
+// most rings are held, with the label sets that fit in the places left, in
+// Gather's order; a key whose sum is a gap takes neither. It reports whether
+// it dropped a key or label set.
+func addFresh[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T], pts []point[P], sh shape[P, T]) (dropped bool) {
+	byKey := map[string][]point[P]{}
+	for _, p := range pts {
+		byKey[p.key] = append(byKey[p.key], p)
+	}
+	for _, key := range slices.Sorted(maps.Keys(byKey)) {
+		all := byKey[key]
+		taken := all[:min(len(all), max(0, ts.mostSets-len(ts.places)))]
+		if len(taken) == 0 {
+			dropped = true
+			continue
+		}
+		sum := taken[0].v
+		for _, p := range taken[1:] {
+			sum = sh.add(sum, p.v)
+		}
+		v := sh.value(sum)
+		if sh.isGap(v) {
+			continue
+		}
+		if len(rings) >= ts.most {
+			dropped = true
+			continue
+		}
+		dropped = dropped || len(taken) < len(all)
+		r := newRing[T](ts.capacity)
+		for range min(earlier, ts.capacity-1) {
+			r.push(sh.gap)
+		}
+		r.push(v)
+		rings[key] = r
+		for _, p := range taken {
+			ts.places[p.set] = place{key: key, last: column}
+		}
+	}
+	return dropped
+}
+
+// addTo adds p's value to its key's sum.
+func addTo[P any](sums map[string]P, p point[P], add func(sum, v P) P) {
+	if sum, ok := sums[p.key]; ok {
+		sums[p.key] = add(sum, p.v)
+		return
+	}
+	sums[p.key] = p.v
 }
 
 // release frees the place of each label set whose newest point has left its
@@ -449,7 +610,8 @@ func (ts *tracked) release(column int) {
 }
 
 // unplace frees the place of each label set whose key holds no ring, such as
-// one past the most keys, or one whose point was a gap.
+// one whose ring missed edges left with no usable point, or whose sum was a
+// gap.
 func (ts *tracked) unplace() {
 	for set, p := range ts.places {
 		if !ts.holds(p.key) {
@@ -468,28 +630,24 @@ func (ts *tracked) holds(key string) bool {
 	return ok
 }
 
-// pushValues pushes sums onto a value or quantile track's rings, a sum that
-// is not finite, or beyond ±MaxMagnitude, such as a By sum that overflows,
-// as a gap, since no frame can carry it.
-func (ts *tracked) pushValues(sums map[string]float64, earlier int) bool {
-	for key, v := range sums {
-		if !isWithin(v) {
-			sums[key] = math.NaN()
-		}
-	}
-	return update(ts.values, sums, ts.capacity, earlier, ts.most, math.NaN(), math.IsNaN)
-}
-
-// gap pushes a gap column onto ts's rings.
+// gap pushes a gap column onto ts's rings, and drops a ring it leaves with
+// no usable point.
 func (ts *tracked) gap() {
 	if ts.form == formBins {
-		update(ts.hists, nil, 0, 0, 0, nil, isNoBuckets)
+		pushGap(ts.hists, nil, isNoBuckets)
 		return
 	}
-	update(ts.values, nil, 0, 0, 0, math.NaN(), math.IsNaN)
+	pushGap(ts.values, math.NaN(), math.IsNaN)
 }
 
-func isNoBuckets(v []float64) bool { return v == nil }
+func pushGap[T any](rings map[string]*ring[T], gap T, isGap func(T) bool) {
+	for key, r := range rings {
+		r.push(gap)
+		if allGaps(r, isGap) {
+			delete(rings, key)
+		}
+	}
+}
 
 // keyOf is the series key of a sample's labels.
 func (ts *tracked) keyOf(labels []measure.Label) string {
@@ -527,34 +685,22 @@ func (ts *tracked) read(fam *measure.Family) []reading {
 	return out
 }
 
-// admit reports whether r may add a point to key at the column: when its
-// label set holds a place, or takes one while fewer than MaxLabelSets are
-// held, so a new label set never displaces a held one.
-func (s *Sampler) admit(ts *tracked, r reading, key string) bool {
-	if _, ok := ts.places[r.set]; !ok && len(ts.places) >= MaxLabelSets {
-		s.dropped(ts)
-		return false
-	}
-	ts.places[r.set] = place{key: key, last: s.column}
-	return true
-}
-
-// keepBases makes next ts's baselines. Past MaxBaselines it evicts the
-// least recently changed, one with no place before one with a place, then
-// in label-set order.
+// keepBases makes next ts's baselines. Past mostBases it forgets the
+// baselines of label sets holding no place, the least recently changed
+// first, then in label-set order: a label set holding a place never loses
+// its baseline.
 func (s *Sampler) keepBases(ts *tracked, next map[string]base) {
-	if over := len(next) - MaxBaselines; over > 0 {
-		sets := slices.Collect(maps.Keys(next))
-		placed := func(set string) int {
-			if _, ok := ts.places[set]; ok {
-				return 1
+	if over := len(next) - ts.mostBases; over > 0 {
+		var unplaced []string
+		for set := range next {
+			if _, ok := ts.places[set]; !ok {
+				unplaced = append(unplaced, set)
 			}
-			return 0
 		}
-		slices.SortFunc(sets, func(a, b string) int {
-			return cmp.Or(cmp.Compare(next[a].changed, next[b].changed), cmp.Compare(placed(a), placed(b)), strings.Compare(a, b))
+		slices.SortFunc(unplaced, func(a, b string) int {
+			return cmp.Or(cmp.Compare(next[a].changed, next[b].changed), strings.Compare(a, b))
 		})
-		for _, set := range sets[:over] {
+		for _, set := range unplaced[:over] {
 			delete(next, set)
 		}
 		s.dropped(ts)
@@ -571,7 +717,7 @@ func (s *Sampler) dropped(ts *tracked) {
 	ts.capped = true
 	s.pending = append(s.pending, warning{
 		msg:  "chartdata: a sampled track has more label sets or series than the sampler holds; new ones are dropped, or old baselines forgotten",
-		args: []any{"name", ts.decl.Declaration().Name, "most_label_sets", MaxLabelSets, "most_series", ts.most, "most_baselines", MaxBaselines},
+		args: []any{"name", ts.decl.Declaration().Name, "most_label_sets", ts.mostSets, "most_series", ts.most, "most_baselines", ts.mostBases},
 	})
 }
 
@@ -582,22 +728,19 @@ func (s *Sampler) log() *slog.Logger {
 	return s.logger
 }
 
-// observeValues returns the sum of ts's points in fam for each key given
-// one: a gauge's value, or a counter's increase since its baseline. A
-// reading that is not finite, or beyond ±MaxMagnitude, gives no point and
-// leaves its label set's baseline as it was, but none past missed edges,
-// whose increase would cover several steps.
-func (s *Sampler) observeValues(ts *tracked, fam *measure.Family) map[string]float64 {
-	sums := map[string]float64{}
-	next := map[string]base{}
+// valuePoints returns the points of ts's samples in fam, a gauge's value or a
+// counter's increase since its baseline, and puts in next the baseline each
+// leaves. A reading that is not finite, or beyond ±MaxMagnitude, gives no
+// point and leaves its label set's baseline as it was, but none past missed
+// edges, whose increase would cover several steps.
+func (ts *tracked) valuePoints(fam *measure.Family, next map[string]base, column int) []point[float64] {
+	var pts []point[float64]
 	for _, r := range ts.read(fam) {
-		key := ts.keyOf(r.smp.Labels)
-		if v, ok := ts.valueOf(r, next, s.column); ok && s.admit(ts, r, key) {
-			sums[key] += v
+		if v, ok := ts.valueOf(r, next, column); ok {
+			pts = append(pts, point[float64]{v: v, set: r.set, key: ts.keyOf(r.smp.Labels)})
 		}
 	}
-	s.keepBases(ts, next)
-	return sums
+	return pts
 }
 
 // valueOf returns r's point at column, a counter's increase, and puts the
@@ -630,25 +773,23 @@ func increase(cur, prev float64) float64 {
 	return cur - prev
 }
 
-// observeHistograms returns the sum of the bucket increases of ts's samples
-// in fam since their baselines for each key that observed any.
-func (s *Sampler) observeHistograms(ts *tracked, fam *measure.Family) map[string][]float64 {
-	sums := map[string][]float64{}
-	next := map[string]base{}
+// bucketPoints returns the points of ts's samples in fam, the bucket
+// increases of each that observed since its baseline, and puts in next the
+// baseline each leaves.
+func (ts *tracked) bucketPoints(fam *measure.Family, next map[string]base, column int) []point[[]float64] {
+	var pts []point[[]float64]
 	for _, r := range ts.read(fam) {
 		cur := cumulative(r.smp.Histogram)
 		b, ok := ts.bases[r.set]
-		next[r.set] = b.next(cur, s.column)
+		next[r.set] = b.next(cur, column)
 		if !ok || ts.rebase {
 			continue
 		}
-		key := ts.keyOf(r.smp.Labels)
-		if delta := bucketIncrease(cur, b.cum); delta[len(delta)-1] > 0 && s.admit(ts, r, key) {
-			addInto(sums, key, delta)
+		if delta := bucketIncrease(cur, b.cum); delta[len(delta)-1] > 0 {
+			pts = append(pts, point[[]float64]{v: delta, set: r.set, key: ts.keyOf(r.smp.Labels)})
 		}
 	}
-	s.keepBases(ts, next)
-	return sums
+	return pts
 }
 
 // bucketIncrease is each cumulative bucket's increase from prev to cur, all
@@ -664,54 +805,12 @@ func bucketIncrease(cur, prev []float64) []float64 {
 	return delta
 }
 
-// addInto adds delta to key's sum, bucket by bucket.
-func addInto(sums map[string][]float64, key string, delta []float64) {
-	sum := sums[key]
-	if sum == nil {
-		sums[key] = delta
-		return
-	}
+// addBuckets adds v into sum, bucket by bucket.
+func addBuckets(sum, v []float64) []float64 {
 	for k := range sum {
-		sum[k] += delta[k]
+		sum[k] += v[k]
 	}
-}
-
-// update pushes each held key's value in sums onto its ring, a gap for a key
-// with none, and drops a ring left with no usable point, whether or not sums
-// holds its key. It then adds a ring of capacity for each new key with a
-// value, in key order, while fewer than most are held, and reports whether
-// it dropped one. A new key's ring starts with a gap per earlier column, so
-// its indices match the older rings'.
-func update[T any](rings map[string]*ring[T], sums map[string]T, capacity, earlier, most int, gap T, isGap func(T) bool) (dropped bool) {
-	for key, r := range rings {
-		v, ok := sums[key]
-		if !ok {
-			v = gap
-		}
-		r.push(v)
-		if isGap(v) && allGaps(r, isGap) {
-			delete(rings, key)
-		}
-	}
-	var fresh []string
-	for key, v := range sums {
-		if _, held := rings[key]; !held && !isGap(v) {
-			fresh = append(fresh, key)
-		}
-	}
-	slices.Sort(fresh)
-	for _, key := range fresh {
-		if len(rings) >= most {
-			return true
-		}
-		r := newRing[T](capacity)
-		for range min(earlier, capacity-1) {
-			r.push(gap)
-		}
-		r.push(sums[key])
-		rings[key] = r
-	}
-	return false
+	return sum
 }
 
 // cumulative is a histogram reading's cumulative bucket counts, the +Inf
@@ -911,7 +1010,7 @@ func below(vs []float64, i int) float64 {
 }
 
 // sumColumns adds the bucket increases of r's columns. r must hold one:
-// update drops an all-gap ring.
+// settle and gap drop an all-gap ring.
 func sumColumns(r *ring[[]float64]) []float64 {
 	var sum []float64
 	for i := range r.n {
