@@ -31,8 +31,12 @@ func (k Kind) MarshalText() ([]byte, error) {
 
 // Timing is a union tagged by an enum.
 type Timing struct {
-	Kind     Kind     `json:"kind"`
-	Ms       *int64   `json:"ms,omitempty"`
+	// Kind names the case.
+	Kind Kind   `json:"kind"`
+	Ms   *int64 `json:"ms,omitempty"`
+	// Scale multiplies each instant.
+	//
+	// One leaves the timing unchanged.
 	Scale    *float64 `json:"scale,omitempty"`
 	OffsetMs *int64   `json:"offset_ms,omitempty"`
 }
@@ -66,8 +70,9 @@ type Untagged struct {
 
 // Command is a union whose tag selects the type its payload decodes as.
 type Command struct {
-	Type    string          `json:"type"`
-	ChatID  string          `json:"chat_id,omitempty"`
+	Type   string `json:"type"`
+	ChatID string `json:"chat_id,omitempty"`
+	// Payload is the command's argument, typed by its case.
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 

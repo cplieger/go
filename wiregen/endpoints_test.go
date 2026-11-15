@@ -201,7 +201,8 @@ func TestEndpointErrorsValidated(t *testing.T) {
 }
 
 // TestQueryTypeArgument: Params and Query structs become the members of one
-// typed arguments object; only scalar fields may cross a URL.
+// typed arguments object, each with its field's JSDoc; only scalar fields may
+// cross a URL.
 func TestQueryTypeArgument(t *testing.T) {
 	t.Run("emits members and the query fold", func(t *testing.T) {
 		e := get("listItems", "/api/items/{id}")
@@ -211,7 +212,7 @@ func TestQueryTypeArgument(t *testing.T) {
 		r.Enums = []wiregen.EnumRef{wiregen.StringEnum[client.Kind]()}
 		out := mustGen(t, r.clientFile)
 		for _, want := range []string{
-			"export interface ListItemsArgs {\n  readonly id: string;\n  readonly cursor?: string;\n  readonly kind?: Kind;\n  readonly limit?: number;\n  readonly fresh?: boolean;\n}",
+			"export interface ListItemsArgs {\n  readonly id: string;\n  /** Cursor resumes the list after the item it names. */\n  readonly cursor?: string;\n  readonly kind?: Kind;\n  readonly limit?: number;\n  readonly fresh?: boolean;\n}",
 			"path: `/api/items/${globalThis.encodeURIComponent(globalThis.String(args.id))}` + qs([[\"cursor\", args.cursor], [\"kind\", args.kind], [\"limit\", args.limit], [\"fresh\", args.fresh]]),",
 			"import type { Kind } from \"./types.gen.js\";",
 			"export function listItems(args: ListItemsArgs, opts?: ClientOpts)",
@@ -278,18 +279,19 @@ func TestQueryTypeArgument(t *testing.T) {
 }
 
 // TestHeadersArgument: a declared header is an argument of its endpoint's
-// function, required or not, sent in the spec's headers only when given.
+// function, required or not, documented by its Description, sent in the
+// spec's headers only when given.
 func TestHeadersArgument(t *testing.T) {
 	e := wiregen.Endpoint{
 		Name: "startJob", Method: "POST", Path: "/api/jobs", Kind: wiregen.KindJSON,
 		Headers: []wiregen.Header{
-			{Name: "Idempotency-Key", Arg: "idempotencyKey", MinBytes: 1, MaxBytes: 255},
+			{Name: "Idempotency-Key", Arg: "idempotencyKey", MinBytes: 1, MaxBytes: 255, Description: "Deduplicates a retried start."},
 			{Name: "X-Trace", Arg: "trace", MaxBytes: 64, Required: true},
 		},
 	}
 	out := mustGen(t, newEndpointRegistry(e).clientFile)
 	for _, want := range []string{
-		"  readonly idempotencyKey?: string;\n  readonly trace: string;\n",
+		"  /**\n   * Deduplicates a retried start.\n   */\n  readonly idempotencyKey?: string;\n  readonly trace: string;\n",
 		"    if (args.idempotencyKey !== undefined) {\n      headers[\"Idempotency-Key\"] = args.idempotencyKey;\n    }\n",
 		"    headers[\"X-Trace\"] = args.trace;\n",
 		"      headers,\n",

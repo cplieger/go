@@ -84,22 +84,27 @@ func (g *generator) emitStructInterfaces(w *strings.Builder, engine *astEngine) 
 		}
 		w.WriteString("export interface " + g.tsName(ti.Name) + " {\n")
 		for i := range ti.Fields {
-			emitInterfaceField(w, &ti.Fields[i])
+			emitInterfaceField(w, &ti.Fields[i], "  ")
 		}
 		w.WriteString("}\n\n")
 	}
 }
 
-// emitInterfaceField writes one `name: type;` (or `name?: type;`) interface
-// member, prefixed by its JSDoc when present.
-func emitInterfaceField(w *strings.Builder, f *fieldInfo) {
-	for l := range strings.Lines(f.Doc) {
-		w.WriteString("  " + l)
-	}
+// emitInterfaceField writes one `name: type;` (or `name?: type;`) object
+// type member at indent, prefixed by its JSDoc when present.
+func emitInterfaceField(w *strings.Builder, f *fieldInfo, indent string) {
+	writeDoc(w, f.Doc, indent)
+	q := ""
 	if f.optional() {
-		w.WriteString("  " + tsPropName(f.WireName) + "?: " + f.TSType + ";\n")
-	} else {
-		w.WriteString("  " + tsPropName(f.WireName) + ": " + f.TSType + ";\n")
+		q = "?"
+	}
+	w.WriteString(indent + tsPropName(f.WireName) + q + ": " + f.TSType + ";\n")
+}
+
+// writeDoc writes doc, a JSDoc block or "", each line at indent.
+func writeDoc(w *strings.Builder, doc, indent string) {
+	for l := range strings.Lines(doc) {
+		w.WriteString(indent + l)
 	}
 }
 
