@@ -84,6 +84,14 @@ func (m *refSampler) step(edge int64, fam *measure.Family) {
 	for key := range m.rings {
 		held[key] = true
 	}
+	release := func() {
+		for set, pl := range m.places {
+			if m.column-pl.last >= m.capacity {
+				delete(m.places, set)
+			}
+		}
+	}
+	before := maps.Clone(m.places)
 	// A place held with a point is kept, then one whose newest point has left
 	// its ring is freed, then new label sets of held keys take the places left.
 	for _, p := range pts {
@@ -91,16 +99,23 @@ func (m *refSampler) step(edge int64, fam *measure.Family) {
 			take(p)
 		}
 	}
-	for set, pl := range m.places {
-		if m.column-pl.last >= m.capacity {
-			delete(m.places, set)
-		}
-	}
+	release()
 	for _, p := range pts {
 		if _, ok := m.places[p.set]; !ok && held[p.key] && len(m.places) < m.mostSets {
 			take(p)
 		}
 	}
+	// A key whose value is a gap gives no label set a place at this step.
+	for set, pl := range m.places {
+		if pl.last == m.column && m.value(sums[pl.key]) == nil {
+			if old, ok := before[set]; ok {
+				m.places[set] = old
+			} else {
+				delete(m.places, set)
+			}
+		}
+	}
+	release()
 	m.column--
 	m.push(edge, sums)
 	// New keys in key order, while fewer than most rings are held.
@@ -274,8 +289,8 @@ func (sc *scenario) collect(_ context.Context, e *measure.Emitter) {
 }
 
 // next picks the label sets read at the next step and their readings:
-// churn, NaN, ±Inf and 1e301, counter and histogram resets, and histograms
-// that stop observing.
+// churn, NaN, ±Inf and 1e301, gauges that sum past 1e300, counter and
+// histogram resets, and histograms that stop observing.
 func (sc *scenario) next() {
 	odd := []float64{math.NaN(), math.Inf(1), math.Inf(-1), 1e301}
 	present := []float64{0.2, 0.6, 0.95}[sc.rng.IntN(3)]
@@ -289,8 +304,11 @@ func (sc *scenario) next() {
 			switch sc.kind {
 			case measure.KindGauge:
 				sc.emit[set] = float64(sc.rng.IntN(4))
-				if sc.rng.IntN(8) == 0 {
+				switch sc.rng.IntN(8) {
+				case 0:
 					sc.emit[set] = odd[sc.rng.IntN(len(odd))]
+				case 1:
+					sc.emit[set] = 6e299 // usable, but two sum past 1e300
 				}
 			case measure.KindCounter:
 				if sc.rng.IntN(20) == 0 {
@@ -316,8 +334,9 @@ func (sc *scenario) next() {
 
 // A Sampler and refSampler fed the same random steps hold the same frame,
 // places and baselines after every step: label sets churning past both
-// caps, unusable readings, resets, idle histograms, Keep from Every to four
-// steps, a clock that skips edges or steps back, and late timers.
+// caps, unusable readings, sums that are gaps, resets, idle histograms, Keep
+// from Every to four steps, a clock that skips edges or steps back, and late
+// timers.
 func FuzzSampler_matchesItsReference(f *testing.F) {
 	for seed := range uint64(300) {
 		f.Add(seed)
@@ -334,6 +353,9 @@ func FuzzSampler_matchesItsReference(f *testing.F) {
 			name: "runs", kind: kinds[pick], form: forms[pick], q: []float64{0, 0.5, 0.95}[rng.IntN(3)],
 			bounds: [][]float64{{1, 2, 4}, {0, 1, 3}}[rng.IntN(2)], every: int(every.Milliseconds()),
 			keepCols: keepCols, capacity: keepCols, mostSets: 2 + rng.IntN(5), by: rng.IntN(5) > 0,
+		}
+		if m.form == formQuantile && rng.IntN(3) == 0 {
+			m.bounds = []float64{1, 1e301} // a quantile past 1e300 is a gap
 		}
 		m.mostBases = m.mostSets + rng.IntN(6)
 		m.most = 1 + rng.IntN(m.mostSets)

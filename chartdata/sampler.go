@@ -158,8 +158,8 @@ type tracked struct {
 	most     int // the most keys the track holds
 	capacity int // a ring's capacity: the sampler's columns, or an AsBins window's
 	// mostSets and mostBases are MaxLabelSets and MaxBaselines. mostSets
-	// must not pass mostBases, or keepBases would have to forget the
-	// baseline of a label set holding a place.
+	// must not pass mostBases: keepBases keeps every placed baseline, and
+	// slicing its unplaced list past its length panics.
 	mostSets  int
 	mostBases int
 	// rebase makes the next read take no increase, since the steps before
@@ -492,7 +492,7 @@ func isNoBuckets(v []float64) bool { return v == nil }
 
 // settle pushes the column at column onto rings from pts, the step's points
 // in Gather's order, and reports whether it dropped a label set or key. It
-// gives label sets places, at most mostSets, in this order:
+// gives places, at most mostSets, to label sets of keys whose sum is no gap:
 //  1. a label set holding a place keeps it with its point, and a place whose
 //     newest point has left its key's ring is freed;
 //  2. new label sets of keys holding a ring take places;
@@ -508,27 +508,37 @@ func settle[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T
 		}
 	}
 	sums := map[string]P{}
-	dropped := placeHeld(ts, column, held, sums, sh.add)
+	renewed, dropped := placeHeld(ts, column, held, sums, sh.add)
+	var takenBack bool
 	for key, r := range rings {
 		v := sh.gap
 		if sum, ok := sums[key]; ok {
-			v = sh.value(sum)
+			if v = sh.value(sum); sh.isGap(v) {
+				ts.takeBack(key, column, renewed)
+				takenBack = true
+			}
 		}
 		r.push(v)
 		if sh.isGap(v) && allGaps(r, sh.isGap) {
 			delete(rings, key)
 		}
 	}
+	if takenBack {
+		ts.release(column)
+	}
 	return addFresh(ts, column, earlier, rings, fresh, sh) || dropped
 }
 
 // placeHeld adds into sums the points of pts, all of keys holding a ring,
-// whose label sets hold or take a place, and reports whether it dropped one.
-// Each held place is renewed before release runs, so a place is never freed
-// in the step its label set gives a point, whatever the ring's capacity.
-func placeHeld[P any](ts *tracked, column int, pts []point[P], sums map[string]P, add func(sum, v P) P) (dropped bool) {
+// whose label sets hold or take a place. It returns the place each renewed
+// one held before, for takeBack, and whether it dropped a label set. Each
+// held place is renewed before release runs, so a place is never freed in
+// the step its label set gives a point, whatever the ring's capacity.
+func placeHeld[P any](ts *tracked, column int, pts []point[P], sums map[string]P, add func(sum, v P) P) (renewed map[string]place, dropped bool) {
+	renewed = map[string]place{}
 	for _, p := range pts {
-		if _, ok := ts.places[p.set]; ok {
+		if old, ok := ts.places[p.set]; ok {
+			renewed[p.set] = old
 			ts.places[p.set] = place{key: p.key, last: column}
 			addTo(sums, p, add)
 		}
@@ -545,7 +555,22 @@ func placeHeld[P any](ts *tracked, column int, pts []point[P], sums map[string]P
 		ts.places[p.set] = place{key: p.key, last: column}
 		addTo(sums, p, add)
 	}
-	return dropped
+	return renewed, dropped
+}
+
+// takeBack undoes placeHeld's places for key at column: a renewed place gets
+// back the place it held before, from renewed, and a new one is freed.
+func (ts *tracked) takeBack(key string, column int, renewed map[string]place) {
+	for set, p := range ts.places {
+		if p.key != key || p.last != column {
+			continue
+		}
+		if old, ok := renewed[set]; ok {
+			ts.places[set] = old
+		} else {
+			delete(ts.places, set)
+		}
+	}
 }
 
 // addFresh gives each new key of pts a ring, in key order, while fewer than

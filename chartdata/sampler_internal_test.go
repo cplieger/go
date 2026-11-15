@@ -3,6 +3,7 @@ package chartdata
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -352,5 +353,94 @@ func TestSamplerNeverForgetsTheBaselineOfALabelSetHoldingAPlace(t *testing.T) {
 		if _, ok := ts.bases[set]; !ok {
 			t.Errorf("the placed label set %q lost its baseline", set)
 		}
+	}
+}
+
+// A step whose sum for a series is a gap gives that series' ring no point,
+// so none of its label sets takes or renews a place at that step: a new
+// label set whose quantile is past 1e300 takes none, and held label sets
+// whose gauges sum past 1e300 lose their places once their points leave the
+// ring, however often they are read.
+func TestSamplerGivesNoPlaceForAStepWhoseSumIsAGap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		kind  measure.Kind
+		track []TrackOption
+		// steps holds each step's readings by host: a gauge's value, or a
+		// histogram's cumulative observations per bucket, +Inf last.
+		steps      []map[string][]uint64
+		gauges     []map[string]float64
+		want, gone []string
+	}{
+		{
+			name:  "newLabelSetOfAHeldSeries",
+			kind:  measure.KindHistogram,
+			track: []TrackOption{AsQuantile(0.5)},
+			steps: []map[string][]uint64{
+				{"h1": {0, 0, 0}},
+				{"h1": {1, 1, 1}},                  // 0.5: the series' first point
+				{"h1": {1, 1, 1}, "h2": {0, 0, 0}}, // h2's baseline
+				{"h1": {1, 1, 1}, "h2": {0, 1, 1}}, // a median of 5e300, a gap
+			},
+			want: []string{"h1"}, gone: []string{"h2"},
+		},
+		{
+			name: "heldLabelSetsPastTheirPoints",
+			kind: measure.KindGauge,
+			gauges: []map[string]float64{
+				{"h1": 1, "h2": 1},
+				{"h0": 1},
+				{"h1": 6e299, "h2": 6e299}, // a sum of 1.2e300, a gap
+				{"h1": 6e299, "h2": 6e299}, // h1's and h2's points have left the ring
+			},
+			want: []string{"h0"}, gone: []string{"h1", "h2"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := []measure.Option{measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("host")}
+			var desc *measure.Desc
+			if tc.kind == measure.KindHistogram {
+				desc = measure.NewHistogramDesc("wait_seconds", "h", measure.UnitSeconds, []string{"host"}, []float64{1, 1e301}, opts...)
+			} else {
+				desc = measure.NewGaugeDesc("load", "h", measure.UnitCount, []string{"host"}, opts...)
+			}
+			at := 0
+			reg := measure.NewRegistry("")
+			reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+				if tc.kind == measure.KindHistogram {
+					for _, host := range slices.Sorted(maps.Keys(tc.steps[at])) {
+						cum := tc.steps[at][host]
+						e.EmitHistogram(desc, cum[:len(cum)-1], cum[len(cum)-1], 0, host)
+					}
+					return
+				}
+				for _, host := range slices.Sorted(maps.Keys(tc.gauges[at])) {
+					e.Emit(desc, tc.gauges[at][host], host)
+				}
+			}, desc))
+			track := Sampled(desc, tc.track...)
+			s, err := NewSampler(Sampling{Registry: reg, Every: time.Minute, Keep: 3 * time.Minute}, track)
+			if err != nil {
+				t.Fatalf("NewSampler: %v", err)
+			}
+			for at = range max(len(tc.steps), len(tc.gauges)) {
+				if _, _, err := s.tick(t.Context(), time.Unix(int64(at+1)*60, 0)); err != nil {
+					t.Fatalf("tick: %v", err)
+				}
+			}
+			places := s.tracks[track].places
+			for _, host := range tc.want {
+				if _, ok := places[labelSet([]measure.Label{{Name: "host", Value: host}})]; !ok {
+					t.Errorf("%s holds no place, want one", host)
+				}
+			}
+			for _, host := range tc.gone {
+				if _, ok := places[labelSet([]measure.Label{{Name: "host", Value: host}})]; ok {
+					t.Errorf("%s holds a place, want none", host)
+				}
+			}
+		})
 	}
 }
