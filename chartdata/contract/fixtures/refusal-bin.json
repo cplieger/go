@@ -1,0 +1,19 @@
+{
+  "frame": {
+    "axis": "value",
+    "name": "depth",
+    "series": [],
+    "type": "bins",
+    "unit": "count",
+    "x1": [
+      0,
+      4
+    ],
+    "x2": [
+      3,
+      3
+    ]
+  },
+  "rule": "bin",
+  "field": "bins[1]"
+}

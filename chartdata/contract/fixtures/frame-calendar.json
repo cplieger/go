@@ -1,0 +1,13 @@
+{
+  "type": "calendar",
+  "name": "runs",
+  "unit": "count",
+  "zone": "UTC",
+  "values": [
+    3,
+    null,
+    5
+  ],
+  "start": 1772323200000,
+  "open": true
+}

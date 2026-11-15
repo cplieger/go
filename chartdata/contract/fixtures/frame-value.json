@@ -1,0 +1,22 @@
+{
+  "type": "value",
+  "name": "coverage_ratio",
+  "unit": "ratio",
+  "meters": [
+    {
+      "low": 0.5,
+      "high": 0.9,
+      "optimum": 1,
+      "key": "en",
+      "value": 0.92,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "key": "fr",
+      "value": 0.4,
+      "min": 0,
+      "max": 1
+    }
+  ]
+}

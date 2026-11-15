@@ -1,0 +1,34 @@
+{
+  "type": "flow",
+  "name": "voters",
+  "unit": "count",
+  "nodes": [
+    {
+      "key": "blue"
+    },
+    {
+      "key": "red"
+    }
+  ],
+  "stages": [
+    "2019",
+    "2024"
+  ],
+  "links": [
+    {
+      "value": 10,
+      "from": "blue",
+      "to": "blue"
+    },
+    {
+      "value": 2,
+      "from": "blue",
+      "to": "red"
+    },
+    {
+      "value": null,
+      "from": "red",
+      "to": "red"
+    }
+  ]
+}

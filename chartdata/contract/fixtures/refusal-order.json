@@ -1,0 +1,14 @@
+{
+  "frame": {
+    "name": "depth",
+    "series": [],
+    "type": "series",
+    "unit": "count",
+    "x": [
+      2,
+      1
+    ]
+  },
+  "rule": "order",
+  "field": "x[1]"
+}

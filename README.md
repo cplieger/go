@@ -42,6 +42,7 @@ Nothing here imports a cplieger repository outside this one.
 | [`yamlenv`](yamlenv) | Loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. |
 | [`health`](health) | Gives a Go service one health verdict, kept in memory, served at `GET /healthz` and checked by the same binary when Docker asks, with no shell, curl or wget. |
 | [`measure`](measure) | Gives your Go service a Prometheus `/metrics` endpoint with counters, gauges, histograms, state sets and process metrics, declaring each series' unit once for the page and your charts, using only the standard library. |
+| [`chartdata`](chartdata) | Turns those series into the data your charts draw: typed frames the `@cplieger/ui` chart elements take as they are, built from your store or sampled from the registry, and live events that change a chart already drawn. |
 | [`scheduler`](scheduler) | Lets your Go container run its job on an interval or an outside trigger, with no overlapping runs and a clean shutdown. |
 | [`filesafe`](filesafe) | Writes files from Go so that a crash or a power loss leaves the complete old content or the complete new content, never a partial file. |
 | [`keylock`](keylock) | Gives your Go code one lock per key, so work on one file, user or record waits for itself while work on other keys runs. |

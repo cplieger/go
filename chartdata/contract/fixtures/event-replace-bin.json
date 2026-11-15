@@ -1,0 +1,10 @@
+{
+  "x1": 1772323200000,
+  "x2": 1772380000000,
+  "open": true,
+  "key": "runs_daily",
+  "kind": "replace",
+  "values": [
+    5
+  ]
+}

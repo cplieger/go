@@ -1,0 +1,14 @@
+{
+  "type": "states",
+  "name": "provider_health",
+  "keys": [
+    "up",
+    null,
+    "down"
+  ],
+  "at": [
+    1772323200000,
+    1772323260000,
+    1772323320000
+  ]
+}

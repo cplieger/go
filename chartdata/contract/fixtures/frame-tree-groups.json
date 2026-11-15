@@ -1,0 +1,29 @@
+{
+  "type": "tree",
+  "name": "disk_bytes",
+  "unit": "bytes",
+  "groups": [
+    {
+      "key": "media",
+      "children": [
+        {
+          "value": 600000000000,
+          "key": "films"
+        },
+        {
+          "value": 300000000000,
+          "key": "series"
+        }
+      ]
+    },
+    {
+      "key": "backups",
+      "children": [
+        {
+          "value": 200000000000,
+          "key": "db"
+        }
+      ]
+    }
+  ]
+}

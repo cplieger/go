@@ -1,0 +1,28 @@
+{
+  "type": "categories",
+  "name": "runs",
+  "unit": "count",
+  "names": [
+    "ok",
+    "failed",
+    "skipped"
+  ],
+  "series": [
+    {
+      "key": "host-a",
+      "values": [
+        30,
+        2,
+        null
+      ]
+    },
+    {
+      "key": "host-b",
+      "values": [
+        28,
+        0,
+        1
+      ]
+    }
+  ]
+}
