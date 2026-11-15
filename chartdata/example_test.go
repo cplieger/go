@@ -14,10 +14,13 @@ import (
 )
 
 // A series only charts draw is a Desc exported to chartdata alone, which
-// /metrics never serves.
+// /metrics never serves. Registering it reserves its name, which the frame
+// then carries. This is the README's example.
 func ExampleNewCategoriesFrame() {
-	runs := measure.NewCounterDesc("runs_total", "Runs, by result and host", measure.UnitCount,
+	reg := measure.NewRegistry("myapp")
+	runs := measure.NewCounterDesc("runs_total", "Runs by result and host.", measure.UnitCount,
 		[]string{"result", "host"}, measure.WithExport(measure.ExportChartdata))
+	reg.MustRegister(runs)
 
 	f, err := chartdata.NewCategoriesFrame(runs, []string{"ok", "failed"}, []chartdata.Series{
 		{Key: "host-a", Values: []float64{30, 2}},
@@ -29,7 +32,7 @@ func ExampleNewCategoriesFrame() {
 	b, _ := json.Marshal(f)
 	fmt.Println(string(b))
 	// Output:
-	// {"type":"categories","name":"runs_total","unit":"count","names":["ok","failed"],"series":[{"key":"host-a","values":[30,2]},{"key":"host-b","values":[28,null]}]}
+	// {"type":"categories","name":"myapp_runs_total","unit":"count","names":["ok","failed"],"series":[{"key":"host-a","values":[30,2]},{"key":"host-b","values":[28,null]}]}
 }
 
 func ExampleNewSeriesFrame() {

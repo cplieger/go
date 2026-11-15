@@ -9,7 +9,7 @@ require (
 
 require (
 	github.com/cplieger/go/filesafe v1.1.0 // indirect
-	github.com/cplieger/go/measure/v2 v2.0.0-dev.1 // indirect
+	github.com/cplieger/go/measure/v2 v2.0.0-dev.2 // indirect
 	golang.org/x/mod v0.43.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
