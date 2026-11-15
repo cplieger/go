@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,66 +359,109 @@ func TestSamplerNeverForgetsTheBaselineOfALabelSetHoldingAPlace(t *testing.T) {
 
 // A step whose sum for a series is a gap gives that series' ring no point,
 // so none of its label sets takes or renews a place at that step: a new
-// label set whose quantile is past 1e300 takes none, and held label sets
-// whose gauges sum past 1e300 lose their places once their points leave the
-// ring, however often they are read.
+// label set whose quantile is past 1e300 takes none, held label sets whose
+// gauges sum past 1e300 lose their places once their points leave the ring,
+// however often they are read, and the places they free go to new label sets
+// of held series before new series.
 func TestSamplerGivesNoPlaceForAStepWhoseSumIsAGap(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		kind  measure.Kind
 		track []TrackOption
-		// steps holds each step's readings by host: a gauge's value, or a
-		// histogram's cumulative observations per bucket, +Inf last.
-		steps      []map[string][]uint64
+		// steps holds a histogram's cumulative observations per bucket by
+		// label set, "key/host", +Inf last.
+		steps []map[string][]uint64
+		// gauges holds a gauge's value by label set.
 		gauges     []map[string]float64
-		want, gone []string
+		newest     map[string]float64 // each series' newest column, by key
+		want, gone []string           // the label sets holding a place, and not
+		mostSets   int
 	}{
 		{
 			name:  "newLabelSetOfAHeldSeries",
 			kind:  measure.KindHistogram,
 			track: []TrackOption{AsQuantile(0.5)},
 			steps: []map[string][]uint64{
-				{"h1": {0, 0, 0}},
-				{"h1": {1, 1, 1}},                  // 0.5: the series' first point
-				{"h1": {1, 1, 1}, "h2": {0, 0, 0}}, // h2's baseline
-				{"h1": {1, 1, 1}, "h2": {0, 1, 1}}, // a median of 5e300, a gap
+				{"k/h1": {0, 0, 0}},
+				{"k/h1": {1, 1, 1}},                    // 0.5: the series' first point
+				{"k/h1": {1, 1, 1}, "k/h2": {0, 0, 0}}, // h2's baseline
+				{"k/h1": {1, 1, 1}, "k/h2": {0, 1, 1}}, // a median of 5e300, a gap
 			},
-			want: []string{"h1"}, gone: []string{"h2"},
+			newest: map[string]float64{"wait_seconds": math.NaN()},
+			want:   []string{"k/h1"}, gone: []string{"k/h2"},
 		},
 		{
 			name: "heldLabelSetsPastTheirPoints",
 			kind: measure.KindGauge,
 			gauges: []map[string]float64{
-				{"h1": 1, "h2": 1},
-				{"h0": 1},
-				{"h1": 6e299, "h2": 6e299}, // a sum of 1.2e300, a gap
-				{"h1": 6e299, "h2": 6e299}, // h1's and h2's points have left the ring
+				{"k/h1": 1, "k/h2": 1},
+				{"k/h0": 1},
+				{"k/h1": 6e299, "k/h2": 6e299}, // a sum of 1.2e300, a gap
+				{"k/h1": 6e299, "k/h2": 6e299}, // h1's and h2's points have left the ring
 			},
-			want: []string{"h0"}, gone: []string{"h1", "h2"},
+			newest: map[string]float64{"load": math.NaN()},
+			want:   []string{"k/h0"}, gone: []string{"k/h1", "k/h2"},
+		},
+		{
+			name:  "freedPlacesAtTheCap",
+			kind:  measure.KindGauge,
+			track: []TrackOption{By("key")},
+			gauges: []map[string]float64{
+				{"a/h1": 1, "a/h2": 1, "b/h1": 10}, // the three places
+				{"b/h1": 10},
+				{"b/h1": 10},
+				// a's points have left the ring and a sums past 1e300: its two
+				// places go to b's new label set, then to the new series c.
+				{"a/h1": 6e299, "a/h2": 6e299, "b/h1": 10, "b/h2": 7, "c/h1": 3},
+			},
+			newest:   map[string]float64{"b": 17, "c": 3},
+			want:     []string{"b/h1", "b/h2", "c/h1"},
+			gone:     []string{"a/h1", "a/h2"},
+			mostSets: 3,
+		},
+		{
+			name:  "aGapAfterTakingAFreedPlace",
+			kind:  measure.KindGauge,
+			track: []TrackOption{By("key")},
+			gauges: []map[string]float64{
+				{"a/h1": 1, "a/h2": 1, "b/h1": 1},
+				{"b/h1": 1},
+				{"b/h1": 1},
+				// a sums past 1e300; b/h2 takes a freed place and b sums past
+				// 1e300 too, so neither takes a place and c takes one.
+				{"a/h1": 6e299, "a/h2": 6e299, "b/h1": 6e299, "b/h2": 6e299, "c/h1": 3},
+			},
+			newest:   map[string]float64{"b": math.NaN(), "c": 3},
+			want:     []string{"b/h1", "c/h1"},
+			gone:     []string{"a/h1", "a/h2", "b/h2"},
+			mostSets: 3,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := []measure.Option{measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("host")}
+			opts := []measure.Option{measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("key", "host")}
+			labels := []string{"key", "host"}
 			var desc *measure.Desc
 			if tc.kind == measure.KindHistogram {
-				desc = measure.NewHistogramDesc("wait_seconds", "h", measure.UnitSeconds, []string{"host"}, []float64{1, 1e301}, opts...)
+				desc = measure.NewHistogramDesc("wait_seconds", "h", measure.UnitSeconds, labels, []float64{1, 1e301}, opts...)
 			} else {
-				desc = measure.NewGaugeDesc("load", "h", measure.UnitCount, []string{"host"}, opts...)
+				desc = measure.NewGaugeDesc("load", "h", measure.UnitCount, labels, opts...)
 			}
 			at := 0
 			reg := measure.NewRegistry("")
 			reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
 				if tc.kind == measure.KindHistogram {
-					for _, host := range slices.Sorted(maps.Keys(tc.steps[at])) {
-						cum := tc.steps[at][host]
-						e.EmitHistogram(desc, cum[:len(cum)-1], cum[len(cum)-1], 0, host)
+					for _, set := range slices.Sorted(maps.Keys(tc.steps[at])) {
+						key, host, _ := strings.Cut(set, "/")
+						cum := tc.steps[at][set]
+						e.EmitHistogram(desc, cum[:len(cum)-1], cum[len(cum)-1], 0, key, host)
 					}
 					return
 				}
-				for _, host := range slices.Sorted(maps.Keys(tc.gauges[at])) {
-					e.Emit(desc, tc.gauges[at][host], host)
+				for _, set := range slices.Sorted(maps.Keys(tc.gauges[at])) {
+					key, host, _ := strings.Cut(set, "/")
+					e.Emit(desc, tc.gauges[at][set], key, host)
 				}
 			}, desc))
 			track := Sampled(desc, tc.track...)
@@ -425,20 +469,39 @@ func TestSamplerGivesNoPlaceForAStepWhoseSumIsAGap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewSampler: %v", err)
 			}
+			if tc.mostSets > 0 {
+				s.tracks[track].mostSets = tc.mostSets
+			}
 			for at = range max(len(tc.steps), len(tc.gauges)) {
 				if _, _, err := s.tick(t.Context(), time.Unix(int64(at+1)*60, 0)); err != nil {
 					t.Fatalf("tick: %v", err)
 				}
 			}
+			f, err := s.Series(track, 3*time.Minute)
+			if err != nil {
+				t.Fatalf("Series: %v", err)
+			}
+			newest := map[string]float64{}
+			for _, sr := range f.Series {
+				newest[sr.Key] = plainValues(sr.Values)[len(sr.Values)-1]
+			}
+			if !maps.EqualFunc(newest, tc.newest, sameFloat) {
+				t.Errorf("newest columns %v, want %v", newest, tc.newest)
+			}
 			places := s.tracks[track].places
-			for _, host := range tc.want {
-				if _, ok := places[labelSet([]measure.Label{{Name: "host", Value: host}})]; !ok {
-					t.Errorf("%s holds no place, want one", host)
+			placed := func(set string) bool {
+				key, host, _ := strings.Cut(set, "/")
+				_, ok := places[labelSet([]measure.Label{{Name: "key", Value: key}, {Name: "host", Value: host}})]
+				return ok
+			}
+			for _, set := range tc.want {
+				if !placed(set) {
+					t.Errorf("%s holds no place, want one", set)
 				}
 			}
-			for _, host := range tc.gone {
-				if _, ok := places[labelSet([]measure.Label{{Name: "host", Value: host}})]; ok {
-					t.Errorf("%s holds a place, want none", host)
+			for _, set := range tc.gone {
+				if placed(set) {
+					t.Errorf("%s holds a place, want none", set)
 				}
 			}
 		})

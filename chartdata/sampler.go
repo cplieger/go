@@ -492,12 +492,11 @@ func isNoBuckets(v []float64) bool { return v == nil }
 
 // settle pushes the column at column onto rings from pts, the step's points
 // in Gather's order, and reports whether it dropped a label set or key. It
-// gives places, at most mostSets, to label sets of keys whose sum is no gap:
-//  1. a label set holding a place keeps it with its point, and a place whose
-//     newest point has left its key's ring is freed;
-//  2. new label sets of keys holding a ring take places;
-//  3. new keys, in key order, while fewer than most rings are held, take a
-//     ring and places for their label sets.
+// gives places, at most mostSets, first to label sets holding one, then to
+// new label sets of keys holding a ring, then to new keys' label sets, in key
+// order, while fewer than most rings are held. The held keys whose sum is a
+// gap lose their points and the step's places are settled again from the
+// start, until no held key's sum is a gap, so their places go to the others.
 func settle[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T], pts []point[P], sh shape[P, T]) bool {
 	var held, fresh []point[P]
 	for _, p := range pts {
@@ -507,38 +506,45 @@ func settle[P, T any](ts *tracked, column, earlier int, rings map[string]*ring[T
 			fresh = append(fresh, p)
 		}
 	}
-	sums := map[string]P{}
-	renewed, dropped := placeHeld(ts, column, held, sums, sh.add)
-	var takenBack bool
+	before := maps.Clone(ts.places)
+	sums, dropped := placeHeld(ts, column, held, sh.add)
+	for gaps := gapKeys(sums, sh); len(gaps) > 0; gaps = gapKeys(sums, sh) {
+		held = slices.DeleteFunc(held, func(p point[P]) bool { return gaps[p.key] })
+		ts.places = maps.Clone(before)
+		sums, dropped = placeHeld(ts, column, held, sh.add)
+	}
 	for key, r := range rings {
 		v := sh.gap
 		if sum, ok := sums[key]; ok {
-			if v = sh.value(sum); sh.isGap(v) {
-				ts.takeBack(key, column, renewed)
-				takenBack = true
-			}
+			v = sh.value(sum)
 		}
 		r.push(v)
 		if sh.isGap(v) && allGaps(r, sh.isGap) {
 			delete(rings, key)
 		}
 	}
-	if takenBack {
-		ts.release(column)
-	}
 	return addFresh(ts, column, earlier, rings, fresh, sh) || dropped
 }
 
-// placeHeld adds into sums the points of pts, all of keys holding a ring,
-// whose label sets hold or take a place. It returns the place each renewed
-// one held before, for takeBack, and whether it dropped a label set. Each
-// held place is renewed before release runs, so a place is never freed in
-// the step its label set gives a point, whatever the ring's capacity.
-func placeHeld[P any](ts *tracked, column int, pts []point[P], sums map[string]P, add func(sum, v P) P) (renewed map[string]place, dropped bool) {
-	renewed = map[string]place{}
+// gapKeys holds the keys of sums whose sum is a gap.
+func gapKeys[P, T any](sums map[string]P, sh shape[P, T]) map[string]bool {
+	gaps := map[string]bool{}
+	for key, sum := range sums {
+		if sh.isGap(sh.value(sum)) {
+			gaps[key] = true
+		}
+	}
+	return gaps
+}
+
+// placeHeld sums by key the points of pts, all of keys holding a ring, whose
+// label sets hold or take a place, and reports whether it dropped a label
+// set. Each held place is renewed before release runs, so a place is never
+// freed in the step its label set gives a point, whatever the ring's capacity.
+func placeHeld[P any](ts *tracked, column int, pts []point[P], add func(sum, v P) P) (sums map[string]P, dropped bool) {
+	sums = map[string]P{}
 	for _, p := range pts {
-		if old, ok := ts.places[p.set]; ok {
-			renewed[p.set] = old
+		if _, ok := ts.places[p.set]; ok {
 			ts.places[p.set] = place{key: p.key, last: column}
 			addTo(sums, p, add)
 		}
@@ -555,22 +561,7 @@ func placeHeld[P any](ts *tracked, column int, pts []point[P], sums map[string]P
 		ts.places[p.set] = place{key: p.key, last: column}
 		addTo(sums, p, add)
 	}
-	return renewed, dropped
-}
-
-// takeBack undoes placeHeld's places for key at column: a renewed place gets
-// back the place it held before, from renewed, and a new one is freed.
-func (ts *tracked) takeBack(key string, column int, renewed map[string]place) {
-	for set, p := range ts.places {
-		if p.key != key || p.last != column {
-			continue
-		}
-		if old, ok := renewed[set]; ok {
-			ts.places[set] = old
-		} else {
-			delete(ts.places, set)
-		}
-	}
+	return sums, dropped
 }
 
 // addFresh gives each new key of pts a ring, in key order, while fewer than

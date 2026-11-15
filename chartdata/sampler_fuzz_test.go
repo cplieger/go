@@ -92,30 +92,35 @@ func (m *refSampler) step(edge int64, fam *measure.Family) {
 		}
 	}
 	before := maps.Clone(m.places)
-	// A place held with a point is kept, then one whose newest point has left
-	// its ring is freed, then new label sets of held keys take the places left.
-	for _, p := range pts {
-		if _, ok := m.places[p.set]; ok {
-			take(p)
-		}
-	}
-	release()
-	for _, p := range pts {
-		if _, ok := m.places[p.set]; !ok && held[p.key] && len(m.places) < m.mostSets {
-			take(p)
-		}
-	}
-	// A key whose value is a gap gives no label set a place at this step.
-	for set, pl := range m.places {
-		if pl.last == m.column && m.value(sums[pl.key]) == nil {
-			if old, ok := before[set]; ok {
-				m.places[set] = old
-			} else {
-				delete(m.places, set)
+	gapKeys := map[string]bool{}
+	for {
+		// A place held with a point is kept, then one whose newest point has
+		// left its ring is freed, then new label sets of held keys take the
+		// places left. The keys whose value is a gap give none of their label
+		// sets a place, and the step starts over without them.
+		m.places = maps.Clone(before)
+		sums = map[string][]float64{}
+		for _, p := range pts {
+			if _, ok := m.places[p.set]; ok && !gapKeys[p.key] {
+				take(p)
 			}
 		}
+		release()
+		for _, p := range pts {
+			if _, ok := m.places[p.set]; !ok && held[p.key] && !gapKeys[p.key] && len(m.places) < m.mostSets {
+				take(p)
+			}
+		}
+		more := false
+		for key, sum := range sums {
+			if m.value(sum) == nil {
+				gapKeys[key], more = true, true
+			}
+		}
+		if !more {
+			break
+		}
 	}
-	release()
 	m.column--
 	m.push(edge, sums)
 	// New keys in key order, while fewer than most rings are held.
