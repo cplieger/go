@@ -1,0 +1,9 @@
+{
+  "open": true,
+  "key": "wait_p95",
+  "kind": "replace",
+  "values": [
+    0.8,
+    0.1
+  ]
+}

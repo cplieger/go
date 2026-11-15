@@ -1,0 +1,19 @@
+{
+  "type": "tree",
+  "name": "disk_bytes",
+  "unit": "bytes",
+  "parts": [
+    {
+      "value": 900000000000,
+      "key": "media"
+    },
+    {
+      "value": 200000000000,
+      "key": "backups"
+    },
+    {
+      "value": null,
+      "key": "unknown"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "maxCalendarDays": 7000,
+  "maxLabelSets": 1000,
+  "maxMagnitude": 1e+300,
+  "maxPoints": 10000,
+  "maxRows": 1000,
+  "maxSubRows": 2500,
+  "maxValues": 1000000,
+  "minEveryMs": 1000
+}

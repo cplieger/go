@@ -1,0 +1,22 @@
+{
+  "categories": {
+    "type": "categories",
+    "name": "runs",
+    "unit": "count",
+    "names": [
+      "ok",
+      "failed"
+    ],
+    "series": [
+      {
+        "key": "runs",
+        "values": [
+          30,
+          2
+        ]
+      }
+    ]
+  },
+  "key": "runs",
+  "kind": "set"
+}

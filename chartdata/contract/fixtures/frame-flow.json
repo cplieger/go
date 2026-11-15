@@ -1,0 +1,22 @@
+{
+  "type": "flow",
+  "name": "energy",
+  "unit": "none",
+  "links": [
+    {
+      "value": 380,
+      "from": "coal",
+      "to": "power"
+    },
+    {
+      "value": 120,
+      "from": "gas",
+      "to": "power"
+    },
+    {
+      "value": 290,
+      "from": "power",
+      "to": "homes"
+    }
+  ]
+}

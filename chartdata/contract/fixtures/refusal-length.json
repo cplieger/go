@@ -1,0 +1,21 @@
+{
+  "frame": {
+    "name": "depth",
+    "series": [
+      {
+        "key": "depth",
+        "values": [
+          1
+        ]
+      }
+    ],
+    "type": "series",
+    "unit": "count",
+    "x": [
+      1,
+      2
+    ]
+  },
+  "rule": "length",
+  "field": "series[0].values"
+}
