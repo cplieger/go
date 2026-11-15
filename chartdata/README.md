@@ -96,7 +96,7 @@ The package examples on pkg.go.dev show more cases, and `go test` keeps them tru
 - Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints` and `MaxLabelSets`, and the duration ladder `DurationEdges`.
 - Sampling: `NewSampler` with `Sampling`, `(*Sampler).Run`, `Series` and `Bins`, and `Sampled` with its options `Where`, `By`, `Key`, `AsQuantile` and `AsBins`.
 - Events: `FrameEvent` and `FrameEventKind` with its constants, `AppendColumn`, `AppendBin`, `ReplaceColumn`, `ReplaceBin`, `ResetAt` and `SetFrame`.
-- Code generation: `WireTypes`, every wire type, and `WireEnums`, every string enum on the wire, for an app's own wiregen run.
+- Code generation: `WireTypes`, every wire type, `WireEnums`, every string enum on the wire, and `WireUnions` with `WireUnion`, the tagged wire structs, for an app's own wiregen run.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/chartdata).
 

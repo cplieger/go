@@ -51,3 +51,31 @@ func WireEnums() []reflect.Type {
 		reflect.TypeFor[FrameEventKind](),
 	}
 }
+
+// WireUnion is a wire struct tagged by one of its fields: each of Cases'
+// keys is a value of the field Tag names, listing the wire names of the
+// other fields that value allows.
+type WireUnion struct {
+	Type  reflect.Type
+	Cases map[string][]string
+	Tag   string
+}
+
+// WireUnions returns the tagged wire structs, FrameEvent by its kind, for an
+// app's code generator to register beside WireTypes, such as with
+// wiregen.Union, so each kind of event is typed by its own fields. Each call
+// returns fresh values.
+func WireUnions() []WireUnion {
+	keyed := func(fields ...string) []string { return append([]string{"key"}, fields...) }
+	return []WireUnion{{
+		Type: reflect.TypeFor[FrameEvent](),
+		Tag:  "kind",
+		Cases: map[string][]string{
+			string(KindAppend):  keyed("x", "x1", "x2", "values"),
+			string(KindReplace): keyed("x1", "x2", "open", "values"),
+			string(KindReset):   keyed("at"),
+			string(KindSet): keyed("series", "bins", "categories", "boxes", "points", "grid",
+				"calendar", "tree", "flow", "events", "states", "value"),
+		},
+	}}
+}

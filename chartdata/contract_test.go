@@ -72,7 +72,7 @@ func frameFixtures(t *testing.T) []fixture {
 			X: chartdata.FrameGridAxis{Edges: []float64{0, 6, 12, 18, 24}}, Y: chartdata.FrameGridAxis{Names: []string{"mon", "tue"}},
 			Values: [][]float64{{1, 4, nan, 0}, {2, 3, 5, 1}},
 		})),
-		named("frame-calendar")(chartdata.NewCalendarFrame(runs, day, []float64{3, nan, 5}, chartdata.WithOpen(true))),
+		named("frame-calendar")(chartdata.NewCalendarFrame(runs, "UTC", day, []float64{3, nan, 5}, chartdata.WithOpen(true))),
 		named("frame-tree")(chartdata.NewTreeFrame(gauge("disk_bytes", measure.UnitBytes),
 			[]chartdata.TreePart{{Key: "media", Value: 9e11}, {Key: "backups", Value: 2e11}, {Key: "unknown", Value: nan}})),
 		named("frame-tree-groups")(chartdata.NewGroupedTreeFrame(gauge("disk_bytes", measure.UnitBytes), []chartdata.TreeGroup{
@@ -320,5 +320,62 @@ func TestFrameFixturesDecodeAsTheirTypes(t *testing.T) {
 				t.Errorf("round trip =\n%s\nwant\n%s", again, b)
 			}
 		})
+	}
+}
+
+// TestEventsSendTheFieldsTheirKindsUnionAllows checks WireUnions against
+// what the constructors build: every event, a set of each frame included,
+// sends only its kind's fields, and each field a kind lists is sent by some
+// event of that kind, so the generated union neither refuses a real event
+// nor admits a field no event sends.
+func TestEventsSendTheFieldsTheirKindsUnionAllows(t *testing.T) {
+	t.Parallel()
+	unions := chartdata.WireUnions()
+	if len(unions) != 1 || unions[0].Type != reflect.TypeFor[chartdata.FrameEvent]() || unions[0].Tag != "kind" {
+		t.Fatalf("WireUnions = %+v, want FrameEvent tagged by kind", unions)
+	}
+	cases := unions[0].Cases
+	events := eventFixtures(t)
+	for _, f := range frameFixtures(t) {
+		if f.err != nil {
+			t.Fatalf("%s: %v", f.name, f.err)
+		}
+		ptr := reflect.New(reflect.TypeOf(f.value))
+		ptr.Elem().Set(reflect.ValueOf(f.value))
+		events = append(events, named("set-"+f.name)(chartdata.SetFrame("k", ptr.Interface().(chartdata.Frame))))
+	}
+	sent := map[string]map[string]bool{}
+	for _, e := range events {
+		if e.err != nil {
+			t.Fatalf("%s: %v", e.name, e.err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(encode(t, e.value)), &fields); err != nil {
+			t.Fatalf("%s: %v", e.name, err)
+		}
+		kind, _ := fields["kind"].(string)
+		if sent[kind] == nil {
+			sent[kind] = map[string]bool{}
+		}
+		for name := range fields {
+			if name == "kind" {
+				continue
+			}
+			sent[kind][name] = true
+			if !slices.Contains(cases[kind], name) {
+				t.Errorf("%s sends %q, which a %s event's union case does not allow", e.name, name, kind)
+			}
+		}
+	}
+	for kind, fields := range cases {
+		for _, name := range fields {
+			if !sent[kind][name] {
+				t.Errorf("the %s case allows %q, which no %s event sends", kind, name, kind)
+			}
+		}
+	}
+	unions[0].Cases["set"] = nil
+	if chartdata.WireUnions()[0].Cases["set"] == nil {
+		t.Error("WireUnions shares its cases between calls")
 	}
 }

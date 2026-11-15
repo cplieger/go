@@ -43,9 +43,9 @@ go func() {
 | `Every` | The step. Columns are taken on multiples of `Every` since the Unix epoch, so two processes with the same step agree on the edges. At least `MinEvery`, 1 second. |
 | `Keep` | How long a column is held, at most `MaxPoints` (10,000) steps, rounded up to a whole step. At least `Every`. |
 | `Emit` | Optional. Receives each step's events, on the sampler's goroutine. A column whose edge passes while `Emit` runs is a gap, and so is a counter's or histogram's next column, so hand the event to your stream without waiting. |
-| `Logger` | Optional. Takes the warnings below; nil means `slog.Default()`. |
+| `Logger` | Optional. Takes the warnings below, written on the sampler's goroutine after each step, so a slow handler never holds up `Series` or `Bins`; nil means `slog.Default()`. |
 
-`NewSampler` returns an error for a configuration outside those bounds and for a track that does not fit its declaration: a nil track or option, a track given twice, `By` naming no label of the declaration, a histogram with neither `AsQuantile` nor `AsBins`, either of them on anything else, a quantile outside 0 to 1, and an `AsBins` window outside `Every` to `Keep`.
+`NewSampler` returns an error for a configuration outside those bounds and for a track that does not fit its declaration: a nil track or option, a track given twice, `By` naming no label of the declaration, a histogram with neither `AsQuantile` nor `AsBins`, either of them on anything else, a quantile outside 0 to 1, an `AsBins` window outside `Every` to `Keep`, and an `AsBins` track of a histogram with a bucket bound beyond ±`MaxMagnitude`, since no `BinsFrame` carries that edge.
 
 `Run` blocks until `ctx` ends and then returns nil. It returns an error, and stops, when a tracked declaration is not registered in the registry, and when it is called a second time.
 
@@ -57,9 +57,11 @@ Each step reads the tracked declarations only, through `measure`'s `Registry.Gat
 
 | Kind | Each column holds |
 | --- | --- |
-| Gauge, state set, info | its value; a value that is not finite, or beyond ±`MaxMagnitude`, is a gap, since no frame can carry it |
+| Gauge, state set, info | its value |
 | Counter | its increase since the previous column, as PromQL's `increase()` takes it: a fall, such as a `Delete` and a new record, is a reset, and the new value is the increase. A label set adds nothing to the column it first appears in, since it has no earlier value, so the process's first column is a gap |
 | Histogram | the increase of each bucket since the previous column, read as `AsQuantile(q)` or `AsBins(window)` |
+
+A reading that is not finite, or beyond ±`MaxMagnitude`, is no reading, since no frame can carry it. It adds nothing to its column, which is a gap when no other label set of its series gives a value, and it changes nothing the track holds: a counter's next usable reading takes its increase from the last usable one, and the series stays in place. `measure` drops a NaN counter sample before the sampler reads it, so that label set is not read at that step, and its next reading is a first appearance.
 
 Two options narrow a track, and one names it:
 
@@ -86,7 +88,7 @@ Both are safe to call while the sampler runs. When the process's first column fa
 
 - Each ring holds `Keep / Every` columns, and drops the oldest when full. An `AsBins` track's rings hold its window's columns only.
 - A series whose ring holds no value at all is removed, which frees its place for a new one.
-- A step that runs past the next edges, such as a slow `Emit` or a paused process, leaves a gap column at each edge it missed, and a counter's or histogram's first column after them is a gap, since its increase would cover several steps.
+- A step that runs past the next edges, such as a slow `Emit`, leaves a gap column at each edge it missed, and a counter's or histogram's first column after them is a gap, since its increase would cover several steps. A wait that runs past them, such as in a paused process, does the same: the step reads at the latest edge it passed, so its reading is stamped when it was taken.
 - The edges only move forward: when the wall clock steps back, the next column waits for the edge after the newest.
 - A restart starts every ring empty. The sampler keeps no store and never downsamples: a frame holds every column of its span.
 
@@ -98,4 +100,4 @@ When `Emit` is set, each step sends, for each track in the order given to `NewSa
 - for a gauge, counter or `AsQuantile` track, an `append` of each new column, the gap columns of missed edges included, with a value per series in key order, or, when the set of series changed, a `set` of the whole ring's `SeriesFrame`;
 - for an `AsBins` track, a `set` of its window's `BinsFrame`.
 
-A frame the sampler cannot build for a `set` is not sent, and the first such frame of a track logs one warning. Until a `set` is sent, the track sends no `append`, since the page holds the series of the last `set` it got. [Events](events.md) says how the page applies each kind.
+`NewSampler` admits only tracks whose frames the constructors take, so every `set` is sent; a frame refused all the same would be a bug, and its track logs one warning. [Events](events.md) says how the page applies each kind.

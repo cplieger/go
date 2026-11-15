@@ -142,17 +142,22 @@ func TestCalendarFrameOnTheWire(t *testing.T) {
 	t.Parallel()
 	paris, err := time.LoadLocation("Europe/Paris")
 	if err != nil {
-		t.Skipf("no tzdata: %v", err)
-	}
-	start := time.Date(2026, 3, 29, 0, 0, 0, 0, paris)
-	f, err := chartdata.NewCalendarFrame(gauge("checks", measure.UnitCount), start, []float64{1, nan}, chartdata.WithOpen(true))
-	if err != nil {
-		t.Fatalf("NewCalendarFrame: %v", err)
+		t.Fatalf("LoadLocation: %v", err)
 	}
 	want := `{"type":"calendar","name":"checks","unit":"count","zone":"Europe/Paris","values":[1,null],` +
 		`"start":1774738800000,"open":true}`
-	if got := encode(t, f); got != want {
-		t.Errorf("JSON =\n%s\nwant\n%s", got, want)
+	midnight := time.Date(2026, 3, 29, 0, 0, 0, 0, paris)
+	for name, start := range map[string]time.Time{"inTheZone": midnight, "inUTC": midnight.UTC()} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, err := chartdata.NewCalendarFrame(gauge("checks", measure.UnitCount), "Europe/Paris", start, []float64{1, nan}, chartdata.WithOpen(true))
+			if err != nil {
+				t.Fatalf("NewCalendarFrame: %v", err)
+			}
+			if got := encode(t, f); got != want {
+				t.Errorf("JSON =\n%s\nwant\n%s", got, want)
+			}
+		})
 	}
 }
 

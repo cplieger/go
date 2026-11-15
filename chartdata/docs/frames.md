@@ -34,7 +34,7 @@ Each constructor takes the declaration the frame draws first: any `measure` inst
 | `BoxesFrame` | `NewBoxesFrame(d, names, series, opts...)` | `names` and `series`, each with `low`, `q1`, `median`, `q3` and `high` per name, and optional `outliers` | box plots |
 | `PointsFrame` | `NewPointsFrame(m, series, opts...)` | `series`, each a group of named points with `x`, `y` and an optional size `r`, and `units`, one per measure | a scatter or bubble chart |
 | `GridFrame` | `NewGridFrame(d, grid, opts...)` | an `x` and a `y` axis, each of `names` or bin `edges`, and `values`, a row per y entry | a cell grid or a 2D histogram |
-| `CalendarFrame` | `NewCalendarFrame(d, start, values, opts...)` | `start`, the first day's midnight in `zone`, an IANA zone, and `values`, one per calendar day | a calendar heatmap |
+| `CalendarFrame` | `NewCalendarFrame(d, zone, start, values, opts...)` | `zone`, an IANA zone name, `start`, the first day's midnight in it, and `values`, one per calendar day | a calendar heatmap |
 | `TreeFrame` | `NewTreeFrame(d, parts, opts...)` or `NewGroupedTreeFrame(d, groups, opts...)` | one level of `parts`, or two levels of `groups` and their `children` | a treemap |
 | `FlowFrame` | `NewFlowFrame(d, flow, opts...)` | `links` from node to node, with optional `nodes` for their order and `stages` for an alluvial diagram | a Sankey or alluvial diagram |
 | `EventsFrame` | `NewEventsFrame(d, rows, opts...)` | `rows`, each a key and the instants of its events | a dot timeline strip |
@@ -47,7 +47,7 @@ A few shapes need more than the table says:
 - A `TreeFrame` holds `parts` or `groups`, never both. A part with no data sends `value: null`; a group sends no value, since its value is its children's sum.
 - A `FlowFrame` without stages is a Sankey diagram, and its links may form no loop, since a node in a loop has no column. With stages it is an alluvial diagram, and each link names the stage it leaves; with exactly two stages a link may leave it empty, meaning the first.
 - A `StatesFrame` of a `measure` state set takes only the states the state set declares.
-- A `CalendarFrame`'s day is the calendar day in its zone, 23 or 25 hours long across a daylight-saving change. `start` must be a midnight in an IANA location, one `time.LoadLocation` resolves; `time.Local` is refused, since its name says no zone, and so is a `time.FixedZone`.
+- A `CalendarFrame`'s day is the calendar day in its zone, 23 or 25 hours long across a daylight-saving change. `zone` must be a name `time.LoadLocation` resolves, other than `""` and `"Local"`, which name no zone, and `start` must be a midnight in that zone, whatever `start`'s own location.
 
 ## Options
 

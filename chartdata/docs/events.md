@@ -15,6 +15,7 @@ A `FrameEvent` changes a frame the page already drew, without re-sending the fra
 | `reset` | `ResetAt(key, at)` | `at` | marks a restart at an instant |
 | `set` | `SetFrame(key, &frame)` | the field named for the frame's type | replaces the whole frame |
 
+- The generated `FrameEvent` type is a union by `kind`: each member holds only the fields its kind's rows list, and a decoder refuses another kind's field.
 - `values` hold one value per series, in the frame's series order, `NaN` for a gap, which the event carries as `null`.
 - An `x` and a bin's edges must be finite, and a bin's start must be below its end. A refused event returns a `*RefusalError`, as a refused frame does.
 - The page checks that an appended `x` or bin comes after the frame's last; the server does not hold the drawn frame.

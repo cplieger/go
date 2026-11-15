@@ -1,6 +1,6 @@
 // Package gen generates chartdata's TypeScript contract, contract/frame.ts,
 // and the deadset edges that pair it with the Go wire types, from
-// chartdata.WireTypes and chartdata.WireEnums. It is a module of its own, so
+// chartdata.WireTypes, chartdata.WireEnums and chartdata.WireUnions. It is a module of its own, so
 // wiregen and its dependencies stay out of every chartdata importer's module
 // graph.
 package gen
@@ -26,6 +26,9 @@ func Generate(ctx context.Context, root, tsDir, edges string) error {
 	}
 	for _, t := range chartdata.WireEnums() {
 		r.Enums = append(r.Enums, wiregen.EnumRef{Type: wiregen.TypeOf(t)})
+	}
+	for _, u := range chartdata.WireUnions() {
+		r.Unions = append(r.Unions, wiregen.Union{Type: wiregen.TypeOf(u.Type), Tag: u.Tag, Cases: u.Cases})
 	}
 	return r.Generate(ctx,
 		wiregen.WithTSDir(tsDir),

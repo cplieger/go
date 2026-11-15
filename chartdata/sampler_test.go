@@ -2,6 +2,7 @@ package chartdata_test
 
 import (
 	"context"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -468,6 +469,55 @@ func TestSamplerHoldsAtMostMaxLabelSetsSeriesAcrossChurn(t *testing.T) {
 	})
 }
 
+// readingHandler reads a frame each time it handles a record, as a handler
+// that blocks on the sampler's lock would.
+type readingHandler struct {
+	slog.Handler
+	read func()
+}
+
+func (h *readingHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.read()
+	return h.Handler.Handle(ctx, r)
+}
+
+// The sampler's warnings are written with its lock released, so a logger
+// that reads the sampler, or is slow, never holds up a read.
+func TestSamplerLogsWithItsLockReleased(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		turns := churn(reg, func() []string {
+			out := make([]string, chartdata.MaxLabelSets+1)
+			for i := range out {
+				out[i] = strconv.Itoa(1_000_000 + i)
+			}
+			return out
+		})
+		var logs logCapture
+		var s *chartdata.Sampler
+		reads := 0
+		track := chartdata.Sampled(turns, chartdata.By("agent"))
+		logger := slog.New(&readingHandler{Handler: slog.NewTextHandler(&logs, nil), read: func() {
+			if _, err := s.Series(track, time.Minute); err != nil {
+				t.Errorf("Series from the logger: %v", err)
+			}
+			reads++
+		}})
+		s, err := chartdata.NewSampler(chartdata.Sampling{Registry: reg, Every: every, Keep: 10 * time.Minute, Logger: logger}, track)
+		if err != nil {
+			t.Fatalf("NewSampler: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() { _ = s.Run(ctx) }()
+		time.Sleep(every + every/2)
+		synctest.Wait()
+		if n := logs.count(dropLog); n != 1 || reads != 1 {
+			t.Errorf("logged the drop %d times with %d reads, want once each", n, reads)
+		}
+	})
+}
+
 // A new label set that sorts first must not take the place of one already
 // held: the held set keeps its values, and the new one is dropped.
 func TestSamplerKeepsTheHeldLabelSetsOverANewOneThatSortsFirst(t *testing.T) {
@@ -566,6 +616,106 @@ func TestSamplerTakesAReadingNoFrameCarriesAsAGap(t *testing.T) {
 	})
 }
 
+// A reading that is not finite, or past MaxMagnitude, is no reading: its
+// column is a gap, and the next usable reading takes its increase from the
+// last usable one. measure drops a NaN counter sample, so its label set is
+// not read at all, and its next reading is a first appearance.
+func TestSamplerTakesAnUnusableCounterReadingAsNoReading(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bad  float64
+		want []float64
+	}{
+		{"inf", inf, []float64{nan, nan, 5, 2}},
+		{"pastMaxMagnitude", 1e301, []float64{nan, nan, 5, 2}},
+		{"nanDroppedByMeasure", nan, []float64{nan, nan, nan, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reg := measure.NewRegistry("")
+				jobs := measure.NewCounterDesc("jobs_total", "h", measure.UnitCount, nil)
+				var mu sync.Mutex
+				total := 10.0
+				reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+					mu.Lock()
+					defer mu.Unlock()
+					e.Emit(jobs, total)
+				}, jobs))
+				set := func(v float64) {
+					mu.Lock()
+					total = v
+					mu.Unlock()
+				}
+				track := chartdata.Sampled(jobs)
+				h := start(t, reg, 10*time.Minute, track)
+				defer h.stop()
+				for _, v := range []float64{10, tc.bad, 15, 17} {
+					set(v)
+					step()
+				}
+				if got := valuesOf(new(seriesOf(t, h.s, track, 10*time.Minute)))["jobs_total"]; !sameValues(got, tc.want) {
+					t.Errorf("increases of 10, %v, 15, 17 = %v, want %v", tc.bad, got, tc.want)
+				}
+			})
+		})
+	}
+}
+
+// An unusable gauge reading is a gap that leaves the series in place, so
+// the page keeps getting appends, and in a By sum it adds nothing while the
+// key's other label sets still count.
+func TestSamplerTakesAnUnusableGaugeReadingAsNoReading(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bad  float64
+	}{
+		{"inf", inf},
+		{"nan", nan},
+		{"pastMaxMagnitude", 1e301},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reg := measure.NewRegistry("")
+				up := measure.NewLabeledGauge("load", "h", measure.UnitNone, []string{"dc", "host"})
+				reg.MustRegister(up)
+				track := chartdata.Sampled(up, chartdata.By("dc"))
+				h := start(t, reg, 2*time.Minute, track)
+				defer h.stop()
+				steps := []struct{ a, b, c float64 }{
+					{1, 2, 4},
+					{tc.bad, 2, tc.bad},
+					{tc.bad, 3, tc.bad},
+					{tc.bad, 3, tc.bad},
+					{1, 3, 5},
+				}
+				for i, v := range steps {
+					up.Set(v.a, "one", "a")
+					up.Set(v.b, "one", "b")
+					up.Set(v.c, "two", "c")
+					step()
+					if i == 0 {
+						h.takeEvents() // the first column's set of both series
+					}
+				}
+				f := seriesOf(t, h.s, track, 2*time.Minute)
+				got := valuesOf(&f)
+				if want := []float64{3, 4}; !sameValues(got["one"], want) {
+					t.Errorf("dc one = %v, want %v: host a's unusable readings add nothing", got["one"], want)
+				}
+				if want := []float64{nan, 5}; !sameValues(got["two"], want) {
+					t.Errorf("dc two = %v, want %v", got["two"], want)
+				}
+				for _, e := range h.takeEvents() {
+					encode(t, e)
+					if e.Kind == chartdata.KindSet {
+						t.Errorf("a set event, want appends only: an unusable reading keeps the series in place")
+					}
+				}
+			})
+		})
+	}
+}
+
 // A step that overruns its next edges, such as a slow Emit, leaves a gap
 // column at each edge it missed, and a counter's next column is a gap too,
 // since its increase would cover several steps.
@@ -642,7 +792,8 @@ func TestNewSamplerRefusesABadConfiguration(t *testing.T) {
 	reg := measure.NewRegistry("")
 	depth := measure.NewLabeledGauge("depth", "h", measure.UnitCount, []string{"queue"})
 	wait := measure.NewHistogram("wait_seconds", "h", measure.UnitSeconds)
-	reg.MustRegister(depth, wait)
+	huge := measure.NewHistogram("size_bytes", "h", measure.UnitBytes, measure.WithBuckets([]float64{1, 1e301}))
+	reg.MustRegister(depth, wait, huge)
 	ok := chartdata.Sampling{Registry: reg, Every: time.Minute, Keep: time.Hour}
 	with := func(edit func(*chartdata.Sampling)) chartdata.Sampling {
 		c := ok
@@ -672,6 +823,7 @@ func TestNewSamplerRefusesABadConfiguration(t *testing.T) {
 		{"quantileNaN", ok, []*chartdata.Track{chartdata.Sampled(wait, chartdata.AsQuantile(nan))}, "not from 0 to 1"},
 		{"binsPastKeep", ok, []*chartdata.Track{chartdata.Sampled(wait, chartdata.AsBins(2*time.Hour))}, "not from Every"},
 		{"binsBelowEvery", ok, []*chartdata.Track{chartdata.Sampled(wait, chartdata.AsBins(time.Second))}, "not from Every"},
+		{"binsBoundPastMaxMagnitude", ok, []*chartdata.Track{chartdata.Sampled(huge, chartdata.AsBins(time.Hour))}, "bucket bound beyond"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -682,6 +834,9 @@ func TestNewSamplerRefusesABadConfiguration(t *testing.T) {
 	}
 	if _, err := chartdata.NewSampler(with(func(c *chartdata.Sampling) { c.Every, c.Keep = time.Second, 10_000*time.Second })); err != nil {
 		t.Errorf("NewSampler at MaxPoints = %v, want it taken", err)
+	}
+	if _, err := chartdata.NewSampler(ok, chartdata.Sampled(huge, chartdata.AsQuantile(0.5))); err != nil {
+		t.Errorf("NewSampler of a quantile past MaxMagnitude = %v, want it taken: such a quantile is a gap", err)
 	}
 }
 

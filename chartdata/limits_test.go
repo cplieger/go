@@ -102,7 +102,7 @@ func TestConstructorsRefuseAFramePastTheLimits(t *testing.T) {
 			return err
 		}},
 		{name: "calendarDays", rule: chartdata.RuleLimit, field: "values", build: func() error {
-			_, err := chartdata.NewCalendarFrame(d, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 6_995))
+			_, err := chartdata.NewCalendarFrame(d, "UTC", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 6_995))
 			return err
 		}},
 		// An oversized axis is charged from its length, before its edges are
@@ -151,7 +151,7 @@ func TestConstructorsTakeAFrameAtTheLimits(t *testing.T) {
 	if _, err := chartdata.NewCategoriesFrame(d, keys(1_000), nil); err != nil {
 		t.Errorf("1,000 names: %v", err)
 	}
-	if _, err := chartdata.NewCalendarFrame(d, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 6_994)); err != nil {
+	if _, err := chartdata.NewCalendarFrame(d, "UTC", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 6_994)); err != nil {
 		t.Errorf("6,994 days: %v", err)
 	}
 }

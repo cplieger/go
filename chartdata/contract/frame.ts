@@ -7,6 +7,19 @@ export type FrameEventKind = "append" | "replace" | "reset" | "set";
 export type FrameType = "series" | "bins" | "categories" | "boxes" | "points" | "grid" | "calendar" | "tree" | "flow" | "events" | "states" | "value";
 
 /**
+ * FrameEvent changes a frame already drawn, sent on the app's own event
+ * stream. Key names the frame the page drew; each kind sets only its own
+ * fields, and a set event exactly one frame field, the one its frame's type
+ * names. Build one with AppendColumn, AppendBin, ReplaceColumn, ReplaceBin,
+ * ResetAt or SetFrame.
+ */
+export type FrameEvent =
+  | { kind: "append"; x?: number; x1?: number; x2?: number; key: string; values?: (number | null)[] }
+  | { kind: "replace"; x1?: number; x2?: number; open?: boolean; key: string; values?: (number | null)[] }
+  | { kind: "reset"; at?: number; key: string }
+  | { kind: "set"; series?: SeriesFrame; bins?: BinsFrame; categories?: CategoriesFrame; boxes?: BoxesFrame; points?: PointsFrame; grid?: GridFrame; calendar?: CalendarFrame; tree?: TreeFrame; flow?: FlowFrame; events?: EventsFrame; states?: StatesFrame; value?: ValueFrame; key: string };
+
+/**
  * BinsFrame is series of values over bins from X1 to X2, drawn as rects or
  * a histogram. X1 strictly increases, X2 never decreases, and each bin's X1
  * is below its X2.
@@ -115,41 +128,6 @@ export interface FrameBoxes {
   high: (number | null)[];
   /** Outliers holds an array per category when any category has one. */
   outliers?: number[][];
-}
-
-/**
- * FrameEvent changes a frame already drawn, sent on the app's own event
- * stream. Key names the frame the page drew; each kind sets only its own
- * fields, and a set event exactly one frame field, the one its frame's type
- * names. Build one with AppendColumn, AppendBin, ReplaceColumn, ReplaceBin,
- * ResetAt or SetFrame.
- */
-export interface FrameEvent {
-  x?: number;
-  x1?: number;
-  x2?: number;
-  open?: boolean;
-  /** At is a reset's instant, in Unix milliseconds. */
-  at?: number;
-  series?: SeriesFrame;
-  bins?: BinsFrame;
-  categories?: CategoriesFrame;
-  boxes?: BoxesFrame;
-  points?: PointsFrame;
-  grid?: GridFrame;
-  calendar?: CalendarFrame;
-  tree?: TreeFrame;
-  flow?: FlowFrame;
-  events?: EventsFrame;
-  states?: StatesFrame;
-  value?: ValueFrame;
-  key: string;
-  kind: FrameEventKind;
-  /**
-   * Values are the new column's or bin's values in the frame's series
-   * order, null for a gap.
-   */
-  values?: (number | null)[];
 }
 
 /**

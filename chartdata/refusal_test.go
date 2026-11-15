@@ -87,7 +87,7 @@ func TestConstructorsRefuseABadOption(t *testing.T) {
 			return err
 		}},
 		{name: "resetsOnCalendar", rule: chartdata.RuleOption, field: "options", build: func() error {
-			_, err := chartdata.NewCalendarFrame(d, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil,
+			_, err := chartdata.NewCalendarFrame(d, "UTC", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil,
 				chartdata.WithResets(time.Now()))
 			return err
 		}},
@@ -290,21 +290,27 @@ func TestPointsAndGridFramesRefuseMalformedData(t *testing.T) {
 	})
 }
 
-func TestCalendarFrameRefusesABadStart(t *testing.T) {
+func TestCalendarFrameRefusesABadZoneOrStart(t *testing.T) {
 	t.Parallel()
 	d := gauge("checks", measure.UnitCount)
 	midnight := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	newCalendar := func(start time.Time, values ...float64) func() error {
+	newCalendar := func(zone string, start time.Time, values ...float64) func() error {
 		return func() error {
-			_, err := chartdata.NewCalendarFrame(d, start, values)
+			_, err := chartdata.NewCalendarFrame(d, zone, start, values)
 			return err
 		}
 	}
+	// A FixedZone may borrow an IANA name at another offset: its midnight is
+	// not the named zone's.
+	borrowed := func(zone string) time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.FixedZone(zone, 0)) }
 	runRefusals(t, []refusalCase{
-		{name: "local", rule: chartdata.RuleShape, field: "start", build: newCalendar(time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local))},
-		{name: "fixedZone", rule: chartdata.RuleShape, field: "start", build: newCalendar(time.Date(2026, 1, 1, 0, 0, 0, 0, time.FixedZone("Paris", 3600)))},
-		{name: "notMidnight", rule: chartdata.RuleShape, field: "start", build: newCalendar(midnight.Add(time.Hour))},
-		{name: "valueInfinite", rule: chartdata.RuleFinite, field: "values[1]", build: newCalendar(midnight, 1, inf)},
+		{name: "noZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("", midnight)},
+		{name: "localZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Local", midnight)},
+		{name: "unknownZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Mars/Olympus", midnight)},
+		{name: "notMidnight", rule: chartdata.RuleShape, field: "start", build: newCalendar("UTC", midnight.Add(time.Hour))},
+		{name: "borrowedParis", rule: chartdata.RuleShape, field: "start", build: newCalendar("Europe/Paris", borrowed("Europe/Paris"))},
+		{name: "borrowedNewYork", rule: chartdata.RuleShape, field: "start", build: newCalendar("America/New_York", borrowed("America/New_York"))},
+		{name: "valueInfinite", rule: chartdata.RuleFinite, field: "values[1]", build: newCalendar("UTC", midnight, 1, inf)},
 	})
 }
 
