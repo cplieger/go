@@ -62,7 +62,7 @@ func start(t *testing.T, reg *measure.Registry, keep time.Duration, tracks ...*c
 }
 
 // step moves the clock one column on and waits for the sampler to take it.
-func (h *harness) step() {
+func step() {
 	time.Sleep(every)
 	synctest.Wait()
 }
@@ -127,9 +127,9 @@ func TestSamplerHoldsAGaugesValueOnEachStep(t *testing.T) {
 		defer h.stop()
 
 		depth.Set(5)
-		h.step()
+		step()
 		depth.Set(7)
-		h.step()
+		step()
 		f := seriesOf(t, h.s, track, 10*time.Minute)
 		if want := []float64{float64(t0 + min1), float64(t0 + 2*min1)}; !sameValues(f.X, want) {
 			t.Errorf("x = %v, want each column stamped with its edge, %v", f.X, want)
@@ -160,13 +160,13 @@ func TestSamplerTakesACountersIncreaseResetAware(t *testing.T) {
 		defer h.stop()
 
 		runs.Add(3, "ok")
-		h.step() // the first column sets the baseline
+		step() // the first column sets the baseline
 		runs.Add(2, "ok")
-		h.step()
+		step()
 		runs.Delete("ok")
 		runs.Add(1, "ok") // a fall from 5 to 1 is a reset: the increase is 1
-		h.step()
-		h.step()
+		step()
+		step()
 		got := valuesOf(new(seriesOf(t, h.s, track, 10*time.Minute)))["ok"]
 		if want := []float64{nan, 2, 1, 0}; !sameValues(got, want) {
 			t.Errorf("increases = %v, want %v", got, want)
@@ -192,12 +192,12 @@ func TestSamplerNarrowsWithWhereAndSumsWithBy(t *testing.T) {
 		for _, l := range [][]string{{"/a", "200"}, {"/a", "500"}, {"/b", "503"}, {"/b", "500"}} {
 			reqs.Add(0, l...)
 		}
-		h.step()
+		step()
 		reqs.Add(4, "/a", "200")
 		reqs.Add(1, "/a", "500")
 		reqs.Add(2, "/b", "503")
 		reqs.Add(3, "/b", "500")
-		h.step()
+		step()
 		if got := valuesOf(new(seriesOf(t, h.s, total, 10*time.Minute)))["http_requests_total"]; !sameValues(got, []float64{nan, 6}) {
 			t.Errorf("5xx in all = %v, want [NaN 6], the first column the baseline", got)
 		}
@@ -224,13 +224,13 @@ func TestSamplerEstimatesAQuantileAndBinsAHistogram(t *testing.T) {
 		defer h.stop()
 
 		wait.Observe(100) // before the baseline: in no step
-		h.step()
+		step()
 		for _, v := range []float64{0.5, 1.5, 1.5, 3} {
 			wait.Observe(v)
 		}
-		h.step()
+		step()
 		wait.Observe(10) // past the last bound: the +Inf bucket
-		h.step()
+		step()
 		// Step 2's cumulative buckets are 1, 3, 4 and +Inf 4: the median's rank,
 		// 2, falls in (1, 2], half-way through its 2 observations.
 		if got := valuesOf(new(seriesOf(t, h.s, p50, 10*time.Minute)))["wait_seconds"]; !sameValues(got, []float64{nan, 1.5, 4}) {
@@ -264,10 +264,10 @@ func TestSamplerRingsAreBounded(t *testing.T) {
 
 		up.Set(1, "a")
 		up.Set(1, "b")
-		h.step()
+		step()
 		up.Delete("b")
 		for range 4 {
-			h.step()
+			step()
 		}
 		f := seriesOf(t, h.s, track, 3*time.Minute)
 		if want := []float64{float64(t0 + 3*min1), float64(t0 + 4*min1), float64(t0 + 5*min1)}; !sameValues(f.X, want) {
@@ -294,7 +294,7 @@ func TestSamplerEmitsEventsForEachStep(t *testing.T) {
 		defer h.stop()
 
 		up.Set(1, "a")
-		h.step()
+		step()
 		events := h.takeEvents()
 		kinds := func(es []chartdata.FrameEvent) []chartdata.FrameEventKind {
 			out := make([]chartdata.FrameEventKind, len(es))
@@ -317,7 +317,7 @@ func TestSamplerEmitsEventsForEachStep(t *testing.T) {
 		}
 
 		up.Set(2, "a")
-		h.step()
+		step()
 		events = h.takeEvents()
 		if len(events) != 2 || events[0].Kind != chartdata.KindAppend || *events[0].X != float64(t0+2*min1) ||
 			!sameValues(plain(events[0].Values), []float64{2}) {
@@ -325,7 +325,7 @@ func TestSamplerEmitsEventsForEachStep(t *testing.T) {
 		}
 
 		up.Set(1, "b")
-		h.step()
+		step()
 		events = h.takeEvents()
 		if events[0].Kind != chartdata.KindSet || len(events[0].Series.Series) != 2 {
 			t.Errorf("a new series' step = %+v, want a set of the frame with both series", events[0])
@@ -348,9 +348,9 @@ func TestSamplerSeriesMatchTheAppendsValues(t *testing.T) {
 
 		up.Set(1, "a")
 		up.Set(1, "b")
-		h.step()
+		step()
 		up.Delete("a")
-		h.step()
+		step()
 		h.takeEvents()
 		f := seriesOf(t, h.s, track, time.Minute)
 		if len(f.Series) != 2 || f.Series[0].Key != "a" || f.Series[1].Key != "b" {
@@ -360,7 +360,7 @@ func TestSamplerSeriesMatchTheAppendsValues(t *testing.T) {
 			t.Errorf("a over the last minute = %v, want one gap", plain(f.Series[0].Values))
 		}
 		up.Set(3, "b")
-		h.step()
+		step()
 		events := h.takeEvents()
 		if len(events) != 1 || events[0].Kind != chartdata.KindAppend || !sameValues(plain(events[0].Values), []float64{nan, 3}) {
 			t.Errorf("the next step's events = %+v, want an append of a gap for a and 3 for b", events)
@@ -518,7 +518,7 @@ func TestSamplerReadsWhileItSamples_Concurrent(t *testing.T) {
 		}()
 		for i := range 5 {
 			depth.Set(float64(i))
-			h.step()
+			step()
 		}
 		cancel()
 		<-read
