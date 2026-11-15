@@ -21,3 +21,33 @@ func declarationOf(d measure.Declared, field string) (measure.Declaration, error
 	}
 	return decl, nil
 }
+
+// begin reads d's metadata, then charges the frame as charged does.
+func begin(d measure.Declared, opts []Option, allowed optionKind, charge int, checks ...func() error) (measure.Declaration, options, error) {
+	decl, err := declarationOf(d, "declaration")
+	if err != nil {
+		return decl, options{}, err
+	}
+	o, err := charged(opts, allowed, charge, checks...)
+	return decl, o, err
+}
+
+// charged refuses a frame whose charge values, with its refs and notes,
+// pass MaxValues, before any check reads the data; then it applies opts,
+// refusing an option outside allowed, and runs checks in order.
+func charged(opts []Option, allowed optionKind, charge int, checks ...func() error) (options, error) {
+	var values count
+	if err := values.add(charge, "frame"); err != nil {
+		return options{}, err
+	}
+	o, err := applyOptions(opts, allowed, &values)
+	if err != nil {
+		return o, err
+	}
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return o, err
+		}
+	}
+	return o, nil
+}
