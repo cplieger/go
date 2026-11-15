@@ -349,10 +349,7 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 	at := ", \"" + path + "\")"
 	switch f.Kind {
 	case kindRaw:
-		if f.optional() {
-			return ownRead(wn, used) + " as unknown"
-		}
-		return presentRead(wn, path, used)
+		return wholeRead(f, wn, path, used)
 	case kindBytes:
 		used.helper(helperReqStr)
 		if f.refusesNull() {
@@ -390,7 +387,6 @@ func wholeRead(f *fieldInfo, wn, path string, used *usedIdents) string {
 	return presentRead(wn, path, used)
 }
 
-// presentRead reads o's own property wn, refusing it absent at path.
 func presentRead(wn, path string, used *usedIdents) string {
 	used.helper(helperReqRaw)
 	return helperReqRaw + "(o, \"" + wn + "\", \"" + path + "\")"

@@ -189,7 +189,7 @@ func TestDecoders_OptionalPassthroughKeepsNull(t *testing.T) {
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasOptionalPassthrough]()}
 	dec := mustGen(t, r.decodersFile)
 	for _, want := range []string{
-		`if ($v !== undefined) out.raw = own(o, "raw") as unknown;`,
+		`if ($v !== undefined) out.raw = own(o, "raw");`,
 	} {
 		if !strings.Contains(dec, want) {
 			t.Errorf("HasOptionalPassthrough decoder missing %q\n--- output ---\n%s", want, dec)
