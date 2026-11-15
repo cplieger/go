@@ -122,11 +122,6 @@ export interface FrameEvent {
   x?: number;
   x1?: number;
   x2?: number;
-  /**
-   * Start, on an append, is the window's new start when it slides by more
-   * than the column dropped; columns before it drop.
-   */
-  start?: number;
   open?: boolean;
   /** At is a reset's instant, in Unix milliseconds. */
   at?: number;

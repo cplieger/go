@@ -526,8 +526,9 @@ func (s *Sampler) state(t *Track) (*tracked, error) {
 
 // Series reads a value or quantile track as a SeriesFrame of its columns in
 // the last span, from Every to Keep, with the span as its domain and, when
-// the process started inside it, the first column as its reset. A series
-// with no value in the span is left out.
+// the process started inside it, the first column as its reset. It holds
+// every series the track's rings hold, in the order the append events'
+// values take, a series with no value in the span as gaps.
 func (s *Sampler) Series(t *Track, last time.Duration) (SeriesFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -552,17 +553,14 @@ func (s *Sampler) seriesFrame(ts *tracked, last time.Duration) (SeriesFrame, err
 	for i := first; i < s.cols.n; i++ {
 		x = append(x, float64(s.cols.at(i)))
 	}
-	var series []Series
-	for _, key := range ts.keys() {
+	keys := ts.keys()
+	series := make([]Series, 0, len(keys))
+	for _, key := range keys {
 		values := make([]float64, len(x))
-		seen := false
 		for i := range values {
 			values[i] = ts.valueAt(key, first+i)
-			seen = seen || !math.IsNaN(values[i])
 		}
-		if seen {
-			series = append(series, Series{Key: key, Values: values})
-		}
+		series = append(series, Series{Key: key, Values: values})
 	}
 	opts := []Option{WithDomain(Range{From: float64(from), To: float64(end)})}
 	if s.start > from {

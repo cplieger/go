@@ -11,13 +11,18 @@ type FrameEventKind string
 // The kinds of FrameEvent.
 const (
 	// KindAppend adds one column to a SeriesFrame, or one bin to a BinsFrame.
+	// The frame keeps its span: its domain, or its x extent when it has
+	// none, slides to end at the new column, and the columns before the new
+	// start drop.
 	KindAppend FrameEventKind = "append"
 	// KindReplace changes a frame's last column or open bin in place.
 	KindReplace FrameEventKind = "replace"
 	// KindReset marks a restart: a line breaks there instead of joining
 	// across it, and a state history shows a gap.
 	KindReset FrameEventKind = "reset"
-	// KindSet replaces the whole frame.
+	// KindSet replaces the whole frame. A frame drawn with a domain keeps
+	// its span: the page clips the new frame to that span, ending where the
+	// new frame's domain ends, since a Sampler's set carries its whole ring.
 	KindSet FrameEventKind = "set"
 )
 
@@ -27,13 +32,10 @@ const (
 // names. Build one with AppendColumn, AppendBin, ReplaceColumn, ReplaceBin,
 // ResetAt or SetFrame.
 type FrameEvent struct {
-	X  *float64 `json:"x,omitempty"`
-	X1 *float64 `json:"x1,omitempty"`
-	X2 *float64 `json:"x2,omitempty"`
-	// Start, on an append, is the window's new start when it slides by more
-	// than the column dropped; columns before it drop.
-	Start *float64 `json:"start,omitempty"`
-	Open  *bool    `json:"open,omitempty"`
+	X    *float64 `json:"x,omitempty"`
+	X1   *float64 `json:"x1,omitempty"`
+	X2   *float64 `json:"x2,omitempty"`
+	Open *bool    `json:"open,omitempty"`
 	// At is a reset's instant, in Unix milliseconds.
 	At         *int64           `json:"at,omitempty"`
 	Series     *SeriesFrame     `json:"series,omitempty"`
@@ -180,8 +182,9 @@ func ResetAt(key string, at time.Time) FrameEvent {
 	return FrameEvent{Key: key, Kind: KindReset, At: &ms}
 }
 
-// SetFrame replaces the frame key names with a copy of f, built by this
-// package's constructors. It refuses a nil f.
+// SetFrame replaces the frame key names with f, built by this package's
+// constructors. The event shares f's slices, so leave them unchanged while
+// the event is in use. It refuses a nil f.
 func SetFrame(key string, f Frame) (FrameEvent, error) {
 	if f == nil || reflect.ValueOf(f).IsNil() {
 		return FrameEvent{}, refuse(RuleEmpty, "frame", "is nil")

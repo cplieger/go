@@ -48,6 +48,7 @@ type RefusalError struct {
 	Reason string
 }
 
+// Error returns the field, the reason and the rule on one line.
 func (e *RefusalError) Error() string {
 	return fmt.Sprintf("chartdata: %s %s (%s)", e.Field, e.Reason, e.Rule)
 }

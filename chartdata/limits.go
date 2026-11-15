@@ -3,7 +3,7 @@ package chartdata
 import "time"
 
 // The limits table: the ceilings the chart elements draw within, which every
-// constructor enforces, and the sampler's bounds, which [Sample] enforces.
+// constructor enforces, and the sampler's bounds, which a [Sampler] enforces.
 // A refusal that depends on how the page presents a frame, such as a log
 // axis's thinnest bin or a plot's size in pixels, is left to the element.
 const (
@@ -25,11 +25,11 @@ const (
 	MaxMagnitude = 1e300
 	// MaxCalendarDays is the most days a CalendarFrame holds: MaxRows weeks.
 	MaxCalendarDays = 7 * MaxRows
-	// MinEvery is the shortest step [Sample] takes.
+	// MinEvery is the shortest step a [Sampler] takes.
 	MinEvery = time.Second
 	// MaxPoints is the most points one sampled ring holds, keep / every.
 	MaxPoints = 10_000
-	// MaxLabelSets is the most label sets [Sample] keeps per declaration; a
-	// new one past it is dropped and logged once.
+	// MaxLabelSets is the most label sets a [Sampler] reads per track; one
+	// past it is dropped, and the first drop logged.
 	MaxLabelSets = 1_000
 )

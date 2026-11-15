@@ -333,6 +333,41 @@ func TestSamplerEmitsEventsForEachStep(t *testing.T) {
 	})
 }
 
+// A page draws a span shorter than the ring and keeps it current with append
+// events, whose values follow the ring's series: the frame it read first
+// must hold the same series in the same order, gaps for one with no value
+// in its span.
+func TestSamplerSeriesMatchTheAppendsValues(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		up := measure.NewLabeledGauge("up", "h", measure.UnitNone, []string{"host"})
+		reg.MustRegister(up)
+		track := chartdata.Sampled(up, chartdata.By("host"))
+		h := start(t, reg, 10*time.Minute, track)
+		defer h.stop()
+
+		up.Set(1, "a")
+		up.Set(1, "b")
+		h.step()
+		up.Delete("a")
+		h.step()
+		h.takeEvents()
+		f := seriesOf(t, h.s, track, time.Minute)
+		if len(f.Series) != 2 || f.Series[0].Key != "a" || f.Series[1].Key != "b" {
+			t.Fatalf("the last minute's series = %+v, want a then b, as the ring holds them", f.Series)
+		}
+		if !sameValues(plain(f.Series[0].Values), []float64{nan}) {
+			t.Errorf("a over the last minute = %v, want one gap", plain(f.Series[0].Values))
+		}
+		up.Set(3, "b")
+		h.step()
+		events := h.takeEvents()
+		if len(events) != 1 || events[0].Kind != chartdata.KindAppend || !sameValues(plain(events[0].Values), []float64{nan, 3}) {
+			t.Errorf("the next step's events = %+v, want an append of a gap for a and 3 for b", events)
+		}
+	})
+}
+
 func TestSamplerKeepsAtMostMaxLabelSets(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reg := measure.NewRegistry("")
