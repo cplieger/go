@@ -78,10 +78,11 @@ A pointer-receiver bound method, one whose body is not a single return of consta
 The decoders follow what `encoding/json` writes:
 
 - An optional field reads an absent key or `null` as absent. A mapped decoder is never called on either.
+- A required field is refused when its key is absent, and the error names the field's path. A field mapped with a `Decoder` leaves that check to the `Decoder`.
 - A required slice or map reads `null` as `[]` or `{}`, and a required `[]byte` reads it as `""`, unless a `Count` lower bound refuses it.
 - An array response, an endpoint with `Array` set, reads a `null` body as `[]`, as `encoding/json` writes a handler's nil slice.
 - A pointer element of a slice or map reads `null` as `null`. Any other nil element reads as empty, as a required field does.
-- A `json.RawMessage` field passes `null` through as data.
+- A `json.RawMessage` field, required or optional, passes `null` through as data. A required field mapped with no `Decoder` passes it through too.
 - A decoder reads only the object's own properties: a key such as `constructor` that every JavaScript object inherits is absent unless the JSON sends it, and a `__proto__` key, in a map or as a field, is kept as an own property.
 
 The OpenAPI schemas say the same thing in each direction:
@@ -192,7 +193,7 @@ r.Mappings = map[string]wiregen.Mapping{
 ```
 
 - `TS` is the TypeScript type expression.
-- `Decoder` is a TypeScript expression called as `(obj, key, path)` that returns the field's value or throws. An empty one casts the value unchecked, except that a field a union case lists in `Required` is checked present. The validators module's helpers, such as `reqStr`, are in scope.
+- `Decoder` is a TypeScript expression called as `(obj, key, path)` that returns the field's value or throws. An empty one casts the value unchecked, `null` included, once a required field is checked present. The validators module's helpers, such as `reqStr`, are in scope.
 - `Schema` is the value's JSON Schema, required when an OpenAPI document is written. A `$ref` in it must be a string whose JSON pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) names something in the document, such as `#/components/schemas/Item`. `Generate` refuses one that does not, or that points into another document.
 
 A key may name a type alias or the type it resolves to, and both work. `go/types` resolves an alias past its own name, and the standard library re-homes types behind aliases: `json.RawMessage` is an alias for `encoding/json/jsontext.Value` from Go 1.27, so either key keeps a mapping in force across a toolchain upgrade. Set one of the two: when both are set, the alias's key applies and the other, reached by no other field, is refused.

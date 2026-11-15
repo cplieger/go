@@ -91,8 +91,8 @@ func TestGenerateDecoders(t *testing.T) {
 	if !strings.Contains(out, "reqOneOf(o, \"status\", STATUSS") {
 		t.Errorf("missing enum validation for status, got:\n%s", out)
 	}
-	if !strings.Contains(out, "decodeAddress(own(o, \"address\"))") {
-		t.Errorf("missing nested struct decoder call, got:\n%s", out)
+	if !strings.Contains(out, `address: decodeAddress(reqRaw(o, "address", "$.user")),`) {
+		t.Errorf("a required struct field should be checked present, then decoded, got:\n%s", out)
 	}
 	if !strings.Contains(out, `from "./test-validators.js"`) {
 		t.Errorf("missing validators import, got:\n%s", out)
@@ -452,8 +452,8 @@ func TestMappingsWithoutDecoder(t *testing.T) {
 		"github.com/cplieger/go/wiregen/v2/testdata/basic.CustomID": {TS: "string"},
 	}
 	dec := mustGen(t, r.decodersFile)
-	if !strings.Contains(dec, "own(o, \"id\") as string") {
-		t.Errorf("a mapping without a decoder should cast, got:\n%s", dec)
+	if !strings.Contains(dec, `id: reqRaw(o, "id", "$.has_custom_mapped") as string,`) {
+		t.Errorf("a required field mapped without a decoder should be checked present, then cast, got:\n%s", dec)
 	}
 }
 
@@ -653,6 +653,7 @@ func goldenRegistry() *testRegistry {
 		wiregen.TypeRef[basic.HasTime](),
 		wiregen.TypeRef[basic.HasBytes](),
 		wiregen.TypeRef[basic.HasMap](),
+		wiregen.TypeRef[basic.HasRaw](),
 		wiregen.TypeRef[basic.WithEmbedding](),
 	)
 	return r

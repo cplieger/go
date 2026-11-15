@@ -93,6 +93,46 @@ func TestPresence_decoderAndSchemaAcceptEncodingJSON(t *testing.T) {
 	}
 }
 
+func requiredReg() *testRegistry {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{
+		wiregen.TypeRef[presence.Required](), wiregen.TypeRef[presence.Inner](), wiregen.TypeRef[presence.Named](),
+	}
+	r.Mappings = map[string]wiregen.Mapping{
+		"github.com/cplieger/go/wiregen/v2/testdata/presence.Mapped": {TS: "unknown"},
+	}
+	return r
+}
+
+// A required field the decoder reads whole is refused absent, naming the
+// field, while null stays what the field's kind makes it: data for raw JSON
+// and an unchecked mapping, {} for a named map, refused for a struct.
+func TestPresence_requiredKeyRefusedAbsent(t *testing.T) {
+	got := decodeResults(t, requiredReg(), "decodeRequired", []string{
+		`{"raw":1,"mapped":"m","struct":{"a":1},"named":{"k":1}}`,
+		`{"raw":null,"mapped":null,"struct":{"a":1},"named":null}`,
+		`{"mapped":"m","struct":{"a":1},"named":{}}`,
+		`{"raw":1,"struct":{"a":1},"named":{}}`,
+		`{"raw":1,"mapped":"m","named":{}}`,
+		`{"raw":1,"mapped":"m","struct":{"a":1}}`,
+		`{"raw":1,"mapped":"m","struct":null,"named":{}}`,
+	})
+	want := []string{
+		`{"raw":1,"mapped":"m","struct":{"a":1},"named":{"k":1}}`,
+		`{"raw":null,"mapped":null,"struct":{"a":1},"named":{}}`,
+		`$.required.raw: expected a JSON value, got undefined`,
+		`$.required.mapped: expected a JSON value, got undefined`,
+		`$.required.struct: expected a JSON value, got undefined`,
+		`$.required.named: expected a JSON value, got undefined`,
+		`$.inner: expected object, got null`,
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("body %d decoded to %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
 // The decoders read only own JSON properties: an inherited constructor or
 // toString is absent, and a __proto__ key, in a map or a struct, survives as
 // an own property.
