@@ -1,4 +1,5 @@
 {
+  "maxBaselines": 4000,
   "maxCalendarDays": 6994,
   "maxLabelSets": 1000,
   "maxMagnitude": 1e+300,

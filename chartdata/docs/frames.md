@@ -47,7 +47,7 @@ A few shapes need more than the table says:
 - A `TreeFrame` holds `parts` or `groups`, never both. A part with no data sends `value: null`; a group sends no value, since its value is its children's sum.
 - A `FlowFrame` without stages is a Sankey diagram, and its links may form no loop, since a node in a loop has no column. With stages it is an alluvial diagram, and each link names the stage it leaves; with exactly two stages a link may leave it empty, meaning the first.
 - A `StatesFrame` of a `measure` state set takes only the states the state set declares.
-- A `CalendarFrame`'s day is the calendar day in its zone, 23 or 25 hours long across a daylight-saving change. `zone` must be a name `time.LoadLocation` resolves, other than `""`, `"Local"`, `"localtime"` and `"posixrules"`, which name the host's own zone and which browsers do not take; an app whose image has no zoneinfo imports `time/tzdata`, and the refusal carries `LoadLocation`'s error. `start` must be the first instant of a day in that zone, whatever `start`'s own location: on a day that reads 00:00 twice, the first of them, and on a day with no 00:00, such as Santiago's 2024-09-08, its first instant, 01:00.
+- A `CalendarFrame`'s day is the calendar day in its zone, 23 or 25 hours long across a daylight-saving change. `zone` must be a name `time.LoadLocation` resolves, other than the names that load in Go but that a browser's `Intl.DateTimeFormat` refuses: `""`, `"Local"` and `"localtime"`, which name the host's zone, `"posixrules"`, `"Factory"`, and the `posix/` and `right/` trees some hosts install; an app whose image has no zoneinfo imports `time/tzdata`, and the refusal carries `LoadLocation`'s error. `start` must be the first instant of a day in that zone, whatever `start`'s own location: on a day that reads 00:00 twice, the first of them, and on a day with no 00:00, such as Santiago's 2024-09-08, its first instant, 01:00.
 
 ## Options
 
@@ -95,7 +95,8 @@ The rules are stable. The refusal fixtures carry them, so the chart elements ref
 | `MaxMagnitude` | 1e300 | the magnitude of any value, so the chart's sums and scales stay finite |
 | `MinEvery` | 1 s | a `Sampler`'s shortest step |
 | `MaxPoints` | 10,000 | the points one sampled ring holds, `Keep / Every` |
-| `MaxLabelSets` | 1,000 | the label sets a `Sampler` reads per track, after `Where`, and the series it holds per track; a value or quantile track holds at most `MaxValues / (Keep / Every)` series, so its whole ring fits one frame |
+| `MaxLabelSets` | 1,000 | the label sets that hold a place in a `Sampler` track, each while its series' ring holds one of its points, and the series it holds per track; a value or quantile track holds at most `MaxValues / (Keep / Every)` series, so its whole ring fits one frame |
+| `MaxBaselines` | 4,000 | the counter or histogram label sets whose last reading a `Sampler` track keeps, place or not; past it, the least recently changed is forgotten and its next reading is a first appearance |
 
 ## The duration ladder
 

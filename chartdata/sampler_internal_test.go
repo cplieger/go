@@ -2,8 +2,10 @@ package chartdata
 
 import (
 	"context"
+	"log/slog"
 	"math"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -262,3 +264,55 @@ func TestSamplerKeepsASeriesWhileItsRingHoldsAValue(t *testing.T) {
 }
 
 func sameFloat(a, b float64) bool { return a == b || (math.IsNaN(a) && math.IsNaN(b)) }
+
+// A histogram label set read before its first observation keeps a baseline
+// of zeros, so its first observation counts, and a track keeps at most
+// MaxBaselines of them: one forgotten past the cap gives no point for its
+// first observation, a first appearance.
+func TestSamplerKeepsAtMostMaxBaselinesOfUnobservedLabelSets(t *testing.T) {
+	t.Parallel()
+	reg := measure.NewRegistry("")
+	wait := measure.NewHistogramDesc("wait_seconds", "h", measure.UnitSeconds, []string{"agent"}, []float64{1, 2, 4},
+		measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+	agents := make([]string, MaxBaselines+5)
+	for i := range agents {
+		agents[i] = strconv.Itoa(10_000 + i)
+	}
+	observed := map[string]uint64{}
+	reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+		for _, a := range agents {
+			n := observed[a]
+			e.EmitHistogram(wait, []uint64{n, n, n}, n, float64(n)/2, a) // n observations of 0.5
+		}
+	}, wait))
+	track := Sampled(wait, AsQuantile(0.5), By("agent"))
+	s, err := NewSampler(Sampling{Registry: reg, Every: time.Minute, Keep: 10 * time.Minute, Logger: slog.New(slog.DiscardHandler)}, track)
+	if err != nil {
+		t.Fatalf("NewSampler: %v", err)
+	}
+	tick := func(minute int64) {
+		t.Helper()
+		if _, _, err := s.tick(t.Context(), time.Unix(minute*60, 0)); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	}
+	tick(1)
+	if got := len(s.tracks[track].bases); got != MaxBaselines {
+		t.Errorf("baselines of %d unobserved label sets = %d, want %d", len(agents), got, MaxBaselines)
+	}
+	// All changed at the first column and hold no place, so the first in
+	// label-set order are forgotten.
+	forgotten, kept := agents[0], agents[len(agents)-1]
+	observed[forgotten], observed[kept] = 1, 1
+	tick(2)
+	f, err := s.Series(track, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if len(f.Series) != 1 || f.Series[0].Key != kept {
+		t.Fatalf("series = %d, want only %s's: %s's baseline was forgotten", len(f.Series), kept, forgotten)
+	}
+	if got, want := plainValues(f.Series[0].Values), []float64{math.NaN(), 0.5}; !slices.EqualFunc(got, want, sameFloat) {
+		t.Errorf("%s = %v, want %v: its first observation counts from zero", kept, got, want)
+	}
+}

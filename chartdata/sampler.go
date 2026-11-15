@@ -1,10 +1,12 @@
 package chartdata
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -124,6 +126,7 @@ type Sampler struct {
 	every   time.Duration
 	keep    time.Duration
 	start   int64 // the first column's edge in Unix milliseconds; 0 before it
+	column  int   // the columns pushed, the newest's number
 	mu      sync.Mutex
 	running atomic.Bool
 }
@@ -134,8 +137,8 @@ type warning struct {
 	args []any
 }
 
-// tracked is a Track's state: its rings, one per key, and the label sets it
-// read last step.
+// tracked is a Track's state: its rings, one per key, the label sets that
+// hold a place, and the baselines of the label sets it read last step.
 type tracked struct {
 	*Track
 	// values holds a value or quantile track's rings, aligned with the
@@ -144,22 +147,44 @@ type tracked struct {
 	// hists holds an AsBins track's rings of bucket increases, +Inf last,
 	// each holding the window's columns only.
 	hists map[string]*ring[[]float64]
-	// prev holds the label sets the track holds, read last step, each with a
-	// counter's or histogram's cumulative reading.
-	prev map[string][]float64
-	// unseen holds a histogram's label sets read last step with no
-	// observation yet, which hold no place but count from zero when they
-	// first observe.
-	unseen map[string]struct{}
-	kind   measure.Kind
-	byAt   int
-	most   int // the most keys the track holds
-	span   int // an AsBins ring's capacity, the window's columns
+	// places holds the label sets whose points are in their key's ring, at
+	// most MaxLabelSets.
+	places map[string]place
+	// bases holds a counter's or histogram's label sets read last step, at
+	// most MaxBaselines, each with its last usable cumulative reading.
+	bases    map[string]base
+	kind     measure.Kind
+	byAt     int
+	most     int // the most keys the track holds
+	capacity int // a ring's capacity: the sampler's columns, or an AsBins window's
 	// rebase makes the next read take no increase, since the steps before
 	// it were missed.
 	rebase bool
 	capped bool
 	warned bool
+}
+
+// place is a label set's place among a track's MaxLabelSets: the key its
+// points go to and the column of its newest point.
+type place struct {
+	key  string
+	last int
+}
+
+// base is a label set's last usable cumulative reading, a counter's value or
+// a histogram's buckets, and the column at which it last changed.
+type base struct {
+	cum     []float64
+	changed int
+}
+
+// next is the base a usable reading of cum at column leaves: b, when cum
+// equals it, or cum, changed at column.
+func (b base) next(cum []float64, column int) base {
+	if b.cum != nil && slices.Equal(b.cum, cum) {
+		return b
+	}
+	return base{cum: cum, changed: column}
 }
 
 // NewSampler builds a Sampler of tracks. It refuses an Every below MinEvery,
@@ -219,7 +244,7 @@ func (s *Sampler) track(t *Track) (*tracked, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts := &tracked{Track: t, kind: decl.Kind, byAt: -1, prev: map[string][]float64{}}
+	ts := &tracked{Track: t, kind: decl.Kind, byAt: -1, places: map[string]place{}, bases: map[string]base{}}
 	if t.by != "" {
 		if ts.byAt = slices.Index(decl.Labels, t.by); ts.byAt < 0 {
 			return nil, fmt.Errorf("By(%q) names no label of %s", t.by, decl.Name)
@@ -230,11 +255,12 @@ func (s *Sampler) track(t *Track) (*tracked, error) {
 	}
 	if t.form == formBins {
 		ts.hists = map[string]*ring[[]float64]{}
-		ts.span = steps(t.window, s.every)
+		ts.capacity = steps(t.window, s.every)
 		ts.most = min(MaxLabelSets, MaxValues/max(1, len(binsOf(decl.Buckets))))
 	} else {
 		ts.values = map[string]*ring[float64]{}
-		ts.most = min(MaxLabelSets, MaxValues/len(s.cols.buf))
+		ts.capacity = len(s.cols.buf)
+		ts.most = min(MaxLabelSets, MaxValues/ts.capacity)
 	}
 	return ts, nil
 }
@@ -343,7 +369,7 @@ func (s *Sampler) tick(ctx context.Context, edge time.Time) ([]FrameEvent, []war
 	}
 	gaps := s.gaps(edge)
 	s.newest = edge
-	s.cols.push(edge.UnixMilli())
+	s.push(edge)
 	var events []FrameEvent
 	for _, ts := range s.order {
 		fam := fams[slices.Index(s.decls, ts.decl)]
@@ -376,44 +402,82 @@ func (s *Sampler) gaps(edge time.Time) int {
 	}
 	n := min(missed, len(s.cols.buf)-1)
 	for k := n; k > 0; k-- {
-		s.cols.push(edge.Add(-time.Duration(k) * s.every).UnixMilli())
+		s.push(edge.Add(-time.Duration(k) * s.every))
 	}
 	return n
 }
 
+// push adds the column at edge.
+func (s *Sampler) push(edge time.Time) {
+	s.cols.push(edge.UnixMilli())
+	s.column++
+}
+
 // observe reads ts's samples in fam into its rings, as the newest column.
 func (s *Sampler) observe(ts *tracked, fam *measure.Family) {
-	capacity, earlier := len(s.cols.buf), s.cols.n-1
+	earlier := s.cols.n - 1
+	ts.release(s.column)
 	var dropped bool
 	switch ts.form {
 	case formValue:
-		dropped = ts.pushValues(s.observeValues(ts, fam), capacity, earlier)
+		dropped = ts.pushValues(s.observeValues(ts, fam), earlier)
 	case formQuantile:
 		bounds := ts.decl.Declaration().Buckets
 		sums := map[string]float64{}
 		for key, cum := range s.observeHistograms(ts, fam) {
 			sums[key] = quantile(ts.q, bounds, cum)
 		}
-		dropped = ts.pushValues(sums, capacity, earlier)
+		dropped = ts.pushValues(sums, earlier)
 	case formBins:
-		dropped = update(ts.hists, s.observeHistograms(ts, fam), ts.span, earlier, ts.most, nil, isNoBuckets)
+		dropped = update(ts.hists, s.observeHistograms(ts, fam), ts.capacity, earlier, ts.most, nil, isNoBuckets)
 	}
 	ts.rebase = false
+	ts.unplace()
 	if dropped {
 		s.dropped(ts)
 	}
 }
 
+// release frees the place of each label set whose newest point has left its
+// key's ring by column.
+func (ts *tracked) release(column int) {
+	for set, p := range ts.places {
+		if column-p.last >= ts.capacity {
+			delete(ts.places, set)
+		}
+	}
+}
+
+// unplace frees the place of each label set whose key holds no ring, such as
+// one past the most keys, or one whose point was a gap.
+func (ts *tracked) unplace() {
+	for set, p := range ts.places {
+		if !ts.holds(p.key) {
+			delete(ts.places, set)
+		}
+	}
+}
+
+// holds reports whether ts holds a ring for key.
+func (ts *tracked) holds(key string) bool {
+	if ts.form == formBins {
+		_, ok := ts.hists[key]
+		return ok
+	}
+	_, ok := ts.values[key]
+	return ok
+}
+
 // pushValues pushes sums onto a value or quantile track's rings, a sum that
 // is not finite, or beyond ±MaxMagnitude, such as a By sum that overflows,
 // as a gap, since no frame can carry it.
-func (ts *tracked) pushValues(sums map[string]float64, capacity, earlier int) bool {
+func (ts *tracked) pushValues(sums map[string]float64, earlier int) bool {
 	for key, v := range sums {
 		if !isWithin(v) {
 			sums[key] = math.NaN()
 		}
 	}
-	return update(ts.values, sums, capacity, earlier, ts.most, math.NaN(), math.IsNaN)
+	return update(ts.values, sums, ts.capacity, earlier, ts.most, math.NaN(), math.IsNaN)
 }
 
 // gap pushes a gap column onto ts's rings.
@@ -449,61 +513,65 @@ func labelSet(labels []measure.Label) string {
 type reading struct {
 	smp *measure.Sample
 	set string
-	// unseen marks a histogram's label set read last step with no
-	// observation, whose increase counts from zero.
-	unseen bool
 }
 
-// read returns the samples in fam ts reads: every label set Where keeps that
-// the track holds, then new ones with a usable reading, in Gather's order,
-// while fewer than MaxLabelSets are held, so a new label set never displaces
-// a held one and one with no usable reading takes no place.
-func (s *Sampler) read(ts *tracked, fam *measure.Family) []reading {
-	var held, fresh []reading
-	unseen := map[string]struct{}{}
+// read returns the samples in fam that Where keeps, in Gather's order.
+func (ts *tracked) read(fam *measure.Family) []reading {
+	var out []reading
 	for i := range fam.Samples {
 		smp := &fam.Samples[i]
-		if ts.where != nil && !ts.where(smp.Labels) {
-			continue
-		}
-		r := reading{smp: smp, set: labelSet(smp.Labels)}
-		_, r.unseen = ts.unseen[r.set]
-		switch _, ok := ts.prev[r.set]; {
-		case ok:
-			held = append(held, r)
-		case usable(smp):
-			fresh = append(fresh, r)
-		case smp.Histogram != nil && len(unseen) < MaxLabelSets:
-			unseen[r.set] = struct{}{}
+		if ts.where == nil || ts.where(smp.Labels) {
+			out = append(out, reading{smp: smp, set: labelSet(smp.Labels)})
 		}
 	}
-	ts.unseen = unseen
-	if room := MaxLabelSets - len(held); len(fresh) > room {
-		fresh = fresh[:room]
-		s.dropped(ts)
-	}
-	return append(held, fresh...)
+	return out
 }
 
-// usable reports whether smp can give its key a value: a histogram reading
-// with an observation, or a value within ±MaxMagnitude.
-func usable(smp *measure.Sample) bool {
-	if smp.Histogram != nil {
-		return smp.Histogram.Count > 0
+// admit reports whether r may add a point to key at the column: when its
+// label set holds a place, or takes one while fewer than MaxLabelSets are
+// held, so a new label set never displaces a held one.
+func (s *Sampler) admit(ts *tracked, r reading, key string) bool {
+	if _, ok := ts.places[r.set]; !ok && len(ts.places) >= MaxLabelSets {
+		s.dropped(ts)
+		return false
 	}
-	return isWithin(smp.Value)
+	ts.places[r.set] = place{key: key, last: s.column}
+	return true
+}
+
+// keepBases makes next ts's baselines. Past MaxBaselines it evicts the
+// least recently changed, one with no place before one with a place, then
+// in label-set order.
+func (s *Sampler) keepBases(ts *tracked, next map[string]base) {
+	if over := len(next) - MaxBaselines; over > 0 {
+		sets := slices.Collect(maps.Keys(next))
+		placed := func(set string) int {
+			if _, ok := ts.places[set]; ok {
+				return 1
+			}
+			return 0
+		}
+		slices.SortFunc(sets, func(a, b string) int {
+			return cmp.Or(cmp.Compare(next[a].changed, next[b].changed), cmp.Compare(placed(a), placed(b)), strings.Compare(a, b))
+		})
+		for _, set := range sets[:over] {
+			delete(next, set)
+		}
+		s.dropped(ts)
+	}
+	ts.bases = next
 }
 
 // dropped queues, the first time for a track, the warning that it dropped a
-// new label set or series.
+// new label set or series, or forgot a baseline.
 func (s *Sampler) dropped(ts *tracked) {
 	if ts.capped {
 		return
 	}
 	ts.capped = true
 	s.pending = append(s.pending, warning{
-		msg:  "chartdata: a sampled track has more label sets or series than the sampler holds; new ones are dropped",
-		args: []any{"name", ts.decl.Declaration().Name, "most_label_sets", MaxLabelSets, "most_series", ts.most},
+		msg:  "chartdata: a sampled track has more label sets or series than the sampler holds; new ones are dropped, or old baselines forgotten",
+		args: []any{"name", ts.decl.Declaration().Name, "most_label_sets", MaxLabelSets, "most_series", ts.most, "most_baselines", MaxBaselines},
 	})
 }
 
@@ -514,49 +582,43 @@ func (s *Sampler) log() *slog.Logger {
 	return s.logger
 }
 
-// observeValues returns the sum of ts's samples in fam for each key given a
-// value: a gauge's value, or a counter's increase since its last reading. A
-// reading that is not finite, or beyond ±MaxMagnitude, adds nothing, and its
-// label set keeps its baseline, but none past missed edges.
+// observeValues returns the sum of ts's points in fam for each key given
+// one: a gauge's value, or a counter's increase since its baseline. A
+// reading that is not finite, or beyond ±MaxMagnitude, gives no point and
+// leaves its label set's baseline as it was, but none past missed edges,
+// whose increase would cover several steps.
 func (s *Sampler) observeValues(ts *tracked, fam *measure.Family) map[string]float64 {
 	sums := map[string]float64{}
-	next := map[string][]float64{}
-	for _, r := range s.read(ts, fam) {
-		if v, ok := ts.valueOf(r, next); ok {
-			sums[ts.keyOf(r.smp.Labels)] += v
+	next := map[string]base{}
+	for _, r := range ts.read(fam) {
+		key := ts.keyOf(r.smp.Labels)
+		if v, ok := ts.valueOf(r, next, s.column); ok && s.admit(ts, r, key) {
+			sums[key] += v
 		}
 	}
-	ts.prev = next
+	s.keepBases(ts, next)
 	return sums
 }
 
-// valueOf returns r's value for the column, a counter's increase, and puts
-// the baseline r leaves in next; false when r gives the column no value.
-func (ts *tracked) valueOf(r reading, next map[string][]float64) (float64, bool) {
+// valueOf returns r's point at column, a counter's increase, and puts the
+// baseline r leaves in next; false when r gives no point.
+func (ts *tracked) valueOf(r reading, next map[string]base, column int) (float64, bool) {
 	v := r.smp.Value
-	prev := ts.prev[r.set]
-	switch {
-	case !isWithin(v):
-		next[r.set] = ts.kept(prev)
-		return 0, false
-	case ts.kind != measure.KindCounter:
-		next[r.set] = nil
-		return v, true
+	if ts.kind != measure.KindCounter {
+		return v, isWithin(v)
 	}
-	next[r.set] = []float64{v}
-	if prev == nil || ts.rebase {
+	b, ok := ts.bases[r.set]
+	if !isWithin(v) {
+		if ok && !ts.rebase {
+			next[r.set] = b
+		}
 		return 0, false
 	}
-	return increase(v, prev[0]), true
-}
-
-// kept is the baseline a label set keeps past a step that read it no
-// value: none past missed edges, whose increase would cover several steps.
-func (ts *tracked) kept(prev []float64) []float64 {
-	if ts.rebase {
-		return nil
+	next[r.set] = b.next([]float64{v}, column)
+	if !ok || ts.rebase {
+		return 0, false
 	}
-	return prev
+	return increase(v, b.cum[0]), true
 }
 
 // increase is a counter's increase from prev to cur, reset-aware as PromQL's
@@ -569,25 +631,23 @@ func increase(cur, prev float64) float64 {
 }
 
 // observeHistograms returns the sum of the bucket increases of ts's samples
-// in fam since their last reading for each key that observed any.
+// in fam since their baselines for each key that observed any.
 func (s *Sampler) observeHistograms(ts *tracked, fam *measure.Family) map[string][]float64 {
 	sums := map[string][]float64{}
-	next := map[string][]float64{}
-	for _, r := range s.read(ts, fam) {
+	next := map[string]base{}
+	for _, r := range ts.read(fam) {
 		cur := cumulative(r.smp.Histogram)
-		next[r.set] = cur
-		prev, ok := ts.prev[r.set]
-		if r.unseen {
-			prev, ok = make([]float64, len(cur)), true
-		}
+		b, ok := ts.bases[r.set]
+		next[r.set] = b.next(cur, s.column)
 		if !ok || ts.rebase {
 			continue
 		}
-		if delta := bucketIncrease(cur, prev); delta[len(delta)-1] > 0 {
-			addInto(sums, ts.keyOf(r.smp.Labels), delta)
+		key := ts.keyOf(r.smp.Labels)
+		if delta := bucketIncrease(cur, b.cum); delta[len(delta)-1] > 0 && s.admit(ts, r, key) {
+			addInto(sums, key, delta)
 		}
 	}
-	ts.prev = next
+	s.keepBases(ts, next)
 	return sums
 }
 
@@ -617,8 +677,8 @@ func addInto(sums map[string][]float64, key string, delta []float64) {
 }
 
 // update pushes each held key's value in sums onto its ring, a gap for a key
-// with none, and drops a ring left with no usable point, however often its
-// key is read. It then adds a ring of capacity for each new key with a
+// with none, and drops a ring left with no usable point, whether or not sums
+// holds its key. It then adds a ring of capacity for each new key with a
 // value, in key order, while fewer than most are held, and reports whether
 // it dropped one. A new key's ring starts with a gap per earlier column, so
 // its indices match the older rings'.

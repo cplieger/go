@@ -12,7 +12,7 @@ The Go wire types are the one source of the frames' shape. [wiregen](../../wireg
 | `contract/fixtures/frame-<type>.json` | One frame of each type as the constructors encode it: `series`, `bins`, `categories`, `boxes`, `points`, `grid`, `calendar`, `tree` and `tree-groups`, `flow` and `flow-stages`, `events`, `states` and `value` |
 | `contract/fixtures/event-<kind>.json` | One event of each kind and shape: `append-column`, `append-bin`, `replace-column`, `replace-bin`, `reset` and `set` |
 | `contract/fixtures/refusal-<rule>.json` | `{"frame": ..., "rule": ..., "field": ...}`: a frame as the wire would carry it, which the constructors refuse by `rule` at `field`, one per rule a wire frame can break |
-| `contract/fixtures/limits.json` | The limits table: `maxValues`, `maxRows`, `maxSubRows`, `maxMagnitude`, `maxCalendarDays`, `minEveryMs`, `maxPoints` and `maxLabelSets` |
+| `contract/fixtures/limits.json` | The limits table: `maxValues`, `maxRows`, `maxSubRows`, `maxMagnitude`, `maxCalendarDays`, `minEveryMs`, `maxPoints`, `maxLabelSets` and `maxBaselines` |
 | `contract/fixtures/duration-edges.json` | `DurationEdges`, in seconds |
 | `deadset-edges.json` | The edges pairing each generated field with its Go field, so a dead-code analysis of this module reads the wire fields as used |
 

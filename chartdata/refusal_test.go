@@ -309,6 +309,9 @@ func TestCalendarFrameRefusesABadZoneOrStart(t *testing.T) {
 		{name: "localZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Local", midnight)},
 		{name: "localtimeZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("localtime", midnight)},
 		{name: "posixrulesZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("posixrules", midnight)},
+		{name: "factoryZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Factory", midnight)},
+		{name: "posixTreeZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("posix/Europe/Paris", midnight)},
+		{name: "rightTreeZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("right/Europe/Paris", midnight)},
 		{name: "unknownZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Mars/Olympus", midnight)},
 		{name: "notMidnight", rule: chartdata.RuleShape, field: "start", build: newCalendar("UTC", midnight.Add(time.Hour))},
 		{name: "borrowedParis", rule: chartdata.RuleShape, field: "start", build: newCalendar("Europe/Paris", borrowed("Europe/Paris"))},
@@ -318,6 +321,17 @@ func TestCalendarFrameRefusesABadZoneOrStart(t *testing.T) {
 		// Santiago's 2024-09-08 has no 00:00 and starts at 01:00, 04:00Z.
 		{name: "santiagoPastItsFirstInstant", rule: chartdata.RuleShape, field: "start", build: newCalendar("America/Santiago", time.Date(2024, 9, 8, 5, 0, 0, 0, time.UTC))},
 		{name: "valueInfinite", rule: chartdata.RuleFinite, field: "values[1]", build: newCalendar("UTC", midnight, 1, inf)},
+	})
+	// Each loads on a host with the zoneinfo it names, so it must be refused
+	// by name, never by a failed load.
+	t.Run("browserRefusedNamesAreRefusedByName", func(t *testing.T) {
+		t.Parallel()
+		for _, zone := range []string{"", "Local", "localtime", "posixrules", "Factory", "posix/Europe/Paris", "right/Europe/Paris"} {
+			_, err := chartdata.NewCalendarFrame(d, zone, midnight, nil)
+			if err == nil || !strings.Contains(err.Error(), "a browser takes") {
+				t.Errorf("zone %q: error = %v, want it refused as a name no browser takes", zone, err)
+			}
+		}
 	})
 	t.Run("unknownZoneKeepsTheCause", func(t *testing.T) {
 		t.Parallel()

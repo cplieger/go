@@ -93,7 +93,7 @@ The package examples on pkg.go.dev show more cases, and `go test` keeps them tru
 - Constructors: `NewSeriesFrame`, `NewBinsFrame`, `NewCategoriesFrame`, `NewBoxesFrame`, `NewPointsFrame`, `NewGridFrame`, `NewCalendarFrame`, `NewTreeFrame`, `NewGroupedTreeFrame`, `NewFlowFrame`, `NewEventsFrame`, `NewStatesFrame` and `NewValueFrame`, with their inputs (`Series`, `Bin`, `Boxes`, `Measures`, `Points`, `Grid`, `TreePart`, `TreeGroup`, `Flow`, `FlowLink`, `Times`, `State`).
 - Options: `WithRefs`, `WithNotes`, `WithDomain` with `Range`, `WithOpen` and `WithResets`.
 - Refusals: `RefusalError` and `Rule` with its constants.
-- Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints` and `MaxLabelSets`, and the duration ladder `DurationEdges`.
+- Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints`, `MaxLabelSets` and `MaxBaselines`, and the duration ladder `DurationEdges`.
 - Sampling: `NewSampler` with `Sampling`, `(*Sampler).Run`, `Series` and `Bins`, and `Sampled` with its options `Where`, `By`, `Key`, `AsQuantile` and `AsBins`.
 - Events: `FrameEvent` and `FrameEventKind` with its constants, `AppendColumn`, `AppendBin`, `ReplaceColumn`, `ReplaceBin`, `ResetAt` and `SetFrame`.
 - Code generation: `WireTypes`, every wire type, `WireEnums`, every string enum on the wire, and `WireUnions` with `WireUnion`, the tagged wire structs, for an app's own wiregen run.

@@ -31,10 +31,17 @@ const (
 	MinEvery = time.Second
 	// MaxPoints is the most points one sampled ring holds, keep / every.
 	MaxPoints = 10_000
-	// MaxLabelSets is the most label sets a [Sampler] reads per track, and
-	// the most series it holds per track; a label set or series takes its
-	// place with its first usable reading, a new one past it is dropped, and
-	// the first drop logged. A value or quantile track holds at most
-	// MaxValues / (Keep / Every) series, so its whole ring fits one frame.
+	// MaxLabelSets is the most label sets that hold a place in a [Sampler]
+	// track, and the most series it holds per track. A label set takes its
+	// place with its first point, a value, increase, bin or quantile, and
+	// gives it up once its key's ring holds none of its points, however
+	// often it is read; a new one past the cap is dropped, and the first drop
+	// logged. A value or quantile track holds at most MaxValues / (Keep /
+	// Every) series, so its whole ring fits one frame.
 	MaxLabelSets = 1_000
+	// MaxBaselines is the most counter or histogram label sets whose last
+	// reading a track keeps, place or not, to take the next increase from.
+	// Past it, the least recently changed is forgotten, and its next
+	// reading is a first appearance.
+	MaxBaselines = 4 * MaxLabelSets
 )

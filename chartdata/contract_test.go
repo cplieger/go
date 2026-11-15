@@ -231,6 +231,7 @@ func limitsFixtures() []fixture {
 			"maxValues": chartdata.MaxValues, "maxRows": chartdata.MaxRows, "maxSubRows": chartdata.MaxSubRows,
 			"maxMagnitude": chartdata.MaxMagnitude, "maxCalendarDays": chartdata.MaxCalendarDays,
 			"minEveryMs": chartdata.MinEvery.Milliseconds(), "maxPoints": chartdata.MaxPoints, "maxLabelSets": chartdata.MaxLabelSets,
+			"maxBaselines": chartdata.MaxBaselines,
 		}},
 		{name: "duration-edges", value: map[string]any{"unit": "seconds", "edges": chartdata.DurationEdges()}},
 	}

@@ -25,6 +25,7 @@ func TestTheLimitsAreTheChartsCeilings(t *testing.T) {
 		{"MinEvery", float64(chartdata.MinEvery), float64(time.Second)},
 		{"MaxPoints", chartdata.MaxPoints, 10_000},
 		{"MaxLabelSets", chartdata.MaxLabelSets, 1_000},
+		{"MaxBaselines", chartdata.MaxBaselines, 4_000},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
