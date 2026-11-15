@@ -1,6 +1,6 @@
 # Client IP, hosts and credentials
 
-This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address and checking one static credential.
+This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address, checking configured credentials and limiting failed authentication.
 
 ## Client IP
 
@@ -137,3 +137,34 @@ The configured secret is hashed with SHA-256 once, at construction. `Verify` has
 An empty configured secret fails closed. `Verify` then returns false for every value, the empty string included. Otherwise `sha256("")` would equal `sha256("")`, and an unset secret would admit a client presenting nothing. Treat an empty configured value as "auth not configured", never as "no credential required".
 
 This checks one shared secret, not user identities. Per-user credentials, password hashing and sessions belong to the [access](https://github.com/cplieger/access) library.
+
+## Several static credentials
+
+`NewTokenSet(configured)` builds a `TokenSet` from secrets your operator configures, one per caller, for an endpoint where each caller holds its own. `Match(presented)` reports the position of the secret that matched, so your app can tell which caller it is, and is safe for concurrent use.
+
+Each secret is hashed with SHA-256 once, at construction. `Match` hashes the presented value once and compares it with every configured digest, with no early exit, so the time taken depends only on how many secrets the set holds. A presented value longer than `MaxTokenBytes` (512) answers no match without being hashed. The zero `TokenSet` matches nothing.
+
+`NewTokenSet` refuses an empty list, an empty secret, one longer than `MaxTokenBytes` and one given twice, because a repeated secret would make the position ambiguous. The refusal is a `*TokenSetError`. Its `Err` is `ErrNoTokens`, `ErrTokenEmpty`, `ErrTokenTooLong` or `ErrTokenRepeated`, which `errors.Is` matches. `Index` is the refused secret's position and `First` the earlier position a repeated secret equals. The error names positions only and never quotes a secret, so you can log it as it is.
+
+## Failed-authentication limits
+
+`FailureLimiter` throttles clients that keep failing to authenticate. Use it in a handler that must check a credential before it can answer anything, such as a webhook endpoint. `RateLimiter`'s `FailedAuthRateLimit` preset is a single bucket for the whole process; `FailureLimiter` counts per client and across clients, and a request it throttles never moves its counts.
+
+`NewFailureLimiter(limits)` checks a `FailureLimits` and returns a limiter, or an error naming the first field out of range:
+
+| Field | Meaning |
+| --- | --- |
+| `PerKey`, `PerKeyWindow` | Failures one client key may make per window before it is throttled. Both must be positive |
+| `Global`, `GlobalWindow` | Failures every key together may make per window before keys that are not exempt are throttled. Both zero turns the global window off |
+| `MaxKeys` | How many keys' failures are held. Charging a new key past it forgets the least recently charged one |
+| `TrustPerGroup`, `TrustWindow` | How many keys one group trusts at once, and how long a mark lasts |
+| `IPv6Prefix` | Leading bits of an IPv6 address that make its key, 1 to 128. Zero means 64, RFC 6177's end-site `/64` |
+| `Now` | The clock. Nil means `time.Now`; a test passes a fake one |
+
+Call `Decide(client, failure)` once per request, before you write anything. It answers whether the client is throttled, and for how long, from the state before this request. A throttled answer changes nothing, so a flood of throttled requests can neither fill a window nor push a key out of the held set. Answer a throttled request the same way whatever it presented. When the answer is not throttled and `failure` is true, the failure is charged to the client's key and to the global window. Asking once per request under the limiter's lock is what keeps concurrent requests from passing a full window together.
+
+A key is a client address: an IPv4 address whole, and an IPv6 address masked to `IPv6Prefix` bits. Every invalid address shares one key.
+
+After a request that was not throttled succeeds, call `MarkGood(group, client)` with a group name taken from your configuration, never from the request. While its mark lasts and its own window holds no failure, a marked key is exempt from the global window. So a spray of failures across many addresses cannot lock out a caller that recently succeeded. Each group holds at most `TrustPerGroup` keys and replaces its own oldest mark, never another group's.
+
+The limiter keeps its state in memory, so it resets at a restart and replicas do not share it. It logs nothing and returns no error after construction, so a group name never leaves it.
