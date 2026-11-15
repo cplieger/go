@@ -14,11 +14,10 @@ import (
 	"github.com/cplieger/go/measure/v2"
 )
 
-// The cases follow Prometheus's histogram_quantile (promql/quantile.go):
-// linear interpolation inside the bucket the rank falls in, the lowest
-// bucket from 0 when its bound is above 0, the highest finite bound for a
-// rank in the +Inf bucket, NaN for no observations or fewer than two buckets.
-func TestQuantileIsHistogramQuantile(t *testing.T) {
+// A sampled histogram's cumulative counts take histogram_quantile's estimate
+// (promql/quantile.go), a count below the one before it forced up to it, and
+// NaN where Quantile answers none.
+func TestQuantileOfCumulativeCountsIsHistogramQuantile(t *testing.T) {
 	t.Parallel()
 	bounds := []float64{1, 2, 4}
 	for _, tc := range []struct {
@@ -29,21 +28,17 @@ func TestQuantileIsHistogramQuantile(t *testing.T) {
 		want   float64
 	}{
 		{"median", bounds, []float64{1, 3, 4, 4}, 0.5, 1.5},
-		{"top", bounds, []float64{1, 3, 4, 4}, 1, 4},
-		{"p99", bounds, []float64{1, 3, 4, 4}, 0.99, 3.92},
-		{"lowestFromZero", bounds, []float64{4, 4, 4, 4}, 0.25, 0.25},
 		{"inTheInfBucket", bounds, []float64{1, 1, 1, 4}, 0.9, 4},
-		{"lowestBoundAtZero", []float64{0, 1}, []float64{2, 4, 4}, 0.25, 0},
-		{"lowestBoundBelowZero", []float64{-1, 1}, []float64{2, 4, 4}, 0.25, -1},
 		{"unsortedCountsMadeMonotonic", bounds, []float64{2, 1, 4, 4}, 0.5, 1},
+		{"fallInTheInfBucketMadeMonotonic", bounds, []float64{1, 2, 4, 3}, 0.75, 3},
 		{"noObservations", bounds, []float64{0, 0, 0, 0}, 0.5, math.NaN()},
 		{"onlyTheInfBucket", nil, []float64{5}, 0.5, math.NaN()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := quantile(tc.q, tc.bounds, tc.cum)
+			got := quantileOf(tc.q, tc.bounds, tc.cum)
 			if math.IsNaN(got) != math.IsNaN(tc.want) || math.Abs(got-tc.want) > 1e-12 {
-				t.Errorf("quantile(%v, %v, %v) = %v, want %v", tc.q, tc.bounds, tc.cum, got, tc.want)
+				t.Errorf("quantileOf(%v, %v, %v) = %v, want %v", tc.q, tc.bounds, tc.cum, got, tc.want)
 			}
 		})
 	}

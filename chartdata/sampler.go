@@ -80,7 +80,7 @@ func Key(key string) TrackOption {
 }
 
 // AsQuantile samples a histogram as its q-quantile over each step, from 0 to
-// 1, estimated as PromQL's histogram_quantile estimates it.
+// 1, which Quantile estimates from the step's bucket increases.
 func AsQuantile(q float64) TrackOption {
 	return func(t *Track) { t.form, t.q = formQuantile, q }
 }
@@ -476,7 +476,7 @@ var binsShape = shape[[]float64, []float64]{
 func quantileShape(q float64, bounds []float64) shape[[]float64, float64] {
 	return shape[[]float64, float64]{
 		gap: math.NaN(), isGap: math.IsNaN, add: addBuckets,
-		value: func(sum []float64) float64 { return carried(quantile(q, bounds, sum)) },
+		value: func(sum []float64) float64 { return carried(quantileOf(q, bounds, sum)) },
 	}
 }
 
@@ -887,37 +887,22 @@ func (ts *tracked) keys() []string {
 	return out
 }
 
-// quantile estimates the q-quantile of cumulative bucket counts cum over
-// bounds, +Inf last, as Prometheus's histogram_quantile does: linearly
-// within the bucket the rank falls in, the lowest from 0 when its bound is
-// above 0; the highest finite bound for a rank in +Inf; NaN for fewer than
-// two buckets or no observations.
-// https://github.com/prometheus/prometheus/blob/main/promql/quantile.go
-func quantile(q float64, bounds, cum []float64) float64 {
-	if len(cum) < 2 {
+// quantileOf is Quantile of the cumulative bucket counts cum, +Inf last, NaN
+// where it answers none. A count below the one before it adds nothing, as
+// histogram_quantile's monotonic fix takes it.
+func quantileOf(q float64, bounds, cum []float64) float64 {
+	counts := make([]float64, len(cum))
+	top := 0.0
+	for i, c := range cum {
+		if c > top {
+			counts[i], top = c-top, c
+		}
+	}
+	v, ok := Quantile(bounds, counts, q)
+	if !ok {
 		return math.NaN()
 	}
-	cum = slices.Clone(cum)
-	for i := 1; i < len(cum); i++ {
-		cum[i] = max(cum[i], cum[i-1])
-	}
-	total := cum[len(cum)-1]
-	if !(total > 0) {
-		return math.NaN()
-	}
-	rank := q * total
-	b, _ := slices.BinarySearch(cum, rank)
-	if b == len(cum)-1 {
-		return bounds[len(bounds)-1]
-	}
-	if b == 0 && bounds[0] <= 0 {
-		return bounds[0]
-	}
-	start, count := 0.0, cum[b]
-	if b > 0 {
-		start, count, rank = bounds[b-1], cum[b]-cum[b-1], rank-cum[b-1]
-	}
-	return start + (bounds[b]-start)*(rank/count)
+	return v
 }
 
 // window returns the index of the first column after from.

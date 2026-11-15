@@ -245,7 +245,7 @@ func (m *refSampler) value(sum []float64) []float64 {
 	}
 	v := sum[0]
 	if m.form == formQuantile {
-		v = quantile(m.q, m.bounds, sum)
+		v = quantileOf(m.q, m.bounds, sum)
 	}
 	if !isWithin(v) {
 		return nil
