@@ -13,7 +13,7 @@ chartdata is built for a service that declares its series once with `measure` an
 - Each constructor takes the `measure` declaration it draws, so a frame's name and unit match what the registry holds for the same series once the declaration is registered.
 - Twelve frame types cover every chart element: series, bins, categories, boxes, points, grids, calendars, trees, flows, event strips, state histories and meters.
 - A constructor refuses a malformed frame, such as unequal lengths, an unsorted x or an infinite value, and one past the limits the chart draws within, with an error naming the rule and the field.
-- A `Sampler` holds the recent history of the series you keep nowhere else, in bounded rings, and estimates a histogram's quantiles as Prometheus's `histogram_quantile` does.
+- A `Sampler` holds the recent history of the series you keep nowhere else, in bounded rings, and estimates a histogram's quantiles as Prometheus's `histogram_quantile` does. `Quantile` gives the same estimate from the bucket counts your store holds, so a built frame and a sampled one agree.
 - Events append a column, replace the last one, mark a restart or replace a whole frame, so a page stays current without reloading.
 - The TypeScript types and a golden fixture of every frame, event and refusal are generated from the Go types and committed, so a chart library tests against the exact wire.
 
@@ -94,6 +94,7 @@ The package examples on pkg.go.dev show more cases, and `go test` keeps them tru
 - Options: `WithRefs`, `WithNotes`, `WithDomain` with `Range`, `WithOpen` and `WithResets`.
 - Refusals: `RefusalError` and `Rule` with its constants.
 - Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints`, `MaxLabelSets` and `MaxBaselines`, and the duration ladder `DurationEdges`.
+- Quantiles: `Quantile`, the estimate an `AsQuantile` track takes, from a histogram's edges and per-bucket counts.
 - Sampling: `NewSampler` with `Sampling`, `(*Sampler).Run`, `Series` and `Bins`, and `Sampled` with its options `Where`, `By`, `Key`, `AsQuantile` and `AsBins`.
 - Events: `FrameEvent` and `FrameEventKind` with its constants, `AppendColumn`, `AppendBin`, `ReplaceColumn`, `ReplaceBin`, `ResetAt` and `SetFrame`.
 - Code generation: `WireTypes`, every wire type, `WireEnums`, every string enum on the wire, and `WireUnions` with `WireUnion`, the tagged wire structs, for an app's own wiregen run.
@@ -112,7 +113,7 @@ chartdata leaves these out on purpose. The [non-goals](docs/non-goals.md) page g
 
 ## Documentation
 
-- [Frames](docs/frames.md) covers the twelve frame types, their constructors and options, the wire format, every refusal, the limits table and the duration ladder.
+- [Frames](docs/frames.md) covers the twelve frame types, their constructors and options, the wire format, every refusal, the limits table, the duration ladder and `Quantile`.
 - [Sampling](docs/sampling.md) covers the `Sampler`: what it reads from each kind of series, its bounds, its reads and the events it sends.
 - [Events](docs/events.md) covers the four event kinds and how a page applies them.
 - [The generated contract](docs/contract.md) covers the TypeScript types, the golden fixtures and their paths, the drift check and generating an app's own decoders.

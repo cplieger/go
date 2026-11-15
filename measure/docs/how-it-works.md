@@ -13,13 +13,13 @@ Every constructor takes a metric name, its HELP text and its unit, then options.
 | Gauge | `NewGauge(name, help, unit, opts...)` | `Set`, `Add`, `Sub`, `Inc`, `Dec` and `Value`, all on `float64` |
 | Labeled gauge | `NewLabeledGauge(name, help, unit, labels, opts...)` | `Set(v, vals...)`, `Delete(vals...)`, `Reset()` |
 | Histogram | `NewHistogram(name, help, unit, opts...)` | `Observe(v)` |
-| Labeled histogram | `NewLabeledHistogram(name, help, unit, labels, opts...)` | `Observe(v, vals...)`, `Delete(vals...)`, `Reset()`, `NewTimer(vals...)` |
+| Labeled histogram | `NewLabeledHistogram(name, help, unit, labels, opts...)` | `Observe(v, vals...)`, `Seed(vals...)`, `Delete(vals...)`, `Reset()`, `NewTimer(vals...)` |
 | State set | `NewStateSet(name, help, labels, states, opts...)` | `Set(state, vals...)`, `Delete(vals...)` |
 | Info | `NewInfo(name, help, labels, opts...)` | `Set(vals...)`, `Delete()` |
 
 Counters hold `int64` values. A counter saturates at `math.MaxInt64` instead of wrapping to a negative value, so the series stays monotonic. A negative `Add` panics.
 
-On a labeled metric, every record, `Delete` and `NewTimer` call takes one value per label name, in the order the names were given. A call with a different number of values panics. A state set's `Set` and `Delete` take the values of the labels before its state label, and `Set` panics on a state it does not declare. `Delete` removes one label combination, and `Reset` removes all of them.
+On a labeled metric, every record, `Seed`, `Delete` and `NewTimer` call takes one value per label name, in the order the names were given. A call with a different number of values panics. A state set's `Set` and `Delete` take the values of the labels before its state label, and `Set` panics on a state it does not declare. `Delete` removes one label combination, and `Reset` removes all of them.
 
 A histogram observes values in its unit, which for a latency is seconds.
 

@@ -75,7 +75,7 @@ A counter's or histogram's increase is taken from its label set's baseline, its 
 
 ### Histograms
 
-`AsQuantile(q)` estimates the q-quantile of each column's bucket increases as Prometheus's [`histogram_quantile`](https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile) does: linearly within the bucket the rank falls in, the lowest bucket from 0 when its bound is above 0, and the highest finite bound for a rank in the `+Inf` bucket. A column with no observations, or a histogram with no finite bucket, is a gap.
+`AsQuantile(q)` estimates the q-quantile of each column's bucket increases with `Quantile`, as Prometheus's [`histogram_quantile`](https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile) does: linearly within the bucket the rank falls in, the lowest bucket from 0 when its bound is above 0, and the highest finite bound for a rank in the `+Inf` bucket. A column `Quantile` answers no estimate for, such as one with no observations or a histogram with no finite bucket, is a gap. A frame you build from your store's bucket counts with `Quantile` therefore matches the track's ([Frames](frames.md#quantiles-of-a-stored-histogram)).
 
 For either form, a step with no observation gives no point. A label set read with no observation yet holds no place, and its baseline of zeros makes its first observations count in the column they are made in. An `AsBins` series with no observation over its window is not in the frame.
 
