@@ -23,13 +23,17 @@ const (
 	// MaxMagnitude is the largest magnitude a value may have, so the chart's
 	// sums and scales stay finite.
 	MaxMagnitude = 1e300
-	// MaxCalendarDays is the most days a CalendarFrame holds: MaxRows weeks.
-	MaxCalendarDays = 7 * MaxRows
+	// MaxCalendarDays is the most days a CalendarFrame holds: the most that
+	// fit in MaxRows weeks at any week start, since the page picks it and a
+	// first day up to 6 days into its week adds a partial week.
+	MaxCalendarDays = 7*(MaxRows-1) + 1
 	// MinEvery is the shortest step a [Sampler] takes.
 	MinEvery = time.Second
 	// MaxPoints is the most points one sampled ring holds, keep / every.
 	MaxPoints = 10_000
-	// MaxLabelSets is the most label sets a [Sampler] reads per track; one
-	// past it is dropped, and the first drop logged.
+	// MaxLabelSets is the most label sets a [Sampler] reads per track, and
+	// the most series it holds per track; a new one past it is dropped, and
+	// the first drop logged. A value or quantile track holds at most
+	// MaxValues / (Keep / Every) series, so its whole ring fits one frame.
 	MaxLabelSets = 1_000
 )

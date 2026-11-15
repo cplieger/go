@@ -395,8 +395,244 @@ func TestSamplerKeepsAtMostMaxLabelSets(t *testing.T) {
 		if got := len(seriesOf(t, s, track, 10*time.Minute).Series); got != chartdata.MaxLabelSets {
 			t.Errorf("series = %d, want %d, the rest dropped", got, chartdata.MaxLabelSets)
 		}
-		if n := logs.count("more label sets than the sampler keeps"); n != 1 {
+		if n := logs.count(dropLog); n != 1 {
 			t.Errorf("logged the cap %d times, want once", n)
+		}
+	})
+}
+
+// dropLog is the warning a track logs when it drops a new label set or
+// series.
+const dropLog = "more label sets or series than the sampler holds"
+
+// churn registers an ExportChartdata gauge of an unbounded agent label whose
+// collector emits the agents agents returns at each read.
+func churn(reg *measure.Registry, agents func() []string) *measure.Desc {
+	turns := measure.NewGaugeDesc("turns", "h", measure.UnitCount, []string{"agent"},
+		measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+	reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+		for _, a := range agents() {
+			e.Emit(turns, 1, a)
+		}
+	}, turns))
+	return turns
+}
+
+// sampled runs a sampler of track on reg, every minute, keeping keep, with
+// its warnings in logs, and moves the clock half a step past the first
+// column.
+func sampled(t *testing.T, reg *measure.Registry, keep time.Duration, logs *logCapture, track *chartdata.Track) *chartdata.Sampler {
+	t.Helper()
+	s, err := chartdata.NewSampler(chartdata.Sampling{Registry: reg, Every: every, Keep: keep, Logger: logs.logger()}, track)
+	if err != nil {
+		t.Fatalf("NewSampler: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go func() { _ = s.Run(ctx) }()
+	time.Sleep(every + every/2)
+	synctest.Wait()
+	return s
+}
+
+// Label values that change at every read, as an unbounded label's may, must
+// not pile up rings past the cap: the series a track holds stay at
+// MaxLabelSets however many steps bring new ones.
+func TestSamplerHoldsAtMostMaxLabelSetsSeriesAcrossChurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		var mu sync.Mutex
+		next := 0
+		turns := churn(reg, func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			out := make([]string, chartdata.MaxLabelSets)
+			for i := range out {
+				out[i] = strconv.Itoa(1_000_000 + next)
+				next++
+			}
+			return out
+		})
+		var logs logCapture
+		track := chartdata.Sampled(turns, chartdata.By("agent"))
+		s := sampled(t, reg, 10*time.Minute, &logs, track)
+		for range 7 {
+			step()
+		}
+		if got := len(seriesOf(t, s, track, 10*time.Minute).Series); got != chartdata.MaxLabelSets {
+			t.Errorf("series after 8 steps of new agents = %d, want %d", got, chartdata.MaxLabelSets)
+		}
+		if n := logs.count(dropLog); n != 1 {
+			t.Errorf("logged the drop %d times, want once", n)
+		}
+	})
+}
+
+// A new label set that sorts first must not take the place of one already
+// held: the held set keeps its values, and the new one is dropped.
+func TestSamplerKeepsTheHeldLabelSetsOverANewOneThatSortsFirst(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		held := make([]string, chartdata.MaxLabelSets)
+		for i := range held {
+			held[i] = "m" + strconv.Itoa(10_000+i)
+		}
+		var mu sync.Mutex
+		agents := held
+		turns := churn(reg, func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return agents
+		})
+		var logs logCapture
+		track := chartdata.Sampled(turns, chartdata.By("agent"))
+		s := sampled(t, reg, 10*time.Minute, &logs, track)
+		mu.Lock()
+		agents = append([]string{"a"}, held...)
+		mu.Unlock()
+		step()
+		got := valuesOf(new(seriesOf(t, s, track, 10*time.Minute)))
+		if len(got) != chartdata.MaxLabelSets {
+			t.Errorf("series = %d, want %d", len(got), chartdata.MaxLabelSets)
+		}
+		if _, ok := got["a"]; ok {
+			t.Errorf("the new agent a is held, want it dropped")
+		}
+		if last := got[held[len(held)-1]]; !sameValues(last, []float64{1, 1}) {
+			t.Errorf("the held agent that sorts last = %v, want [1 1]", last)
+		}
+	})
+}
+
+// A value track's whole ring must fit one frame: 10,000 one-second steps
+// leave room for 100 series of MaxValues.
+func TestSamplerHoldsNoMoreSeriesThanAFrameOfTheRingTakes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		agents := make([]string, 150)
+		for i := range agents {
+			agents[i] = strconv.Itoa(1_000 + i)
+		}
+		turns := churn(reg, func() []string { return agents })
+		var logs logCapture
+		track := chartdata.Sampled(turns, chartdata.By("agent"))
+		s, err := chartdata.NewSampler(chartdata.Sampling{
+			Registry: reg, Every: time.Second, Keep: chartdata.MaxPoints * time.Second, Logger: logs.logger(),
+		}, track)
+		if err != nil {
+			t.Fatalf("NewSampler: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() { _ = s.Run(ctx) }()
+		time.Sleep(1500 * time.Millisecond)
+		synctest.Wait()
+		f, err := s.Series(track, chartdata.MaxPoints*time.Second)
+		if err != nil {
+			t.Fatalf("Series of the whole ring: %v", err)
+		}
+		if want := chartdata.MaxValues / chartdata.MaxPoints; len(f.Series) != want {
+			t.Errorf("series = %d, want %d, MaxValues over the ring's points", len(f.Series), want)
+		}
+		if n := logs.count(dropLog); n != 1 {
+			t.Errorf("logged the drop %d times, want once", n)
+		}
+	})
+}
+
+// A gauge may hold ±Inf or a value past MaxMagnitude, which no frame can
+// carry: the sampler takes it as a gap, so the ring still reads and every
+// event still encodes.
+func TestSamplerTakesAReadingNoFrameCarriesAsAGap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		depth := measure.NewGauge("depth", "h", measure.UnitCount)
+		reg.MustRegister(depth)
+		track := chartdata.Sampled(depth)
+		h := start(t, reg, 10*time.Minute, track)
+		defer h.stop()
+
+		for _, v := range []float64{1, inf, -inf, 2e300, 2} {
+			depth.Set(v)
+			step()
+		}
+		f := seriesOf(t, h.s, track, 10*time.Minute)
+		if got := valuesOf(&f)["depth"]; !sameValues(got, []float64{1, nan, nan, nan, 2}) {
+			t.Errorf("values = %v, want [1 NaN NaN NaN 2]", got)
+		}
+		for _, e := range h.takeEvents() {
+			encode(t, e)
+		}
+	})
+}
+
+// A step that overruns its next edges, such as a slow Emit, leaves a gap
+// column at each edge it missed, and a counter's next column is a gap too,
+// since its increase would cover several steps.
+func TestSamplerLeavesAGapAtEachMissedEdge(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		depth := measure.NewGauge("depth", "h", measure.UnitCount)
+		runs := measure.NewCounter("runs_total", "h", measure.UnitCount)
+		reg.MustRegister(depth, runs)
+		gauge, counter := chartdata.Sampled(depth), chartdata.Sampled(runs)
+		var mu sync.Mutex
+		var events []chartdata.FrameEvent
+		slow := true
+		s, err := chartdata.NewSampler(chartdata.Sampling{
+			Registry: reg, Every: every, Keep: 10 * time.Minute,
+			Emit: func(e chartdata.FrameEvent) {
+				mu.Lock()
+				events = append(events, e)
+				stall := slow && e.X != nil && *e.X == float64(t0+2*min1)
+				if stall {
+					slow = false
+				}
+				mu.Unlock()
+				if stall {
+					time.Sleep(2*every + every/2)
+				}
+			},
+		}, gauge, counter)
+		if err != nil {
+			t.Fatalf("NewSampler: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() { _ = s.Run(ctx) }()
+		depth.Set(1)
+		runs.Add(1)
+		time.Sleep(every + every/2)
+		synctest.Wait()
+		runs.Add(2)
+		time.Sleep(4 * every)
+		synctest.Wait()
+		// Columns 1 and 2 are taken; Emit stalls column 2 until 4.5 minutes,
+		// so 3 and 4 are missed and 5 is taken.
+		g := seriesOf(t, s, gauge, 10*time.Minute)
+		want := []float64{float64(t0 + min1), float64(t0 + 2*min1), float64(t0 + 3*min1), float64(t0 + 4*min1), float64(t0 + 5*min1)}
+		if !sameValues(g.X, want) {
+			t.Fatalf("x = %v, want a column at each edge, missed ones included, %v", g.X, want)
+		}
+		if got := valuesOf(&g)["depth"]; !sameValues(got, []float64{1, 1, nan, nan, 1}) {
+			t.Errorf("gauge = %v, want [1 1 NaN NaN 1]", got)
+		}
+		if got := valuesOf(new(seriesOf(t, s, counter, 10*time.Minute)))["runs_total"]; !sameValues(got, []float64{nan, 2, nan, nan, nan}) {
+			t.Errorf("counter = %v, want [NaN 2 NaN NaN NaN]: no increase across the missed steps", got)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		var appended []float64
+		for _, e := range events {
+			if e.Kind == chartdata.KindAppend && e.Key == "depth" {
+				appended = append(appended, *e.X)
+				if *e.X == want[2] && e.Values[0] != nil {
+					t.Errorf("the missed column's append = %v, want a gap", *e.Values[0])
+				}
+			}
+		}
+		if !sameValues(appended, want[1:]) {
+			t.Errorf("appends at %v, want one per column after the first, %v", appended, want[1:])
 		}
 	})
 }

@@ -12,8 +12,8 @@ import (
 	"github.com/cplieger/go/wiregen/v2"
 )
 
-// interfaces maps each exported interface in a generated types file to its
-// declaration.
+// interfaces maps each exported interface and type alias in a generated
+// types file to its declaration.
 func interfaces(t *testing.T, file string) map[string]string {
 	t.Helper()
 	src, err := os.ReadFile(file)
@@ -21,8 +21,8 @@ func interfaces(t *testing.T, file string) map[string]string {
 		t.Fatalf("read %s: %v", file, err)
 	}
 	out := map[string]string{}
-	for _, m := range regexp.MustCompile(`(?ms)^export interface (\w+) \{\n.*?^\}`).FindAllStringSubmatch(string(src), -1) {
-		out[m[1]] = m[0]
+	for _, m := range regexp.MustCompile(`(?ms)^export interface (\w+) \{\n.*?^\}|^export type (\w+) = [^\n]*;$`).FindAllStringSubmatch(string(src), -1) {
+		out[m[1]+m[2]] = m[0]
 	}
 	return out
 }
@@ -40,6 +40,9 @@ func TestAnAppsGeneratorRegistersChartdatasTypes(t *testing.T) {
 	for _, typ := range chartdata.WireTypes() {
 		r.Types = append(r.Types, wiregen.TypeOf(typ))
 	}
+	for _, typ := range chartdata.WireEnums() {
+		r.Enums = append(r.Enums, wiregen.EnumRef{Type: wiregen.TypeOf(typ)})
+	}
 	tsDir := filepath.Join(t.TempDir(), "wire")
 	if err := r.Generate(t.Context(), wiregen.WithTSDir(tsDir)); err != nil {
 		t.Fatalf("an app's Generate: %v", err)
@@ -51,8 +54,8 @@ func TestAnAppsGeneratorRegistersChartdatasTypes(t *testing.T) {
 		}
 	}
 	contract := interfaces(t, filepath.Join(root, "contract", gen.TypesFile))
-	if len(contract) != len(chartdata.WireTypes()) {
-		t.Errorf("frame.ts declares %d interfaces, want one per chartdata wire type, %d", len(contract), len(chartdata.WireTypes()))
+	if want := len(chartdata.WireTypes()) + len(chartdata.WireEnums()); len(contract) != want {
+		t.Errorf("frame.ts declares %d types, want one per chartdata wire type and enum, %d", len(contract), want)
 	}
 	for name, want := range contract {
 		if got[name] != want {

@@ -108,6 +108,10 @@ func TestConstructorsRefuseABadOption(t *testing.T) {
 			build: newSeries(chartdata.WithResets(time.UnixMilli(2), time.UnixMilli(2))),
 		},
 		{
+			name: "resetsInOneMillisecond", rule: chartdata.RuleOrder, field: "resets",
+			build: newSeries(chartdata.WithResets(time.UnixMilli(2), time.UnixMilli(2).Add(time.Microsecond))),
+		},
+		{
 			name: "refInfinite", rule: chartdata.RuleFinite, field: "refs[1].value",
 			build: newSeries(chartdata.WithRefs(chartdata.FrameRef{Key: "a", Value: 1}, chartdata.FrameRef{Key: "b", Value: -inf})),
 		},
@@ -298,6 +302,7 @@ func TestCalendarFrameRefusesABadStart(t *testing.T) {
 	}
 	runRefusals(t, []refusalCase{
 		{name: "local", rule: chartdata.RuleShape, field: "start", build: newCalendar(time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local))},
+		{name: "fixedZone", rule: chartdata.RuleShape, field: "start", build: newCalendar(time.Date(2026, 1, 1, 0, 0, 0, 0, time.FixedZone("Paris", 3600)))},
 		{name: "notMidnight", rule: chartdata.RuleShape, field: "start", build: newCalendar(midnight.Add(time.Hour))},
 		{name: "valueInfinite", rule: chartdata.RuleFinite, field: "values[1]", build: newCalendar(midnight, 1, inf)},
 	})
@@ -416,6 +421,10 @@ func TestEventsStatesAndValueFramesRefuseMalformedData(t *testing.T) {
 		}},
 		{name: "statesNotIncreasing", rule: chartdata.RuleOrder, field: "states[1].at", build: func() error {
 			_, err := chartdata.NewStatesFrame(d, []chartdata.State{{At: time.UnixMilli(5), Key: "a"}, {At: time.UnixMilli(5), Key: "b"}})
+			return err
+		}},
+		{name: "statesInOneMillisecond", rule: chartdata.RuleOrder, field: "states[1].at", build: func() error {
+			_, err := chartdata.NewStatesFrame(d, []chartdata.State{{At: time.UnixMilli(5), Key: "a"}, {At: time.UnixMilli(5).Add(time.Microsecond), Key: "b"}})
 			return err
 		}},
 		{name: "stateUndeclared", rule: chartdata.RuleShape, field: "states[1].key", build: func() error {

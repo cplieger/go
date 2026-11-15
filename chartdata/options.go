@@ -116,7 +116,7 @@ func (o *options) checkAxis() error {
 		}
 	}
 	for i := 1; i < len(o.resets); i++ {
-		if !o.resets[i].After(o.resets[i-1]) {
+		if o.resets[i].UnixMilli() <= o.resets[i-1].UnixMilli() {
 			return refusef(RuleOrder, "resets", "must strictly increase, at %d", i)
 		}
 	}

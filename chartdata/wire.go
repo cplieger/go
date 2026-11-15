@@ -4,10 +4,10 @@ import "reflect"
 
 // WireTypes returns every struct type this package puts on the wire, the
 // twelve frames, their parts and FrameEvent, for an app's code generator to
-// register, such as with wiregen.TypeOf. Each name is unique to this
-// package's wire: a frame's ends in Frame, and every other one starts with
-// Frame, so none collides with an app's own type. Each call returns a fresh
-// slice.
+// register beside WireEnums, such as with wiregen.TypeOf. A frame's name
+// ends in Frame and every other one starts with Frame, so an app's own types
+// rarely meet them; wiregen refuses a clash by name. Each call returns a
+// fresh slice.
 func WireTypes() []reflect.Type {
 	return []reflect.Type{
 		reflect.TypeFor[SeriesFrame](),
@@ -36,5 +36,18 @@ func WireTypes() []reflect.Type {
 		reflect.TypeFor[FrameFlowLink](),
 		reflect.TypeFor[FrameTimes](),
 		reflect.TypeFor[FrameMeter](),
+	}
+}
+
+// WireEnums returns the string enums on the wire, FrameType, FrameAxis and
+// FrameEventKind, for an app's code generator to register beside WireTypes,
+// such as with wiregen.EnumRef{Type: wiregen.TypeOf(t)}, so the frame's type
+// and an event's kind are typed by their members. Each call returns a fresh
+// slice.
+func WireEnums() []reflect.Type {
+	return []reflect.Type{
+		reflect.TypeFor[FrameType](),
+		reflect.TypeFor[FrameAxis](),
+		reflect.TypeFor[FrameEventKind](),
 	}
 }

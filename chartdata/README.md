@@ -10,7 +10,7 @@ It builds on [`measure`](../measure) and otherwise uses only the standard librar
 
 chartdata is built for a service that declares its series once with `measure` and draws them on its own pages.
 
-- Each constructor takes the `measure` declaration it draws, so a frame's name and unit always match what `/metrics` serves for the same series.
+- Each constructor takes the `measure` declaration it draws, so a frame's name and unit match what the registry holds for the same series once the declaration is registered.
 - Twelve frame types cover every chart element: series, bins, categories, boxes, points, grids, calendars, trees, flows, event strips, state histories and meters.
 - A constructor refuses a malformed frame, such as unequal lengths, an unsorted x or an infinite value, and one past the limits the chart draws within, with an error naming the rule and the field.
 - A `Sampler` holds the recent history of the series you keep nowhere else, in bounded rings, and estimates a histogram's quantiles as Prometheus's `histogram_quantile` does.
@@ -30,8 +30,17 @@ go get github.com/cplieger/go/chartdata@latest
 Build a frame in your API's handler from whatever your store returns, and serve it as JSON:
 
 ```go
-var runs = measure.NewCounterDesc("runs_total", "Runs by result and host.", measure.UnitCount,
-	[]string{"result", "host"}, measure.WithExport(measure.ExportChartdata))
+var (
+	reg  = measure.NewRegistry("myapp")
+	runs = measure.NewCounterDesc("runs_total", "Runs by result and host.", measure.UnitCount,
+		[]string{"result", "host"}, measure.WithExport(measure.ExportChartdata))
+)
+
+func main() {
+	// Reserves myapp_runs_total, the name the frame carries; /metrics serves nothing for it.
+	reg.MustRegister(runs)
+	// ...
+}
 
 func runsHandler(w http.ResponseWriter, r *http.Request) {
 	// Your store's query, as a value per result for each host; NaN is no data.
@@ -51,7 +60,7 @@ func runsHandler(w http.ResponseWriter, r *http.Request) {
 The frame encodes as:
 
 ```json
-{"type":"categories","name":"runs_total","unit":"count","names":["ok","failed"],"series":[{"key":"host-a","values":[30,2]},{"key":"host-b","values":[28,null]}]}
+{"type":"categories","name":"myapp_runs_total","unit":"count","names":["ok","failed"],"series":[{"key":"host-a","values":[30,2]},{"key":"host-b","values":[28,null]}]}
 ```
 
 A `NaN` value is a gap, sent as `null`. Instants are Unix milliseconds and quantities are in the declaration's base unit.
@@ -87,7 +96,7 @@ The package examples on pkg.go.dev show more cases, and `go test` keeps them tru
 - Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints` and `MaxLabelSets`, and the duration ladder `DurationEdges`.
 - Sampling: `NewSampler` with `Sampling`, `(*Sampler).Run`, `Series` and `Bins`, and `Sampled` with its options `Where`, `By`, `Key`, `AsQuantile` and `AsBins`.
 - Events: `FrameEvent` and `FrameEventKind` with its constants, `AppendColumn`, `AppendBin`, `ReplaceColumn`, `ReplaceBin`, `ResetAt` and `SetFrame`.
-- Code generation: `WireTypes`, every wire type, for an app's own wiregen run.
+- Code generation: `WireTypes`, every wire type, and `WireEnums`, every string enum on the wire, for an app's own wiregen run.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/chartdata).
 

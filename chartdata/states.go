@@ -65,7 +65,7 @@ func NewStatesFrame(d measure.Declared, states []State, opts ...Option) (StatesF
 	at := make([]int64, len(states))
 	for i, s := range states {
 		field := indexed("states", i)
-		if i > 0 && !s.At.After(states[i-1].At) {
+		if i > 0 && s.At.UnixMilli() <= states[i-1].At.UnixMilli() {
 			return StatesFrame{}, refuse(RuleOrder, field+".at", "must strictly increase")
 		}
 		at[i] = s.At.UnixMilli()

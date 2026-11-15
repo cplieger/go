@@ -21,7 +21,7 @@ func TestTheLimitsAreTheChartsCeilings(t *testing.T) {
 		{"MaxRows", chartdata.MaxRows, 1_000},
 		{"MaxSubRows", chartdata.MaxSubRows, 2_500},
 		{"MaxMagnitude", chartdata.MaxMagnitude, 1e300},
-		{"MaxCalendarDays", chartdata.MaxCalendarDays, 7_000},
+		{"MaxCalendarDays", chartdata.MaxCalendarDays, 6_994},
 		{"MinEvery", float64(chartdata.MinEvery), float64(time.Second)},
 		{"MaxPoints", chartdata.MaxPoints, 10_000},
 		{"MaxLabelSets", chartdata.MaxLabelSets, 1_000},
@@ -29,6 +29,18 @@ func TestTheLimitsAreTheChartsCeilings(t *testing.T) {
 		if c.got != c.want {
 			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
 		}
+	}
+	// ui src/data/chart/calendar.ts lays a calendar out in ceil((lead + days)
+	// / 7) weeks, lead the first day's place in the page's week, 0 to 6, and
+	// refuses more than MOST_ROWS weeks.
+	weeks := func(lead, days int) int { return (lead + days + 6) / 7 }
+	for lead := range 7 {
+		if w := weeks(lead, chartdata.MaxCalendarDays); w > chartdata.MaxRows {
+			t.Errorf("MaxCalendarDays from a first day %d into its week takes %d weeks, past %d", lead, w, chartdata.MaxRows)
+		}
+	}
+	if w := weeks(6, chartdata.MaxCalendarDays+1); w <= chartdata.MaxRows {
+		t.Errorf("one day past MaxCalendarDays takes %d weeks at most, so the cap is below what every week start fits", w)
 	}
 }
 
@@ -90,7 +102,16 @@ func TestConstructorsRefuseAFramePastTheLimits(t *testing.T) {
 			return err
 		}},
 		{name: "calendarDays", rule: chartdata.RuleLimit, field: "values", build: func() error {
-			_, err := chartdata.NewCalendarFrame(d, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 7_001))
+			_, err := chartdata.NewCalendarFrame(d, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 6_995))
+			return err
+		}},
+		// An oversized axis is charged from its length, before its edges are
+		// read: these are out of order too.
+		{name: "gridEdgesCharged", rule: chartdata.RuleLimit, field: "frame", build: func() error {
+			e := make([]float64, 1_000_002)
+			_, err := chartdata.NewGridFrame(d, &chartdata.Grid{
+				X: chartdata.FrameGridAxis{Edges: e}, Y: chartdata.FrameGridAxis{Names: []string{"r"}},
+			})
 			return err
 		}},
 		{name: "eventRows", rule: chartdata.RuleLimit, field: "rows", build: func() error {
@@ -130,7 +151,7 @@ func TestConstructorsTakeAFrameAtTheLimits(t *testing.T) {
 	if _, err := chartdata.NewCategoriesFrame(d, keys(1_000), nil); err != nil {
 		t.Errorf("1,000 names: %v", err)
 	}
-	if _, err := chartdata.NewCalendarFrame(d, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 7_000)); err != nil {
-		t.Errorf("7,000 days: %v", err)
+	if _, err := chartdata.NewCalendarFrame(d, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), make([]float64, 6_994)); err != nil {
+		t.Errorf("6,994 days: %v", err)
 	}
 }

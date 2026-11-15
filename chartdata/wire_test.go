@@ -51,3 +51,37 @@ func TestWireTypesListEveryTypeOnTheWire(t *testing.T) {
 		t.Error("WireTypes shares its slice between calls")
 	}
 }
+
+// TestWireEnumsListEveryEnumOnTheWire walks the same fields: each string
+// type they reach is listed, so the generated frame type, axis and event
+// kind name their members instead of any string.
+func TestWireEnumsListEveryEnumOnTheWire(t *testing.T) {
+	t.Parallel()
+	listed := chartdata.WireEnums()
+	reached := map[reflect.Type]bool{}
+	for _, typ := range chartdata.WireTypes() {
+		for f := range typ.Fields() {
+			ft := f.Type
+			for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.String && ft != reflect.TypeFor[string]() {
+				reached[ft] = true
+			}
+		}
+	}
+	for typ := range reached {
+		if !slices.Contains(listed, typ) {
+			t.Errorf("%s is on the wire but not in WireEnums", typ.Name())
+		}
+	}
+	for _, typ := range listed {
+		if !reached[typ] {
+			t.Errorf("%s is in WireEnums but on no frame or event", typ.Name())
+		}
+	}
+	listed[0] = nil
+	if chartdata.WireEnums()[0] == nil {
+		t.Error("WireEnums shares its slice between calls")
+	}
+}

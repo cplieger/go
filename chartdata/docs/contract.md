@@ -8,7 +8,7 @@ The Go wire types are the one source of the frames' shape. [wiregen](../../wireg
 
 | Path | Holds |
 | --- | --- |
-| `contract/frame.ts` | The TypeScript interfaces of every type `WireTypes` returns: the twelve frames, their parts and `FrameEvent`. Types only, with no decoder |
+| `contract/frame.ts` | The TypeScript interfaces of every type `WireTypes` returns, the twelve frames, their parts and `FrameEvent`, and the union of each string enum `WireEnums` returns: `FrameType`, `FrameAxis` and `FrameEventKind`. Types only, with no decoder |
 | `contract/fixtures/frame-<type>.json` | One frame of each type as the constructors encode it: `series`, `bins`, `categories`, `boxes`, `points`, `grid`, `calendar`, `tree` and `tree-groups`, `flow` and `flow-stages`, `events`, `states` and `value` |
 | `contract/fixtures/event-<kind>.json` | One event of each kind and shape: `append-column`, `append-bin`, `replace-column`, `replace-bin`, `reset` and `set` |
 | `contract/fixtures/refusal-<rule>.json` | `{"frame": ..., "rule": ..., "field": ...}`: a frame as the wire would carry it, which the constructors refuse by `rule` at `field`, one per rule a wire frame can break |
@@ -25,7 +25,7 @@ The refusal fixtures cover the rules from `length` to `limit`. `declaration` and
 Two tests are the drift check, and CI runs both on every change:
 
 - `TestTheFixturesAreCurrent`, in this module, rebuilds every fixture through the constructors and fails when a committed file differs, is missing or is not one the constructors produce.
-- `TestTheContractIsGenerated`, in the nested `internal/gen` module, runs wiregen over `WireTypes` and fails when `contract/frame.ts` or `deadset-edges.json` differs.
+- `TestTheContractIsGenerated`, in the nested `internal/gen` module, runs wiregen over `WireTypes` and `WireEnums` and fails when `contract/frame.ts` or `deadset-edges.json` differs.
 
 After changing a wire type or a fixture, regenerate both and commit the result with the change:
 
@@ -48,7 +48,10 @@ r := wiregen.Registry{
 for _, t := range chartdata.WireTypes() {
 	r.Types = append(r.Types, wiregen.TypeOf(t))
 }
+for _, t := range chartdata.WireEnums() {
+	r.Enums = append(r.Enums, wiregen.EnumRef{Type: wiregen.TypeOf(t)})
+}
 err := r.Generate(ctx, wiregen.WithTSDir("web/src/wire"))
 ```
 
-Each chartdata interface the app's run writes is the same as `frame.ts`'s, which a test in `internal/gen` checks, so a frame the app's decoder reads passes to the chart unchanged. No chartdata type is named `Event` or any other bare name an app is likely to use: a frame's name ends in `Frame`, and every other wire type's starts with `Frame`, since wiregen keys types by their bare name.
+Each chartdata interface and enum the app's run writes is the same as `frame.ts`'s, which a test in `internal/gen` checks, so a frame the app's decoder reads passes to the chart unchanged. wiregen keys types by their bare name and refuses two of one name, so no chartdata type is named `Event` or another bare name an app is likely to use: a frame's name ends in `Frame`, and every other wire type's starts with `Frame`. An app type of the same name, such as its own `FrameRef`, is refused by its run and needs another name.

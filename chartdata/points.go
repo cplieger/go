@@ -129,11 +129,8 @@ func NewGridFrame(d measure.Declared, g *Grid, opts ...Option) (GridFrame, error
 	if g == nil {
 		return GridFrame{}, refuse(RuleEmpty, "grid", "is nil")
 	}
-	columns, rows, err := checkGridAxes(g)
-	if err != nil {
-		return GridFrame{}, err
-	}
-	decl, o, err := begin(d, opts, optMarks, seriesCharge(rows, columns))
+	columns, rows := gridEntries(g.X), gridEntries(g.Y)
+	decl, o, err := begin(d, opts, optMarks, seriesCharge(rows, columns), func() error { return checkGridAxes(g) })
 	if err != nil {
 		return GridFrame{}, err
 	}
@@ -158,16 +155,26 @@ func NewGridFrame(d measure.Declared, g *Grid, opts ...Option) (GridFrame, error
 	}, nil
 }
 
-// checkGridAxes returns how many columns and rows g's axes have, refusing a
-// y of more than MaxRows entries.
-func checkGridAxes(g *Grid) (columns, rows int, err error) {
-	if columns, err = checkGridAxis("x", g.X); err != nil {
-		return 0, 0, err
+// gridEntries is how many entries an axis has, by its names or else its
+// edges, before checkGridAxis checks it.
+func gridEntries(a FrameGridAxis) int {
+	if len(a.Names) > 0 {
+		return len(a.Names)
 	}
-	if rows, err = checkGridAxis("y", g.Y); err != nil {
-		return 0, 0, err
+	return max(len(a.Edges)-1, 0)
+}
+
+// checkGridAxes refuses a malformed axis, and a y of more than MaxRows
+// entries.
+func checkGridAxes(g *Grid) error {
+	if _, err := checkGridAxis("x", g.X); err != nil {
+		return err
 	}
-	return columns, rows, checkMost("y", rows, MaxRows, "rows")
+	rows, err := checkGridAxis("y", g.Y)
+	if err != nil {
+		return err
+	}
+	return checkMost("y", rows, MaxRows, "rows")
 }
 
 // checkGridAxis returns how many entries the axis has.

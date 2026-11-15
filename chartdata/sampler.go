@@ -94,8 +94,8 @@ func AsBins(window time.Duration) TrackOption {
 type Sampling struct {
 	// Registry holds every tracked declaration. Required.
 	Registry *measure.Registry
-	// Logger takes the warning for a declaration past MaxLabelSets label
-	// sets; nil means slog.Default.
+	// Logger takes the warning for a track past the label sets or series it
+	// holds; nil means slog.Default.
 	Logger *slog.Logger
 	// Emit, when set, receives the events that keep a drawn frame current,
 	// on the sampler's goroutine, after each step.
@@ -111,6 +111,7 @@ type Sampling struct {
 // that the app keeps nowhere else. It keeps no store: its rings start empty
 // when the process starts. Build it with NewSampler and run it with Run.
 type Sampler struct {
+	newest  time.Time // the newest column's edge; zero before the first
 	reg     *measure.Registry
 	logger  *slog.Logger
 	emit    func(FrameEvent)
@@ -125,16 +126,30 @@ type Sampler struct {
 	running atomic.Bool
 }
 
-// tracked is a Track's state: its rings, one per key, aligned with the
-// sampler's columns, and the last cumulative reading of each label set.
+// tracked is a Track's state: its rings, one per key, and the label sets it
+// read last step.
 type tracked struct {
 	*Track
-	values map[string]*ring[float64]   // formValue and counters
-	hists  map[string]*ring[[]float64] // formQuantile and formBins: bucket increases, +Inf last
-	prev   map[string][]float64        // a counter's or histogram's last reading by label set
-	kind   measure.Kind
-	byAt   int
+	// values holds a value or quantile track's rings, aligned with the
+	// sampler's columns.
+	values map[string]*ring[float64]
+	// hists holds an AsBins track's rings of bucket increases, +Inf last,
+	// each holding the window's columns only.
+	hists map[string]*ring[[]float64]
+	// prev holds the label sets read last step, each with a counter's or
+	// histogram's cumulative reading.
+	prev map[string][]float64
+	kind measure.Kind
+	byAt int
+	most int // the most keys the track holds
+	span int // an AsBins ring's capacity, the window's columns
+	// rebase makes the next read take no increase, since the steps before
+	// it were missed.
+	rebase bool
 	capped bool
+	// stale is set while a set event the page needs was refused: an append
+	// would follow series the page never received.
+	stale  bool
 	warned bool
 }
 
@@ -150,16 +165,13 @@ func NewSampler(cfg Sampling, tracks ...*Track) (*Sampler, error) {
 	case cfg.Keep < cfg.Every:
 		return nil, fmt.Errorf("chartdata: Sampling.Keep %v is below Every %v", cfg.Keep, cfg.Every)
 	}
-	points := int64(cfg.Keep / cfg.Every)
-	if cfg.Keep%cfg.Every != 0 {
-		points++
-	}
+	points := steps(cfg.Keep, cfg.Every)
 	if points > MaxPoints {
 		return nil, fmt.Errorf("chartdata: Sampling.Keep holds %d steps of %v, past the most, %d", points, cfg.Every, MaxPoints)
 	}
 	s := &Sampler{
 		reg: cfg.Registry, logger: cfg.Logger, emit: cfg.Emit, every: cfg.Every, keep: cfg.Keep,
-		cols: newRing[int64](int(points)), tracks: make(map[*Track]*tracked, len(tracks)),
+		cols: newRing[int64](points), tracks: make(map[*Track]*tracked, len(tracks)),
 	}
 	for i, t := range tracks {
 		ts, err := s.track(t)
@@ -173,6 +185,15 @@ func NewSampler(cfg Sampling, tracks ...*Track) (*Sampler, error) {
 		}
 	}
 	return s, nil
+}
+
+// steps is how many steps of every span holds, a part step counted whole.
+func steps(span, every time.Duration) int {
+	n := int(span / every)
+	if span%every != 0 {
+		n++
+	}
+	return n
 }
 
 func (s *Sampler) track(t *Track) (*tracked, error) {
@@ -198,10 +219,13 @@ func (s *Sampler) track(t *Track) (*tracked, error) {
 	if err := s.checkForm(t, &decl); err != nil {
 		return nil, err
 	}
-	if t.form == formValue {
-		ts.values = map[string]*ring[float64]{}
-	} else {
+	if t.form == formBins {
 		ts.hists = map[string]*ring[[]float64]{}
+		ts.span = steps(t.window, s.every)
+		ts.most = min(MaxLabelSets, MaxValues/max(1, len(binsOf(decl.Buckets))))
+	} else {
+		ts.values = map[string]*ring[float64]{}
+		ts.most = min(MaxLabelSets, MaxValues/len(s.cols.buf))
 	}
 	return ts, nil
 }
@@ -230,7 +254,7 @@ func (s *Sampler) Run(ctx context.Context) error {
 		return errors.New("chartdata: Sampler.Run called twice")
 	}
 	for {
-		next := nextEdge(time.Now(), s.every)
+		next := s.after(time.Now())
 		timer := time.NewTimer(time.Until(next))
 		select {
 		case <-ctx.Done():
@@ -250,39 +274,122 @@ func (s *Sampler) Run(ctx context.Context) error {
 	}
 }
 
+// after is the next column's edge: the first multiple of every after now,
+// but never at or before the newest column, which a wall clock stepped back
+// would give.
+func (s *Sampler) after(now time.Time) time.Time {
+	next := nextEdge(now, s.every)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.newest.IsZero() && !next.After(s.newest) {
+		return s.newest.Add(s.every)
+	}
+	return next
+}
+
 // nextEdge is the first multiple of every since the Unix epoch after now.
 func nextEdge(now time.Time, every time.Duration) time.Time {
 	step := int64(every)
 	return time.Unix(0, (now.UnixNano()/step+1)*step)
 }
 
-// tick takes the column at edge and returns the events it makes.
+// tick takes the column at edge, after a gap column for each edge missed
+// since the newest, and returns the events they make. edge must be after
+// the newest column.
 func (s *Sampler) tick(ctx context.Context, edge time.Time) ([]FrameEvent, error) {
 	fams, err := s.reg.GatherOf(ctx, s.decls...)
 	if fams == nil && err != nil {
 		return nil, err
 	}
-	at := edge.UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	first := s.start == 0
+	first := s.newest.IsZero()
 	if first {
-		s.start = at
+		s.start = edge.UnixMilli()
 	}
-	s.cols.push(at)
+	gaps := s.gaps(edge)
+	s.newest = edge
+	s.cols.push(edge.UnixMilli())
 	var events []FrameEvent
 	for _, ts := range s.order {
 		fam := fams[slices.Index(s.decls, ts.decl)]
 		before := ts.keys()
-		if ts.form == formValue {
-			s.observeValues(ts, &fam)
-		} else {
-			s.observeHistograms(ts, &fam)
+		for range gaps {
+			ts.gap()
 		}
-		events = append(events, s.eventsOf(ts, before, first)...)
+		s.observe(ts, &fam)
+		events = append(events, s.eventsOf(ts, before, first, s.cols.n-1-gaps)...)
 	}
 	return events, nil
 }
+
+// gaps pushes a gap column for each edge missed between the newest column
+// and edge, the most the ring holds, and returns how many it pushed. A track
+// past missed edges takes no increase on its next read, which would cover
+// several steps.
+func (s *Sampler) gaps(edge time.Time) int {
+	if s.newest.IsZero() {
+		return 0
+	}
+	missed := int(edge.Sub(s.newest)/s.every) - 1
+	if missed <= 0 {
+		return 0
+	}
+	for _, ts := range s.order {
+		ts.rebase = true
+	}
+	n := min(missed, len(s.cols.buf)-1)
+	for k := n; k > 0; k-- {
+		s.cols.push(edge.Add(-time.Duration(k) * s.every).UnixMilli())
+	}
+	return n
+}
+
+// observe reads ts's samples in fam into its rings, as the newest column.
+func (s *Sampler) observe(ts *tracked, fam *measure.Family) {
+	capacity, earlier := len(s.cols.buf), s.cols.n-1
+	var dropped bool
+	switch ts.form {
+	case formValue:
+		dropped = ts.pushValues(s.observeValues(ts, fam), capacity, earlier)
+	case formQuantile:
+		bounds := ts.decl.Declaration().Buckets
+		sums := map[string]float64{}
+		for key, cum := range s.observeHistograms(ts, fam) {
+			sums[key] = quantile(ts.q, bounds, cum)
+		}
+		dropped = ts.pushValues(sums, capacity, earlier)
+	case formBins:
+		dropped = update(ts.hists, s.observeHistograms(ts, fam), ts.span, earlier, ts.most, nil, isNoBuckets)
+	}
+	ts.rebase = false
+	if dropped {
+		s.dropped(ts)
+	}
+}
+
+// pushValues pushes sums onto a value or quantile track's rings, a reading
+// that is not finite, or beyond ±MaxMagnitude, as a gap, since no frame can
+// carry it.
+func (ts *tracked) pushValues(sums map[string]float64, capacity, earlier int) bool {
+	for key, v := range sums {
+		if !isWithin(v) {
+			sums[key] = math.NaN()
+		}
+	}
+	return update(ts.values, sums, capacity, earlier, ts.most, math.NaN(), math.IsNaN)
+}
+
+// gap pushes a gap column onto ts's rings.
+func (ts *tracked) gap() {
+	if ts.form == formBins {
+		update(ts.hists, nil, 0, 0, 0, nil, isNoBuckets)
+		return
+	}
+	update(ts.values, nil, 0, 0, 0, math.NaN(), math.IsNaN)
+}
+
+func isNoBuckets(v []float64) bool { return v == nil }
 
 // keyOf is the series key of a sample's labels.
 func (ts *tracked) keyOf(labels []measure.Label) string {
@@ -302,51 +409,75 @@ func labelSet(labels []measure.Label) string {
 	return b.String()
 }
 
-// admit reports whether a sample counts toward ts, the n-th admitted, and
-// logs once the first time a declaration passes MaxLabelSets.
-func (s *Sampler) admit(ts *tracked, labels []measure.Label, n int) bool {
-	if ts.where != nil && !ts.where(labels) {
-		return false
-	}
-	if n < MaxLabelSets {
-		return true
-	}
-	if !ts.capped {
-		ts.capped = true
-		logger := s.logger
-		if logger == nil {
-			logger = slog.Default()
-		}
-		logger.Warn("chartdata: a sampled declaration has more label sets than the sampler keeps; the rest are dropped",
-			"name", ts.decl.Declaration().Name, "most", MaxLabelSets)
-	}
-	return false
+// reading is one sample a track reads, with its label set.
+type reading struct {
+	smp *measure.Sample
+	set string
 }
 
-func (s *Sampler) observeValues(ts *tracked, fam *measure.Family) {
-	sums := map[string]float64{}
-	next := map[string][]float64{}
-	n := 0
+// read returns the samples in fam ts reads: every label set Where keeps that
+// it read last step, then new ones in Gather's order while fewer than
+// MaxLabelSets are read, so a new label set never displaces a held one.
+func (s *Sampler) read(ts *tracked, fam *measure.Family) []reading {
+	var held, fresh []reading
 	for i := range fam.Samples {
 		smp := &fam.Samples[i]
-		if !s.admit(ts, smp.Labels, n) {
+		if ts.where != nil && !ts.where(smp.Labels) {
 			continue
 		}
-		n++
-		v := smp.Value
+		r := reading{smp: smp, set: labelSet(smp.Labels)}
+		if _, ok := ts.prev[r.set]; ok {
+			held = append(held, r)
+		} else {
+			fresh = append(fresh, r)
+		}
+	}
+	if room := MaxLabelSets - len(held); len(fresh) > room {
+		fresh = fresh[:room]
+		s.dropped(ts)
+	}
+	return append(held, fresh...)
+}
+
+// dropped logs, the first time for a track, that it dropped a new label set
+// or series.
+func (s *Sampler) dropped(ts *tracked) {
+	if ts.capped {
+		return
+	}
+	ts.capped = true
+	s.log().Warn("chartdata: a sampled track has more label sets or series than the sampler holds; new ones are dropped",
+		"name", ts.decl.Declaration().Name, "most_label_sets", MaxLabelSets, "most_series", ts.most)
+}
+
+func (s *Sampler) log() *slog.Logger {
+	if s.logger == nil {
+		return slog.Default()
+	}
+	return s.logger
+}
+
+// observeValues returns each key's sum of ts's samples in fam: a gauge's
+// value, or a counter's increase since its last reading.
+func (s *Sampler) observeValues(ts *tracked, fam *measure.Family) map[string]float64 {
+	sums := map[string]float64{}
+	next := map[string][]float64{}
+	for _, r := range s.read(ts, fam) {
+		v := r.smp.Value
 		if ts.kind == measure.KindCounter {
-			set := labelSet(smp.Labels)
-			next[set] = []float64{v}
-			prev, ok := ts.prev[set]
-			if !ok {
+			next[r.set] = []float64{v}
+			prev, ok := ts.prev[r.set]
+			if !ok || ts.rebase {
 				continue
 			}
 			v = increase(v, prev[0])
+		} else {
+			next[r.set] = nil
 		}
-		sums[ts.keyOf(smp.Labels)] += v
+		sums[ts.keyOf(r.smp.Labels)] += v
 	}
 	ts.prev = next
-	update(ts.values, sums, s.cols, math.NaN(), math.IsNaN)
+	return sums
 }
 
 // increase is a counter's increase from prev to cur, reset-aware as PromQL's
@@ -358,25 +489,20 @@ func increase(cur, prev float64) float64 {
 	return cur - prev
 }
 
-func (s *Sampler) observeHistograms(ts *tracked, fam *measure.Family) {
+// observeHistograms returns each key's sum of the bucket increases of ts's
+// samples in fam since their last reading.
+func (s *Sampler) observeHistograms(ts *tracked, fam *measure.Family) map[string][]float64 {
 	sums := map[string][]float64{}
 	next := map[string][]float64{}
-	n := 0
-	for i := range fam.Samples {
-		smp := &fam.Samples[i]
-		if smp.Histogram == nil || !s.admit(ts, smp.Labels, n) {
-			continue
-		}
-		n++
-		cur := cumulative(smp.Histogram)
-		set := labelSet(smp.Labels)
-		next[set] = cur
-		if prev, ok := ts.prev[set]; ok && len(prev) == len(cur) {
-			addInto(sums, ts.keyOf(smp.Labels), bucketIncrease(cur, prev))
+	for _, r := range s.read(ts, fam) {
+		cur := cumulative(r.smp.Histogram)
+		next[r.set] = cur
+		if prev, ok := ts.prev[r.set]; ok && !ts.rebase {
+			addInto(sums, ts.keyOf(r.smp.Labels), bucketIncrease(cur, prev))
 		}
 	}
 	ts.prev = next
-	update(ts.hists, sums, s.cols, nil, func(v []float64) bool { return v == nil })
+	return sums
 }
 
 // bucketIncrease is each cumulative bucket's increase from prev to cur, all
@@ -395,7 +521,7 @@ func bucketIncrease(cur, prev []float64) []float64 {
 // addInto adds delta to key's sum, bucket by bucket.
 func addInto(sums map[string][]float64, key string, delta []float64) {
 	sum, ok := sums[key]
-	if !ok || len(sum) != len(delta) {
+	if !ok {
 		sums[key] = delta
 		return
 	}
@@ -404,30 +530,41 @@ func addInto(sums map[string][]float64, key string, delta []float64) {
 	}
 }
 
-// update pushes each key's value in sums onto its ring, and gap onto the ring
-// of a key with none, dropping a ring left with no point; a new key's ring
-// starts with a gap per earlier column, so every ring stays aligned with
-// cols, whose newest column is the one pushed.
-func update[T any](rings map[string]*ring[T], sums map[string]T, cols *ring[int64], gap T, isGap func(T) bool) {
+// update pushes each held key's value in sums onto its ring, gap for a key
+// with none, and drops a ring left with no point. It then adds a ring of
+// capacity for each new key with a value, in key order, while fewer than
+// most are held, and reports whether it dropped one. A new key's ring starts
+// with a gap per earlier column, so its indices match the older rings'.
+func update[T any](rings map[string]*ring[T], sums map[string]T, capacity, earlier, most int, gap T, isGap func(T) bool) (dropped bool) {
 	for key, r := range rings {
-		if v, ok := sums[key]; ok {
-			r.push(v)
-			delete(sums, key)
-			continue
+		v, ok := sums[key]
+		if !ok {
+			v = gap
 		}
-		r.push(gap)
-		if allGaps(r, isGap) {
+		r.push(v)
+		if isGap(v) && allGaps(r, isGap) {
 			delete(rings, key)
 		}
 	}
+	var fresh []string
 	for key, v := range sums {
-		r := newRing[T](len(cols.buf))
-		for range cols.n - 1 {
+		if _, held := rings[key]; !held && !isGap(v) {
+			fresh = append(fresh, key)
+		}
+	}
+	slices.Sort(fresh)
+	for _, key := range fresh {
+		if len(rings) >= most {
+			return true
+		}
+		r := newRing[T](capacity)
+		for range min(earlier, capacity-1) {
 			r.push(gap)
 		}
-		r.push(v)
+		r.push(sums[key])
 		rings[key] = r
 	}
+	return false
 }
 
 // cumulative is a histogram reading's cumulative bucket counts, the +Inf
@@ -453,12 +590,12 @@ func allGaps[T any](r *ring[T], gap func(T) bool) bool {
 // keys returns the track's keys, sorted.
 func (ts *tracked) keys() []string {
 	var out []string
-	if ts.form == formValue {
-		for k := range ts.values {
+	if ts.form == formBins {
+		for k := range ts.hists {
 			out = append(out, k)
 		}
 	} else {
-		for k := range ts.hists {
+		for k := range ts.values {
 			out = append(out, k)
 		}
 	}
@@ -473,7 +610,7 @@ func (ts *tracked) keys() []string {
 // two buckets or no observations.
 // https://github.com/prometheus/prometheus/blob/main/promql/quantile.go
 func quantile(q float64, bounds, cum []float64) float64 {
-	if len(cum) < 2 || len(cum) != len(bounds)+1 {
+	if len(cum) < 2 {
 		return math.NaN()
 	}
 	cum = slices.Clone(cum)
@@ -499,7 +636,7 @@ func quantile(q float64, bounds, cum []float64) float64 {
 	return start + (bounds[b]-start)*(rank/count)
 }
 
-// window returns the indices of the columns after from, up to the newest.
+// window returns the index of the first column after from.
 func (s *Sampler) window(from int64) (first int) {
 	first = s.cols.n
 	for first > 0 && s.cols.at(first-1) > from {
@@ -556,9 +693,10 @@ func (s *Sampler) seriesFrame(ts *tracked, last time.Duration) (SeriesFrame, err
 	keys := ts.keys()
 	series := make([]Series, 0, len(keys))
 	for _, key := range keys {
+		r := ts.values[key]
 		values := make([]float64, len(x))
 		for i := range values {
-			values[i] = ts.valueAt(key, first+i)
+			values[i] = r.at(first + i)
 		}
 		series = append(series, Series{Key: key, Values: values})
 	}
@@ -567,18 +705,6 @@ func (s *Sampler) seriesFrame(ts *tracked, last time.Duration) (SeriesFrame, err
 		opts = append(opts, WithResets(time.UnixMilli(s.start)))
 	}
 	return NewSeriesFrame(ts.decl, x, series, opts...)
-}
-
-// valueAt is key's value at column i, NaN for a gap.
-func (ts *tracked) valueAt(key string, i int) float64 {
-	if ts.form == formValue {
-		return ts.values[key].at(i)
-	}
-	cum := ts.hists[key].at(i)
-	if cum == nil {
-		return math.NaN()
-	}
-	return quantile(ts.q, ts.decl.Declaration().Buckets, cum)
 }
 
 // Bins reads an AsBins track as a BinsFrame of the observations in each
@@ -595,25 +721,31 @@ func (s *Sampler) Bins(t *Track) (BinsFrame, error) {
 	if ts.form != formBins {
 		return BinsFrame{}, errors.New("chartdata: only an AsBins track is read with Bins")
 	}
-	return ts.binsFrame(s.window(s.end()-ts.window.Milliseconds()), s.cols.n)
+	return ts.binsFrame()
 }
 
-func (ts *tracked) binsFrame(first, last int) (BinsFrame, error) {
-	bounds := ts.decl.Declaration().Buckets
+// binsOf is the bins of a histogram's bounds: each finite bucket with a
+// finite lower edge, the first from 0 when its bound is above 0.
+func binsOf(bounds []float64) []Bin {
 	lowest := 0
 	if len(bounds) > 0 && bounds[0] <= 0 {
 		lowest = 1
 	}
-	bins := make([]Bin, 0, len(bounds)-lowest)
+	bins := make([]Bin, 0, max(0, len(bounds)-lowest))
 	for i := lowest; i < len(bounds); i++ {
 		bins = append(bins, Bin{From: below(bounds, i), To: bounds[i]})
 	}
-	var series []Series
-	for _, key := range ts.keys() {
-		sum := sumColumns(ts.hists[key], first, last)
-		if sum == nil {
-			continue
-		}
+	return bins
+}
+
+func (ts *tracked) binsFrame() (BinsFrame, error) {
+	bounds := ts.decl.Declaration().Buckets
+	bins := binsOf(bounds)
+	lowest := len(bounds) - len(bins)
+	keys := ts.keys()
+	series := make([]Series, 0, len(keys))
+	for _, key := range keys {
+		sum := sumColumns(ts.hists[key])
 		values := make([]float64, 0, len(bins))
 		for i := lowest; i < len(bounds); i++ {
 			values = append(values, max(0, sum[i]-below(sum, i)))
@@ -631,11 +763,11 @@ func below(vs []float64, i int) float64 {
 	return vs[i-1]
 }
 
-// sumColumns adds the bucket increases of r's columns first to last, nil when
-// every one is a gap.
-func sumColumns(r *ring[[]float64], first, last int) []float64 {
+// sumColumns adds the bucket increases of r's columns. r must hold one: an
+// all-gap ring is dropped by update.
+func sumColumns(r *ring[[]float64]) []float64 {
 	var sum []float64
-	for i := first; i < last; i++ {
+	for i := range r.n {
 		cum := r.at(i)
 		if cum == nil {
 			continue
@@ -658,57 +790,52 @@ func (ts *tracked) eventKey() string {
 	return ts.decl.Declaration().Name
 }
 
-// eventsOf returns the events the newest column makes for ts, whose keys
-// were before ahead of it: a reset at the first column of the process, then
-// an append, or a set of the whole ring when its series changed; an AsBins
-// track sets its window's frame on every step.
-func (s *Sampler) eventsOf(ts *tracked, before []string, first bool) []FrameEvent {
+// eventsOf returns the events the columns from index from to the newest
+// make for ts, whose keys were before ahead of them: a reset at the first
+// column of the process, then an append of each column, or a set of the
+// whole ring when its series changed or the page lacks the last set; an
+// AsBins track sets its window's frame on every step.
+func (s *Sampler) eventsOf(ts *tracked, before []string, first bool, from int) []FrameEvent {
 	key := ts.eventKey()
 	var events []FrameEvent
 	if first {
 		events = append(events, ResetAt(key, time.UnixMilli(s.start)))
 	}
-	newest := s.cols.n - 1
 	switch keys := ts.keys(); {
 	case ts.form == formBins:
-		f, err := ts.binsFrame(s.window(s.end()-ts.window.Milliseconds()), s.cols.n)
-		if err != nil {
-			s.warnOnce(ts, err)
-			return events
-		}
-		e, _ := SetFrame(key, &f)
-		return append(events, e)
-	case slices.Equal(keys, before):
-		values := make([]*float64, len(keys))
-		for i, k := range keys {
-			if v := ts.valueAt(k, newest); !math.IsNaN(v) {
-				values[i] = &v
+		f, err := ts.binsFrame()
+		return append(events, s.set(ts, key, &f, err)...)
+	case slices.Equal(keys, before) && !ts.stale:
+		for i := from; i < s.cols.n; i++ {
+			values := make([]*float64, len(keys))
+			for k, name := range keys {
+				if v := ts.values[name].at(i); !math.IsNaN(v) {
+					values[k] = &v
+				}
 			}
+			x := float64(s.cols.at(i))
+			events = append(events, FrameEvent{Key: key, Kind: KindAppend, X: &x, Values: values})
 		}
-		x := float64(s.cols.at(newest))
-		return append(events, FrameEvent{Key: key, Kind: KindAppend, X: &x, Values: values})
+		return events
 	default:
 		f, err := s.seriesFrame(ts, s.keep)
-		if err != nil {
-			s.warnOnce(ts, err)
-			return events
-		}
-		e, _ := SetFrame(key, &f)
-		return append(events, e)
+		return append(events, s.set(ts, key, &f, err)...)
 	}
 }
 
-// warnOnce logs, the first time for a track, a frame the sampler could not
-// build for a set event, such as one past MaxValues.
-func (s *Sampler) warnOnce(ts *tracked, err error) {
-	if ts.warned {
-		return
+// set returns the set event of f, or none when its constructor refused it
+// with err, which marks the track stale until a set is sent.
+func (s *Sampler) set(ts *tracked, key string, f Frame, err error) []FrameEvent {
+	if err != nil {
+		ts.stale = true
+		if !ts.warned {
+			ts.warned = true
+			s.log().Warn("chartdata: a sampled frame was refused, so its set event was not sent",
+				"name", ts.decl.Declaration().Name, "err", err)
+		}
+		return nil
 	}
-	ts.warned = true
-	logger := s.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.Warn("chartdata: a sampled frame was refused, so its set event was not sent",
-		"name", ts.decl.Declaration().Name, "err", err)
+	ts.stale = false
+	e, _ := SetFrame(key, f) // refuses only a nil frame
+	return []FrameEvent{e}
 }
