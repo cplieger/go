@@ -829,11 +829,13 @@ func (ts *tracked) bucketPoints(fam *measure.Family, next map[string]base, colum
 }
 
 // bucketIncrease is each cumulative bucket's increase from prev to cur, all
-// of cur when the count fell, a reset.
+// of cur when any bucket's count fell, a reset.
 func bucketIncrease(cur, prev []float64) []float64 {
 	delta := slices.Clone(cur)
-	if cur[len(cur)-1] < prev[len(prev)-1] {
-		return delta
+	for k := range cur {
+		if cur[k] < prev[k] {
+			return delta
+		}
 	}
 	for k := range delta {
 		delta[k] -= prev[k]

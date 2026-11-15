@@ -254,6 +254,42 @@ func TestSamplerEstimatesAQuantileAndBinsAHistogram(t *testing.T) {
 	})
 }
 
+func TestSamplerTakesAHistogramsIncreaseResetAware(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := measure.NewRegistry("")
+		wait := measure.NewLabeledHistogram("wait_seconds", "h", measure.UnitSeconds, []string{"profile"}, measure.WithBuckets([]float64{1, 2, 4}))
+		reg.MustRegister(wait)
+		p50 := chartdata.Sampled(wait, chartdata.AsQuantile(0.5))
+		bins := chartdata.Sampled(wait, chartdata.AsBins(time.Minute))
+		h := start(t, reg, 10*time.Minute, p50, bins)
+		defer h.stop()
+
+		wait.Observe(1.5, "ui")
+		step() // the first column sets the baseline
+		wait.Observe(1.5, "ui")
+		wait.Observe(1.5, "ui")
+		step()
+		// Re-created inside one step and out-observing its old count of 3: the
+		// bucket up to 2 falls from 3 to 2, a reset, so the increase is the new
+		// histogram's 2 observations in (0, 1] and 2 in (2, 4].
+		wait.Delete("ui")
+		for _, v := range []float64{0.5, 0.5, 3, 3} {
+			wait.Observe(v, "ui")
+		}
+		step()
+		if got := valuesOf(new(seriesOf(t, h.s, p50, 10*time.Minute)))["wait_seconds"]; !sameValues(got, []float64{nan, 1.5, 1}) {
+			t.Errorf("p50 = %v, want [NaN 1.5 1]: half-way through (1, 2], then the top of (0, 1]", got)
+		}
+		f, err := h.s.Bins(bins)
+		if err != nil {
+			t.Fatalf("Bins: %v", err)
+		}
+		if len(f.Series) != 1 || !sameValues(plain(f.Series[0].Values), []float64{2, 0, 2}) {
+			t.Errorf("observations per bin over the last minute = %+v, want [2 0 2], the new histogram's", f.Series)
+		}
+	})
+}
+
 func TestSamplerRingsAreBounded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reg := measure.NewRegistry("")

@@ -6,13 +6,13 @@ import (
 )
 
 // Quantile estimates the q-quantile of a histogram as PromQL's
-// histogram_quantile does, and as an AsQuantile track does. edges are the
-// finite bucket bounds, strictly increasing, and counts each bucket's
-// observations, the last above every edge. It answers false for no
-// observations, fewer than two buckets, a negative or non-finite count, an
-// estimate past float64, or q of 0 over an empty lowest bucket above 0, and
-// panics for q outside [0, 1], a non-finite or out-of-order edge, or a counts
-// length other than len(edges)+1.
+// histogram_quantile does. edges are the finite bucket bounds, strictly
+// increasing, and counts each bucket's observations, the last above every
+// edge. It answers false for no observations, fewer than two buckets, a
+// negative or non-finite count, a total past float64, two neighbouring edges
+// further apart than float64 reaches, or q of 0 over an empty lowest bucket
+// above 0, and panics for q outside [0, 1], a non-finite or out-of-order
+// edge, or a counts length other than len(edges)+1.
 func Quantile(edges, counts []float64, q float64) (float64, bool) {
 	checkQuantile(edges, counts, q)
 	total := 0.0

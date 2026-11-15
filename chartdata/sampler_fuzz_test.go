@@ -218,8 +218,12 @@ func (m *refSampler) point(smp *measure.Sample, set string, next map[string]base
 		return nil
 	}
 	delta := slices.Clone(cur)
+	reset := false // a fall in any entry: the increase is cur
+	for k := range cur {
+		reset = reset || cur[k] < b.cum[k]
+	}
 	for k := range delta {
-		if cur[last] >= b.cum[last] { // else a reset: the increase is cur
+		if !reset {
 			delta[k] -= b.cum[k]
 		}
 	}
