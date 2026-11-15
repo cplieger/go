@@ -260,9 +260,9 @@ func WithDeadsetEdges(targetRoot string) Option {
 // path, relative to the working directory, instead of
 // targetRoot/deadset-edges.json, merging into the file there. The TS
 // directory must lie below that file's directory, which roots the TS scopes;
-// the Go packages still resolve against targetRoot, so another tree holding
-// the same package.json files and hand-written edges generates as in place.
-// Empty, the default, keeps targetRoot/deadset-edges.json.
+// the Go packages still resolve against targetRoot, so another tree with the
+// same package.json files, file description and hand-written edges generates
+// as in place. Empty, the default, keeps targetRoot/deadset-edges.json.
 func WithDeadsetEdgesFile(path string) Option {
 	return func(o *options) { o.deadsetEdgesFile = path }
 }
