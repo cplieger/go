@@ -20,6 +20,7 @@ const (
 	helperReqStr       = "reqStr"
 	helperReqNum       = "reqNum"
 	helperReqBool      = "reqBool"
+	helperReqRaw       = "reqRaw"
 )
 
 // --- types generation ---
@@ -338,9 +339,11 @@ func ownRead(wn string, used *usedIdents) string {
 	return "own(o, \"" + wn + "\")"
 }
 
-// reqDecode is reqExpr before the bound checks. A required field has no
-// pointer level (presence.go), so null reaches it only as encoding/json's nil
-// collection or []byte, which reads as empty.
+// reqDecode is reqExpr before the bound checks. refusesNull decides whether
+// null is refused (presence.go); otherwise null reaches a required field
+// only as raw JSON, kept as data, or as encoding/json's nil collection or
+// []byte, which reads as empty. A mapped field is judged by its Decoder, or
+// with none only checked present when CaseRequired.
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
 	// own is imported only when a branch reads through it.
@@ -348,42 +351,69 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 	at := ", \"" + path + "\")"
 	switch f.Kind {
 	case kindRaw:
+		if f.CaseRequired {
+			used.helper(helperReqRaw)
+			return helperReqRaw + "(o, \"" + wn + "\"" + at
+		}
 		return read() + " as unknown"
 	case kindBytes:
 		used.helper(helperReqStr)
+		if f.refusesNull() {
+			return "reqStr(o, \"" + wn + "\"" + at
+		}
 		return read() + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
 	case kindSlice, kindMap:
-		if f.mapRef() {
-			// The named map's own decoder reads null as empty.
-			return g.decoderName(f.GoTypeName) + "(" + read() + ")"
-		}
-		helper, empty := helperDecodeArray, "[]"
-		if f.Kind == kindMap {
-			helper, empty = helperDecodeRecord, "{}"
-		}
-		used.helper(helper)
-		decode := helper + "(" + read() + ", " + g.elemDecoderExpr(f.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
-		if f.refusesNull() {
-			return decode
-		}
-		return read() + " === null ? " + empty + " : " + decode
+		return g.collectionDecode(f, wn, path, used)
 	case kindMapped:
 		if f.Mapping.Decoder != "" {
 			used.opaqueExpr(f.Mapping.Decoder)
 			return f.Mapping.Decoder + "(o, \"" + wn + "\"" + at
 		}
 		used.opaqueExpr(f.TSType)
+		if f.CaseRequired {
+			used.helper(helperReqRaw)
+			return helperReqRaw + "(o, \"" + wn + "\"" + at + " as " + f.TSType
+		}
 		return read() + " as " + f.TSType
 	case kindEnum:
 		used.helper("reqOneOf")
 		used.enumUse(f.GoTypeName)
 		return "reqOneOf(o, \"" + wn + "\", " + g.enumConstName(f.GoTypeName) + at
 	case kindStruct:
+		if f.CaseRequired {
+			// reqRaw names the absent field; the decoder refuses null.
+			used.helper(helperReqRaw)
+			return g.decoderName(f.GoTypeName) + "(" + helperReqRaw + "(o, \"" + wn + "\"" + at + ")"
+		}
 		return g.decoderName(f.GoTypeName) + "(" + read() + ")"
 	}
 	helper := primHelpers[f.Kind]
 	used.helper(helper)
 	return helper + "(o, \"" + wn + "\"" + at
+}
+
+// collectionDecode is reqDecode for a slice or map field; null reads as
+// empty unless f refusesNull.
+func (g *generator) collectionDecode(f *fieldInfo, wn, path string, used *usedIdents) string {
+	read := ownRead(wn, used)
+	if f.mapRef() {
+		if f.refusesNull() {
+			used.helper("asObject")
+			return g.decoderName(f.GoTypeName) + "(asObject(" + read + ", \"" + path + "." + wn + "\"))"
+		}
+		// The named map's own decoder reads null as empty.
+		return g.decoderName(f.GoTypeName) + "(" + read + ")"
+	}
+	helper, empty := helperDecodeArray, "[]"
+	if f.Kind == kindMap {
+		helper, empty = helperDecodeRecord, "{}"
+	}
+	used.helper(helper)
+	decode := helper + "(" + read + ", " + g.elemDecoderExpr(f.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
+	if f.refusesNull() {
+		return decode
+	}
+	return read + " === null ? " + empty + " : " + decode
 }
 
 var primHelpers = map[wireKind]string{
@@ -631,7 +661,7 @@ func (g *generator) arbForType(ti *typeInfo, reaches map[string]map[string]bool)
 // predicate it renders the LEAF record a depth cap forces: a recursive
 // optional field is absent and a recursive collection is empty, while a
 // recursive required struct field keeps its tie, because that type is capped
-// too and Go admits no unbroken chain of required struct fields.
+// too and rankEnds proves its capped draw ends.
 func (g *generator) arbRecord(fields []*fieldInfo, indent string, recursive func(*fieldInfo) bool, fixed map[string]string) string {
 	var b strings.Builder
 	var required []string
@@ -1025,6 +1055,15 @@ export function optBool(o: globalThis.Record<string, unknown>, key: string, path
   }
   if (typeof v !== "boolean") {
     fail(` + "`${path}.${key}`" + `, ` + "`expected boolean or undefined, got ${typeName(v)}`" + `);
+  }
+  return v;
+}
+
+/** Required JSON value of any shape; throws if absent. Null is a value. */
+export function reqRaw(o: globalThis.Record<string, unknown>, key: string, path = "$"): unknown {
+  const v = own(o, key);
+  if (v === undefined) {
+    fail(` + "`${path}.${key}`" + `, "expected a JSON value, got undefined");
   }
   return v;
 }

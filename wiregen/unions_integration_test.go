@@ -5,6 +5,8 @@ package wiregen_test
 import (
 	"strings"
 	"testing"
+
+	"github.com/cplieger/go/wiregen/v2"
 )
 
 // The union decoders type-check under tsc and, under node, decode each case,
@@ -81,6 +83,139 @@ for (const body of bodies) {
 		`refused $.command.payload: not allowed in this case`,
 		`refused $.create_chat.title: expected string, got undefined`,
 		`ok {"type":"rename"}`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// A case's required fields are non-optional members under tsc, and node
+// refuses each one absent or null, while the case that does not list stored
+// reads it as optional; a required json.RawMessage passes null as data.
+func TestUnionRequired_DecoderRuns(t *testing.T) {
+	out := runTS(t, checkedReg(), map[string]string{"main.ts": `import { decodeChecked } from "./decoders.gen.js";
+import type { Checked } from "./types.gen.js";
+const bodies = [
+  '{"state":"gone","stored":{"path":"p"}}',
+  '{"state":"gone"}',
+  '{"state":"updated","stored":null}',
+  '{"state":"unchanged"}',
+  '{"state":"unchanged","stored":null}',
+  '{"state":"error","failure":"f","detail":null}',
+  '{"state":"error","detail":1}',
+  '{"state":"error","failure":"f"}',
+];
+for (const body of bodies) {
+  try {
+    const c: Checked = decodeChecked(JSON.parse(body));
+    if (c.state === "gone" || c.state === "updated") {
+      const path: string = c.stored.path;
+      void path;
+    }
+    console.log("ok " + JSON.stringify(c));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"state":"gone","stored":{"path":"p"}}`,
+		`refused $.checked.stored: expected a JSON value, got undefined`,
+		`refused $.stored: expected object, got null`,
+		`ok {"state":"unchanged"}`,
+		`ok {"state":"unchanged"}`,
+		`ok {"state":"error","failure":"f","detail":null}`,
+		`refused $.checked.failure: expected string, got undefined`,
+		`refused $.checked.detail: expected a JSON value, got undefined`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// A required payload is a non-optional member under tsc, and node refuses
+// it absent or null in its case while another case's payload stays optional.
+func TestUnionRequired_PayloadDecoderRuns(t *testing.T) {
+	r := newTestRegistry()
+	r.Unions = []wiregen.Union{requiredPayloadCommand()}
+	out := runTS(t, r, map[string]string{"main.ts": `import { decodeCommand } from "./decoders.gen.js";
+import type { Command } from "./types.gen.js";
+const bodies = [
+  '{"type":"create","payload":{"title":"a"}}',
+  '{"type":"create"}',
+  '{"type":"create","payload":null}',
+  '{"type":"rename"}',
+];
+for (const body of bodies) {
+  try {
+    const c: Command = decodeCommand(JSON.parse(body));
+    if (c.type === "create") {
+      const title: string = c.payload.title;
+      void title;
+    }
+    console.log("ok " + JSON.stringify(c));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"type":"create","payload":{"title":"a"}}`,
+		`refused $.command.payload: expected a JSON value, got undefined`,
+		`refused $.create_chat: expected object, got null`,
+		`ok {"type":"rename"}`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// In the case that lists them, node refuses a []byte, slice or named map
+// null or absent and a mapped field with no Decoder absent, while the case
+// that does not list them reads null as absent; tsc checks the listing
+// case's members need no undefined guard.
+func TestUnionRequired_NullableFieldsDecoderRuns(t *testing.T) {
+	out := runTS(t, parcelReg(), map[string]string{"main.ts": `import { decodeParcel } from "./decoders.gen.js";
+import type { Parcel } from "./types.gen.js";
+const bodies = [
+  '{"kind":"full","data":"","tags":[],"labels":{},"at":1}',
+  '{"kind":"full","data":null,"tags":[],"labels":{},"at":1}',
+  '{"kind":"full","tags":[],"labels":{},"at":1}',
+  '{"kind":"full","data":"","tags":null,"labels":{},"at":1}',
+  '{"kind":"full","data":"","labels":{},"at":1}',
+  '{"kind":"full","data":"","tags":[],"labels":null,"at":1}',
+  '{"kind":"full","data":"","tags":[],"at":1}',
+  '{"kind":"full","data":"","tags":[],"labels":{}}',
+  '{"kind":"empty","data":null,"tags":null,"labels":null,"at":null}',
+  '{"kind":"empty"}',
+];
+for (const body of bodies) {
+  try {
+    const p: Parcel = decodeParcel(JSON.parse(body));
+    if (p.kind === "full") {
+      const n: number = p.data.length + p.tags.length + Object.keys(p.labels).length + p.at;
+      void n;
+    }
+    console.log("ok " + JSON.stringify(p));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"kind":"full","data":"","tags":[],"labels":{},"at":1}`,
+		`refused $.parcel.data: expected string, got null`,
+		`refused $.parcel.data: expected string, got undefined`,
+		`refused $.parcel.tags: expected array, got null`,
+		`refused $.parcel.tags: expected array, got undefined`,
+		`refused $.parcel.labels: expected object, got null`,
+		`refused $.parcel.labels: expected object, got undefined`,
+		`refused $.parcel.at: expected a JSON value, got undefined`,
+		`ok {"kind":"empty"}`,
+		`ok {"kind":"empty"}`,
 		"",
 	}, "\n")
 	if out != want {

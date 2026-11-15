@@ -1,0 +1,113 @@
+{
+  "components": {
+    "schemas": {
+      "Checked": {
+        "discriminator": {
+          "mapping": {
+            "error": "#/components/schemas/Checked.error",
+            "gone": "#/components/schemas/Checked.gone",
+            "unchanged": "#/components/schemas/Checked.unchanged",
+            "updated": "#/components/schemas/Checked.updated"
+          },
+          "propertyName": "state"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Checked.error"
+          },
+          {
+            "$ref": "#/components/schemas/Checked.gone"
+          },
+          {
+            "$ref": "#/components/schemas/Checked.unchanged"
+          },
+          {
+            "$ref": "#/components/schemas/Checked.updated"
+          }
+        ]
+      },
+      "Checked.error": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {},
+          "failure": {
+            "type": "string"
+          },
+          "state": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "state",
+          "failure",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "Checked.gone": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "gone"
+          },
+          "stored": {
+            "$ref": "#/components/schemas/Stored"
+          }
+        },
+        "required": [
+          "state",
+          "stored"
+        ],
+        "type": "object"
+      },
+      "Checked.unchanged": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "unchanged"
+          },
+          "stored": {
+            "$ref": "#/components/schemas/Stored"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "Checked.updated": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "updated"
+          },
+          "stored": {
+            "$ref": "#/components/schemas/Stored"
+          }
+        },
+        "required": [
+          "state",
+          "stored"
+        ],
+        "type": "object"
+      },
+      "Stored": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "t",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}

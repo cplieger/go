@@ -131,3 +131,58 @@ type NotRaw struct {
 type Batch struct {
 	Commands []Command `json:"commands"`
 }
+
+// Checked is a union whose cases share an optional field some of them
+// require.
+type Checked struct {
+	State   string          `json:"state"`
+	Stored  *Stored         `json:"stored,omitempty"`
+	Failure string          `json:"failure,omitempty"`
+	Detail  json.RawMessage `json:"detail,omitempty"`
+}
+
+// Stored is where a checked copy is stored.
+type Stored struct {
+	Path string `json:"path"`
+}
+
+// Chain is a union whose case requires a field that reaches it back.
+type Chain struct {
+	Type  string `json:"type"`
+	Next  *Chain `json:"next,omitempty"`
+	Value int    `json:"value,omitempty"`
+}
+
+// Loop is a union whose every case requires a field leading back to it,
+// through Link.
+type Loop struct {
+	Type string `json:"type"`
+	Link *Link  `json:"link,omitempty"`
+}
+
+// Link is a plain struct that requires a Loop.
+type Link struct {
+	Loop Loop `json:"loop"`
+}
+
+// Labeled is a union whose every case requires its name.
+type Labeled struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+// Parcel is a union whose cases share fields encoding/json writes as null
+// when nil, or leaves out, and one case requires.
+type Parcel struct {
+	Kind   string   `json:"kind"`
+	Data   []byte   `json:"data,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	Labels Labels   `json:"labels,omitempty"`
+	At     Stamp    `json:"at,omitempty"`
+}
+
+// Labels is a named map a Parcel carries.
+type Labels map[string]string
+
+// Stamp is an instant the tests give a Mapping with no Decoder.
+type Stamp int64

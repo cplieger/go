@@ -107,7 +107,7 @@ wiregen.Union{
 }
 ```
 
-`Tag` and the field lists are wire names. The tag is a required string or enum field, and an enum tag's cases are exactly its members. Each case lists the other fields it allows, every field belongs to some case, and a listed field keeps its own presence rule. A field some case leaves out must be tagged `omitempty` or `omitzero`, since otherwise `encoding/json` writes it in every case and the decoder and the case schema would refuse that output. Cases are emitted in the enum's order, or by value for a string tag.
+`Tag` and the field lists are wire names. The tag is a required string or enum field, and an enum tag's cases are exactly its members. Each case lists the other fields it allows, every field belongs to some case, and a listed field keeps its own presence rule unless `Required` lists it for that case (below). A field some case leaves out must be tagged `omitempty` or `omitzero`, since otherwise `encoding/json` writes it in every case and the decoder and the case schema would refuse that output. Cases are emitted in the enum's order, or by value for a string tag.
 
 - The types file carries one object type per case, one member per line under its field's JSDoc, the tag's included:
 
@@ -150,6 +150,22 @@ The payload field is listed in no case. It belongs to each case with a payload t
 - The decoder decodes `payload` with that case's decoder, reads `null` as absent, and refuses a present payload in a case that has none.
 - In each case's component, `payload` is that type's `$ref` or `null`, or absent.
 
+A field several cases share has one presence rule, so when one case always sends it and another may not, the field is tagged `omitempty` or `omitzero` and `Required` names the cases that always send it, keyed by case value:
+
+```go
+wiregen.Union{
+    Type:  wiregen.TypeRef[wire.Checked](),
+    Tag:   "state",
+    Cases: map[string][]string{"updated": {"stored"}, "unchanged": {"stored"}, "error": {"failure"}},
+    Required: map[string][]string{
+        "updated": {"stored"},
+        "error":   {"failure"},
+    },
+}
+```
+
+In a case that lists it, the field is present and not `null`, in both directions. A `json.RawMessage` other than the payload is only present, since its `null` is data, while a listed payload is decoded as its case's type and so is never `null`. The case's TS member has no `?`, the decoder refuses the field absent, and the case's component lists it in `required`. The decoder also refuses `null` and the schema drops it, except for that `json.RawMessage`, whose schema stays the open schema. A field whose type has a `Mapping` with a `Decoder` hands absence and `null` to that decoder; one with no `Decoder` is only checked present. Every other case keeps the field's own rule, `stored?:` in the unchanged case above. The Go side does not change, so the server must write the field in every case that lists it. `Generate` refuses a `Required` key that is no case, a field the case does not carry, the payload in a case with no payload type, a field listed twice, the tag or a field every case already sends and never as `null`, and a union whose every case requires a field that leads back to it, which no finite value fills.
+
 ## Named maps
 
 A registered named map type, `type Settings map[string]json.RawMessage`, is a body of its own: an open JSON object whose keys are not known in advance. It can be listed in `Types`, or named as an endpoint's `Request` or `Response`, an event's data, a union case's payload or the `ErrorEnvelope`. Its key and value follow the rules of a map field, so the value is any type wiregen reads, `json.RawMessage` included, and the key is a string, an integer or an `encoding.TextMarshaler`.
@@ -176,7 +192,7 @@ r.Mappings = map[string]wiregen.Mapping{
 ```
 
 - `TS` is the TypeScript type expression.
-- `Decoder` is a TypeScript expression called as `(obj, key, path)` that returns the field's value or throws. An empty one casts the value unchecked. The validators module's helpers, such as `reqStr`, are in scope.
+- `Decoder` is a TypeScript expression called as `(obj, key, path)` that returns the field's value or throws. An empty one casts the value unchecked, except that a field a union case lists in `Required` is checked present. The validators module's helpers, such as `reqStr`, are in scope.
 - `Schema` is the value's JSON Schema, required when an OpenAPI document is written. A `$ref` in it must be a string whose JSON pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) names something in the document, such as `#/components/schemas/Item`. `Generate` refuses one that does not, or that points into another document.
 
 A key may name a type alias or the type it resolves to, and both work. `go/types` resolves an alias past its own name, and the standard library re-homes types behind aliases: `json.RawMessage` is an alias for `encoding/json/jsontext.Value` from Go 1.27, so either key keeps a mapping in force across a toolchain upgrade. Set one of the two: when both are set, the alias's key applies and the other, reached by no other field, is refused.

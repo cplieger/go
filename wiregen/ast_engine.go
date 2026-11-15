@@ -83,7 +83,10 @@ type fieldInfo struct {
 	// RawNull: raw JSON typed as another shape (a union payload), whose bytes
 	// can be JSON null, which no omit option drops.
 	RawNull bool
-	Tagged  bool // wire name came from an explicit json tag
+	// CaseRequired: a union case's copy of a field its Required lists;
+	// presence.go derives its rules.
+	CaseRequired bool
+	Tagged       bool // wire name came from an explicit json tag
 }
 
 // wireKind is the one wire form encoding/json gives a value.
@@ -167,6 +170,9 @@ func newASTEngine(ctx context.Context, g *generator) (*astEngine, error) {
 		e.types = append(e.types, ti)
 	}
 	if err := e.resolveUnions(); err != nil {
+		return nil, err
+	}
+	if err := e.rankEnds(); err != nil {
 		return nil, err
 	}
 	if err := e.checkURLArguments(); err != nil {

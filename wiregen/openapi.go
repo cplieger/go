@@ -530,7 +530,8 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 // objectSchema is the object schema of fields in direction d, override
 // replacing a property's schema by wire name. A response field is required
 // unless omitempty or omitzero, since the encoder always writes it; a
-// request field also unless a pointer, as the decoder leaves it nil.
+// request field also unless a pointer, as the decoder leaves it nil. A
+// union case's Required copy is required in both directions.
 func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map[string]any) map[string]any {
 	props := map[string]any{}
 	required := []any{}
@@ -554,8 +555,8 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 // []byte is nullable: in a request always, since null decodes to nil, and in
 // a response unless omitempty or omitzero, since nil encodes as null. A typed
 // union payload is nullable in a response even with an omit option, since its
-// bytes can be JSON null. A Count lower bound of 1 or more makes it never
-// nullable.
+// bytes can be JSON null. A Count lower bound of 1 or more, or a union
+// case's Required, makes it never nullable.
 func (b *docBuilder) fieldSchema(f *fieldInfo, d direction) any {
 	s := b.valueSchema(f, d)
 	null := f.nullIn()

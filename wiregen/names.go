@@ -299,7 +299,7 @@ func enumNamesSlice(m map[string]enumDef) []string {
 // the one type, stays first.
 var validatorsExports = []string{
 	"Decoder", "own", "asObject", "asArray", helperReqStr, helperReqNum, helperReqBool,
-	"optStr", "optNum", "optBool", "reqOneOf", helperDecodeArray, helperDecodeRecord,
+	helperReqRaw, "optStr", "optNum", "optBool", "reqOneOf", helperDecodeArray, helperDecodeRecord,
 	"refuseKeys", "checkRange", "checkBytes", "checkPattern", "checkCount",
 }
 
