@@ -181,7 +181,7 @@ func (ui *unionInfo) requiredInEveryCase(ti *typeInfo, name string) bool {
 		if name == ui.payload {
 			f = uc.payload
 		}
-		if f.optional() || f.nullOut() || f.nullIn() {
+		if f.optional() || f.nullOut() {
 			return false
 		}
 	}

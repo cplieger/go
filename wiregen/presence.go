@@ -56,9 +56,9 @@ func (f *fieldInfo) elemTS() string {
 }
 
 // refusesNull reports whether f's decoder refuses null: f is CaseRequired
-// and no json.RawMessage, or its Count bound refuses null, which would
-// decode to an empty collection below the bound, while a pointer level
-// instead takes it as nil.
+// and neither a json.RawMessage nor mapped, whose Decoder judges null, or
+// its Count bound refuses null, which would decode to an empty collection
+// below the bound, while a pointer level instead takes it as nil.
 func (f *fieldInfo) refusesNull() bool {
-	return (f.CaseRequired && f.Kind != kindRaw) || (f.Ptrs == 0 && f.Bounds.refusesNull())
+	return (f.CaseRequired && f.Kind != kindRaw && f.Kind != kindMapped) || (f.Ptrs == 0 && f.Bounds.refusesNull())
 }
