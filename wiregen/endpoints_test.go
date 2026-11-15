@@ -291,7 +291,7 @@ func TestHeadersArgument(t *testing.T) {
 	}
 	out := mustGen(t, newEndpointRegistry(e).clientFile)
 	for _, want := range []string{
-		"  /**\n   * Deduplicates a retried start.\n   */\n  readonly idempotencyKey?: string;\n  readonly trace: string;\n",
+		"  /** Deduplicates a retried start. */\n  readonly idempotencyKey?: string;\n  readonly trace: string;\n",
 		"    if (args.idempotencyKey !== undefined) {\n      headers[\"Idempotency-Key\"] = args.idempotencyKey;\n    }\n",
 		"    headers[\"X-Trace\"] = args.trace;\n",
 		"      headers,\n",

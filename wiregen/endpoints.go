@@ -1022,21 +1022,13 @@ func (g *generator) endpointResult(e *Endpoint, st *clientState) (tsType, decode
 	return tn, dec
 }
 
-// jsDoc renders summary and description as a JSDoc block, or "" when both
-// are empty. A "*/" in either is broken so it cannot close the comment.
+// jsDoc renders summary and description as JSDoc, or "" when both are empty.
 func jsDoc(summary, description string) string {
 	text := strings.TrimSpace(strings.TrimSpace(summary) + "\n\n" + strings.TrimSpace(description))
 	if text == "" {
 		return ""
 	}
-	text = strings.ReplaceAll(text, "*/", "*\\/")
-	var b strings.Builder
-	b.WriteString("/**\n")
-	for line := range strings.SplitSeq(text, "\n") {
-		b.WriteString(strings.TrimRight(" * "+line, " ") + "\n")
-	}
-	b.WriteString(" */\n")
-	return b.String()
+	return linesToJSDoc(strings.Split(text, "\n"))
 }
 
 // emitClientImports writes the client's imports: the transport, the

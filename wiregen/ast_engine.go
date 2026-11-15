@@ -1349,7 +1349,17 @@ func commentToJSDoc(cg *ast.CommentGroup) string {
 		}
 	}
 	for i, l := range lines {
-		lines[i] = strings.ReplaceAll(strings.TrimPrefix(l, indent), "*/", "*\\/")
+		lines[i] = strings.TrimPrefix(l, indent)
+	}
+	return linesToJSDoc(lines)
+}
+
+// linesToJSDoc renders lines, the first not blank, as `/** x */` for one
+// line and a block otherwise, a blank line as a bare " *". Trailing space is
+// dropped and "*/" is broken so it cannot close the comment.
+func linesToJSDoc(lines []string) string {
+	for i, l := range lines {
+		lines[i] = strings.ReplaceAll(strings.TrimRight(l, " \t"), "*/", "*\\/")
 	}
 	if len(lines) == 1 {
 		return "/** " + lines[0] + " */\n"
