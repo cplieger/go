@@ -342,7 +342,8 @@ func ownRead(wn string, used *usedIdents) string {
 // reqDecode is reqExpr before the bound checks. refusesNull decides whether
 // null is refused (presence.go); otherwise null reaches a required field
 // only as raw JSON, kept as data, or as encoding/json's nil collection or
-// []byte, which reads as empty.
+// []byte, which reads as empty. A mapped field is judged by its Decoder, or
+// with none only checked present when CaseRequired.
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
 	// own is imported only when a branch reads through it.
@@ -369,6 +370,10 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 			return f.Mapping.Decoder + "(o, \"" + wn + "\"" + at
 		}
 		used.opaqueExpr(f.TSType)
+		if f.CaseRequired {
+			used.helper(helperReqRaw)
+			return helperReqRaw + "(o, \"" + wn + "\"" + at + " as " + f.TSType
+		}
 		return read() + " as " + f.TSType
 	case kindEnum:
 		used.helper("reqOneOf")

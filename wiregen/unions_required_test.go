@@ -346,3 +346,88 @@ func TestGolden_UnionRequired(t *testing.T) {
 	goldenCompare(t, "testdata/golden/union-required.decoders.gen.ts", mustGen(t, r.decodersFile))
 	goldenCompare(t, "testdata/golden/union-required.openapi.json", mustGen(t, r.openapiFile))
 }
+
+const unionsPkg = "github.com/cplieger/go/wiregen/v2/testdata/unions"
+
+// parcelReg registers the Parcel union: full requires each nullable or
+// omittable field and the mapped one, empty leaves them to their own rule.
+func parcelReg() *testRegistry {
+	r := newTestRegistry()
+	r.Mappings = map[string]wiregen.Mapping{
+		unionsPkg + ".Stamp": {TS: "number", Schema: map[string]any{"type": "integer"}},
+	}
+	r.Types = []wiregen.Type{wiregen.TypeRef[unions.Labels]()}
+	fields := []string{"data", "tags", "labels", "at"}
+	r.Unions = []wiregen.Union{{
+		Type: wiregen.TypeRef[unions.Parcel](), Tag: "kind",
+		Cases:    map[string][]string{"empty": fields, "full": fields},
+		Required: map[string][]string{"full": fields},
+	}}
+	r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
+	return r
+}
+
+// In the case that lists them, a []byte, slice and named map are read
+// with no null-to-empty fallback, so null is refused, and a mapped field
+// with no Decoder is checked present; the case that does not list them
+// reads each as optional.
+func TestUnionRequired_NullableFieldsDecoder(t *testing.T) {
+	out := mustGen(t, parcelReg().decodersFile)
+	full := caseBlock(t, out, "full")
+	for _, want := range []string{
+		`data: reqStr(o, "data", "$.parcel"),`,
+		`tags: decodeArray(own(o, "tags"), `,
+		`labels: decodeLabels(asObject(own(o, "labels"), "$.parcel.labels")),`,
+		`at: reqRaw(o, "at", "$.parcel") as number,`,
+	} {
+		if !strings.Contains(full, want) {
+			t.Errorf("case full missing %q:\n%s", want, full)
+		}
+	}
+	if strings.Contains(full, "=== null") || strings.Contains(full, "const $v") {
+		t.Errorf("case full still reads a listed field as optional or null as empty:\n%s", full)
+	}
+	empty := caseBlock(t, out, "empty")
+	for _, f := range []string{"data", "tags", "labels", "at"} {
+		if !strings.Contains(empty, `const $v = own(o, "`+f+`");`) {
+			t.Errorf("case empty does not read %s as optional:\n%s", f, empty)
+		}
+	}
+}
+
+// The request schema of the listing case requires each field and drops the
+// null encoding/json would decode to nil; the other case keeps it nullable.
+func TestUnionRequired_NullableFieldsOpenAPI(t *testing.T) {
+	r := parcelReg()
+	r.opts = []wiregen.Option{wiregen.WithTransportImport("./api-client.js")}
+	r.Endpoints = []wiregen.Endpoint{{
+		Name: "putParcel", Method: "POST", Path: "/api/parcel", Kind: wiregen.KindJSON,
+		Request: wiregen.TypeRef[unions.Parcel](), Response: wiregen.TypeRef[unions.Parcel](),
+	}}
+	doc := mustGen(t, r.openapiFile)
+	for _, name := range []string{"Parcel.full", "ParcelInput.full"} {
+		if got := requiredOf(t, component(t, doc, name)); !slices.Equal(got, []string{"at", "data", "kind", "labels", "tags"}) {
+			t.Errorf("%s required = %v, want every field", name, got)
+		}
+	}
+	for _, f := range []string{"data", "tags", "labels"} {
+		if got := prop(t, component(t, doc, "ParcelInput.full"), f); strings.Contains(got, `"null"`) {
+			t.Errorf("ParcelInput.full's %s = %s, want no null", f, got)
+		}
+		if got := prop(t, component(t, doc, "ParcelInput.empty"), f); !strings.Contains(got, `"null"`) {
+			t.Errorf("ParcelInput.empty's %s = %s, want nullable", f, got)
+		}
+	}
+	s := compiled(t, doc, "#/components/schemas/ParcelInput")
+	for body, ok := range map[string]bool{
+		`{"kind":"full","data":"","tags":[],"labels":{},"at":1}`:   true,
+		`{"kind":"full","data":"","tags":null,"labels":{},"at":1}`: false,
+		`{"kind":"full","data":"","labels":{},"at":1}`:             false,
+		`{"kind":"empty","data":null,"tags":null,"labels":null}`:   true,
+		`{"kind":"empty"}`: true,
+	} {
+		if err := validates(t, s, body); (err == nil) != ok {
+			t.Errorf("%s: validates = %v, want ok %v", body, err, ok)
+		}
+	}
+}

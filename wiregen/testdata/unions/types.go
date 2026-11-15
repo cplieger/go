@@ -170,3 +170,19 @@ type Labeled struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
 }
+
+// Parcel is a union whose cases share fields encoding/json writes as null
+// when nil, or leaves out, and one case requires.
+type Parcel struct {
+	Kind   string   `json:"kind"`
+	Data   []byte   `json:"data,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	Labels Labels   `json:"labels,omitempty"`
+	At     Stamp    `json:"at,omitempty"`
+}
+
+// Labels is a named map a Parcel carries.
+type Labels map[string]string
+
+// Stamp is an instant the tests give a Mapping with no Decoder.
+type Stamp int64

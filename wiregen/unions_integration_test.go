@@ -173,6 +173,56 @@ for (const body of bodies) {
 	}
 }
 
+// In the case that lists them, node refuses a []byte, slice or named map
+// null or absent and a mapped field with no Decoder absent, while the case
+// that does not list them reads null as absent; tsc checks the listing
+// case's members need no undefined guard.
+func TestUnionRequired_NullableFieldsDecoderRuns(t *testing.T) {
+	out := runTS(t, parcelReg(), map[string]string{"main.ts": `import { decodeParcel } from "./decoders.gen.js";
+import type { Parcel } from "./types.gen.js";
+const bodies = [
+  '{"kind":"full","data":"","tags":[],"labels":{},"at":1}',
+  '{"kind":"full","data":null,"tags":[],"labels":{},"at":1}',
+  '{"kind":"full","tags":[],"labels":{},"at":1}',
+  '{"kind":"full","data":"","tags":null,"labels":{},"at":1}',
+  '{"kind":"full","data":"","labels":{},"at":1}',
+  '{"kind":"full","data":"","tags":[],"labels":null,"at":1}',
+  '{"kind":"full","data":"","tags":[],"at":1}',
+  '{"kind":"full","data":"","tags":[],"labels":{}}',
+  '{"kind":"empty","data":null,"tags":null,"labels":null,"at":null}',
+  '{"kind":"empty"}',
+];
+for (const body of bodies) {
+  try {
+    const p: Parcel = decodeParcel(JSON.parse(body));
+    if (p.kind === "full") {
+      const n: number = p.data.length + p.tags.length + Object.keys(p.labels).length + p.at;
+      void n;
+    }
+    console.log("ok " + JSON.stringify(p));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"kind":"full","data":"","tags":[],"labels":{},"at":1}`,
+		`refused $.parcel.data: expected string, got null`,
+		`refused $.parcel.data: expected string, got undefined`,
+		`refused $.parcel.tags: expected array, got null`,
+		`refused $.parcel.tags: expected array, got undefined`,
+		`refused $.parcel.labels: expected object, got null`,
+		`refused $.parcel.labels: expected object, got undefined`,
+		`refused $.parcel.at: expected a JSON value, got undefined`,
+		`ok {"kind":"empty"}`,
+		`ok {"kind":"empty"}`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
 // The bounded decoders of the full document's registry type-check, and
 // node runs them.
 func TestBoundedDecoders_typeCheck(t *testing.T) {

@@ -14,31 +14,24 @@ import (
 // discriminator whose cases admit no other property.
 type Union struct {
 	// Cases maps each tag value to the wire names of the other fields that
-	// case allows; a listed field keeps its own presence rule unless
-	// Required lists it for that case.
+	// case allows, each keeping its own presence rule unless Required lists it.
 	Cases map[string][]string
-	// PayloadTypes maps every Cases key to the type Payload decodes as in
-	// that case, or to the zero Type for a case with no payload. Each is a
-	// struct or a named map, as every registered type is, and joins the
-	// registry's types.
+	// PayloadTypes maps every Cases key to the struct or named map Payload
+	// decodes as in that case, joining the registry's types; zero: no payload.
 	PayloadTypes map[string]Type
-	// Required maps a Cases key to wire names of fields that case carries,
-	// the payload included, which it always sends: present and not null,
-	// except a json.RawMessage other than the payload, whose null is data.
-	// In that case alone the TS member is required, the decoder refuses it
-	// absent, and both OpenAPI directions require it. The Go side is
-	// unchanged, so the server must write it for the case. Listing the tag,
-	// a field every case already sends and never as null, or one the case
-	// does not carry is refused.
+	// Required maps a Cases key to the fields that case always sends, the
+	// payload included: the TS member drops `?`, OpenAPI requires it, and the
+	// decoder refuses it absent or null. A non-payload json.RawMessage keeps
+	// null as data; a Mapping's Decoder judges both, and with none only
+	// presence is checked. The server must write it; the tag, a field every
+	// case sends non-null, or one the case lacks is refused.
 	Required map[string][]string
 	Type     Type
 	Tag      string
-	// Payload, when set, names a json.RawMessage field of Type whose type
-	// the tag selects. It is listed in no case: it belongs to each case with
-	// a payload type, keeps its own omit options there, and is refused in
-	// the others. A json.RawMessage can be null on the wire, so the typed
-	// payload's TS member is optional, its schemas are nullable and a
-	// decoder reads null as absent, unless Required lists it for the case.
+	// Payload, when set, names a json.RawMessage field of Type, listed in no
+	// case, that each case with a payload type decodes as that type, keeping
+	// its omit options, and the other cases refuse. Its bytes can be null, so
+	// it is optional and nullable unless Required lists it for the case.
 	Payload string
 }
 
