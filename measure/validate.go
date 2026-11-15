@@ -41,15 +41,9 @@ func truncateForLog(s string) string {
 	return s[:cut] + "..."
 }
 
-// sanitizeUTF8 is the shared UTF-8 sanitization engine for record-time label
-// values and construction-time help text. It returns s unchanged when s is
-// valid UTF-8; otherwise it returns s with every run of invalid bytes replaced
-// by the Unicode replacement character U+FFFD and reports the change. Both
-// exposition formats require valid UTF-8, but the library never panics on
-// invalid UTF-8: degraded input is repaired and logged instead (unlike the
-// label-arity guard, which stays a fail-fast panic, and the name/label/bucket
-// checks, whose errors are captured into the metric and surface at
-// registration).
+// sanitizeUTF8 returns s, or s with each run of invalid bytes replaced by
+// U+FFFD and true. The text format requires valid UTF-8, and the library
+// repairs and logs degraded input rather than panicking or refusing it.
 func sanitizeUTF8(s string) (string, bool) {
 	if utf8.ValidString(s) {
 		return s, false

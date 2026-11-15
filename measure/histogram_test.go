@@ -12,21 +12,21 @@ import (
 )
 
 func TestNewHistogram_defaultBuckets(t *testing.T) {
-	h := NewHistogram("default_hist", "test")
+	h := NewHistogram("default_hist", "test", UnitNone)
 	if !slices.Equal(h.bounds, DefaultBuckets()) {
 		t.Errorf("NewHistogram no-opts bounds = %v, want DefaultBuckets %v", h.bounds, DefaultBuckets())
 	}
 }
 
 func TestNewLabeledHistogram_defaultBuckets(t *testing.T) {
-	lh := NewLabeledHistogram("default_lh", "test", []string{"k"})
+	lh := NewLabeledHistogram("default_lh", "test", UnitNone, []string{"k"})
 	if !slices.Equal(lh.bounds, DefaultBuckets()) {
 		t.Errorf("NewLabeledHistogram no-opts bounds = %v, want DefaultBuckets %v", lh.bounds, DefaultBuckets())
 	}
 }
 
 func TestNewHistogram_withBucketsOverrides(t *testing.T) {
-	h := NewHistogram("custom_hist", "test", WithBuckets([]float64{1, 2, 3}))
+	h := NewHistogram("custom_hist", "test", UnitNone, WithBuckets([]float64{1, 2, 3}))
 	if !slices.Equal(h.bounds, []float64{1, 2, 3}) {
 		t.Errorf("bounds = %v, want [1 2 3]", h.bounds)
 	}
@@ -51,7 +51,7 @@ func TestNewHistogram_invalidBuckets_errorsAtRegister(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHistogram("inv_"+tc.name, "test", WithBuckets(tc.bounds)) // must not panic
+			h := NewHistogram("inv_"+tc.name, "test", UnitNone, WithBuckets(tc.bounds)) // must not panic
 			mustRegisterError(t, NewRegistry(""), h, tc.want)
 		})
 	}
@@ -62,7 +62,7 @@ func TestNewHistogram_invalidBuckets_errorsAtRegister(t *testing.T) {
 // disturb last-wins ordering.
 func TestNewHistogram_nilOptions(t *testing.T) {
 	t.Run("single nil uses defaults", func(t *testing.T) {
-		h := NewHistogram("nil_h", "test", nil)
+		h := NewHistogram("nil_h", "test", UnitNone, nil)
 		h.Observe(0.5)
 		if h.count.Load() != 1 {
 			t.Errorf("count = %d, want 1", h.count.Load())
@@ -72,13 +72,13 @@ func TestNewHistogram_nilOptions(t *testing.T) {
 		}
 	})
 	t.Run("multiple nils use defaults", func(t *testing.T) {
-		h := NewHistogram("multi_nil_h", "test", nil, nil, nil)
+		h := NewHistogram("multi_nil_h", "test", UnitNone, nil, nil, nil)
 		if len(h.bounds) != len(DefaultBuckets()) {
 			t.Errorf("bounds len = %d, want %d", len(h.bounds), len(DefaultBuckets()))
 		}
 	})
 	t.Run("nil between real options, last wins", func(t *testing.T) {
-		h := NewHistogram("nil_between_h", "test",
+		h := NewHistogram("nil_between_h", "test", UnitNone,
 			WithBuckets([]float64{1, 2}),
 			nil,
 			WithBuckets([]float64{10, 20, 30}),
@@ -90,7 +90,7 @@ func TestNewHistogram_nilOptions(t *testing.T) {
 }
 
 func TestNewLabeledHistogram_nilOption(t *testing.T) {
-	lh := NewLabeledHistogram("nil_lh", "test", []string{"k"}, nil)
+	lh := NewLabeledHistogram("nil_lh", "test", UnitNone, []string{"k"}, nil)
 	lh.Observe(0.1, "v")
 	if lh.vals[labelKey{"v"}].count.Load() != 1 {
 		t.Error("observe failed after nil option")
@@ -102,7 +102,7 @@ func TestNewLabeledHistogram_nilOption(t *testing.T) {
 func TestWithBuckets_doesNotMutateInput(t *testing.T) {
 	input := []float64{1, 3, 5}
 	original := slices.Clone(input)
-	NewHistogram("nomutate_hist", "test", WithBuckets(input))
+	NewHistogram("nomutate_hist", "test", UnitNone, WithBuckets(input))
 	if !slices.Equal(input, original) {
 		t.Errorf("WithBuckets mutated input: got %v, want %v", input, original)
 	}
@@ -113,7 +113,7 @@ func TestWithBuckets_doesNotMutateInput(t *testing.T) {
 // construction must not alter the histogram's bounds.
 func TestNewHistogram_callerMutationAfterConstructionIsolated(t *testing.T) {
 	input := []float64{1, 2, 3}
-	h := NewHistogram("mutafter_hist", "test", WithBuckets(input))
+	h := NewHistogram("mutafter_hist", "test", UnitNone, WithBuckets(input))
 	input[0] = 99
 	if !slices.Equal(h.bounds, []float64{1, 2, 3}) {
 		t.Errorf("h.bounds = %v, want [1 2 3] (caller mutation leaked into owned bounds)", h.bounds)
@@ -121,7 +121,7 @@ func TestNewHistogram_callerMutationAfterConstructionIsolated(t *testing.T) {
 }
 
 func TestWithBuckets_lastWins(t *testing.T) {
-	h := NewHistogram("multi_buckets_hist", "test",
+	h := NewHistogram("multi_buckets_hist", "test", UnitNone,
 		WithBuckets([]float64{1, 2, 3}),
 		WithBuckets([]float64{10, 20}),
 	)
@@ -134,12 +134,12 @@ func TestWithBuckets_lastWins(t *testing.T) {
 // or nil slice yields a histogram with only the implicit +Inf bucket.
 func TestNewHistogram_emptyAndNilBuckets(t *testing.T) {
 	t.Run("empty slice", func(t *testing.T) {
-		h := NewHistogram("empty_buckets", "test", WithBuckets([]float64{}))
+		h := NewHistogram("empty_buckets", "test", UnitNone, WithBuckets([]float64{}))
 		h.Observe(1.0)
 		h.Observe(5.0)
 
 		var b strings.Builder
-		writeHistogram(&b, h)
+		writeFamily(&b, h)
 		if out := b.String(); !strings.Contains(out, `empty_buckets_bucket{le="+Inf"} 2`) {
 			t.Errorf("empty buckets wrong: %s", out)
 		}
@@ -148,7 +148,7 @@ func TestNewHistogram_emptyAndNilBuckets(t *testing.T) {
 		}
 	})
 	t.Run("nil slice", func(t *testing.T) {
-		h := NewHistogram("nil_slice_buckets", "test", WithBuckets(nil))
+		h := NewHistogram("nil_slice_buckets", "test", UnitNone, WithBuckets(nil))
 		if len(h.bounds) != 0 {
 			t.Errorf("nil slice bounds = %d, want 0", len(h.bounds))
 		}
@@ -164,7 +164,7 @@ func TestNewHistogram_emptyAndNilBuckets(t *testing.T) {
 // emitted per label combination (the labeled companion to
 // TestNewHistogram_emptyAndNilBuckets).
 func TestLabeledHistogram_emptyBuckets(t *testing.T) {
-	lh := NewLabeledHistogram("lhx_empty_buckets", "test", []string{"k"}, WithBuckets(nil))
+	lh := NewLabeledHistogram("lhx_empty_buckets", "test", UnitNone, []string{"k"}, WithBuckets(nil))
 	lh.Observe(1.5, "v")
 	lh.Observe(0.5, "v")
 
@@ -177,7 +177,7 @@ func TestLabeledHistogram_emptyBuckets(t *testing.T) {
 	}
 
 	var b strings.Builder
-	writeLabeledHistogram(&b, lh)
+	writeFamily(&b, lh)
 	out := b.String()
 	for _, want := range []string{
 		`lhx_empty_buckets_bucket{k="v",le="+Inf"} 2`,
@@ -191,7 +191,7 @@ func TestLabeledHistogram_emptyBuckets(t *testing.T) {
 }
 
 func TestHistogramObserve(t *testing.T) {
-	h := NewHistogram("test_hist", "test")
+	h := NewHistogram("test_hist", "test", UnitNone)
 	h.Observe(0.003) // <= 0.005
 	h.Observe(0.05)  // <= 0.05
 	h.Observe(2.0)   // > 1.0, only +Inf
@@ -212,7 +212,7 @@ func TestHistogramObserve(t *testing.T) {
 }
 
 func TestHistogramCustomBuckets(t *testing.T) {
-	h := NewHistogram("test_custom_hist", "test", WithBuckets([]float64{1, 5, 10}))
+	h := NewHistogram("test_custom_hist", "test", UnitNone, WithBuckets([]float64{1, 5, 10}))
 	h.Observe(0.5)
 	h.Observe(3)
 	h.Observe(7)
@@ -235,7 +235,7 @@ func TestHistogramCustomBuckets(t *testing.T) {
 func TestHistogram_Observe_valueEqualToBound_countsInThatBucket(t *testing.T) {
 	// le is "less than or equal": an observation exactly equal to a bound
 	// must be counted in that bound's cumulative bucket.
-	h := NewHistogram("boundary_hist", "test", WithBuckets([]float64{0.1, 0.5, 1}))
+	h := NewHistogram("boundary_hist", "test", UnitNone, WithBuckets([]float64{0.1, 0.5, 1}))
 
 	h.Observe(0.1) // exactly the first bound
 	h.Observe(0.5) // exactly the second bound
@@ -258,7 +258,7 @@ func TestHistogram_Observe_valueEqualToBound_countsInThatBucket(t *testing.T) {
 // TestHistogram_zeroBucketBoundary pins le="0" cumulative counting: an
 // observation exactly at the zero bound (and a negative one) count as <= 0.
 func TestHistogram_zeroBucketBoundary(t *testing.T) {
-	h := NewHistogram("zero_bucket_hist", "test", WithBuckets([]float64{0}))
+	h := NewHistogram("zero_bucket_hist", "test", UnitNone, WithBuckets([]float64{0}))
 	h.Observe(0)    // exactly at boundary
 	h.Observe(-0.1) // below zero
 	h.Observe(0.1)  // above
@@ -272,13 +272,13 @@ func TestHistogram_zeroBucketBoundary(t *testing.T) {
 }
 
 func TestHistogram_NegativeBuckets(t *testing.T) {
-	h := NewHistogram("neg_buckets", "test", WithBuckets([]float64{-10, -1, 0, 1, 10}))
+	h := NewHistogram("neg_buckets", "test", UnitNone, WithBuckets([]float64{-10, -1, 0, 1, 10}))
 	h.Observe(-5)
 	h.Observe(0)
 	h.Observe(5)
 
 	var b strings.Builder
-	writeHistogram(&b, h)
+	writeFamily(&b, h)
 	out := b.String()
 
 	if !strings.Contains(out, `neg_buckets_bucket{le="-10"} 0`) {
@@ -293,7 +293,7 @@ func TestHistogram_NegativeBuckets(t *testing.T) {
 }
 
 func TestHistogram_NaNObserve(t *testing.T) {
-	h := NewHistogram("nan_obs", "test", WithBuckets([]float64{0.1, 1}))
+	h := NewHistogram("nan_obs", "test", UnitNone, WithBuckets([]float64{0.1, 1}))
 	h.Observe(math.NaN())
 	// NaN should not panic, count should increment.
 	if h.count.Load() != 1 {
@@ -302,7 +302,7 @@ func TestHistogram_NaNObserve(t *testing.T) {
 }
 
 func TestHistogram_InfObserve(t *testing.T) {
-	h := NewHistogram("inf_obs", "test", WithBuckets([]float64{0.1, 1}))
+	h := NewHistogram("inf_obs", "test", UnitNone, WithBuckets([]float64{0.1, 1}))
 	h.Observe(math.Inf(1))
 	h.Observe(math.Inf(-1))
 	if h.count.Load() != 2 {
@@ -317,12 +317,12 @@ func TestHistogram_InfObserve(t *testing.T) {
 }
 
 func TestHistogram_SingleBucket(t *testing.T) {
-	h := NewHistogram("single_bucket", "test", WithBuckets([]float64{1}))
+	h := NewHistogram("single_bucket", "test", UnitNone, WithBuckets([]float64{1}))
 	h.Observe(0.5)
 	h.Observe(1.5)
 
 	var b strings.Builder
-	writeHistogram(&b, h)
+	writeFamily(&b, h)
 	out := b.String()
 
 	if !strings.Contains(out, `single_bucket_bucket{le="1"} 1`) {
@@ -334,7 +334,7 @@ func TestHistogram_SingleBucket(t *testing.T) {
 }
 
 func TestHistogramSnapshot(t *testing.T) {
-	h := NewHistogram("snap_test", "snapshot",
+	h := NewHistogram("snap_test", "snapshot", UnitNone,
 		WithBuckets([]float64{0.1, 0.5, 1}))
 	h.Observe(0.05) // lands in <=0.1, <=0.5, <=1, +Inf
 	h.Observe(0.3)  // lands in <=0.5, <=1, +Inf
@@ -356,11 +356,11 @@ func TestHistogramSnapshot(t *testing.T) {
 }
 
 func TestWriteHistogramFormat(t *testing.T) {
-	h := NewHistogram("fmt_hist", "test help")
+	h := NewHistogram("fmt_hist", "test help", UnitNone)
 	h.Observe(0.01)
 
 	var b strings.Builder
-	writeHistogram(&b, h)
+	writeFamily(&b, h)
 	out := b.String()
 
 	if !strings.Contains(out, "# HELP fmt_hist test help") {
@@ -382,20 +382,20 @@ func TestWriteHistogramFormat(t *testing.T) {
 
 func TestWriteHistogram_SumRendering(t *testing.T) {
 	t.Run("tiny sum keeps precision", func(t *testing.T) {
-		h := NewHistogram("hist_sum_tiny", "test")
+		h := NewHistogram("hist_sum_tiny", "test", UnitNone)
 		h.Observe(1e-7) // a fixed-precision %.6f would floor this sum to zero
 		var b strings.Builder
-		writeHistogram(&b, h)
+		writeFamily(&b, h)
 		if got := b.String(); !strings.Contains(got, "hist_sum_tiny_sum 1e-07\n") {
 			t.Errorf("writeHistogram sum = %q, want line %q", got, "hist_sum_tiny_sum 1e-07")
 		}
 	})
 	t.Run("whole sum renders as bare integer", func(t *testing.T) {
-		h := NewHistogram("hist_sum_whole", "test")
+		h := NewHistogram("hist_sum_whole", "test", UnitNone)
 		h.Observe(2)
 		h.Observe(2) // sum = 4
 		var b strings.Builder
-		writeHistogram(&b, h)
+		writeFamily(&b, h)
 		if got := b.String(); !strings.Contains(got, "hist_sum_whole_sum 4\n") {
 			t.Errorf("writeHistogram sum = %q, want line %q", got, "hist_sum_whole_sum 4")
 		}
@@ -403,7 +403,7 @@ func TestWriteHistogram_SumRendering(t *testing.T) {
 }
 
 func TestHistogramConcurrent(t *testing.T) {
-	h := NewHistogram("conc_hist", "test")
+	h := NewHistogram("conc_hist", "test", UnitNone)
 	var wg sync.WaitGroup
 	for range 100 {
 		wg.Go(func() { h.Observe(0.01) })
@@ -415,13 +415,13 @@ func TestHistogramConcurrent(t *testing.T) {
 }
 
 func TestLabeledHistogram(t *testing.T) {
-	lh := NewLabeledHistogram("lh_test", "test", []string{"method"}, WithBuckets([]float64{0.1, 0.5, 1}))
+	lh := NewLabeledHistogram("lh_test", "test", UnitNone, []string{"method"}, WithBuckets([]float64{0.1, 0.5, 1}))
 	lh.Observe(0.05, "GET")
 	lh.Observe(0.3, "GET")
 	lh.Observe(2.0, "POST")
 
 	var b strings.Builder
-	writeLabeledHistogram(&b, lh)
+	writeFamily(&b, lh)
 	out := b.String()
 
 	if !strings.Contains(out, "# TYPE lh_test histogram") {
@@ -439,26 +439,26 @@ func TestLabeledHistogram(t *testing.T) {
 }
 
 func TestLabeledHistogram_Reset(t *testing.T) {
-	lh := NewLabeledHistogram("lh_reset", "test", []string{"host"}, WithBuckets([]float64{0.1, 1}))
+	lh := NewLabeledHistogram("lh_reset", "test", UnitNone, []string{"host"}, WithBuckets([]float64{0.1, 1}))
 	lh.Observe(0.05, "a")
 	lh.Observe(0.05, "b")
 	lh.Reset()
 
 	var b strings.Builder
-	writeLabeledHistogram(&b, lh)
+	writeFamily(&b, lh)
 	if b.Len() != 0 {
 		t.Errorf("expected empty output after Reset, got: %s", b.String())
 	}
 }
 
 func TestLabeledHistogram_Delete(t *testing.T) {
-	lh := NewLabeledHistogram("lh_delete", "test", []string{"host"}, WithBuckets([]float64{0.1, 1}))
+	lh := NewLabeledHistogram("lh_delete", "test", UnitNone, []string{"host"}, WithBuckets([]float64{0.1, 1}))
 	lh.Observe(0.05, "a")
 	lh.Observe(0.05, "b")
 	lh.Delete("a")
 
 	var b strings.Builder
-	writeLabeledHistogram(&b, lh)
+	writeFamily(&b, lh)
 	out := b.String()
 	if strings.Contains(out, `host="a"`) {
 		t.Errorf("deleted key still present: %s", out)
@@ -474,12 +474,12 @@ func TestLabeledHistogram_DeleteArityPanic(t *testing.T) {
 			t.Error("expected panic for arity mismatch")
 		}
 	}()
-	lh := NewLabeledHistogram("lh_del_panic", "test", []string{"a", "b"})
+	lh := NewLabeledHistogram("lh_del_panic", "test", UnitNone, []string{"a", "b"})
 	lh.Delete("only_one")
 }
 
 func TestLabeledHistogram_ObserveArityPanic(t *testing.T) {
-	lh := NewLabeledHistogram("arity_h", "test", []string{"a", "b"})
+	lh := NewLabeledHistogram("arity_h", "test", UnitNone, []string{"a", "b"})
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("expected panic for wrong arity")
@@ -491,18 +491,18 @@ func TestLabeledHistogram_ObserveArityPanic(t *testing.T) {
 // TestNewLabeledHistogram_TooManyLabelsErrorsAtRegister pins the maxLabels
 // cap: a ninth label is captured at construction and surfaces at registration.
 func TestNewLabeledHistogram_TooManyLabelsErrorsAtRegister(t *testing.T) {
-	lh := NewLabeledHistogram("lh_many", "test", []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
+	lh := NewLabeledHistogram("lh_many", "test", UnitNone, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
 	mustRegisterError(t, NewRegistry(""), lh, `LabeledHistogram "lh_many" supports at most 8 labels`)
 }
 
 // TestNewLabeledHistogram_ExactlyMaxLabelsAllowed pins the arity guard at its
 // inclusive maximum: eight labels is the legal maximum (the guard is > 8).
 func TestNewLabeledHistogram_ExactlyMaxLabelsAllowed(t *testing.T) {
-	lh := NewLabeledHistogram("mk_lh8", "test", []string{"a", "b", "c", "d", "e", "f", "g", "h"})
+	lh := NewLabeledHistogram("mk_lh8", "test", UnitNone, []string{"a", "b", "c", "d", "e", "f", "g", "h"})
 	lh.Observe(0.5, "1", "2", "3", "4", "5", "6", "7", "8") // must not panic with eight labels
 
 	var b strings.Builder
-	writeLabeledHistogram(&b, lh)
+	writeFamily(&b, lh)
 	if out := b.String(); !strings.Contains(out, `a="1",b="2",c="3",d="4",e="5",f="6",g="7",h="8"`) {
 		t.Errorf("eight-label histogram not exposed correctly:\n%s", out)
 	}
@@ -513,7 +513,7 @@ func TestNewLabeledHistogram_ExactlyMaxLabelsAllowed(t *testing.T) {
 // labeled histogram with an "le" label captures the reserved-label error,
 // which surfaces at registration. It fails if the guard is removed or relaxed.
 func TestNewLabeledHistogram_LabelNameLeErrorsAtRegister(t *testing.T) {
-	lh := NewLabeledHistogram("lh_reserved_le", "test", []string{"method", "le"}) // must not panic
+	lh := NewLabeledHistogram("lh_reserved_le", "test", UnitNone, []string{"method", "le"}) // must not panic
 	mustRegisterError(t, NewRegistry(""), lh, `label name "le" for metric "lh_reserved_le" is reserved`)
 }
 
@@ -521,7 +521,7 @@ func TestNewLabeledHistogram_LabelNameLeErrorsAtRegister(t *testing.T) {
 // several label combinations is counted, exercising the per-key lazy histogram
 // creation under contention.
 func TestLabeledHistogram_Concurrent(t *testing.T) {
-	lh := NewLabeledHistogram("conc_lh", "test", []string{"method", "status"},
+	lh := NewLabeledHistogram("conc_lh", "test", UnitNone, []string{"method", "status"},
 		WithBuckets([]float64{0.01, 0.05, 0.1, 0.5, 1.0}))
 
 	var wg sync.WaitGroup
@@ -560,7 +560,7 @@ func TestLabeledHistogram_Concurrent(t *testing.T) {
 // same test could only assert `d >= 10ms` and cost 10ms of wall time.
 func TestTimer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		h := NewHistogram("timer_test", "test")
+		h := NewHistogram("timer_test", "test", UnitNone)
 		timer := NewTimer(h)
 		synctest.Sleep(10 * time.Millisecond)
 		if d := timer.ObserveDuration(); d != 10*time.Millisecond {
@@ -576,7 +576,7 @@ func TestTimer(t *testing.T) {
 }
 
 func TestLabeledHistogramTimer(t *testing.T) {
-	lh := NewLabeledHistogram("op_seconds", "op", []string{"kind"})
+	lh := NewLabeledHistogram("op_seconds", "op", UnitSeconds, []string{"kind"})
 	r := NewRegistry("")
 	r.MustRegister(lh)
 	tm := lh.NewTimer("scan")
@@ -593,7 +593,7 @@ func TestLabeledHistogramTimer(t *testing.T) {
 // caller-owned slice before ObserveDuration must not change the recorded
 // label set.
 func TestLabeledHistogramTimer_CopiesLabelValuesAtConstruction(t *testing.T) {
-	lh := NewLabeledHistogram("op_seconds_copy", "op", []string{"kind"})
+	lh := NewLabeledHistogram("op_seconds_copy", "op", UnitNone, []string{"kind"})
 	r := NewRegistry("")
 	r.MustRegister(lh)
 	vals := []string{"scan"}
@@ -613,7 +613,7 @@ func TestLabeledHistogramTimer_CopiesLabelValuesAtConstruction(t *testing.T) {
 // eager arity guard: a wrong-arity NewTimer panics when the timer is created,
 // not later in ObserveDuration.
 func TestLabeledHistogramNewTimer_ArityMismatchPanicsAtConstruction(t *testing.T) {
-	lh := NewLabeledHistogram("timer_arity_seconds", "test", []string{"a", "b"})
+	lh := NewLabeledHistogram("timer_arity_seconds", "test", UnitSeconds, []string{"a", "b"})
 	mustPanicContaining(t, "label arity mismatch", func() { lh.NewTimer("only_one") })
 }
 
@@ -640,7 +640,7 @@ func TestBucketAccessorsReturnFreshSlices(t *testing.T) {
 }
 
 func BenchmarkHistogramObserve(b *testing.B) {
-	h := NewHistogram("bench_hist", "bench")
+	h := NewHistogram("bench_hist", "bench", UnitNone)
 	b.ReportAllocs()
 	for b.Loop() {
 		h.Observe(0.042)
@@ -648,7 +648,7 @@ func BenchmarkHistogramObserve(b *testing.B) {
 }
 
 func BenchmarkHistogramObserve_Parallel(b *testing.B) {
-	h := NewHistogram("bench_hist_par", "bench")
+	h := NewHistogram("bench_hist_par", "bench", UnitNone)
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -662,10 +662,10 @@ func BenchmarkHistogramObserve_Parallel(b *testing.B) {
 // ends in _count still emits its derived _bucket/_sum/_count series correctly
 // (the derived suffixes append to the base name without collapsing).
 func TestHistogram_nameEndingInCount(t *testing.T) {
-	h := NewHistogram("ops_count", "operations", WithBuckets([]float64{1, 5, 10}))
+	h := NewHistogram("ops_count", "operations", UnitNone, WithBuckets([]float64{1, 5, 10}))
 	h.Observe(3)
 	var b strings.Builder
-	writeHistogram(&b, h)
+	writeFamily(&b, h)
 	out := b.String()
 	for _, want := range []string{
 		"# TYPE ops_count histogram",
@@ -680,25 +680,15 @@ func TestHistogram_nameEndingInCount(t *testing.T) {
 }
 
 // TestHistogramObserveIsAllocationFreeAtEveryBucketPosition pins Observe at
-// zero allocations wherever the observed value falls. Observe walks the bounds
-// to find the first bucket the value fits, then increments every bucket from
-// there up, so the branch it takes is chosen by the value: a value below the
-// first bound runs the longest bucket loop, one above the last bound skips the
-// loop entirely and touches only +Inf, and a value exactly ON a bound must
-// land in that bucket (the comparison is `seconds <= bound`) rather than
-// falling through to the next. Each of those is a different path and any of
-// them could start allocating on its own, which is why the positions are
-// listed rather than sampled.
-//
-// The two shape cases are there for a different reason: a histogram with only
-// the implicit +Inf bucket and one with 64 bounds bracket the loop, so a
-// regression that allocated per bucket visited would show up in the wide case
-// even if it hid in the default eight.
+// zero allocations wherever the value falls: below the first bound (the
+// longest bucket loop), on a bound (which must count in that bucket), and
+// above the last (only +Inf). Each is its own path, so the positions are
+// listed, not sampled; the +Inf-only and 64-bound shapes bracket the loop.
 func TestHistogramObserveIsAllocationFreeAtEveryBucketPosition(t *testing.T) {
 	// DefaultBuckets is 0.005 .. 1.0, so these positions are stated against
 	// it. Spelled out rather than derived, so a change to DefaultBuckets is a
 	// visible edit here instead of a silently relabelled case.
-	h := NewHistogram("alloc_histogram_seconds", "allocation contract")
+	h := NewHistogram("alloc_histogram_seconds", "allocation contract", UnitSeconds)
 	wide := make([]float64, 64)
 	for i := range wide {
 		wide[i] = float64(i + 1)
@@ -716,9 +706,9 @@ func TestHistogramObserveIsAllocationFreeAtEveryBucketPosition(t *testing.T) {
 		{"on_last_bound", "exactly on the last bound", h, 1.0},
 		{"above_last_bound", "above the last bound (+Inf only)", h, 2.0},
 		{"zero", "zero seconds", h, 0},
-		{"inf_only_histogram", "into a histogram with only the +Inf bucket", NewHistogram("alloc_histogram_inf", "allocation contract", WithBuckets(nil)), 1},
-		{"64_bounds", "above the last of 64 bounds", NewHistogram("alloc_histogram_wide", "allocation contract", WithBuckets(wide)), 100},
-		{"64_bounds_below_first", "below the first of 64 bounds (64 buckets incremented)", NewHistogram("alloc_histogram_wide2", "allocation contract", WithBuckets(wide)), 0.5},
+		{"inf_only_histogram", "into a histogram with only the +Inf bucket", NewHistogram("alloc_histogram_inf", "allocation contract", UnitNone, WithBuckets(nil)), 1},
+		{"64_bounds", "above the last of 64 bounds", NewHistogram("alloc_histogram_wide", "allocation contract", UnitNone, WithBuckets(wide)), 100},
+		{"64_bounds_below_first", "below the first of 64 bounds (64 buckets incremented)", NewHistogram("alloc_histogram_wide2", "allocation contract", UnitNone, WithBuckets(wide)), 0.5},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -737,7 +727,7 @@ func TestHistogramObserveIsAllocationFreeAtEveryBucketPosition(t *testing.T) {
 // fresh label set every run would measure series creation, which is a bounded
 // constant rather than zero (TestLabeledHistogramNewSeriesCostIsConstant).
 func TestLabeledHistogramObserveIsAllocationFreeOnAnExistingSeries(t *testing.T) {
-	lh := NewLabeledHistogram("alloc_labeled_histogram_seconds", "allocation contract", []string{"kind"})
+	lh := NewLabeledHistogram("alloc_labeled_histogram_seconds", "allocation contract", UnitSeconds, []string{"kind"})
 	lh.Observe(0.1, "scan")
 
 	if got := testing.AllocsPerRun(allocRuns, func() { lh.Observe(0.1, "scan") }); got != 0 {
@@ -745,17 +735,11 @@ func TestLabeledHistogramObserveIsAllocationFreeOnAnExistingSeries(t *testing.T)
 	}
 }
 
-// TestLabeledHistogramNewSeriesCostIsConstant pins series creation for the
-// labeled histogram, whose new series is a whole child Histogram rather than
-// one atomic: it measures two allocations (the Histogram and its bucket slice)
-// where the counter and gauge measure one.
-//
-// The bucket-count axis is the one specific to this type. `make([]atomic.Int64,
-// len(bounds)+1)` is a single allocation whatever its length, so the constant
-// must not move between an 8-bound and a 32-bound histogram; if it ever does,
-// something started building per-bucket state and a metric's bucket layout
-// begins multiplying the cost of every label set a caller adds. The
-// existing-series axis is the quadratic guard, as on the counter.
+// TestLabeledHistogramNewSeriesCostIsConstant pins a new labeled histogram
+// series at two allocations (the child Histogram and its bucket slice),
+// whatever its bucket count: per-bucket state would multiply the cost of
+// every label set. The existing-series axis is the quadratic guard, as on
+// the counter.
 func TestLabeledHistogramNewSeriesCostIsConstant(t *testing.T) {
 	// The 20k-series pre-fill crosses cardinalityWarnThreshold; keep its
 	// warning out of the test output. The crossing is in setup.
@@ -769,7 +753,7 @@ func TestLabeledHistogramNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(bounds))
 		for i, bs := range bounds {
 			keys := newSeriesLabelValues(allocRuns, 1, 8)
-			lh := NewLabeledHistogram("alloc_hist_buckets", "allocation contract", []string{"k"}, WithBuckets(bs))
+			lh := NewLabeledHistogram("alloc_hist_buckets", "allocation contract", UnitNone, []string{"k"}, WithBuckets(bs))
 			next := 0
 			counts[i] = testing.AllocsPerRun(allocRuns, func() {
 				lh.Observe(0.1, keys[next]...)
@@ -790,7 +774,7 @@ func TestLabeledHistogramNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(existing))
 		for i, n := range existing {
 			keys := newSeriesLabelValues(allocRuns, 1, 8)
-			lh := NewLabeledHistogram("alloc_hist_existing", "allocation contract", []string{"k"})
+			lh := NewLabeledHistogram("alloc_hist_existing", "allocation contract", UnitNone, []string{"k"})
 			for k := range n {
 				lh.Observe(0.1, "pre"+strconv.Itoa(k))
 			}
@@ -810,26 +794,17 @@ func TestLabeledHistogramNewSeriesCostIsConstant(t *testing.T) {
 	})
 }
 
-// TestTimerAllocationCost pins the timer, which the README puts on the
-// `defer t.ObserveDuration()` path of a request handler, and it is the one
-// place in this file where the answer is not a uniform zero.
-//
-// Recording is free: ObserveDuration is time.Since plus a call through the
-// stored observe func, for both timer flavors. Construction is not, and the
-// two flavors differ for a reason worth stating. NewTimer stores the
-// histogram's Observe METHOD VALUE, which costs nothing while the timer stays
-// on the stack — the whole create-and-observe round measures 0 — but two
-// allocations (the Timer and the bound method) as soon as it escapes.
-// (*LabeledHistogram).NewTimer always costs three: it clones the caller's
-// label values and closes over them, and a closure the Timer holds escapes by
-// construction. That is the price of the label set, not of the timer, and what
-// matters is that it is a constant: it must not grow with the number of label
-// values, or a per-label-per-timer cost lands on every instrumented request.
+// TestTimerAllocationCost pins the timer on a handler's deferred
+// ObserveDuration path. Recording is free for both flavors. NewTimer costs 0
+// on the stack and 2 once it escapes (the Timer and the bound method);
+// (*LabeledHistogram).NewTimer always costs 3, since it clones and closes
+// over the label values. Those must stay constant, never growing with the
+// number of label values.
 func TestTimerAllocationCost(t *testing.T) {
-	h := NewHistogram("alloc_timer_seconds", "allocation contract")
+	h := NewHistogram("alloc_timer_seconds", "allocation contract", UnitSeconds)
 
 	t.Run("observe_duration_is_free", func(t *testing.T) {
-		lh := NewLabeledHistogram("alloc_timer_labeled_seconds", "allocation contract", []string{"kind"})
+		lh := NewLabeledHistogram("alloc_timer_labeled_seconds", "allocation contract", UnitSeconds, []string{"kind"})
 		lh.Observe(0.1, "scan")
 		plain := NewTimer(h)
 		labeled := lh.NewTimer("scan")
@@ -867,7 +842,7 @@ func TestTimerAllocationCost(t *testing.T) {
 			for j := range vals {
 				vals[j] = "v"
 			}
-			lh := NewLabeledHistogram("alloc_timer_arity_seconds", "allocation contract", labelNames(n))
+			lh := NewLabeledHistogram("alloc_timer_arity_seconds", "allocation contract", UnitSeconds, labelNames(n))
 			lh.Observe(0.1, vals...)
 			counts[i] = testing.AllocsPerRun(allocRuns, func() {
 				lh.NewTimer(vals...).ObserveDuration()

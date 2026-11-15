@@ -14,11 +14,11 @@ import (
 func TestRegistryHandler(t *testing.T) {
 	r := NewRegistry("")
 
-	httpReqs := NewLabeledCounter("test_http_requests_total", "Total HTTP requests", []string{"method", "path", "status"})
-	activeConns := NewGauge("test_active_connections", "Active connection count")
-	tasks := NewCounter("test_tasks_total", "Total tasks")
-	events := NewCounter("test_events_total", "Total events")
-	httpDur := NewHistogram("test_http_request_duration_seconds", "HTTP request latency")
+	httpReqs := NewLabeledCounter("test_http_requests_total", "Total HTTP requests", UnitCount, []string{"method", "path", "status"})
+	activeConns := NewGauge("test_active_connections", "Active connection count", UnitNone)
+	tasks := NewCounter("test_tasks_total", "Total tasks", UnitCount)
+	events := NewCounter("test_events_total", "Total events", UnitCount)
+	httpDur := NewHistogram("test_http_request_duration_seconds", "HTTP request latency", UnitSeconds)
 
 	r.MustRegister(httpReqs, activeConns, tasks, events, httpDur)
 
@@ -95,7 +95,7 @@ func TestFormatValue(t *testing.T) {
 
 func TestRegistryAutoPrefix(t *testing.T) {
 	r := NewRegistry("app")
-	c := NewCounter("widgets_total", "Widgets")
+	c := NewCounter("widgets_total", "Widgets", UnitCount)
 	r.MustRegister(c)
 	c.Inc()
 	out := body(t, r)
@@ -112,7 +112,7 @@ func TestRegistryAutoPrefix(t *testing.T) {
 
 func TestRegistryEmptyPrefixUnchanged(t *testing.T) {
 	r := NewRegistry("")
-	c := NewCounter("widgets_total", "Widgets")
+	c := NewCounter("widgets_total", "Widgets", UnitCount)
 	r.MustRegister(c)
 	c.Inc()
 	if out := body(t, r); !strings.Contains(out, "\nwidgets_total 1") {
@@ -136,7 +136,7 @@ func TestRegistryInvalidPrefixReportsAtMustRegister(t *testing.T) {
 			t.Errorf("panic value = %v, want an error naming the invalid prefix", r)
 		}
 	}()
-	NewRegistry("bad-prefix!").MustRegister(NewCounter("widgets_total", "Widgets"))
+	NewRegistry("bad-prefix!").MustRegister(NewCounter("widgets_total", "Widgets", UnitCount))
 }
 
 func TestRegistry_DuplicateRegistrationErrors(t *testing.T) {
@@ -145,24 +145,24 @@ func TestRegistry_DuplicateRegistrationErrors(t *testing.T) {
 		name     string
 	}{
 		{name: "two counters, identical name", register: func(r *Registry) error {
-			r.MustRegister(NewCounter("dup_total", "first"))
-			return r.Register(NewCounter("dup_total", "second"))
+			r.MustRegister(NewCounter("dup_total", "first", UnitCount))
+			return r.Register(NewCounter("dup_total", "second", UnitCount))
 		}},
 		{name: "counter vs labeled counter, identical name", register: func(r *Registry) error {
-			r.MustRegister(NewCounter("hits_total", "first"))
-			return r.Register(NewLabeledCounter("hits_total", "second", []string{"x"}))
+			r.MustRegister(NewCounter("hits_total", "first", UnitCount))
+			return r.Register(NewLabeledCounter("hits_total", "second", UnitCount, []string{"x"}))
 		}},
 		{name: "counter vs gauge, same family", register: func(r *Registry) error {
-			r.MustRegister(NewCounter("widgets", "first"))
-			return r.Register(NewGauge("widgets", "second"))
+			r.MustRegister(NewCounter("widgets", "first", UnitCount))
+			return r.Register(NewGauge("widgets", "second", UnitNone))
 		}},
 		{name: "gauge vs histogram, same name", register: func(r *Registry) error {
-			r.MustRegister(NewGauge("latency", "first"))
-			return r.Register(NewHistogram("latency", "second"))
+			r.MustRegister(NewGauge("latency", "first", UnitNone))
+			return r.Register(NewHistogram("latency", "second", UnitNone))
 		}},
 		{name: "labeled gauge vs labeled histogram, same name", register: func(r *Registry) error {
-			r.MustRegister(NewLabeledGauge("size", "first", []string{"x"}))
-			return r.Register(NewLabeledHistogram("size", "second", []string{"x"}))
+			r.MustRegister(NewLabeledGauge("size", "first", UnitNone, []string{"x"}))
+			return r.Register(NewLabeledHistogram("size", "second", UnitNone, []string{"x"}))
 		}},
 	}
 	for _, tt := range tests {
@@ -181,12 +181,12 @@ func TestRegistry_DuplicateRegistrationErrors(t *testing.T) {
 func TestRegistry_MustRegisterPanicsOnError(t *testing.T) {
 	t.Run("collision", func(t *testing.T) {
 		r := NewRegistry("")
-		r.MustRegister(NewCounter("dup_total", "first"))
-		mustPanicContaining(t, "collides", func() { r.MustRegister(NewCounter("dup_total", "second")) })
+		r.MustRegister(NewCounter("dup_total", "first", UnitCount))
+		mustPanicContaining(t, "collides", func() { r.MustRegister(NewCounter("dup_total", "second", UnitCount)) })
 	})
 	t.Run("construction error", func(t *testing.T) {
 		mustPanicContaining(t, "invalid metric name", func() {
-			NewRegistry("").MustRegister(NewCounter("bad-name", "x"))
+			NewRegistry("").MustRegister(NewCounter("bad-name", "x", UnitCount))
 		})
 	})
 }
@@ -196,9 +196,9 @@ func TestRegistry_MustRegisterPanicsOnError(t *testing.T) {
 // earlier metrics registered and the later ones untouched.
 func TestRegistry_MustRegisterVariadicStopsAtFirstError(t *testing.T) {
 	r := NewRegistry("")
-	ok := NewCounter("vararg_ok_total", "x")
-	bad := NewCounter("bad-name", "x")
-	after := NewCounter("vararg_after_total", "x")
+	ok := NewCounter("vararg_ok_total", "x", UnitCount)
+	bad := NewCounter("bad-name", "x", UnitCount)
+	after := NewCounter("vararg_after_total", "x", UnitCount)
 	mustPanicContaining(t, "invalid metric name", func() { r.MustRegister(ok, bad, after) })
 
 	ok.Inc()
@@ -218,32 +218,32 @@ func TestRegistry_MustRegisterVariadicStopsAtFirstError(t *testing.T) {
 func TestRegistry_DistinctNamesAcrossAllTypes(t *testing.T) {
 	// Distinct family names across every metric type must register cleanly.
 	NewRegistry("").MustRegister(
-		NewCounter("c_total", "c"),
-		NewGauge("g", "g"),
-		NewLabeledCounter("lc", "lc", []string{"x"}),
-		NewLabeledGauge("lg", "lg", []string{"x"}),
-		NewHistogram("h", "h"),
-		NewLabeledHistogram("lh", "lh", []string{"x"}),
+		NewCounter("c_total", "c", UnitCount),
+		NewGauge("g", "g", UnitNone),
+		NewLabeledCounter("lc", "lc", UnitCount, []string{"x"}),
+		NewLabeledGauge("lg", "lg", UnitNone, []string{"x"}),
+		NewHistogram("h", "h", UnitNone),
+		NewLabeledHistogram("lh", "lh", UnitNone, []string{"x"}),
 	)
 }
 
 func TestRegistry_SameNameDifferentRegistries(t *testing.T) {
 	// Each registry owns an independent name space; the same name in two
 	// registries is not a collision.
-	NewRegistry("").MustRegister(NewCounter("shared_total", "first"))
-	NewRegistry("").MustRegister(NewCounter("shared_total", "second"))
+	NewRegistry("").MustRegister(NewCounter("shared_total", "first", UnitCount))
+	NewRegistry("").MustRegister(NewCounter("shared_total", "second", UnitCount))
 }
 
 func TestRegistry_PrefixScopesFamilyNames(t *testing.T) {
 	// The same bare name under different prefixes yields different families.
-	NewRegistry("app_a").MustRegister(NewCounter("reqs", "x"))
-	NewRegistry("app_b").MustRegister(NewCounter("reqs", "x"))
+	NewRegistry("app_a").MustRegister(NewCounter("reqs", "x", UnitCount))
+	NewRegistry("app_b").MustRegister(NewCounter("reqs", "x", UnitCount))
 
 	// Within a single prefixed registry, an identical prefixed name still
 	// collides: app_reqs vs app_reqs.
 	r := NewRegistry("app")
-	r.MustRegister(NewCounter("reqs", "x"))
-	mustRegisterError(t, r, NewCounter("reqs", "y"), "collides")
+	r.MustRegister(NewCounter("reqs", "x", UnitCount))
+	mustRegisterError(t, r, NewCounter("reqs", "y", UnitCount), "collides")
 }
 
 func TestRegistry_ReRegistrationErrors(t *testing.T) {
@@ -253,42 +253,42 @@ func TestRegistry_ReRegistrationErrors(t *testing.T) {
 	// into a fresh family and silently re-append.
 	t.Run("same registry, non-empty prefix", func(t *testing.T) {
 		r := NewRegistry("app")
-		c := NewCounter("reqs", "x")
+		c := NewCounter("reqs", "x", UnitCount)
 		r.MustRegister(c)
 		mustRegisterError(t, r, c, "already registered")
 	})
 	t.Run("two registries", func(t *testing.T) {
-		c := NewCounter("reqs", "x")
+		c := NewCounter("reqs", "x", UnitCount)
 		NewRegistry("a").MustRegister(c)
 		mustRegisterError(t, NewRegistry("b"), c, "already registered")
 	})
 	t.Run("gauge", func(t *testing.T) {
 		r := NewRegistry("")
-		g := NewGauge("temp", "x")
+		g := NewGauge("temp", "x", UnitNone)
 		r.MustRegister(g)
 		mustRegisterError(t, r, g, "already registered")
 	})
 	t.Run("histogram", func(t *testing.T) {
 		r := NewRegistry("")
-		h := NewHistogram("lat", "x")
+		h := NewHistogram("lat", "x", UnitNone)
 		r.MustRegister(h)
 		mustRegisterError(t, r, h, "already registered")
 	})
 	t.Run("labeled counter", func(t *testing.T) {
 		r := NewRegistry("")
-		lc := NewLabeledCounter("hits", "x", []string{"m"})
+		lc := NewLabeledCounter("hits", "x", UnitCount, []string{"m"})
 		r.MustRegister(lc)
 		mustRegisterError(t, r, lc, "already registered")
 	})
 	t.Run("labeled gauge", func(t *testing.T) {
 		r := NewRegistry("")
-		lg := NewLabeledGauge("sizes", "x", []string{"m"})
+		lg := NewLabeledGauge("sizes", "x", UnitNone, []string{"m"})
 		r.MustRegister(lg)
 		mustRegisterError(t, r, lg, "already registered")
 	})
 	t.Run("labeled histogram", func(t *testing.T) {
 		r := NewRegistry("")
-		lh := NewLabeledHistogram("durations", "x", []string{"m"})
+		lh := NewLabeledHistogram("durations", "x", UnitNone, []string{"m"})
 		r.MustRegister(lh)
 		mustRegisterError(t, r, lh, "already registered")
 	})
@@ -335,12 +335,12 @@ func registerConcurrently(t *testing.T, m Metric) {
 func TestRegistry_ConcurrentCrossRegistryRegister(t *testing.T) {
 	t.Run("counter", func(t *testing.T) {
 		for range 100 {
-			registerConcurrently(t, NewCounter("xreg_total", "x"))
+			registerConcurrently(t, NewCounter("xreg_total", "x", UnitCount))
 		}
 	})
 	t.Run("labeled counter", func(t *testing.T) {
 		for range 100 {
-			registerConcurrently(t, NewLabeledCounter("xreg_labeled_total", "x", []string{"m"}))
+			registerConcurrently(t, NewLabeledCounter("xreg_labeled_total", "x", UnitCount, []string{"m"}))
 		}
 	})
 }
@@ -383,8 +383,8 @@ func TestRegistry_RegisterNilMetricErrors(t *testing.T) {
 // different registry afterwards.
 func TestRegistry_FailedRegistrationLeavesMetricRegistrable(t *testing.T) {
 	r1 := NewRegistry("")
-	r1.MustRegister(NewCounter("rollback_total", "first"))
-	c := NewCounter("rollback_total", "second")
+	r1.MustRegister(NewCounter("rollback_total", "first", UnitCount))
+	c := NewCounter("rollback_total", "second", UnitCount)
 	mustRegisterError(t, r1, c, "collides")
 
 	r2 := NewRegistry("")
@@ -405,12 +405,12 @@ func TestRegistry_HistogramCollisionReleasesDerivedNames(t *testing.T) {
 	r := NewRegistry("")
 	// Occupy the _sum name, so the histogram's base and _bucket reservations
 	// succeed before the _sum one fails.
-	r.MustRegister(NewGauge("txn_sum", "occupies the histogram's _sum name"))
-	mustRegisterError(t, r, NewHistogram("txn", "x"), "collides")
+	r.MustRegister(NewGauge("txn_sum", "occupies the histogram's _sum name", UnitNone))
+	mustRegisterError(t, r, NewHistogram("txn", "x", UnitNone), "collides")
 
 	// The rolled-back base and _bucket names must be free again.
-	r.MustRegister(NewGauge("txn", "base name released"))
-	r.MustRegister(NewGauge("txn_bucket", "bucket name released"))
+	r.MustRegister(NewGauge("txn", "base name released", UnitNone))
+	r.MustRegister(NewGauge("txn_bucket", "bucket name released", UnitNone))
 }
 
 // TestRegistry_ProcessFamilyNamesAreGuarded asserts NewRegistry pre-reserves the
@@ -419,21 +419,21 @@ func TestRegistry_HistogramCollisionReleasesDerivedNames(t *testing.T) {
 func TestRegistry_ProcessFamilyNamesAreGuarded(t *testing.T) {
 	r := NewRegistry("")
 	mustRegisterError(t, r,
-		NewGauge("go_goroutines", "user gauge colliding with the built-in process metric"), "collides")
+		NewGauge("go_goroutines", "user gauge colliding with the built-in process metric", UnitNone), "collides")
 }
 
 // TestRegisterCounter_VerbatimNameReservation locks the name-reservation
-// semantics (unchanged from v3): a counter reserves ONLY its registered name
-// (no derived _total normalization), so a base name and its _total-suffixed
-// sibling are distinct families across all metric types.
+// semantics: a counter reserves ONLY its registered name (no derived _total
+// normalization), so a base name and its _total-suffixed sibling are
+// distinct families.
 func TestRegisterCounter_VerbatimNameReservation(t *testing.T) {
 	NewRegistry("").MustRegister(
-		NewCounter("mk_events", "events"),
-		NewGauge("mk_events_total", "a distinct family in Prometheus text format"),
-		NewCounter("mk_reqs", "first"),
-		NewCounter("mk_reqs_total", "a second, distinct counter family"),
-		NewLabeledCounter("mk_hits", "hits", []string{"m"}),
-		NewGauge("mk_hits_total", "also distinct"),
+		NewCounter("mk_events", "events", UnitCount),
+		NewCounter("mk_events_total", "a distinct family in Prometheus text format", UnitCount),
+		NewCounter("mk_reqs", "first", UnitCount),
+		NewCounter("mk_reqs_total", "a second, distinct counter family", UnitCount),
+		NewLabeledCounter("mk_hits", "hits", UnitCount, []string{"m"}),
+		NewCounter("mk_hits_total", "also distinct", UnitCount),
 	)
 }
 
@@ -442,7 +442,7 @@ func TestRegisterCounter_VerbatimNameReservation(t *testing.T) {
 func TestHandler_logsOnWriteError(t *testing.T) {
 	buf := captureDebugLogs(t)
 	reg := NewRegistry("")
-	reg.MustRegister(NewCounter("writeerr_total", "h"))
+	reg.MustRegister(NewCounter("writeerr_total", "h", UnitCount))
 
 	reg.Handler()(&failWriter{}, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
@@ -456,9 +456,9 @@ func TestHandler_logsOnWriteError(t *testing.T) {
 // registry read lock and the labeled-metric snapshot paths under contention.
 func TestRegistry_FullHandler_ResetDelete_Concurrent(t *testing.T) {
 	r := NewRegistry("")
-	lg := NewLabeledGauge("rt6_full_gauge", "test", []string{"host"})
-	c := NewCounter("rt6_full_counter", "test")
-	h := NewHistogram("rt6_full_hist", "test")
+	lg := NewLabeledGauge("rt6_full_gauge", "test", UnitNone, []string{"host"})
+	c := NewCounter("rt6_full_counter", "test", UnitCount)
+	h := NewHistogram("rt6_full_hist", "test", UnitNone)
 	r.MustRegister(lg, c, h)
 
 	var wg sync.WaitGroup
@@ -528,9 +528,9 @@ func TestRegistry_FullHandler_ResetDelete_Concurrent(t *testing.T) {
 
 func BenchmarkRegistryHandler(b *testing.B) {
 	r := NewRegistry("")
-	httpReqs := NewLabeledCounter("bench_http_requests_total", "Total HTTP requests", []string{"method", "path", "status"})
-	httpDur := NewHistogram("bench_http_request_duration_seconds", "HTTP request latency")
-	tasks := NewCounter("bench_tasks_total", "Total tasks")
+	httpReqs := NewLabeledCounter("bench_http_requests_total", "Total HTTP requests", UnitCount, []string{"method", "path", "status"})
+	httpDur := NewHistogram("bench_http_request_duration_seconds", "HTTP request latency", UnitSeconds)
+	tasks := NewCounter("bench_tasks_total", "Total tasks", UnitCount)
 	r.MustRegister(httpReqs, httpDur, tasks)
 
 	httpReqs.Inc("GET", "/api", "200")
@@ -553,7 +553,7 @@ func BenchmarkRegistryHandler(b *testing.B) {
 // only invalid names and has a door to say so at.
 func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 	r := NewRegistry("bad prefix")
-	c := NewCounter("requests", "total requests")
+	c := NewCounter("requests", "total requests", UnitCount)
 
 	err := r.Register(c)
 	if err == nil {
@@ -565,12 +565,12 @@ func TestNewRegistryCapturesAnInvalidPrefix(t *testing.T) {
 
 	// The same registry keeps reporting it: the error is a property of the
 	// registry, not a one-shot.
-	if err := r.Register(NewGauge("queue", "queue depth")); err == nil {
+	if err := r.Register(NewGauge("queue", "queue depth", UnitNone)); err == nil {
 		t.Error("a second Register returned nil, want the captured prefix error again")
 	}
 
 	// And a valid prefix still registers.
-	if err := NewRegistry("app").Register(NewCounter("requests", "total requests")); err != nil {
+	if err := NewRegistry("app").Register(NewCounter("requests", "total requests", UnitCount)); err != nil {
 		t.Errorf("Register on a valid prefix = %v, want nil", err)
 	}
 }
@@ -628,7 +628,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				for i := range n {
-					c := NewCounter("scrape_c"+strconv.Itoa(i)+"_total", "allocation contract")
+					c := NewCounter("scrape_c"+strconv.Itoa(i)+"_total", "allocation contract", UnitCount)
 					r.MustRegister(c)
 					c.Inc()
 				}
@@ -643,7 +643,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
-				lc := NewLabeledCounter("scrape_lc_total", "allocation contract", []string{"a", "b"})
+				lc := NewLabeledCounter("scrape_lc_total", "allocation contract", UnitCount, []string{"a", "b"})
 				r.MustRegister(lc)
 				for i := range n {
 					lc.Inc("v"+strconv.Itoa(i), "w")
@@ -660,7 +660,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
 				for i := range n {
-					h := NewHistogram("scrape_histogram_"+strconv.Itoa(i)+"_seconds", "allocation contract", WithBuckets(histBounds))
+					h := NewHistogram("scrape_histogram_"+strconv.Itoa(i)+"_seconds", "allocation contract", UnitSeconds, WithBuckets(histBounds))
 					r.MustRegister(h)
 					h.Observe(0.02)
 				}
@@ -675,7 +675,7 @@ func TestRegistryHandlerAllocationsAreBoundedPerMetric(t *testing.T) {
 			sizes: []int{1, 10, 100, 1000},
 			build: func(n int) *Registry {
 				r := NewRegistry("alloc")
-				lh := NewLabeledHistogram("scrape_labeled_histogram_seconds", "allocation contract", []string{"a"}, WithBuckets(histBounds))
+				lh := NewLabeledHistogram("scrape_labeled_histogram_seconds", "allocation contract", UnitSeconds, []string{"a"}, WithBuckets(histBounds))
 				r.MustRegister(lh)
 				for i := range n {
 					lh.Observe(0.02, "v"+strconv.Itoa(i))

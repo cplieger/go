@@ -21,7 +21,7 @@ func countFamiliesWithPrefix(fams []metricFamily, prefix string) int {
 }
 
 func TestLabeledCounterFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
-	lc := NewLabeledCounter("nilguard_total", "help", []string{"k"})
+	lc := NewLabeledCounter("nilguard_total", "help", UnitCount, []string{"k"})
 	lc.Add(5, "live")
 	// A concurrent Delete/Reset can null a map slot between family()'s key
 	// snapshot and its value load; inject that state to exercise the guard
@@ -42,7 +42,7 @@ func TestLabeledCounterFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
 }
 
 func TestLabeledHistogramFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
-	lh := NewLabeledHistogram("nilguard_seconds", "help", []string{"k"})
+	lh := NewLabeledHistogram("nilguard_seconds", "help", UnitSeconds, []string{"k"})
 	lh.Observe(0.5, "live")
 	// Same concurrent-Delete race as the labeled counter: a nil map slot must be
 	// skipped, not dereferenced (h.snapshot() on a nil *Histogram panics). "ghost"
@@ -67,7 +67,7 @@ func TestLabeledHistogramFamily_skipsConcurrentlyDeletedKey(t *testing.T) {
 // malformed exposition that both parsers reject.
 
 func TestLabeledCounterFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.T) {
-	lc := NewLabeledCounter("allnil_total", "help", []string{"k"})
+	lc := NewLabeledCounter("allnil_total", "help", UnitCount, []string{"k"})
 	// The sole observed key, nulled between family()'s key snapshot and its
 	// value load. keys stays non-empty (so the len(keys)==0 early-out does not
 	// fire), but the guarded loop appends nothing.
@@ -83,7 +83,7 @@ func TestLabeledCounterFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testin
 }
 
 func TestLabeledGaugeFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.T) {
-	lg := NewLabeledGauge("allnil", "help", []string{"k"})
+	lg := NewLabeledGauge("allnil", "help", UnitNone, []string{"k"})
 	lg.vals[labelKey{"ghost"}] = nil
 
 	fam, ok := lg.family()
@@ -96,7 +96,7 @@ func TestLabeledGaugeFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.
 }
 
 func TestLabeledHistogramFamily_reportsNotOkWhenAllObservedKeysNilValued(t *testing.T) {
-	lh := NewLabeledHistogram("allnil_seconds", "help", []string{"k"})
+	lh := NewLabeledHistogram("allnil_seconds", "help", UnitSeconds, []string{"k"})
 	lh.vals[labelKey{"ghost"}] = nil
 
 	fam, ok := lh.family()
@@ -117,7 +117,7 @@ func TestCollect_capacityCounters(t *testing.T) {
 	const prefix = "capctr_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		reg.MustRegister(NewCounter(prefix+strconv.Itoa(i)+"_total", "h"))
+		reg.MustRegister(NewCounter(prefix+strconv.Itoa(i)+"_total", "h", UnitCount))
 	}
 
 	fams := reg.collect(context.Background())
@@ -131,7 +131,7 @@ func TestCollect_capacityLabeledGauges(t *testing.T) {
 	const prefix = "caplg_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		lg := NewLabeledGauge(prefix+strconv.Itoa(i), "h", []string{"k"})
+		lg := NewLabeledGauge(prefix+strconv.Itoa(i), "h", UnitNone, []string{"k"})
 		reg.MustRegister(lg)
 		lg.Set(1, "v") // a labeled metric only emits a family once a combo is set
 	}
@@ -147,7 +147,7 @@ func TestCollect_capacityHistograms(t *testing.T) {
 	const prefix = "caphist_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		reg.MustRegister(NewHistogram(prefix+strconv.Itoa(i), "h"))
+		reg.MustRegister(NewHistogram(prefix+strconv.Itoa(i), "h", UnitNone))
 	}
 
 	fams := reg.collect(context.Background())
@@ -161,7 +161,7 @@ func TestCollect_capacityLabeledHistograms(t *testing.T) {
 	const prefix = "caplh_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		lh := NewLabeledHistogram(prefix+strconv.Itoa(i), "h", []string{"k"})
+		lh := NewLabeledHistogram(prefix+strconv.Itoa(i), "h", UnitNone, []string{"k"})
 		reg.MustRegister(lh)
 		lh.Observe(0.1, "v")
 	}
@@ -177,7 +177,7 @@ func TestCollect_capacityGauges(t *testing.T) {
 	const prefix = "capg_"
 	reg := NewRegistry("")
 	for i := range 20 {
-		reg.MustRegister(NewGauge(prefix+strconv.Itoa(i), "h"))
+		reg.MustRegister(NewGauge(prefix+strconv.Itoa(i), "h", UnitNone))
 	}
 
 	fams := reg.collect(context.Background())
@@ -201,25 +201,25 @@ func TestHandler_ErroredMetricNeverReachesTheOutput(t *testing.T) {
 		family string
 		metric func() Metric
 	}{
-		{"counter, invalid name", "bad-name", func() Metric { c := NewCounter("bad-name", "x"); c.Inc(); return c }},
-		{"gauge, invalid name", "bad-name", func() Metric { g := NewGauge("bad-name", "x"); g.Set(4); return g }},
+		{"counter, invalid name", "bad-name", func() Metric { c := NewCounter("bad-name", "x", UnitCount); c.Inc(); return c }},
+		{"gauge, invalid name", "bad-name", func() Metric { g := NewGauge("bad-name", "x", UnitNone); g.Set(4); return g }},
 		{"labeled counter, invalid label name", "wn_ok_total", func() Metric {
-			lc := NewLabeledCounter("wn_ok_total", "x", []string{"bad-label"})
+			lc := NewLabeledCounter("wn_ok_total", "x", UnitCount, []string{"bad-label"})
 			lc.Inc("v")
 			return lc
 		}},
 		{"labeled gauge, reserved label prefix", "wn_ok_gauge", func() Metric {
-			lg := NewLabeledGauge("wn_ok_gauge", "x", []string{"__rsv"})
+			lg := NewLabeledGauge("wn_ok_gauge", "x", UnitNone, []string{"__rsv"})
 			lg.Set(1, "v")
 			return lg
 		}},
 		{"histogram, unordered buckets", "wn_ok_hist", func() Metric {
-			h := NewHistogram("wn_ok_hist", "x", WithBuckets([]float64{2, 1}))
+			h := NewHistogram("wn_ok_hist", "x", UnitNone, WithBuckets([]float64{2, 1}))
 			h.Observe(0.5)
 			return h
 		}},
 		{"labeled histogram, reserved le label", "wn_ok_seconds", func() Metric {
-			lh := NewLabeledHistogram("wn_ok_seconds", "x", []string{"le"})
+			lh := NewLabeledHistogram("wn_ok_seconds", "x", UnitSeconds, []string{"le"})
 			lh.Observe(0.5, "v")
 			return lh
 		}},
@@ -247,12 +247,12 @@ func TestHandler_ErroredMetricNeverReachesTheOutput(t *testing.T) {
 // exposition and that no OpenMetrics-style "# EOF" trailer is emitted.
 func TestEncoders_bothFormats_allTypes(t *testing.T) {
 	r := NewRegistry("")
-	c := NewCounter("parity_counter", "A counter")
-	g := NewGauge("parity_gauge", "A gauge")
-	h := NewHistogram("parity_hist", "A histogram", WithBuckets([]float64{0.1, 1}))
-	lc := NewLabeledCounter("parity_lc", "Labeled counter", []string{"k"})
-	lg := NewLabeledGauge("parity_lg", "Labeled gauge", []string{"k"})
-	lh := NewLabeledHistogram("parity_lh", "Labeled histogram", []string{"k"}, WithBuckets([]float64{0.5}))
+	c := NewCounter("parity_counter", "A counter", UnitCount)
+	g := NewGauge("parity_gauge", "A gauge", UnitNone)
+	h := NewHistogram("parity_hist", "A histogram", UnitNone, WithBuckets([]float64{0.1, 1}))
+	lc := NewLabeledCounter("parity_lc", "Labeled counter", UnitCount, []string{"k"})
+	lg := NewLabeledGauge("parity_lg", "Labeled gauge", UnitNone, []string{"k"})
+	lh := NewLabeledHistogram("parity_lh", "Labeled histogram", UnitNone, []string{"k"}, WithBuckets([]float64{0.5}))
 
 	r.MustRegister(c, g, h, lc, lg, lh)
 
@@ -283,38 +283,23 @@ func TestEncoders_bothFormats_allTypes(t *testing.T) {
 // escapes backslash and newline but leaves the double-quote raw.
 func TestHelpEscaping_Prometheus(t *testing.T) {
 	help := "line1\\line2\nline3\"quoted\""
-	c := NewCounter("help_esc", help)
+	c := NewCounter("help_esc", help, UnitCount)
 	c.Inc()
 
 	var b strings.Builder
-	writeCounter(&b, c)
+	writeFamily(&b, c)
 	if out := b.String(); !strings.Contains(out, `# HELP help_esc line1\\line2\nline3"quoted"`) {
 		t.Errorf("Prometheus HELP escaping wrong:\n%s", out)
 	}
 }
 
-// TestExpositionCostDependsOnLabelValueContent measures what escaping costs at
-// scrape time. It is the only contract here whose answer turns on what the
-// input CONTAINS rather than on how much of it there is, and the answer is yes:
-// a label value carrying a character the text format must escape (`\`, `"` or a
-// newline) costs measurably MORE to expose than one that does not, and the
-// surcharge grows with the value's length.
-//
-// Both halves are worth pinning rather than only the flattering one. Label
-// values are caller-owned and the README already warns that they may carry
-// upstream text, so whoever supplies that text also chooses which of these two
-// paths a scrape takes. What the library owes is that the choice buys a bounded
-// surcharge: it must stay charged per VALUE and per output doubling, never per
-// byte. A per-byte escape cost would let a caller feeding a quoted 64 KiB
-// string into a label turn one series into thousands of allocations on every
-// scrape — an amplification vector reachable from ordinary input, since none of
-// this is on the record path where a cardinality warning would fire.
-//
-// Measured at 100 series: the escaped path costs about 3 allocations more per
-// series at 32 bytes and 11 at 2048, the same under -race. Sixty-four times
-// the bytes for under four times the surcharge is the escaper's output buffer
-// doubling, which is the shape a correct implementation has; a per-byte one
-// would have cost 64 times as much.
+// TestExpositionCostDependsOnLabelValueContent pins what escaping costs at
+// scrape time. A label value holding a backslash, a quote or a newline costs
+// more to expose, and since a caller's upstream text chooses that path, the
+// surcharge must stay per value and per output-buffer doubling, never per
+// byte, or a quoted 64 KiB value turns one series into thousands of
+// allocations per scrape. Measured at 100 series: about 3 more allocations
+// per series at 32 bytes and 11 at 2048.
 func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
 	// maxSurchargePerSeries bounds the escaped path's extra allocations per
 	// series at the smallest value size, and maxSurchargeGrowth bounds how much
@@ -328,17 +313,13 @@ func TestExpositionCostDependsOnLabelValueContent(t *testing.T) {
 	)
 
 	// buildRegistry returns a registry holding one labeled counter with
-	// `series` series whose label value is valueLen bytes of fill. The fill is
-	// a quote on the escaped path, so EVERY byte needs escaping: that is the
-	// worst case the grammar allows and the one a caller cannot make worse.
-	//
-	// The measurement below goes through collect+encode rather than the
-	// handler: it is a difference between two counts, so the handler's fixed
-	// cost would cancel out of it anyway, and the encoder is where the escaping
-	// happens.
+	// `series` series of valueLen bytes of fill. On the escaped path the fill
+	// is a quote, so every byte needs escaping, the worst case. Measuring
+	// collect+encode rather than the handler is enough: the result is a
+	// difference, and the handler's fixed cost cancels out.
 	buildRegistry := func(fill string, valueLen int) *Registry {
 		r := NewRegistry("escapecost")
-		lc := NewLabeledCounter("content_total", "escaping cost contract", []string{"v"})
+		lc := NewLabeledCounter("content_total", "escaping cost contract", UnitCount, []string{"v"})
 		r.MustRegister(lc)
 		for i := range series {
 			lc.Inc(strings.Repeat(fill, valueLen) + strconv.Itoa(i))

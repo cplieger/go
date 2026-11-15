@@ -12,7 +12,7 @@ import (
 // labels before le.
 func TestCollectorServesAHistogramFamily(t *testing.T) {
 	r := NewRegistry("app")
-	d := NewHistogramDesc("start_seconds", "Start latency", []string{"host", "call"}, []float64{0.5, 2})
+	d := NewHistogramDesc("start_seconds", "Start latency", UnitSeconds, []string{"host", "call"}, []float64{0.5, 2})
 	r.MustRegister(staticCollector(func(e *Emitter) {
 		e.EmitHistogram(d, []uint64{1, 3}, 4, 7.25, "nas", "start")
 	}, d))
@@ -42,7 +42,7 @@ func TestCollectorServesAHistogramFamily(t *testing.T) {
 
 func TestCollectorHistogramWithNoBoundsHasOnlyTheInfBucket(t *testing.T) {
 	r := NewRegistry("")
-	d := NewHistogramDesc("h", "h", nil, nil)
+	d := NewHistogramDesc("h", "h", UnitNone, nil, nil)
 	r.MustRegister(staticCollector(func(e *Emitter) { e.EmitHistogram(d, nil, 2, 1.5) }, d))
 	want := "h_bucket{le=\"+Inf\"} 2\nh_sum 1.5\nh_count 2\n"
 	if out := body(t, r); !strings.Contains(out, want) {
@@ -55,11 +55,11 @@ func TestHistogramDescConstructionErrorsSurfaceAtRegister(t *testing.T) {
 		d    *Desc
 		want string
 	}{
-		"le label":            {NewHistogramDesc("h", "h", []string{"le"}, nil), `"le"`},
-		"unsorted bounds":     {NewHistogramDesc("h", "h", nil, []float64{2, 1}), "strictly increasing"},
-		"infinite bound":      {NewHistogramDesc("h", "h", nil, []float64{1, math.Inf(1)}), "finite"},
-		"invalid metric name": {NewHistogramDesc("1h", "h", nil, nil), "1h"},
-		"reserved label":      {NewHistogramDesc("h", "h", []string{"__x"}, nil), "reserved"},
+		"le label":            {NewHistogramDesc("h", "h", UnitNone, []string{"le"}, nil), `"le"`},
+		"unsorted bounds":     {NewHistogramDesc("h", "h", UnitNone, nil, []float64{2, 1}), "strictly increasing"},
+		"infinite bound":      {NewHistogramDesc("h", "h", UnitNone, nil, []float64{1, math.Inf(1)}), "finite"},
+		"invalid metric name": {NewHistogramDesc("1h", "h", UnitNone, nil, nil), "1h"},
+		"reserved label":      {NewHistogramDesc("h", "h", UnitNone, []string{"__x"}, nil), "reserved"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := NewRegistry("").Register(NewCollector(func(context.Context, *Emitter) {}, tc.d))
@@ -73,7 +73,7 @@ func TestHistogramDescConstructionErrorsSurfaceAtRegister(t *testing.T) {
 // A caller's slice changed after the call cannot change the family's bounds.
 func TestHistogramDescOwnsItsBounds(t *testing.T) {
 	bounds := []float64{1, 2}
-	d := NewHistogramDesc("h", "h", nil, bounds)
+	d := NewHistogramDesc("h", "h", UnitNone, nil, bounds)
 	bounds[0] = 5
 	r := NewRegistry("")
 	r.MustRegister(staticCollector(func(e *Emitter) { e.EmitHistogram(d, []uint64{1, 1}, 1, 1) }, d))
@@ -100,8 +100,8 @@ func TestCollectorDropsMalformedHistogramSamples(t *testing.T) {
 		}, "already emitted"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			h := NewHistogramDesc("h", "h", []string{"k"}, []float64{1, 2})
-			g := NewGaugeDesc("g", "h", nil)
+			h := NewHistogramDesc("h", "h", UnitNone, []string{"k"}, []float64{1, 2})
+			g := NewGaugeDesc("g", "h", UnitNone, nil)
 			r := NewRegistry("")
 			r.MustRegister(staticCollector(func(e *Emitter) { tc.emit(e, h, g) }, h, g))
 			fams, err := r.Gather(t.Context())
@@ -125,7 +125,7 @@ func TestCollectorDropsMalformedHistogramSamples(t *testing.T) {
 // Equal bucket counts are an empty bucket, which the format allows.
 func TestCollectorKeepsEmptyBucketsAndANegativeSum(t *testing.T) {
 	r := NewRegistry("")
-	d := NewHistogramDesc("h", "h", nil, []float64{1, 2})
+	d := NewHistogramDesc("h", "h", UnitNone, nil, []float64{1, 2})
 	r.MustRegister(staticCollector(func(e *Emitter) { e.EmitHistogram(d, []uint64{0, 0}, 0, -0.5) }, d))
 	fams, err := r.Gather(t.Context())
 	if err != nil {

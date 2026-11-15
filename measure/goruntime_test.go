@@ -270,7 +270,7 @@ s_count{a="1",b="2"} 7
 // check: a repeated "# TYPE" line makes the scrape invalid.
 func TestPageHasNoRepeatedFamily(t *testing.T) {
 	r := goldenFixtureRegistry()
-	d := NewGaugeDesc("collected", "h", []string{"k"})
+	d := NewGaugeDesc("collected", "h", UnitNone, []string{"k"})
 	r.MustRegister(staticCollector(func(e *Emitter) { e.Emit(d, 1, "v") }, d))
 	seen := map[string]bool{}
 	for line := range strings.SplitSeq(serve(t, r.Handler()), "\n") {
@@ -292,8 +292,14 @@ func TestPageHasNoRepeatedFamily(t *testing.T) {
 // TestRuntimeNamesAreReserved: a user metric cannot take a Go family name or
 // a series name the summary writes.
 func TestRuntimeNamesAreReserved(t *testing.T) {
-	for _, name := range []string{pmThreads, "go_memstats_sys_bytes", pmGCDuration + "_sum", pmGCDuration + "_count", pmNetReceive} {
-		mustRegisterError(t, NewRegistry(""), NewGauge(name, "h"), "collides")
+	for _, m := range []Metric{
+		NewGauge(pmThreads, "h", UnitCount),
+		NewGauge("go_memstats_sys_bytes", "h", UnitBytes),
+		NewGauge(pmGCDuration+"_sum", "h", UnitSeconds),
+		NewGauge(pmGCDuration+"_count", "h", UnitCount),
+		NewCounter(pmNetReceive, "h", UnitBytes),
+	} {
+		mustRegisterError(t, NewRegistry(""), m, "collides")
 	}
 }
 

@@ -24,36 +24,10 @@ func APIBuckets() []float64 {
 	return []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 }
 
-// histogramCfg holds optional configuration for histogram construction.
-type histogramCfg struct {
-	buckets    []float64
-	bucketsSet bool
-}
-
-// HistogramOption configures optional histogram parameters.
-type HistogramOption func(*histogramCfg)
-
-// WithBuckets returns a HistogramOption that sets custom bucket boundaries
-// for a histogram. An empty (or nil) slice yields a histogram with only the implicit
-// +Inf bucket.
-func WithBuckets(buckets []float64) HistogramOption {
-	return func(cfg *histogramCfg) {
-		cfg.buckets = buckets
-		cfg.bucketsSet = true
-	}
-}
-
-// checkBuckets enforces the histogram bucket contract: bounds must be a
-// strictly increasing sequence of finite values. The writers append the
-// implicit le="+Inf" bucket, so callers must not include +Inf (nor any other
-// non-finite value), and duplicate or out-of-order bounds would emit duplicate
-// or non-monotonic le series that Prometheus parsers reject, dropping the
-// whole scrape. metric names the owning metric in each error, so a
-// registration failure out of a multi-metric MustRegister block identifies
-// which declaration carried the bad buckets. A violation is returned as an
-// error that the constructor captures into the histogram, surfacing at
-// registration, consistent with checkMetricName. The empty bound set is
-// valid: it yields a histogram with only the implicit +Inf bucket.
+// checkBuckets requires finite, strictly increasing bounds, since le="+Inf"
+// is implicit and a duplicate or falling bound makes a parser reject the
+// whole scrape. The error names metric, so a MustRegister of many metrics
+// says which one. An empty set is valid: only the +Inf bucket.
 func checkBuckets(metric string, bounds []float64) error {
 	for i, b := range bounds {
 		if math.IsNaN(b) || math.IsInf(b, 0) {
@@ -67,26 +41,18 @@ func checkBuckets(metric string, bounds []float64) error {
 	return nil
 }
 
-// resolveBuckets applies the histogram options, falling back to
-// DefaultBuckets when no WithBuckets option was supplied, validates the
-// resulting bounds, and returns an owned clone. Shared by NewHistogram and
-// NewLabeledHistogram so the default-seed and nil-option-skip invariant is
-// single-sourced. On a bucket-contract violation it returns nil bounds and
-// the error (naming metric) for the constructor to capture.
-func resolveBuckets(metric string, opts []HistogramOption) ([]float64, error) {
-	var cfg histogramCfg
-	for _, o := range opts {
-		if o != nil {
-			o(&cfg)
-		}
+// resolveBuckets returns an owned copy of the bounds WithBuckets set, or
+// DefaultBuckets without it. On a bucket-contract violation it returns nil
+// bounds and the error (naming metric) for the constructor to capture.
+func resolveBuckets(metric string, o *options) ([]float64, error) {
+	bounds := o.buckets
+	if !o.bucketsSet {
+		bounds = DefaultBuckets()
 	}
-	if !cfg.bucketsSet {
-		cfg.buckets = DefaultBuckets()
-	}
-	if err := checkBuckets(metric, cfg.buckets); err != nil {
+	if err := checkBuckets(metric, bounds); err != nil {
 		return nil, err
 	}
-	return slices.Clone(cfg.buckets), nil
+	return slices.Clone(bounds), nil
 }
 
 // Histogram tracks a distribution using cumulative buckets and atomic CAS for sum.
@@ -96,6 +62,7 @@ type Histogram struct {
 	err        error // construction-time validation error; surfaces at registration
 	bounds     []float64
 	buckets    []atomic.Int64
+	meta       declMeta
 	sumBits    atomic.Uint64
 	count      atomic.Int64
 	registered atomic.Bool
@@ -108,42 +75,53 @@ type Histogram struct {
 	mu sync.RWMutex
 }
 
-// NewHistogram creates a histogram with the given name and help text.
-// By default it uses DefaultBuckets; use WithBuckets to override.
-// Construction through NewHistogram is mandatory: the zero Histogram has no
-// bucket slots, so Observe on it panics with an index out of range. An
-// invalid name or a bucket-contract violation (non-finite, duplicate, or
-// out-of-order bounds) is captured into the histogram rather than panicking:
-// the histogram records nothing and the error surfaces at registration.
-func NewHistogram(name, help string, opts ...HistogramOption) *Histogram {
+// NewHistogram creates a histogram whose observations are in unit. By
+// default it uses DefaultBuckets; use WithBuckets to override. Construction
+// through NewHistogram is mandatory: the zero Histogram has no bucket slots,
+// so Observe on it panics with an index out of range. An invalid declaration
+// or a bucket-contract violation (non-finite, duplicate, or out-of-order
+// bounds) is captured into the histogram rather than panicking: the
+// histogram records nothing and the error surfaces at registration.
+func NewHistogram(name, help string, unit Unit, opts ...Option) *Histogram {
 	help = sanitizeHelp(name, help)
-	err := checkMetricName(name)
-	bounds, berr := resolveBuckets(name, opts)
-	if err == nil {
-		err = berr
-	}
-	return &Histogram{
+	o := applyOptions(opts)
+	bounds, berr := resolveBuckets(name, &o)
+	h := &Histogram{
 		name:    name,
 		help:    help,
-		err:     err,
 		bounds:  bounds,
 		buckets: make([]atomic.Int64, len(bounds)+1),
 	}
+	h.meta.fill(name, help, KindHistogram, unit, nil, &o)
+	h.meta.buckets = bounds
+	h.err = firstErr(checkMetricName(name), berr, checkOptionFits(name, &o, true, -1),
+		checkDeclaration(name, KindHistogram, unit, nil, &o))
+	return h
 }
 
-// Observe records a value in the histogram. A histogram carrying a
+// Declaration returns the histogram's metadata.
+func (h *Histogram) Declaration() Declaration { return h.meta.declaration() }
+
+func (h *Histogram) declared() *declMeta {
+	if h == nil {
+		return nil
+	}
+	return &h.meta
+}
+
+// Observe records a value, in the histogram's unit. A histogram carrying a
 // construction error records nothing (one warning on the first drop).
-func (h *Histogram) Observe(seconds float64) {
+func (h *Histogram) Observe(v float64) {
 	if h.err != nil {
 		warnInertOnce(h.err, &h.warned, &h.name)
 		return
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	addFloatBits(&h.sumBits, seconds)
+	addFloatBits(&h.sumBits, v)
 	h.count.Add(1)
 	for i, bound := range h.bounds {
-		if seconds <= bound {
+		if v <= bound {
 			for j := i; j < len(h.bounds); j++ {
 				h.buckets[j].Add(1)
 			}
@@ -174,57 +152,71 @@ type LabeledHistogram struct {
 	err    error // construction-time validation error; surfaces at registration
 	bounds []float64
 	labels []string
+	meta   declMeta
 	series
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewLabeledHistogram creates a labeled histogram with the given name, help, and label names.
-// By default it uses DefaultBuckets; use WithBuckets to override.
-// Construction through NewLabeledHistogram is mandatory: the zero
-// LabeledHistogram has a nil series map and panics on the first record. An
-// invalid metric name, an invalid/reserved/duplicate label name, the reserved
-// "le" label, more than 8 labels, or a bucket-contract violation is captured
-// into the histogram rather than panicking: the histogram records nothing and
-// the error surfaces at registration.
-func NewLabeledHistogram(name, help string, labels []string, opts ...HistogramOption) *LabeledHistogram {
+// NewLabeledHistogram creates a labeled histogram with the given label
+// names, its observations in unit. It uses DefaultBuckets unless WithBuckets
+// sets others, and [WithSeed] creates label sets with no observations.
+// Construction through it is mandatory: the zero LabeledHistogram panics on
+// the first record. An invalid declaration, including the reserved "le"
+// label and bad buckets, is captured and surfaces at registration.
+func NewLabeledHistogram(name, help string, unit Unit, labels []string, opts ...Option) *LabeledHistogram {
 	help = sanitizeHelp(name, help)
+	o := applyOptions(opts)
 	owned, err := checkNameAndLabels("LabeledHistogram", name, labels)
 	if err == nil && slices.Contains(owned, "le") {
 		err = fmt.Errorf(`measure: label name "le" for metric %q is reserved for the histogram bucket bound`, name)
 	}
-	bounds, berr := resolveBuckets(name, opts)
-	if err == nil {
-		err = berr
-	}
-	return &LabeledHistogram{
-		name:   name,
+	bounds, berr := resolveBuckets(name, &o)
+	lh := &LabeledHistogram{
 		help:   help,
-		err:    err,
 		labels: owned,
 		bounds: bounds,
 		vals:   make(map[labelKey]*Histogram),
 	}
+	lh.name = name
+	lh.meta.fill(name, help, KindHistogram, unit, owned, &o)
+	lh.meta.buckets = bounds
+	lh.err = firstErr(err, berr, checkOptionFits(name, &o, true, len(owned)),
+		checkDeclaration(name, KindHistogram, unit, owned, &o))
+	if lh.err == nil {
+		for _, set := range o.seeds {
+			key := labelKeyFor(lh.labels, set)
+			lh.loadOrStore(lh.vals, &key, lh.newSeries)
+		}
+	}
+	return lh
 }
 
-// Observe records a value for the given label values. It panics on a
-// label-arity mismatch. A histogram carrying a construction error records
-// nothing (one warning on the first drop).
-func (lh *LabeledHistogram) Observe(seconds float64, labelVals ...string) {
+// Declaration returns the histogram's metadata.
+func (lh *LabeledHistogram) Declaration() Declaration { return lh.meta.declaration() }
+
+func (lh *LabeledHistogram) declared() *declMeta {
+	if lh == nil {
+		return nil
+	}
+	return &lh.meta
+}
+
+func (lh *LabeledHistogram) newSeries() *Histogram {
+	return &Histogram{bounds: lh.bounds, buckets: make([]atomic.Int64, len(lh.bounds)+1)}
+}
+
+// Observe records a value, in the histogram's unit, for the given label
+// values. It panics on a label-arity mismatch. A histogram carrying a
+// construction error records nothing (one warning on the first drop).
+func (lh *LabeledHistogram) Observe(v float64, labelVals ...string) {
 	if lh.err != nil {
 		warnInertOnce(lh.err, &lh.warned, &lh.name)
 		return
 	}
 	key := labelKeyFor(lh.labels, labelVals)
-	h, _ := lh.loadOrStore(lh.vals, &key, func() *Histogram {
-		return &Histogram{
-			name:    lh.name,
-			help:    lh.help,
-			bounds:  lh.bounds,
-			buckets: make([]atomic.Int64, len(lh.bounds)+1),
-		}
-	})
-	h.Observe(seconds)
+	h, _ := lh.loadOrStore(lh.vals, &key, lh.newSeries)
+	h.Observe(v)
 }
 
 // Reset removes all label combinations from the histogram.
