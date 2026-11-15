@@ -318,20 +318,24 @@ func isComponentNamePart(s string) bool {
 	return true
 }
 
+// emitUnionType writes ti's union alias, each case a multi-line object type
+// in prettier's layout. tsc and typedoc attach no JSDoc written inside a
+// one-line object type, and a case that is multi-line whether documented or
+// not changes only its doc lines when a field gains a doc.
 func (g *generator) emitUnionType(w *strings.Builder, ti *typeInfo) {
 	w.WriteString(ti.Doc)
 	w.WriteString("export type " + g.tsName(ti.Name) + " =")
 	for i := range ti.Union.cases {
 		uc := &ti.Union.cases[i]
-		members := []string{tsPropName(ti.Union.tag) + ": \"" + tsStringLiteral(uc.value) + "\""}
-		for _, f := range ti.caseFields(uc)[1:] {
-			q := ""
-			if f.optional() {
-				q = "?"
-			}
-			members = append(members, tsPropName(f.WireName)+q+": "+f.TSType)
+		fields := ti.caseFields(uc)
+		tag := *fields[0]
+		tag.TSType = "\"" + tsStringLiteral(uc.value) + "\""
+		fields[0] = &tag
+		w.WriteString("\n  | {\n")
+		for _, f := range fields {
+			emitInterfaceField(w, f, "      ")
 		}
-		w.WriteString("\n  | { " + strings.Join(members, "; ") + " }")
+		w.WriteString("    }")
 	}
 	w.WriteString(";\n\n")
 }

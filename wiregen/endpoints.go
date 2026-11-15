@@ -659,6 +659,7 @@ func isHexDigit(c byte) bool {
 type argField struct {
 	name     string
 	tsType   string
+	doc      string // the field's JSDoc, or ""
 	optional bool
 }
 
@@ -785,7 +786,7 @@ func scalarFields(e *Endpoint, role string, wt Type, engine *astEngine) ([]argFi
 		if !isValidTSIdent(f.WireName) {
 			return nil, fmt.Errorf("wiregen: endpoint %s %s field %s.%s has wire name %q, which is not a valid TS identifier", e.Name, role, wt.Name, f.GoName, f.WireName)
 		}
-		fields = append(fields, argField{name: f.WireName, tsType: ts, optional: f.optional()})
+		fields = append(fields, argField{name: f.WireName, tsType: ts, doc: f.Doc, optional: f.optional()})
 	}
 	return fields, nil
 }
@@ -916,7 +917,8 @@ func (g *generator) emitEndpoint(w *strings.Builder, e *Endpoint, args *endpoint
 // emitArgsInterface writes the exported arguments interface.
 func emitArgsInterface(w *strings.Builder, name string, args *endpointArgs, used *usedIdents) {
 	w.WriteString("export interface " + name + " {\n")
-	member := func(n, ts string, optional bool) {
+	member := func(doc, n, ts string, optional bool) {
+		writeDoc(w, doc, "  ")
 		q := ""
 		if optional {
 			q = "?"
@@ -926,15 +928,15 @@ func emitArgsInterface(w *strings.Builder, name string, args *endpointArgs, used
 	for _, group := range [][]argField{args.params, args.query} {
 		for _, f := range group {
 			useArgType(f.tsType, used)
-			member(f.name, f.tsType, f.optional)
+			member(f.doc, f.name, f.tsType, f.optional)
 		}
 	}
 	if args.body != "" {
 		used.typeRef(args.body)
-		member("body", args.body, false)
+		member("", "body", args.body, false)
 	}
 	for _, h := range args.headers {
-		member(h.Arg, tsString, !h.Required)
+		member(jsDoc("", h.Description), h.Arg, tsString, !h.Required)
 	}
 	w.WriteString("}\n\n")
 }
@@ -1020,21 +1022,13 @@ func (g *generator) endpointResult(e *Endpoint, st *clientState) (tsType, decode
 	return tn, dec
 }
 
-// jsDoc renders summary and description as a JSDoc block, or "" when both
-// are empty. A "*/" in either is broken so it cannot close the comment.
+// jsDoc renders summary and description as JSDoc, or "" when both are empty.
 func jsDoc(summary, description string) string {
 	text := strings.TrimSpace(strings.TrimSpace(summary) + "\n\n" + strings.TrimSpace(description))
 	if text == "" {
 		return ""
 	}
-	text = strings.ReplaceAll(text, "*/", "*\\/")
-	var b strings.Builder
-	b.WriteString("/**\n")
-	for line := range strings.SplitSeq(text, "\n") {
-		b.WriteString(strings.TrimRight(" * "+line, " ") + "\n")
-	}
-	b.WriteString(" */\n")
-	return b.String()
+	return linesToJSDoc(strings.Split(text, "\n"))
 }
 
 // emitClientImports writes the client's imports: the transport, the

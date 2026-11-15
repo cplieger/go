@@ -72,7 +72,7 @@ Every type the table names is generated as if listed in `Types`.
 
 `client.gen.ts` holds, for each endpoint:
 
-- `<Name>Args`, a readonly interface of its path parameters, query fields, `body` and header arguments.
+- `<Name>Args`, a readonly interface of its path parameters, query fields, `body` and header arguments. A parameter or query field keeps its field's JSDoc, and a header argument takes its `Description` as JSDoc.
 - `<Name>Error`, the union of its error codes.
 - `<name>Endpoint`, a descriptor `{method, path, codes, request(args), decode}`, whose `request` returns the transport's `EndpointSpec`: placeholders percent-encoded, the query folded into `path` with undefined values skipped, `raw: true` on a raw endpoint, the body, the declared headers when given, and `codes`, the error union's members.
 - and for `KindJSON` and `KindRaw` endpoints, a function returning `globalThis.Promise<ApiResult<T, <Name>Error>>`.

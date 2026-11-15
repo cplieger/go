@@ -251,7 +251,7 @@ func TestMapType_BodyRoles(t *testing.T) {
 	if events := mustGen(t, r.eventsFile); !strings.Contains(events, "labels: decodeLabels,") {
 		t.Errorf("events module does not decode the map's data:\n%s", events)
 	}
-	if types := mustGen(t, r.typesFile); !strings.Contains(types, `{ type: "create"; payload?: Labels }`) {
+	if types := mustGen(t, r.typesFile); !strings.Contains(types, "      type: \"create\";\n      /** Payload is the command's argument, typed by its case. */\n      payload?: Labels;\n") {
 		t.Errorf("types file does not type the payload as the map:\n%s", types)
 	}
 	doc := mustGen(t, r.openapiFile)
