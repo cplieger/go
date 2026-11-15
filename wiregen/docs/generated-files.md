@@ -57,6 +57,7 @@ A failed check throws a `TypeError` whose message starts with the JSON path, suc
 - `asObject(v: unknown, path = "$"): globalThis.Record<string, unknown>`
 - `asArray(v: unknown, path = "$"): unknown[]`
 - `reqStr`, `reqNum` and `reqBool(o: globalThis.Record<string, unknown>, key: string, path = "$")`, where `reqNum` rejects `NaN` and `Infinity`
+- `reqRaw(o, key, path = "$"): unknown`, which refuses an absent key and passes any present value, `null` included, through as data
 - `optStr`, `optNum` and `optBool(o, key, path = "$")`, returning `undefined` for an absent key, for hand-written decoders
 - `reqOneOf<T extends string>(o, key, vals: readonly T[], path = "$"): T`
 - `decodeArray<T>(v: unknown, decode: Decoder<T>, path = "$"): T[]`

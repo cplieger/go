@@ -5,6 +5,8 @@ package wiregen_test
 import (
 	"strings"
 	"testing"
+
+	"github.com/cplieger/go/wiregen/v2"
 )
 
 // The union decoders type-check under tsc and, under node, decode each case,
@@ -80,6 +82,89 @@ for (const body of bodies) {
 		`ok {"type":"create"}`,
 		`refused $.command.payload: not allowed in this case`,
 		`refused $.create_chat.title: expected string, got undefined`,
+		`ok {"type":"rename"}`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// A case's required fields are non-optional members under tsc, and node
+// refuses each one absent or null, while the case that does not list stored
+// reads it as optional; a required json.RawMessage passes null as data.
+func TestUnionRequired_DecoderRuns(t *testing.T) {
+	out := runTS(t, checkedReg(), map[string]string{"main.ts": `import { decodeChecked } from "./decoders.gen.js";
+import type { Checked } from "./types.gen.js";
+const bodies = [
+  '{"state":"gone","stored":{"path":"p"}}',
+  '{"state":"gone"}',
+  '{"state":"updated","stored":null}',
+  '{"state":"unchanged"}',
+  '{"state":"unchanged","stored":null}',
+  '{"state":"error","failure":"f","detail":null}',
+  '{"state":"error","detail":1}',
+  '{"state":"error","failure":"f"}',
+];
+for (const body of bodies) {
+  try {
+    const c: Checked = decodeChecked(JSON.parse(body));
+    if (c.state === "gone" || c.state === "updated") {
+      const path: string = c.stored.path;
+      void path;
+    }
+    console.log("ok " + JSON.stringify(c));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"state":"gone","stored":{"path":"p"}}`,
+		`refused $.stored: expected object, got undefined`,
+		`refused $.stored: expected object, got null`,
+		`ok {"state":"unchanged"}`,
+		`ok {"state":"unchanged"}`,
+		`ok {"state":"error","failure":"f","detail":null}`,
+		`refused $.checked.failure: expected string, got undefined`,
+		`refused $.checked.detail: expected a JSON value, got undefined`,
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("node output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// A required payload is a non-optional member under tsc, and node refuses
+// it absent or null in its case while another case's payload stays optional.
+func TestUnionRequired_PayloadDecoderRuns(t *testing.T) {
+	r := newTestRegistry()
+	r.Unions = []wiregen.Union{requiredPayloadCommand()}
+	out := runTS(t, r, map[string]string{"main.ts": `import { decodeCommand } from "./decoders.gen.js";
+import type { Command } from "./types.gen.js";
+const bodies = [
+  '{"type":"create","payload":{"title":"a"}}',
+  '{"type":"create"}',
+  '{"type":"create","payload":null}',
+  '{"type":"rename"}',
+];
+for (const body of bodies) {
+  try {
+    const c: Command = decodeCommand(JSON.parse(body));
+    if (c.type === "create") {
+      const title: string = c.payload.title;
+      void title;
+    }
+    console.log("ok " + JSON.stringify(c));
+  } catch (e) {
+    console.log("refused " + (e as Error).message);
+  }
+}
+`})
+	want := strings.Join([]string{
+		`ok {"type":"create","payload":{"title":"a"}}`,
+		`refused $.create_chat: expected object, got undefined`,
+		`refused $.create_chat: expected object, got null`,
 		`ok {"type":"rename"}`,
 		"",
 	}, "\n")

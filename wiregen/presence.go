@@ -1,16 +1,16 @@
 package wiregen
 
 // These derive every null and absence rule from what encoding/json writes and
-// reads for a field; the TS types, decoders, arbitraries and OpenAPI schemas
-// all read them.
+// reads for a field, or from a union case's Required, which overrides both;
+// the TS types, decoders, arbitraries and OpenAPI schemas all read them.
 
 // optional reports whether the key may be absent: encoding/json can omit it,
 // or a request may leave a pointer nil. The TS member is `key?:`, and the
 // decoder reads an absent key or null as absent.
-func (f *fieldInfo) optional() bool { return f.Ptrs > 0 || f.absentOut() }
+func (f *fieldInfo) optional() bool { return !f.CaseRequired && (f.Ptrs > 0 || f.absentOut()) }
 
 // absentOut reports whether encoding/json can leave the key out.
-func (f *fieldInfo) absentOut() bool { return f.Omittable || f.ViaEmbedPtr }
+func (f *fieldInfo) absentOut() bool { return !f.CaseRequired && (f.Omittable || f.ViaEmbedPtr) }
 
 // nullOut reports whether encoding/json can write null for the key: a nil
 // pointer or collection no omit option drops, anything nil under a non-nil
@@ -18,6 +18,8 @@ func (f *fieldInfo) absentOut() bool { return f.Omittable || f.ViaEmbedPtr }
 // hold null.
 func (f *fieldInfo) nullOut() bool {
 	switch {
+	case f.CaseRequired:
+		return false
 	case f.RawNull:
 		return true
 	case f.Kind == kindRaw:
@@ -32,7 +34,9 @@ func (f *fieldInfo) nullOut() bool {
 
 // nullIn reports whether a request may send null, which encoding/json decodes
 // to a nil pointer or collection.
-func (f *fieldInfo) nullIn() bool { return f.Kind != kindRaw && (f.Ptrs > 0 || f.nilValue()) }
+func (f *fieldInfo) nullIn() bool {
+	return !f.CaseRequired && f.Kind != kindRaw && (f.Ptrs > 0 || f.nilValue())
+}
 
 // nilValue reports whether the value under the pointers can be nil.
 func (f *fieldInfo) nilValue() bool {
@@ -51,7 +55,10 @@ func (f *fieldInfo) elemTS() string {
 	return f.TSType
 }
 
-// refusesNull reports whether f's Count bound refuses null: null would decode
-// to an empty collection below the bound, which a pointer level instead
-// takes as nil.
-func (f *fieldInfo) refusesNull() bool { return f.Ptrs == 0 && f.Bounds.refusesNull() }
+// refusesNull reports whether f's decoder refuses null: f is CaseRequired
+// and no json.RawMessage, or its Count bound refuses null, which would
+// decode to an empty collection below the bound, while a pointer level
+// instead takes it as nil.
+func (f *fieldInfo) refusesNull() bool {
+	return (f.CaseRequired && f.Kind != kindRaw) || (f.Ptrs == 0 && f.Bounds.refusesNull())
+}

@@ -71,10 +71,12 @@ func TextEnum[T interface{ ~uint8; encoding.TextMarshaler }]() EnumRef
 
 // Union tags Type by its Tag field; each Cases key is a tag value listing the
 // other fields that case allows, all by wire name. Payload names a
-// json.RawMessage field whose type PayloadTypes gives per case.
+// json.RawMessage field whose type PayloadTypes gives per case. Required
+// lists, per case, the fields that case always sends.
 type Union struct {
     Cases        map[string][]string
-    PayloadTypes map[string]Type // every Cases key; the zero Type: no payload
+    PayloadTypes map[string]Type     // every Cases key; the zero Type: no payload
+    Required     map[string][]string // Cases keys; nil: each field keeps its own rule
     Type         Type
     Tag          string
     Payload      string // "": no typed payload

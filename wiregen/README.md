@@ -95,7 +95,7 @@ export const decodeUser: Decoder<User> = (v) => {
 
 ## API
 
-- A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. A type that an endpoint, event or union names is generated without being listed.
+- A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. A `Union` tags a struct by one field, lists each case's fields in `Cases`, types a `json.RawMessage` per case with `Payload` and `PayloadTypes`, and names the fields each case always sends in `Required` ([Unions](docs/type-mapping.md#unions)). A type that an endpoint, event or union names is generated without being listed.
 - Register an enum by its type: `StringEnum[T]()` for a string type, `TextEnum[T]()` for a `uint8` type whose `MarshalText` names its members.
 - `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithDeadsetEdges(targetRoot)` writes a deadset [edges document](https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md), and `WithDeadsetEdgesFile(path)` writes it elsewhere. A CI check can use that to regenerate into a temporary tree and compare it with the committed files ([Writing into another tree](docs/generated-files.md#writing-into-another-tree)). `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
 

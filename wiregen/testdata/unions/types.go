@@ -131,3 +131,36 @@ type NotRaw struct {
 type Batch struct {
 	Commands []Command `json:"commands"`
 }
+
+// Checked is a union whose cases share an optional field some of them
+// require.
+type Checked struct {
+	State   string          `json:"state"`
+	Stored  *Stored         `json:"stored,omitempty"`
+	Failure string          `json:"failure,omitempty"`
+	Detail  json.RawMessage `json:"detail,omitempty"`
+}
+
+// Stored is where a checked copy is stored.
+type Stored struct {
+	Path string `json:"path"`
+}
+
+// Chain is a union whose case requires a field that reaches it back.
+type Chain struct {
+	Type  string `json:"type"`
+	Next  *Chain `json:"next,omitempty"`
+	Value int    `json:"value,omitempty"`
+}
+
+// Loop is a union whose every case requires a field leading back to it,
+// through Link.
+type Loop struct {
+	Type string `json:"type"`
+	Link *Link  `json:"link,omitempty"`
+}
+
+// Link is a plain struct that requires a Loop.
+type Link struct {
+	Loop Loop `json:"loop"`
+}
