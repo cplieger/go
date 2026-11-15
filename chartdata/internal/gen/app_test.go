@@ -21,7 +21,7 @@ func interfaces(t *testing.T, file string) map[string]string {
 		t.Fatalf("read %s: %v", file, err)
 	}
 	out := map[string]string{}
-	for _, m := range regexp.MustCompile(`(?ms)^export interface (\w+) \{\n.*?^\}|^export type (\w+) = [^\n]*;$|^export type (\w+) =\n(?:  \| [^\n]*\n)*?  \| [^\n]*;$`).FindAllStringSubmatch(string(src), -1) {
+	for _, m := range regexp.MustCompile(`(?ms)^export interface (\w+) \{\n.*?^\}|^export type (\w+) = [^\n]*;$|^export type (\w+) =\n.*?^(?:    \}|  \| [^\n]*);$`).FindAllStringSubmatch(string(src), -1) {
 		out[m[1]+m[2]+m[3]] = m[0]
 	}
 	return out

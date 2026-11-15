@@ -14,10 +14,52 @@ export type FrameType = "series" | "bins" | "categories" | "boxes" | "points" | 
  * ResetAt or SetFrame.
  */
 export type FrameEvent =
-  | { kind: "append"; x?: number; x1?: number; x2?: number; key: string; values?: (number | null)[] }
-  | { kind: "replace"; x1?: number; x2?: number; open?: boolean; key: string; values?: (number | null)[] }
-  | { kind: "reset"; at?: number; key: string }
-  | { kind: "set"; series?: SeriesFrame; bins?: BinsFrame; categories?: CategoriesFrame; boxes?: BoxesFrame; points?: PointsFrame; grid?: GridFrame; calendar?: CalendarFrame; tree?: TreeFrame; flow?: FlowFrame; events?: EventsFrame; states?: StatesFrame; value?: ValueFrame; key: string };
+  | {
+      kind: "append";
+      x?: number;
+      x1?: number;
+      x2?: number;
+      key: string;
+      /**
+       * Values are the new column's or bin's values in the frame's series
+       * order, null for a gap.
+       */
+      values?: (number | null)[];
+    }
+  | {
+      kind: "replace";
+      x1?: number;
+      x2?: number;
+      open?: boolean;
+      key: string;
+      /**
+       * Values are the new column's or bin's values in the frame's series
+       * order, null for a gap.
+       */
+      values?: (number | null)[];
+    }
+  | {
+      kind: "reset";
+      /** At is a reset's instant, in Unix milliseconds. */
+      at?: number;
+      key: string;
+    }
+  | {
+      kind: "set";
+      series?: SeriesFrame;
+      bins?: BinsFrame;
+      categories?: CategoriesFrame;
+      boxes?: BoxesFrame;
+      points?: PointsFrame;
+      grid?: GridFrame;
+      calendar?: CalendarFrame;
+      tree?: TreeFrame;
+      flow?: FlowFrame;
+      events?: EventsFrame;
+      states?: StatesFrame;
+      value?: ValueFrame;
+      key: string;
+    };
 
 /**
  * BinsFrame is series of values over bins from X1 to X2, drawn as rects or
