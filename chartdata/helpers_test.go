@@ -1,9 +1,13 @@
 package chartdata_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cplieger/go/chartdata"
@@ -36,4 +40,27 @@ func encode(t *testing.T, v any) string {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	return string(b)
+}
+
+// logCapture collects the lines of a logger handed to the code under test.
+type logCapture struct {
+	buf bytes.Buffer
+	mu  sync.Mutex
+}
+
+func (c *logCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *logCapture) logger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(c, nil))
+}
+
+// count returns how many lines hold msg.
+func (c *logCapture) count(msg string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Count(c.buf.String(), msg)
 }
