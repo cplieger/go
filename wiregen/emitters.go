@@ -339,10 +339,10 @@ func ownRead(wn string, used *usedIdents) string {
 	return "own(o, \"" + wn + "\")"
 }
 
-// reqDecode is reqExpr before the bound checks. A required field has no
-// pointer level unless CaseRequired, which refuses null (presence.go), so
-// null reaches it only as encoding/json's nil collection or []byte, which
-// reads as empty.
+// reqDecode is reqExpr before the bound checks. refusesNull decides whether
+// null is refused (presence.go); otherwise null reaches a required field
+// only as raw JSON, kept as data, or as encoding/json's nil collection or
+// []byte, which reads as empty.
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
 	// own is imported only when a branch reads through it.
@@ -375,6 +375,11 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 		used.enumUse(f.GoTypeName)
 		return "reqOneOf(o, \"" + wn + "\", " + g.enumConstName(f.GoTypeName) + at
 	case kindStruct:
+		if f.CaseRequired {
+			// reqRaw names the absent field; the decoder refuses null.
+			used.helper(helperReqRaw)
+			return g.decoderName(f.GoTypeName) + "(" + helperReqRaw + "(o, \"" + wn + "\"" + at + ")"
+		}
 		return g.decoderName(f.GoTypeName) + "(" + read() + ")"
 	}
 	helper := primHelpers[f.Kind]

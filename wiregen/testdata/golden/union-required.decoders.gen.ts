@@ -28,7 +28,7 @@ export const decodeChecked: Decoder<Checked> = (v) => {
       refuseKeys(o, ["failure", "detail"], "$.checked");
       const out: globalThis.Extract<Checked, { state: "gone" }> = {
         state: tag,
-        stored: decodeStored(own(o, "stored")),
+        stored: decodeStored(reqRaw(o, "stored", "$.checked")),
       };
       return out;
     }
@@ -47,7 +47,7 @@ export const decodeChecked: Decoder<Checked> = (v) => {
       refuseKeys(o, ["failure", "detail"], "$.checked");
       const out: globalThis.Extract<Checked, { state: "updated" }> = {
         state: tag,
-        stored: decodeStored(own(o, "stored")),
+        stored: decodeStored(reqRaw(o, "stored", "$.checked")),
       };
       return out;
     }

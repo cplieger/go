@@ -164,3 +164,9 @@ type Loop struct {
 type Link struct {
 	Loop Loop `json:"loop"`
 }
+
+// Labeled is a union whose every case requires its name.
+type Labeled struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}

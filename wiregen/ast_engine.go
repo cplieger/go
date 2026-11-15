@@ -83,8 +83,8 @@ type fieldInfo struct {
 	// RawNull: raw JSON typed as another shape (a union payload), whose bytes
 	// can be JSON null, which no omit option drops.
 	RawNull bool
-	// CaseRequired: a union case's copy of a field its Required lists, which
-	// that case always sends, present and not null.
+	// CaseRequired: a union case's copy of a field its Required lists;
+	// presence.go derives its rules.
 	CaseRequired bool
 	Tagged       bool // wire name came from an explicit json tag
 }

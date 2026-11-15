@@ -103,7 +103,7 @@ func TestUnionRequired_Decoder(t *testing.T) {
 	for _, value := range []string{"gone", "updated"} {
 		t.Run(value+" reads stored as required", func(t *testing.T) {
 			body := caseBlock(t, out, value)
-			if !strings.Contains(body, `stored: decodeStored(own(o, "stored")),`) || strings.Contains(body, "const $v") {
+			if !strings.Contains(body, `stored: decodeStored(reqRaw(o, "stored", "$.checked")),`) || strings.Contains(body, "const $v") {
 				t.Errorf("case %s does not require stored:\n%s", value, body)
 			}
 		})
@@ -130,7 +130,7 @@ func TestUnionRequired_PayloadDecoder(t *testing.T) {
 	r := newTestRegistry()
 	r.Unions = []wiregen.Union{requiredPayloadCommand()}
 	out := mustGen(t, r.decodersFile)
-	if body := caseBlock(t, out, "create"); !strings.Contains(body, `payload: decodeCreateChat(own(o, "payload")),`) {
+	if body := caseBlock(t, out, "create"); !strings.Contains(body, `payload: decodeCreateChat(reqRaw(o, "payload", "$.command")),`) {
 		t.Errorf("create does not require its payload:\n%s", body)
 	}
 	if body := caseBlock(t, out, "rename"); !strings.Contains(body, `const $v = own(o, "payload");`) {
@@ -263,8 +263,10 @@ func TestUnionRequired_Refusals(t *testing.T) {
 		{"a key that is no case", checkedUnion, func(u *wiregen.Union) { u.Required["missing"] = []string{"stored"} }, `Required key "missing" is no case`},
 		{"another case's field", checkedUnion, func(u *wiregen.Union) { u.Required["gone"] = []string{"failure"} }, `case "gone" requires "failure", which the case does not carry`},
 		{"no field of the type", checkedUnion, func(u *wiregen.Union) { u.Required["gone"] = []string{"nope"} }, `case "gone" requires "nope", which the case does not carry`},
-		{"the tag", checkedUnion, func(u *wiregen.Union) { u.Required["gone"] = []string{"state", "stored"} }, `case "gone" requires "state", which every case already requires`},
-		{"a field every case already requires", shapeUnion, func(u *wiregen.Union) { u.Required = map[string][]string{"circle": {"tags"}} }, `case "circle" requires "tags", which every case already requires`},
+		{"the tag", checkedUnion, func(u *wiregen.Union) { u.Required["gone"] = []string{"state", "stored"} }, `case "gone" requires "state", which every case already sends, never null`},
+		{"a field every case already sends, never null", func() wiregen.Union {
+			return wiregen.Union{Type: wiregen.TypeRef[unions.Labeled](), Tag: "kind", Cases: map[string][]string{"a": {"name"}, "b": {"name"}}}
+		}, func(u *wiregen.Union) { u.Required = map[string][]string{"a": {"name"}} }, `case "a" requires "name", which every case already sends, never null`},
 		{"a field twice", checkedUnion, func(u *wiregen.Union) { u.Required["gone"] = []string{"stored", "stored"} }, `case "gone" requires "stored" twice`},
 		{"a payload in a case with none", commandUnion, func(u *wiregen.Union) { u.Required = map[string][]string{"close": {"payload"}} }, `case "close" requires "payload", which the case does not carry`},
 		{"every case requiring its way back", func() wiregen.Union {
@@ -282,6 +284,22 @@ func TestUnionRequired_Refusals(t *testing.T) {
 			r.Unions = []wiregen.Union{u}
 			requireGenerateError(t, r, tc.want)
 		})
+	}
+}
+
+// A field every case sends that encoding/json can write as null is not
+// required yet, so listing it refuses null in that case alone.
+func TestUnionRequired_NullableSharedField(t *testing.T) {
+	u := shapeUnion()
+	u.Required = map[string][]string{"circle": {"tags"}}
+	r := newTestRegistry()
+	r.Unions = []wiregen.Union{u}
+	out := mustGen(t, r.decodersFile)
+	if body := caseBlock(t, out, "circle"); strings.Contains(body, `own(o, "tags") === null`) {
+		t.Errorf("circle still reads null tags as empty:\n%s", body)
+	}
+	if body := caseBlock(t, out, "square"); !strings.Contains(body, `own(o, "tags") === null ? [] :`) {
+		t.Errorf("square no longer reads null tags as empty:\n%s", body)
 	}
 }
 

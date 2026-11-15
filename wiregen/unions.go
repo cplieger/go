@@ -28,8 +28,8 @@ type Union struct {
 	// In that case alone the TS member is required, the decoder refuses it
 	// absent, and both OpenAPI directions require it. The Go side is
 	// unchanged, so the server must write it for the case. Listing the tag,
-	// a field every case already requires, or one the case does not carry is
-	// refused.
+	// a field every case already sends and never as null, or one the case
+	// does not carry is refused.
 	Required map[string][]string
 	Type     Type
 	Tag      string
@@ -134,7 +134,7 @@ func (ui *unionInfo) checkRequired(u *Union, ti *typeInfo) error {
 			case seen[name]:
 				return fmt.Errorf("case %q requires %q twice", v, name)
 			case ui.requiredInEveryCase(ti, name):
-				return fmt.Errorf("case %q requires %q, which every case already requires", v, name)
+				return fmt.Errorf("case %q requires %q, which every case already sends, never null", v, name)
 			case !slices.Contains(uc.fields, name):
 				return fmt.Errorf("case %q requires %q, which the case does not carry", v, name)
 			}
@@ -173,8 +173,8 @@ func (ui *unionInfo) caseOf(value string) *unionCase {
 	return nil
 }
 
-// requiredInEveryCase reports whether every case carries name and requires
-// it by the field's own rule, the tag included.
+// requiredInEveryCase reports whether every case carries name and its own
+// rule already makes it present and not null, the tag included.
 func (ui *unionInfo) requiredInEveryCase(ti *typeInfo, name string) bool {
 	if name == ui.tag {
 		return true
@@ -188,7 +188,7 @@ func (ui *unionInfo) requiredInEveryCase(ti *typeInfo, name string) bool {
 		if name == ui.payload {
 			f = uc.payload
 		}
-		if f.optional() {
+		if f.optional() || f.nullOut() || f.nullIn() {
 			return false
 		}
 	}

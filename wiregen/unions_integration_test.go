@@ -121,7 +121,7 @@ for (const body of bodies) {
 `})
 	want := strings.Join([]string{
 		`ok {"state":"gone","stored":{"path":"p"}}`,
-		`refused $.stored: expected object, got undefined`,
+		`refused $.checked.stored: expected a JSON value, got undefined`,
 		`refused $.stored: expected object, got null`,
 		`ok {"state":"unchanged"}`,
 		`ok {"state":"unchanged"}`,
@@ -163,7 +163,7 @@ for (const body of bodies) {
 `})
 	want := strings.Join([]string{
 		`ok {"type":"create","payload":{"title":"a"}}`,
-		`refused $.create_chat: expected object, got undefined`,
+		`refused $.command.payload: expected a JSON value, got undefined`,
 		`refused $.create_chat: expected object, got null`,
 		`ok {"type":"rename"}`,
 		"",
