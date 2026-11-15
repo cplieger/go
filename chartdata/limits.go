@@ -32,7 +32,8 @@ const (
 	// MaxPoints is the most points one sampled ring holds, keep / every.
 	MaxPoints = 10_000
 	// MaxLabelSets is the most label sets a [Sampler] reads per track, and
-	// the most series it holds per track; a new one past it is dropped, and
+	// the most series it holds per track; a label set or series takes its
+	// place with its first usable reading, a new one past it is dropped, and
 	// the first drop logged. A value or quantile track holds at most
 	// MaxValues / (Keep / Every) series, so its whole ring fits one frame.
 	MaxLabelSets = 1_000

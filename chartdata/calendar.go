@@ -8,23 +8,25 @@ import (
 
 // NewCalendarFrame builds a CalendarFrame of d's values, one per calendar day
 // of zone from start, NaN for no data. zone is an IANA name that
-// time.LoadLocation resolves, neither "" nor "Local", and start must be a
-// midnight in it, whatever start's own location. The frame holds at most
-// MaxCalendarDays days. It takes WithOpen, WithRefs and WithNotes.
+// time.LoadLocation resolves, and not one naming the host's own zone ("",
+// "Local", "localtime", "posixrules"); an app whose image has no zoneinfo
+// imports time/tzdata. start must be the first instant of a day in zone,
+// whatever start's own location. The frame holds at most MaxCalendarDays
+// days. It takes WithOpen, WithRefs and WithNotes.
 func NewCalendarFrame(d measure.Declared, zone string, start time.Time, values []float64, opts ...Option) (CalendarFrame, error) {
 	if err := checkMost("values", len(values), MaxCalendarDays, "days"); err != nil {
 		return CalendarFrame{}, err
 	}
-	if zone == "" || zone == "Local" {
+	switch zone {
+	case "", "Local", "localtime", "posixrules":
 		return CalendarFrame{}, refusef(RuleShape, "zone", "must be an IANA zone name, not %q", zone)
 	}
 	loc, err := time.LoadLocation(zone)
 	if err != nil {
-		return CalendarFrame{}, refusef(RuleShape, "zone", "must be an IANA zone name, not %q", zone)
+		return CalendarFrame{}, refusef(RuleShape, "zone", "names no zone this process can load, %q: %v", zone, err)
 	}
-	y, m, day := start.In(loc).Date()
-	if !time.Date(y, m, day, 0, 0, 0, 0, loc).Equal(start) {
-		return CalendarFrame{}, refusef(RuleShape, "start", "must be a midnight in %s", zone)
+	if start.In(loc).Day() == start.Add(-time.Nanosecond).In(loc).Day() {
+		return CalendarFrame{}, refusef(RuleShape, "start", "must be the first instant of a day in %s", zone)
 	}
 	decl, o, err := begin(d, opts, optMarks|optOpen, len(values))
 	if err != nil {

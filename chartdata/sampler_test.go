@@ -661,9 +661,9 @@ func TestSamplerTakesAnUnusableCounterReadingAsNoReading(t *testing.T) {
 	}
 }
 
-// An unusable gauge reading is a gap that leaves the series in place, so
-// the page keeps getting appends, and in a By sum it adds nothing while the
-// key's other label sets still count.
+// An unusable gauge reading is a gap that leaves the series in place while
+// its ring holds a usable value, so the page keeps getting appends, and in a
+// By sum it adds nothing while the key's other label sets still count.
 func TestSamplerTakesAnUnusableGaugeReadingAsNoReading(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -679,7 +679,7 @@ func TestSamplerTakesAnUnusableGaugeReadingAsNoReading(t *testing.T) {
 				up := measure.NewLabeledGauge("load", "h", measure.UnitNone, []string{"dc", "host"})
 				reg.MustRegister(up)
 				track := chartdata.Sampled(up, chartdata.By("dc"))
-				h := start(t, reg, 2*time.Minute, track)
+				h := start(t, reg, 10*time.Minute, track)
 				defer h.stop()
 				steps := []struct{ a, b, c float64 }{
 					{1, 2, 4},
@@ -713,6 +713,225 @@ func TestSamplerTakesAnUnusableGaugeReadingAsNoReading(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// readings is what a collector emits at each step: for each key, whether
+// its label sets read usably. A key absent from the step is not emitted.
+type readings struct {
+	step   map[string]bool
+	totals map[string]float64 // a counter's total or a histogram's count, by label set
+	mu     sync.Mutex
+}
+
+func (f *readings) set(step map[string]bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.step = step
+}
+
+// usableKind is a kind of track in TestSamplerTakesAKeyOnlyFromItsFirstUsableReading:
+// its track of reg's declaration, which f feeds, and how many label sets
+// make up one of its keys.
+type usableKind struct {
+	track func(reg *measure.Registry, f *readings) *chartdata.Track
+	name  string
+	hosts int
+	bins  bool
+}
+
+// emitEach emits, for each label set of the step's keys, its value: the
+// usable or the unusable one value gives.
+func (f *readings) emitEach(hosts int, emit func(key, host string, usable bool)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, usable := range f.step {
+		for h := range hosts {
+			emit(key, "h"+strconv.Itoa(h), usable)
+		}
+	}
+}
+
+func usableKinds() []usableKind {
+	value := func(d func() *measure.Desc, usable, unusable func(f *readings, set string) float64, opts ...chartdata.TrackOption) func(*measure.Registry, *readings) *chartdata.Track {
+		return func(reg *measure.Registry, f *readings) *chartdata.Track {
+			desc := d()
+			reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+				f.emitEach(len(desc.Declaration().Labels), func(key, host string, ok bool) {
+					labels := []string{key}
+					if len(desc.Declaration().Labels) == 2 {
+						labels = append(labels, host)
+					}
+					v := unusable(f, key+host)
+					if ok {
+						v = usable(f, key+host)
+					}
+					e.Emit(desc, v, labels...)
+				})
+			}, desc))
+			return chartdata.Sampled(desc, opts...)
+		}
+	}
+	agent := func(newDesc func(string, string, measure.Unit, []string, ...measure.Option) *measure.Desc, name string) func() *measure.Desc {
+		return func() *measure.Desc {
+			return newDesc(name, "h", measure.UnitCount, []string{"agent"}, measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+		}
+	}
+	five := func(*readings, string) float64 { return 5 }
+	nanOf := func(*readings, string) float64 { return nan }
+	counted := func(f *readings, set string) float64 { f.totals[set] += 2; return f.totals[set] }
+	infOf := func(*readings, string) float64 { return inf }
+	histogram := func(opt chartdata.TrackOption) func(*measure.Registry, *readings) *chartdata.Track {
+		return func(reg *measure.Registry, f *readings) *chartdata.Track {
+			desc := measure.NewHistogramDesc("wait_seconds", "h", measure.UnitSeconds, []string{"agent"}, []float64{1, 2, 4},
+				measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("agent"))
+			reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+				f.emitEach(1, func(key, _ string, usable bool) {
+					if usable {
+						f.totals[key]++ // an observation of 0.5
+					}
+					n := uint64(f.totals[key])
+					e.EmitHistogram(desc, []uint64{n, n, n}, n, f.totals[key]/2, key)
+				})
+			}, desc))
+			return chartdata.Sampled(desc, opt, chartdata.By("agent"))
+		}
+	}
+	return []usableKind{
+		{name: "counter", hosts: 1, track: value(agent(measure.NewCounterDesc, "jobs_total"), counted, infOf, chartdata.By("agent"))},
+		{name: "gauge", hosts: 1, track: value(agent(measure.NewGaugeDesc, "depth"), five, nanOf, chartdata.By("agent"))},
+		{name: "quantile", hosts: 1, track: histogram(chartdata.AsQuantile(0.5))},
+		{name: "bins", hosts: 1, bins: true, track: histogram(chartdata.AsBins(3 * time.Minute))},
+		{name: "byKey", hosts: 2, track: value(func() *measure.Desc {
+			return measure.NewGaugeDesc("load", "h", measure.UnitNone, []string{"dc", "host"},
+				measure.WithExport(measure.ExportChartdata), measure.WithUnbounded("dc", "host"))
+		}, five, nanOf, chartdata.By("dc"))},
+	}
+}
+
+// heldSeries returns the series a track's frame holds, by key, as plain
+// values: a Series frame's columns, or a Bins frame's bins.
+func heldSeries(t *testing.T, s *chartdata.Sampler, track *chartdata.Track, bins bool) map[string][]float64 {
+	t.Helper()
+	if !bins {
+		return valuesOf(new(seriesOf(t, s, track, 3*time.Minute)))
+	}
+	f, err := s.Bins(track)
+	if err != nil {
+		t.Fatalf("Bins: %v", err)
+	}
+	out := map[string][]float64{}
+	for _, sr := range f.Series {
+		out[sr.Key] = plain(sr.Values)
+	}
+	return out
+}
+
+// keysFrom returns n keys of prefix, each a label set per host.
+func keysFrom(prefix string, n int, usable bool, into map[string]bool) map[string]bool {
+	for i := range n {
+		into[prefix+strconv.Itoa(10_000+i)] = usable
+	}
+	return into
+}
+
+// A key comes into being only with its first usable reading, holds no place
+// before it, and loses its ring once the ring holds no usable point inside
+// Keep, however often it is read. An unusable reading is a counter's +Inf, a
+// gauge's NaN, or a histogram step with no observation.
+func TestSamplerTakesAKeyOnlyFromItsFirstUsableReading(t *testing.T) {
+	for _, kind := range usableKinds() {
+		n := chartdata.MaxLabelSets / kind.hosts
+		for _, tc := range []struct {
+			check func(t *testing.T, held func() map[string][]float64, logs *logCapture)
+			steps func(i int) map[string]bool
+			name  string
+			count int
+		}{
+			{
+				name: "newKeyOnlyUnusable", count: 4,
+				steps: func(i int) map[string]bool {
+					step := keysFrom("m", n-1, true, map[string]bool{"b": false})
+					if i >= 3 {
+						step["z"] = true
+					}
+					return step
+				},
+				check: func(t *testing.T, held func() map[string][]float64, logs *logCapture) {
+					got := held()
+					if _, ok := got["b"]; ok {
+						t.Errorf("the unusable key b is held")
+					}
+					if _, ok := got["z"]; !ok || len(got) != n {
+						t.Errorf("z held %v among %d series, want it held among %d: b holds no place", ok, len(got), n)
+					}
+					if c := logs.count(dropLog); c != 0 {
+						t.Errorf("logged a drop %d times, want none", c)
+					}
+				},
+			},
+			{
+				name: "newKeyUnusableThenUsable", count: 3,
+				steps: func(i int) map[string]bool { return map[string]bool{"x": i >= 2} },
+				check: func(t *testing.T, held func() map[string][]float64, _ *logCapture) {
+					want := map[string][]float64{
+						"counter": {nan, nan, 2}, "gauge": {nan, 5, 5}, "quantile": {nan, 0.5, 0.5},
+						"bins": {2, 0, 0}, "byKey": {nan, 10, 10},
+					}[kind.name]
+					if got := held()["x"]; !sameValues(got, want) {
+						t.Errorf("x = %v, want %v", got, want)
+					}
+				},
+			},
+			{
+				name: "existingKeyIdlePastKeep", count: 5,
+				steps: func(i int) map[string]bool { return map[string]bool{"a": true, "y": i <= 2} },
+				check: func(t *testing.T, held func() map[string][]float64, _ *logCapture) {
+					got := held()
+					if _, ok := got["y"]; ok {
+						t.Errorf("y = %v after three unusable steps, want its ring removed", got["y"])
+					}
+					if _, ok := got["a"]; !ok {
+						t.Errorf("a is not held")
+					}
+				},
+			},
+			{
+				name: "capFullOfUnusable", count: 2,
+				steps: func(int) map[string]bool { return keysFrom("a", n, false, map[string]bool{"z": true}) },
+				check: func(t *testing.T, held func() map[string][]float64, logs *logCapture) {
+					got := held()
+					if _, ok := got["z"]; !ok || len(got) != 1 {
+						t.Errorf("z held %v among %d series, want it the only one", ok, len(got))
+					}
+					if c := logs.count(dropLog); c != 0 {
+						t.Errorf("logged a drop %d times, want none", c)
+					}
+				},
+			},
+		} {
+			t.Run(kind.name+"_"+tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					reg := measure.NewRegistry("")
+					f := &readings{totals: map[string]float64{}}
+					track := kind.track(reg, f)
+					var logs logCapture
+					f.set(tc.steps(1))
+					s := sampled(t, reg, 3*time.Minute, &logs, track)
+					held := func() map[string][]float64 { return heldSeries(t, s, track, kind.bins) }
+					for i := 2; i <= tc.count; i++ {
+						if tc.name == "existingKeyIdlePastKeep" && i == 5 {
+							if _, ok := held()["y"]; !ok {
+								t.Errorf("y is not held after one usable column and two unusable ones")
+							}
+						}
+						f.set(tc.steps(i))
+						step()
+					}
+					tc.check(t, held, &logs)
+				})
+			})
+		}
 	}
 }
 

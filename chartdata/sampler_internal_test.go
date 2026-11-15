@@ -1,6 +1,7 @@
 package chartdata
 
 import (
+	"context"
 	"math"
 	"slices"
 	"testing"
@@ -100,47 +101,39 @@ func TestSamplerNeverTakesAnEdgeAtOrBeforeTheNewest(t *testing.T) {
 // A timer that fires late, as in a process paused across several edges,
 // reads at the latest edge it passed, not the one it was set for: the
 // edges between are gaps, and a counter's increase over the pause is in no
-// column, since it covers several steps.
+// column, since when inside the pause it happened is unknown.
 func TestSamplerStampsALateReadAtTheEdgeItIsTakenAt(t *testing.T) {
 	t.Parallel()
 	reg := measure.NewRegistry("")
 	runs := measure.NewCounter("runs_total", "h", measure.UnitCount)
 	reg.MustRegister(runs)
 	track := Sampled(runs)
-	s, err := NewSampler(Sampling{Registry: reg, Every: time.Minute, Keep: 10 * time.Minute}, track)
+	var events []FrameEvent
+	s, err := NewSampler(Sampling{
+		Registry: reg, Every: time.Minute, Keep: 10 * time.Minute,
+		Emit: func(e FrameEvent) { events = append(events, e) },
+	}, track)
 	if err != nil {
 		t.Fatalf("NewSampler: %v", err)
 	}
 	minute := func(m int64) time.Time { return time.Unix(m*60, 0) }
-	take := func(now time.Time) []FrameEvent {
+	wake := func(next, now time.Time) {
 		t.Helper()
-		next := s.after(now)
-		events, _, err := s.tick(t.Context(), s.due(next, next))
-		if err != nil {
-			t.Fatalf("tick: %v", err)
+		if err := s.wake(t.Context(), next, now); err != nil {
+			t.Fatalf("wake: %v", err)
 		}
-		return events
 	}
 	runs.Add(1)
-	take(minute(100).Add(30 * time.Second)) // the column at 101
+	wake(minute(101), minute(101)) // the first column, its reset and its append
 	runs.Add(1)
-	take(minute(101).Add(30 * time.Second)) // 102
+	wake(minute(102), minute(102).Add(time.Second))
 	next := s.after(minute(102).Add(30 * time.Second))
 	if !next.Equal(minute(103)) {
 		t.Fatalf("the timer is set for %d, want 103", next.Unix()/60)
 	}
 	runs.Add(120)
-	woke := minute(108).Add(30 * time.Second)
-	if got := s.due(next, woke); !got.Equal(minute(108)) {
-		t.Errorf("due(103, 108:30) = %d, want the latest edge passed, 108", got.Unix()/60)
-	}
-	if got := s.due(next, next.Add(time.Second)); !got.Equal(next) {
-		t.Errorf("due on time = %d, want 103", got.Unix()/60)
-	}
-	events, _, err := s.tick(t.Context(), s.due(next, woke))
-	if err != nil {
-		t.Fatalf("tick: %v", err)
-	}
+	events = nil
+	wake(next, minute(108).Add(30*time.Second))
 	f, err := s.Series(track, 10*time.Minute)
 	if err != nil {
 		t.Fatalf("Series: %v", err)
@@ -157,16 +150,53 @@ func TestSamplerStampsALateReadAtTheEdgeItIsTakenAt(t *testing.T) {
 		t.Errorf("increases = %v, want %v: the pause's 120 in no column", got, want)
 	}
 	if len(events) != 6 {
-		t.Errorf("the late tick sent %d events, want an append for each of 103 to 108, 6", len(events))
+		t.Errorf("the late wake sent %d events, want an append for each of 103 to 108, 6", len(events))
 	}
 	runs.Add(4)
-	take(minute(108).Add(30 * time.Second))
+	wake(minute(109), minute(109))
 	f, err = s.Series(track, time.Minute)
 	if err != nil {
 		t.Fatalf("Series: %v", err)
 	}
 	if got := plainValues(f.Series[0].Values); len(got) != 1 || got[0] != 4 {
 		t.Errorf("the column after the pause = %v, want [4]", got)
+	}
+}
+
+// A counter whose first reading after missed edges is unusable keeps no
+// baseline, since an increase from the one before the edges would cover
+// several steps: its next usable reading is a first appearance.
+func TestSamplerKeepsNoBaselinePastMissedEdges(t *testing.T) {
+	t.Parallel()
+	reg := measure.NewRegistry("")
+	jobs := measure.NewCounterDesc("jobs_total", "h", measure.UnitCount, nil)
+	total := 0.0
+	reg.MustRegister(measure.NewCollector(func(_ context.Context, e *measure.Emitter) {
+		e.Emit(jobs, total)
+	}, jobs))
+	track := Sampled(jobs)
+	s, err := NewSampler(Sampling{Registry: reg, Every: time.Minute, Keep: 10 * time.Minute}, track)
+	if err != nil {
+		t.Fatalf("NewSampler: %v", err)
+	}
+	for _, step := range []struct {
+		minute int64
+		total  float64
+	}{
+		{1, 10}, {2, 11}, {5, math.Inf(1)}, {6, 20}, {7, 21}, // 3 and 4 missed
+	} {
+		total = step.total
+		if _, _, err := s.tick(t.Context(), time.Unix(step.minute*60, 0)); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	}
+	f, err := s.Series(track, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	nan := math.NaN()
+	if got, want := plainValues(f.Series[0].Values), []float64{nan, 1, nan, nan, nan, nan, 1}; !slices.EqualFunc(got, want, sameFloat) {
+		t.Errorf("increases of 10, 11, +Inf after two missed edges, 20, 21 = %v, want %v", got, want)
 	}
 }
 
@@ -182,10 +212,11 @@ func plainValues(values []*float64) []float64 {
 	return out
 }
 
-// A series read at a step that gives it no value, such as the first after
-// missed edges, keeps its ring even when the ring then holds only gaps, so
-// the page keeps getting appends instead of a set without it.
-func TestSamplerKeepsASeriesReadWithNoValue(t *testing.T) {
+// A series given no value at a step, such as the first after missed edges,
+// keeps its ring while the ring holds a usable point, so the page keeps
+// getting appends, and loses it once the ring holds none, however often it
+// is read.
+func TestSamplerKeepsASeriesWhileItsRingHoldsAValue(t *testing.T) {
 	t.Parallel()
 	reg := measure.NewRegistry("")
 	runs := measure.NewCounter("runs_total", "h", measure.UnitCount)
@@ -196,24 +227,37 @@ func TestSamplerKeepsASeriesReadWithNoValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSampler: %v", err)
 	}
-	tick := func(minute int64) []FrameEvent {
+	tick := func(minute int64, observe bool) []FrameEvent {
 		t.Helper()
-		runs.Add(1)
-		wait.Observe(0.1)
+		if observe {
+			runs.Add(1)
+			wait.Observe(0.1)
+		}
 		events, _, err := s.tick(t.Context(), time.Unix(minute*60, 0))
 		if err != nil {
 			t.Fatalf("tick: %v", err)
 		}
 		return events
 	}
-	tick(1)
-	tick(2) // both series take their first value
-	for _, minute := range []int64{10, 11} {
-		for _, e := range tick(minute) {
-			if e.Kind != KindAppend || len(e.Values) != 1 {
-				t.Errorf("minute %d: %s event of %s with %d values, want appends of one series", minute, e.Kind, e.Key, len(e.Values))
-			}
+	tick(1, true)
+	tick(2, true) // both series take their first value
+	// 3 is missed, so each ring is 2's value and two gaps.
+	for _, e := range tick(4, true) {
+		if e.Kind != KindAppend || len(e.Values) != 1 {
+			t.Errorf("minute 4: %s event of %s with %d values, want appends of one series", e.Kind, e.Key, len(e.Values))
 		}
+	}
+	// The quantile reads no observation, so its ring is all gaps; the
+	// counter's increase of 0 is a value.
+	events := tick(5, false)
+	if len(events) != 2 {
+		t.Fatalf("minute 5 sent %d events, want one per track", len(events))
+	}
+	if e := events[0]; e.Kind != KindAppend || len(e.Values) != 1 || e.Values[0] == nil || *e.Values[0] != 0 {
+		t.Errorf("the counter's event = %s of %d values, want an append of 0", e.Kind, len(e.Values))
+	}
+	if e := events[1]; e.Kind != KindSet || e.Series == nil || len(e.Series.Series) != 0 {
+		t.Errorf("the quantile's event = %s, want a set of no series", e.Kind)
 	}
 }
 

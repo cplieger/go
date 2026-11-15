@@ -57,8 +57,9 @@ export interface BoxesFrame {
 
 /**
  * CalendarFrame is a value per calendar day, drawn as a calendar heatmap.
- * Start is the first day's midnight in Zone, in Unix milliseconds, and each
- * value is the next calendar day, 23 or 25 hours long across a DST change.
+ * Start is the first instant of the first day in Zone, in Unix milliseconds,
+ * and each value is the next calendar day, 23 or 25 hours long across a DST
+ * change.
  */
 export interface CalendarFrame {
   type: FrameType;

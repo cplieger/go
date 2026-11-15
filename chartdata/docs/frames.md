@@ -34,7 +34,7 @@ Each constructor takes the declaration the frame draws first: any `measure` inst
 | `BoxesFrame` | `NewBoxesFrame(d, names, series, opts...)` | `names` and `series`, each with `low`, `q1`, `median`, `q3` and `high` per name, and optional `outliers` | box plots |
 | `PointsFrame` | `NewPointsFrame(m, series, opts...)` | `series`, each a group of named points with `x`, `y` and an optional size `r`, and `units`, one per measure | a scatter or bubble chart |
 | `GridFrame` | `NewGridFrame(d, grid, opts...)` | an `x` and a `y` axis, each of `names` or bin `edges`, and `values`, a row per y entry | a cell grid or a 2D histogram |
-| `CalendarFrame` | `NewCalendarFrame(d, zone, start, values, opts...)` | `zone`, an IANA zone name, `start`, the first day's midnight in it, and `values`, one per calendar day | a calendar heatmap |
+| `CalendarFrame` | `NewCalendarFrame(d, zone, start, values, opts...)` | `zone`, an IANA zone name, `start`, the first instant of the first day in it, and `values`, one per calendar day | a calendar heatmap |
 | `TreeFrame` | `NewTreeFrame(d, parts, opts...)` or `NewGroupedTreeFrame(d, groups, opts...)` | one level of `parts`, or two levels of `groups` and their `children` | a treemap |
 | `FlowFrame` | `NewFlowFrame(d, flow, opts...)` | `links` from node to node, with optional `nodes` for their order and `stages` for an alluvial diagram | a Sankey or alluvial diagram |
 | `EventsFrame` | `NewEventsFrame(d, rows, opts...)` | `rows`, each a key and the instants of its events | a dot timeline strip |
@@ -47,7 +47,7 @@ A few shapes need more than the table says:
 - A `TreeFrame` holds `parts` or `groups`, never both. A part with no data sends `value: null`; a group sends no value, since its value is its children's sum.
 - A `FlowFrame` without stages is a Sankey diagram, and its links may form no loop, since a node in a loop has no column. With stages it is an alluvial diagram, and each link names the stage it leaves; with exactly two stages a link may leave it empty, meaning the first.
 - A `StatesFrame` of a `measure` state set takes only the states the state set declares.
-- A `CalendarFrame`'s day is the calendar day in its zone, 23 or 25 hours long across a daylight-saving change. `zone` must be a name `time.LoadLocation` resolves, other than `""` and `"Local"`, which name no zone, and `start` must be a midnight in that zone, whatever `start`'s own location.
+- A `CalendarFrame`'s day is the calendar day in its zone, 23 or 25 hours long across a daylight-saving change. `zone` must be a name `time.LoadLocation` resolves, other than `""`, `"Local"`, `"localtime"` and `"posixrules"`, which name the host's own zone and which browsers do not take; an app whose image has no zoneinfo imports `time/tzdata`, and the refusal carries `LoadLocation`'s error. `start` must be the first instant of a day in that zone, whatever `start`'s own location: on a day that reads 00:00 twice, the first of them, and on a day with no 00:00, such as Santiago's 2024-09-08, its first instant, 01:00.
 
 ## Options
 
@@ -77,7 +77,7 @@ A constructor returns a `*RefusalError` for a frame it refuses, and never a part
 | `negative` | a negative tree part, flow link or point size, each a part of a whole or an area |
 | `duplicate` | a name, series key, row key, meter key or tree key given twice, or two flow links joining the same nodes at the same stage |
 | `empty` | an empty name, node or required list, such as a tree group with no parts, or a nil `Grid` |
-| `shape` | parts that do not fit together, such as a box with some of its five numbers, a grid axis with both names and edges, a flow link naming a node `nodes` does not list, a flow loop, a state its state set does not declare, a meter value outside its range, or a calendar start that is not a midnight or not in an IANA zone |
+| `shape` | parts that do not fit together, such as a box with some of its five numbers, a grid axis with both names and edges, a flow link naming a node `nodes` does not list, a flow loop, a state its state set does not declare, a meter value outside its range, or a calendar start that is not the first instant of a day or not in an IANA zone |
 | `limit` | a frame past one of the limits below |
 
 The rules are stable. The refusal fixtures carry them, so the chart elements refuse the same frames by the same rule. `declaration` and `option` have no fixture, since no frame on the wire can break them.

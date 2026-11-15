@@ -161,6 +161,31 @@ func TestCalendarFrameOnTheWire(t *testing.T) {
 	}
 }
 
+// A day's first instant is its start even where it reads no single 00:00:
+// the first of Havana's two midnights on 2024-11-03, and Santiago's 01:00
+// on 2024-09-08, a day with no 00:00.
+func TestCalendarFrameStartsAtTheFirstInstantOfItsDay(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, zone string
+		start      time.Time
+	}{
+		{"havanaFirstMidnight", "America/Havana", time.Date(2024, 11, 3, 4, 0, 0, 0, time.UTC)},
+		{"santiagoWithNoMidnight", "America/Santiago", time.Date(2024, 9, 8, 4, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, err := chartdata.NewCalendarFrame(gauge("checks", measure.UnitCount), tc.zone, tc.start, []float64{1})
+			if err != nil {
+				t.Fatalf("NewCalendarFrame: %v", err)
+			}
+			if f.Start != tc.start.UnixMilli() {
+				t.Errorf("start = %d, want %d", f.Start, tc.start.UnixMilli())
+			}
+		})
+	}
+}
+
 func TestTreeFramesOnTheWire(t *testing.T) {
 	t.Parallel()
 	d := gauge("disk_bytes", measure.UnitBytes)

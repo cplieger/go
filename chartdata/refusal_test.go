@@ -2,6 +2,7 @@ package chartdata_test
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -306,11 +307,24 @@ func TestCalendarFrameRefusesABadZoneOrStart(t *testing.T) {
 	runRefusals(t, []refusalCase{
 		{name: "noZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("", midnight)},
 		{name: "localZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Local", midnight)},
+		{name: "localtimeZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("localtime", midnight)},
+		{name: "posixrulesZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("posixrules", midnight)},
 		{name: "unknownZone", rule: chartdata.RuleShape, field: "zone", build: newCalendar("Mars/Olympus", midnight)},
 		{name: "notMidnight", rule: chartdata.RuleShape, field: "start", build: newCalendar("UTC", midnight.Add(time.Hour))},
 		{name: "borrowedParis", rule: chartdata.RuleShape, field: "start", build: newCalendar("Europe/Paris", borrowed("Europe/Paris"))},
 		{name: "borrowedNewYork", rule: chartdata.RuleShape, field: "start", build: newCalendar("America/New_York", borrowed("America/New_York"))},
+		// Havana's 2024-11-03 reads 00:00 twice, at 04:00Z and 05:00Z.
+		{name: "havanaSecondMidnight", rule: chartdata.RuleShape, field: "start", build: newCalendar("America/Havana", time.Date(2024, 11, 3, 5, 0, 0, 0, time.UTC))},
+		// Santiago's 2024-09-08 has no 00:00 and starts at 01:00, 04:00Z.
+		{name: "santiagoPastItsFirstInstant", rule: chartdata.RuleShape, field: "start", build: newCalendar("America/Santiago", time.Date(2024, 9, 8, 5, 0, 0, 0, time.UTC))},
 		{name: "valueInfinite", rule: chartdata.RuleFinite, field: "values[1]", build: newCalendar("UTC", midnight, 1, inf)},
+	})
+	t.Run("unknownZoneKeepsTheCause", func(t *testing.T) {
+		t.Parallel()
+		_, err := chartdata.NewCalendarFrame(d, "Mars/Olympus", midnight, nil)
+		if _, want := time.LoadLocation("Mars/Olympus"); err == nil || !strings.Contains(err.Error(), want.Error()) {
+			t.Errorf("error = %v, want it to carry LoadLocation's %q", err, want)
+		}
 	})
 }
 
