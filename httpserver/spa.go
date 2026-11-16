@@ -178,6 +178,9 @@ func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
 	return err
 }
 
+// CheckShell is not written yet.
+func CheckShell(html []byte) error { return nil }
+
 // checkShell refuses what the policy would block or what needs a hash.
 func checkShell(body []byte) error {
 	switch {

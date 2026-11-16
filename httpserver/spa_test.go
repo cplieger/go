@@ -689,6 +689,37 @@ func TestSPARefusesInlineScriptOrStyleInShell(t *testing.T) {
 	})
 }
 
+func TestCheckShell(t *testing.T) {
+	refused := map[string]string{
+		"script element":    `<script>alert(1)</script>`,
+		"empty script":      `<script></script>`,
+		"style element":     `<style>a{}</style>`,
+		"style attribute":   `<p style="color:red">x</p>`,
+		"upper case STYLE":  `<P STYLE='x'>x</P>`,
+		"unquoted style":    `<p class=a style=color:red>x</p>`,
+		"style after quote": `<p title="a>b" style=x>y</p>`,
+	}
+	for name, html := range refused {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err == nil {
+				t.Errorf("CheckShell accepted %q", html)
+			}
+		})
+	}
+	passed := map[string]string{
+		"external script":  `<script type="module" src="/assets/app.js"></script>`,
+		"data-style":       `<body data-style="x">style=plain text</body>`,
+		"style in a value": `<p title="style=x">y</p>`,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
 func TestSPAErrorsResponderAnswersRefusals(t *testing.T) {
 	var codes []httpserver.ErrorCode
 	errs := func(w http.ResponseWriter, r *http.Request, status int, code httpserver.ErrorCode, msg string) {
