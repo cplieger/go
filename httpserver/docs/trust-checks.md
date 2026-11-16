@@ -1,6 +1,6 @@
 # Client IP, hosts and credentials
 
-This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address, checking configured credentials and limiting failed authentication.
+This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address, checking configured credentials and the values they travel in, writing a `WWW-Authenticate` challenge and limiting failed authentication.
 
 ## Client IP
 
@@ -145,6 +145,30 @@ This checks one shared secret, not user identities. Per-user credentials, passwo
 Each secret is hashed with SHA-256 once, at construction. `Match` hashes the presented value once and compares it with every configured digest, with no early exit, so the time taken depends only on how many secrets the set holds. A presented value longer than `MaxTokenBytes` (512) answers no match without being hashed. The zero `TokenSet` matches nothing.
 
 `NewTokenSet` refuses an empty list, an empty secret, one longer than `MaxTokenBytes` and one given twice, because a repeated secret would make the position ambiguous. The refusal is a `*TokenSetError`. Its `Err` is `ErrNoTokens`, `ErrTokenEmpty`, `ErrTokenTooLong` or `ErrTokenRepeated`, which `errors.Is` matches. `Index` is the refused secret's position and `First` the earlier position a repeated secret equals. The error names positions only and never quotes a secret, so you can log it as it is.
+
+## A value that must travel in a header
+
+`CheckFieldValue(v)` reports whether `v` can be sent as an HTTP field value (RFC 9110 section 5.5) and arrive unchanged and unambiguous. Use it at startup on a configured credential that a client sends in a header, so a value that could never match is refused there rather than on every request. It refuses:
+
+- an ASCII control byte other than HTAB, or DEL, which the grammar forbids and `net/http` refuses to send;
+- a space or tab at either edge, which a recipient strips, so the value read back is not the one sent;
+- invalid UTF-8;
+- an invisible rune: a C1 control, a Unicode format character (bidi controls, zero-width characters, the byte order mark) or a line or paragraph separator. Each is legal on the wire but invisible where a person reads or pastes the value.
+
+The refusal is a `*FieldValueError`. Its `Err` is `ErrFieldControl`, `ErrFieldEdgeSpace`, `ErrFieldInvalidUTF8` or `ErrFieldInvisible`, which `errors.Is` matches, and `Offset` is the byte offset of the first refused byte. The error never quotes the value, so it can name a secret's problem without leaking it. Length limits, blank values and the message the operator reads stay your app's policy. The empty string passes.
+
+## The 401 challenge
+
+A `401` must carry at least one `WWW-Authenticate` challenge (RFC 9110 section 11.6.1). `SetChallenge(h, c, more...)` replaces `h`'s `WWW-Authenticate` field with one line per challenge, in order, and sets nothing else, so the status and body stay yours:
+
+```go
+httpserver.SetChallenge(w.Header(), httpserver.Challenge{
+    Scheme: "Bearer",
+    Params: []httpserver.AuthParam{{Name: "realm", Value: "myapp"}},
+})
+```
+
+That writes `Bearer realm="myapp"`. Each parameter's value is written as a quoted-string, with `"` and `\` escaped. A scheme or parameter name that is not an HTTP token, or a value no quoted-string can carry, panics, since those come from your program. Check a value taken from configuration with `CheckFieldValue` first.
 
 ## Failed-authentication limits
 

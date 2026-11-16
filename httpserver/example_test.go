@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -105,4 +106,20 @@ func ExampleGzip() {
 	// Output:
 	// /items: "gzip"
 	// /events: ""
+}
+
+func ExampleSetChallenge() {
+	h := http.Header{}
+	httpserver.SetChallenge(h, httpserver.Challenge{
+		Scheme: "Bearer",
+		Params: []httpserver.AuthParam{{Name: "realm", Value: "myapp"}},
+	})
+	fmt.Println(h.Get("WWW-Authenticate"))
+	// Output: Bearer realm="myapp"
+}
+
+func ExampleCheckFieldValue() {
+	err := httpserver.CheckFieldValue("a-token-pasted-with-a-newline\n")
+	fmt.Println(errors.Is(err, httpserver.ErrFieldControl), err)
+	// Output: true httpserver: field value holds an ASCII control byte or DEL at byte 29
 }
