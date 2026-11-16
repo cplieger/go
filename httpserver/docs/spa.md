@@ -202,8 +202,8 @@ The page writes each file's `Name` and the one sentence of its `OutageClass`, ne
 | Class | Sentence |
 | --- | --- |
 | `OutageDamaged` | The file is damaged. |
-| `OutageFormat` | The file was written by another version of *App*, or is not *App*'s file. |
-| `OutageNewer` | The file was written by a newer version of *App*. |
+| `OutageFormat` | The file was written by another version of _App_, or is not _App_'s file. |
+| `OutageNewer` | The file was written by a newer version of _App_. |
 | `OutageUnreadable` | The file cannot be read. |
 | `OutageKey` | The key file is missing or does not match this accounts file. |
 
