@@ -11,7 +11,7 @@ It replaces the unix-socket listener, stale-socket cleanup and permission checks
 ownersock is built for Go servers that take admin commands from a command-line tool on the same host or in the same container.
 
 - Every accepted connection's peer uid, read with `SO_PEERCRED`, must equal the server's effective uid. A connection from another user is closed inside `Accept` before any byte is read or written, so no request from it reaches your HTTP handlers.
-- A second start beside a live server at the same path is refused, a socket left behind by a crashed process is replaced, and a file at the path that is not a socket is refused and left alone.
+- A second start beside a live server at the same path is refused, a socket left behind by a crashed process is replaced, and a file at the path that is not a socket is refused and left alone. Starts racing on one path bind one at a time, so one of them wins.
 - The socket's directory must be private: `Listen` creates a missing one at mode 0700, refuses an existing one that grants group or other access, is owned by another user or is a symlink, and never changes its mode. The socket is bound at mode 0600.
 - A path longer than the 107 bytes Linux's `sun_path` holds is refused before the directory is touched, with an error naming the path and the limit, instead of failing at bind with a bare `invalid argument`.
 - `Client` reports a refused connection, a missing server and a permission error as three stable codes, each with a hint your command-line tool can print as it is.
@@ -29,15 +29,16 @@ go get github.com/cplieger/go/ownersock@latest
 
 ## Usage
 
-The server binds the socket and serves an HTTP handler on it:
+The server binds the socket and serves an HTTP handler on it, here through this repository's `httpserver`, which sets the timeouts and recovers a handler's panic as a response:
 
 ```go
 ln, err := ownersock.Listen(ownersock.Config{Path: "/run/myapp-admin/admin.sock", Logger: logger})
 if err != nil {
     return err
 }
-srv := &http.Server{Handler: adminMux, ConnContext: ownersock.ConnContext}
-go srv.Serve(ln)
+srv := httpserver.New(httpserver.Chain(adminMux, httpserver.Recoverer()))
+srv.ConnContext = ownersock.ConnContext
+return httpserver.Run(ctx, srv, ln)
 ```
 
 Give the socket a directory of its own, such as `/data/admin/admin.sock` or `/run/myapp-admin/admin.sock`, never the app's data directory or a shared folder such as `/tmp` itself. `Listen` creates a missing directory at mode 0700; its parent must already exist. An existing directory that grants group or other access is refused with `filesafe.ErrModeTooOpen` and left unchanged: `Listen` never runs chmod on it.
@@ -61,6 +62,8 @@ if errors.As(err, &oerr) {
     os.Exit(1)
 }
 ```
+
+`Client` reports a connection the server closes before any answer as `admin_peer_refused`, so serve handlers that always answer, a panic included.
 
 Closing the listener removes the socket file.
 

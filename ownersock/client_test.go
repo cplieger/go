@@ -101,6 +101,7 @@ func TestClient_reportsARefusedPeerSendingABody(t *testing.T) {
 }
 
 func TestClient_answersOnAServedSocket(t *testing.T) {
+	withPeerUID(t, func(*net.UnixConn) (int, error) { return os.Geteuid(), nil })
 	_, path := sockPaths(t)
 	serve(t, listens(t, path, nil))
 	for range 2 {

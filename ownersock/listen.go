@@ -37,20 +37,21 @@ type Config struct {
 	Path string
 }
 
-// Test seams, read once by each Listen.
+// Test seams, read by each Listen.
 var (
-	peerUID = socketPeerUID
-	now     = time.Now
+	peerUID   = socketPeerUID
+	now       = time.Now
+	probeDial = (&net.Dialer{}).DialContext
 )
 
 // Listen creates c.Path's directory at 0700 if missing or proves an existing
-// one private, binds the socket there at mode 0600 and returns a listener
-// whose Accept peer-checks every connection.
-// A path over 107 bytes, or one that is not absolute and clean, is refused
-// before the directory is touched. A socket a server answers on refuses
-// start, a socket nothing answers is replaced, and any other file at the
-// path is refused and left as it is. Directory refusals match filesafe's
-// sentinels with errors.Is. Closing the listener removes the socket.
+// one private, binds the socket at mode 0600 and returns a listener whose
+// Accept peer-checks every connection. A path over 107 bytes, or not
+// absolute and clean, is refused before the directory is touched. A socket a
+// server answers on refuses start, one nothing answers is replaced, any other
+// file is refused and left as it is, and of starts racing on one path one
+// wins. Directory refusals match filesafe's sentinels with errors.Is.
+// Closing the listener removes the socket.
 func Listen(c Config) (net.Listener, error) {
 	path := c.Path
 	if err := checkPathLen(path); err != nil {
@@ -64,12 +65,18 @@ func Listen(c Config) (net.Listener, error) {
 	if _, err := filesafe.EnsurePrivateDir(dir); err != nil {
 		return nil, fmt.Errorf("ownersock: socket directory: %w", err)
 	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
 	ul, err := bind(path)
+	unlock()
 	if err != nil {
 		return nil, err
 	}
 	// The socket is born with the umask's mode; the window before this chmod
-	// reaches no other uid because the directory is already 0700 and ours.
+	// reaches no other non-root uid because the directory is already 0700 and
+	// ours, and Accept refuses root like any other uid but the server's.
 	if err := os.Chmod(path, 0o600); err != nil {
 		return nil, errors.Join(fmt.Errorf("ownersock: chmod socket: %w", err), ul.Close())
 	}
@@ -95,10 +102,10 @@ func checkPathLen(path string) error {
 		textsafe.SanitizeSingleLine(path), len(path), maxPathLen)
 }
 
-// bind binds first so the kernel is the single-instance guard: nothing is
-// removed while the path is free, and two starts racing for it cannot both
-// win. EADDRINUSE asks what is at the path, and a dead socket's removal is
-// followed by one more bind, never a loop.
+// bind binds first, so nothing is removed while the path is free.
+// EADDRINUSE asks what is at the path, and a dead socket's removal is
+// followed by one more bind, never a loop. The caller holds lockDir, so no
+// other start removes or binds between the probe and the second bind.
 func bind(path string) (*net.UnixListener, error) {
 	ul, err := listenUnix(path)
 	if !errors.Is(err, syscall.EADDRINUSE) {
@@ -115,22 +122,17 @@ func bind(path string) (*net.UnixListener, error) {
 }
 
 func listenUnix(path string) (*net.UnixListener, error) {
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
+	ul, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		return nil, fmt.Errorf("ownersock: %w", err)
-	}
-	ul, ok := ln.(*net.UnixListener)
-	if !ok {
-		_ = ln.Close()
-		return nil, fmt.Errorf("ownersock: listening on %q returned a %T", textsafe.SanitizeSingleLine(path), ln)
 	}
 	return ul, nil
 }
 
 // removeDeadSocket removes the socket at path when a dial finds no server
-// behind it. A live socket, a file that is not a socket (a symlink
-// included) and a probe that fails any other way are refused and nothing
-// is removed.
+// behind it, and reports a path emptied since the bind (a server closing) as
+// free. A live socket, a file that is not a socket (a symlink included) and
+// a probe that fails any other way are refused and nothing is removed.
 func removeDeadSocket(path string) error {
 	name := textsafe.SanitizeSingleLine(path)
 	fi, err := os.Lstat(path)
@@ -145,12 +147,14 @@ func removeDeadSocket(path string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
-	if err == nil {
+	conn, err := probeDial(ctx, "unix", path)
+	switch {
+	case err == nil:
 		_ = conn.Close()
 		return liveServer(path)
-	}
-	if !errors.Is(err, syscall.ECONNREFUSED) {
+	case errors.Is(err, syscall.ENOENT):
+		return nil
+	case !errors.Is(err, syscall.ECONNREFUSED):
 		return fmt.Errorf("ownersock: probing the socket at %q: %w", name, err)
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {

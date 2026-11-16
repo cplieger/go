@@ -3,12 +3,16 @@
 package ownersock
 
 import (
+	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/cplieger/go/filesafe"
@@ -36,8 +40,9 @@ func absent(t *testing.T, p string) {
 	}
 }
 
-// unix(7): sun_path is 108 bytes and a pathname socket's path is
-// NUL-terminated inside it, so 107 bytes is the longest that binds.
+// unix(7): Linux's sun_path is 108 bytes and a pathname socket's path is
+// NUL-terminated inside it, so 107 bytes is the longest that binds; darwin's
+// is 104, so the 107-byte bind is listen_linux_test.go's.
 func TestListen_pathBound(t *testing.T) {
 	t.Run("a 108-byte path is refused before the directory is made", func(t *testing.T) {
 		dir, path := pathOfLen(t, 108)
@@ -50,11 +55,6 @@ func TestListen_pathBound(t *testing.T) {
 			t.Errorf("error %q, want it to name the path and the 107-byte limit", msg)
 		}
 		absent(t, dir)
-	})
-	t.Run("a 107-byte path binds", func(t *testing.T) {
-		_, path := pathOfLen(t, 107)
-		listens(t, path, nil)
-		dials(t, path)
 	})
 	t.Run("an over-long path is named without its control characters", func(t *testing.T) {
 		dir, path := pathOfLen(t, 120)
@@ -226,6 +226,87 @@ func TestListen_whatIsAlreadyAtThePath(t *testing.T) {
 		}
 		dials(t, live)
 	})
+}
+
+// Each racer's bind on a crashed server's socket fails with EADDRINUSE, and
+// unserialized, both find it dead, remove it and bind, the first one orphaned.
+func TestListen_ConcurrentStartsOnADeadSocketHaveOneWinner(t *testing.T) {
+	for i := range 200 {
+		dir, path := sockPaths(t)
+		deadSocket(t, dir, path)
+		var (
+			wg  sync.WaitGroup
+			lns [2]net.Listener
+		)
+		start := make(chan struct{})
+		for j := range lns {
+			wg.Go(func() {
+				<-start
+				lns[j], _ = Listen(Config{Path: path, Logger: slog.New(slog.DiscardHandler)})
+			})
+		}
+		close(start)
+		wg.Wait()
+		won := 0
+		for _, ln := range lns {
+			if ln != nil {
+				won++
+				_ = ln.Close()
+			}
+		}
+		if won != 1 {
+			t.Fatalf("iteration %d: %d of two racing starts bound, want 1", i, won)
+		}
+	}
+}
+
+func withProbeDial(t *testing.T, f func(ctx context.Context, network, addr string) (net.Conn, error)) {
+	t.Helper()
+	old := probeDial
+	probeDial = f
+	t.Cleanup(func() { probeDial = old })
+}
+
+func dialFailure(cause error) error {
+	return &net.OpError{Op: "dial", Net: "unix", Err: cause}
+}
+
+func TestListen_whatTheProbeFinds(t *testing.T) {
+	t.Run("a socket its server removed after the first bind is bound", func(t *testing.T) {
+		dir, path := sockPaths(t)
+		deadSocket(t, dir, path)
+		withProbeDial(t, func(context.Context, string, string) (net.Conn, error) {
+			if err := os.Remove(path); err != nil {
+				t.Errorf("removing the socket as its closing server would: %v", err)
+			}
+			return nil, dialFailure(os.NewSyscallError("connect", syscall.ENOENT))
+		})
+		listens(t, path, nil)
+		dials(t, path)
+	})
+	for name, cause := range map[string]error{
+		"EAGAIN on a full backlog": os.NewSyscallError("connect", syscall.EAGAIN),
+		"a timeout":                os.ErrDeadlineExceeded,
+	} {
+		t.Run(name+" refuses start and removes nothing", func(t *testing.T) {
+			dir, path := sockPaths(t)
+			deadSocket(t, dir, path)
+			withProbeDial(t, func(context.Context, string, string) (net.Conn, error) {
+				return nil, dialFailure(cause)
+			})
+			ln, err := Listen(Config{Path: path})
+			if err == nil {
+				_ = ln.Close()
+				t.Fatal("Listen succeeded, want refused")
+			}
+			if !errors.Is(err, cause) {
+				t.Errorf("Listen: %v, want it to match %v", err, cause)
+			}
+			if fi, err := os.Lstat(path); err != nil || fi.Mode().Type() != fs.ModeSocket {
+				t.Errorf("Lstat after the refusal: %v, %v; want the socket left in place", fi, err)
+			}
+		})
+	}
 }
 
 func TestListen_closeRemovesTheSocket(t *testing.T) {
