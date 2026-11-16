@@ -18,20 +18,18 @@ import (
 	"github.com/cplieger/go/httpserver/v2"
 )
 
-const httpserverPath = "github.com/cplieger/go/httpserver/v2"
+const (
+	httpserverPath = "github.com/cplieger/go/httpserver/v2"
+	errorCodeType  = "ErrorCode"
+)
 
-// CheckCodeSpecs fails t unless specs holds exactly the error codes the
-// non-test Go files in dir write: it names each written code missing from
-// specs and each key of specs that nothing writes. A module that answers its
-// own codes calls it from a test with its package directory and its
-// CodeSpecs().
-//
-// A code is written when a string literal, a string constant or an
-// ErrorCode("…") conversion sits at an ErrorCode position of a call
-// (httpserver.WriteError, an ErrorResponder value, or a function or func type
-// declared in dir with an ErrorCode parameter), or is the value of an
-// ErrorCode-typed field in a composite literal. A code passed through a
-// variable is not followed: its literal is counted where it enters.
+// CheckCodeSpecs fails t unless specs holds exactly the codes the non-test Go
+// files in dir write, naming each code missing from specs and each key nothing
+// writes. A code is written when a string literal, a string constant or an
+// ErrorCode conversion of one sits at an ErrorCode argument of a call (to
+// httpserver.WriteError, an ErrorResponder, or a function or func type dir
+// declares) or fills an ErrorCode field of a composite literal. A code held in
+// a variable is not followed; it is counted where its literal enters.
 func CheckCodeSpecs(t testing.TB, dir string, specs map[httpserver.ErrorCode]httpserver.CodeSpec) {
 	t.Helper()
 	written, err := writtenCodes(dir)
@@ -143,7 +141,7 @@ func codePositions(f *ast.File, ft *ast.FuncType) []int {
 	i := 0
 	for _, p := range ft.Params.List {
 		n := max(len(p.Names), 1)
-		if typeName(f, p.Type) == "ErrorCode" {
+		if typeName(f, p.Type) == errorCodeType {
 			for k := range n {
 				pos = append(pos, i+k)
 			}
@@ -202,7 +200,7 @@ func (s *codeScan) declareValues(f *ast.File, v *ast.ValueSpec) {
 func (s *codeScan) declareField(f *ast.File, fd *ast.Field) {
 	tn := typeName(f, fd.Type)
 	for _, name := range fd.Names {
-		if tn == "ErrorCode" {
+		if tn == errorCodeType {
 			s.fields[name.Name] = true
 		}
 		if pos, ok := s.funcTypes[tn]; ok {
@@ -223,16 +221,23 @@ func (s *codeScan) collect(f *ast.File) {
 				}
 			}
 		case *ast.CompositeLit:
-			for _, el := range n.Elts {
-				if kv, ok := el.(*ast.KeyValueExpr); ok {
-					if key, ok := kv.Key.(*ast.Ident); ok && s.fields[key.Name] {
-						s.record(f, kv.Value)
-					}
-				}
-			}
+			s.collectFields(f, n)
 		}
 		return true
 	})
+}
+
+// collectFields records the codes lit gives its ErrorCode-typed fields.
+func (s *codeScan) collectFields(f *ast.File, lit *ast.CompositeLit) {
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); ok && s.fields[key.Name] {
+			s.record(f, kv.Value)
+		}
+	}
 }
 
 // callPositions returns the ErrorCode argument positions of call.
@@ -273,7 +278,7 @@ func (s *codeScan) resolve(f *ast.File, e ast.Expr) (string, bool) {
 		v, ok := s.consts[e.Name]
 		return v, ok
 	case *ast.CallExpr:
-		if len(e.Args) == 1 && typeName(f, e.Fun) == "ErrorCode" {
+		if len(e.Args) == 1 && typeName(f, e.Fun) == errorCodeType {
 			return s.resolve(f, e.Args[0])
 		}
 	case *ast.ParenExpr:

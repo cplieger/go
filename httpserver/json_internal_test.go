@@ -8,15 +8,14 @@ import (
 	"testing"
 )
 
-// TestValidErrorCode pins ErrorCode's grammar directly, both halves. The empty
-// code is VALID (it means "omit the field", which an app with a bare
-// {"error":…} taxonomy relies on), and everything outside [a-z0-9_] is not.
+// TestValidErrorCode pins ErrorCode's grammar directly, both halves: one or
+// more of [a-z0-9_], so the empty code is malformed.
 func TestValidErrorCode(t *testing.T) {
 	cases := []struct {
 		code ErrorCode
 		want bool
 	}{
-		{"", true}, // omit the field
+		{"", false}, // the envelope always carries a code
 		{"host_not_allowed", true},
 		{"rate_limited", true},
 		{"http2_upgrade", true},
@@ -56,9 +55,6 @@ func TestCheckedErrorCode(t *testing.T) {
 
 	if got := checkedErrorCode("rate_limited"); got != "rate_limited" {
 		t.Errorf("checkedErrorCode(rate_limited) = %q, want it unchanged", got)
-	}
-	if got := checkedErrorCode(""); got != "" {
-		t.Errorf("checkedErrorCode(empty) = %q, want empty (the field is omitted)", got)
 	}
 	if got := logCap.snapshot(); len(got) != 0 {
 		t.Errorf("well-formed codes logged %d records, want none", len(got))

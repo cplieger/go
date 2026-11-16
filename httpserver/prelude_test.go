@@ -58,7 +58,8 @@ func TestRequireMethod_mismatch(t *testing.T) {
 // — so the multi-method rendering can never change what today's single-method
 // callers (subflux's RequirePOST/RequireGET, marotte's requirePOST) emit.
 func TestRequireMethod_singleMethodResponseIsByteIdentical(t *testing.T) {
-	const wantBody = `{"error":"method not allowed","code":"method_not_allowed"}` + "\n"
+	const wantBody = `{"code":"method_not_allowed","message":"method not allowed",` +
+		`"remediation":"Resend with a method the Allow header lists.","request_id":"rid-1"}` + "\n"
 	cases := []struct {
 		name     string
 		required string
@@ -77,6 +78,7 @@ func TestRequireMethod_singleMethodResponseIsByteIdentical(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodOptions, "/", nil)
+			req = req.WithContext(httpserver.WithRequestID(req.Context(), "rid-1"))
 			if httpserver.RequireMethod(rr, req, tc.required) {
 				t.Fatalf("RequireMethod = true, want false (OPTIONS vs %q)", tc.required)
 			}

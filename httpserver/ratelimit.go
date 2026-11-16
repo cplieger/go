@@ -21,11 +21,7 @@ type rateLimitConfig struct {
 
 // WithRateLimitError sets the error code and message written in the 429 JSON
 // envelope (via WriteError). Defaults to "rate_limited" / "rate limit
-// exceeded".
-//
-// code is the machine token and msg the sentence; they are separately typed
-// (see ErrorCode) so the pair cannot be supplied transposed. An empty code
-// omits the field.
+// exceeded". A code outside CodeSpecs carries an empty remediation.
 func WithRateLimitError(code ErrorCode, msg string) RateLimitOption {
 	return func(c *rateLimitConfig) {
 		c.code, c.msg = code, msg

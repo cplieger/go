@@ -29,25 +29,30 @@ func ExampleOK() {
 
 func ExampleWriteError() {
 	rr := httptest.NewRecorder()
-	// r may be nil; the request_id field is then omitted.
-	httpserver.WriteError(rr, nil, http.StatusBadRequest, "bad_request", "invalid payload")
+	// Logging puts the request id in the context; without one WriteError
+	// mints a fresh id.
+	r := httptest.NewRequest(http.MethodPost, "/things", nil)
+	r = r.WithContext(httpserver.WithRequestID(r.Context(), "req-1"))
+	httpserver.WriteError(rr, r, http.StatusBadRequest, "bad_request", "invalid payload")
 	fmt.Print(rr.Body.String())
 	// Output:
-	// {"error":"invalid payload","code":"bad_request"}
+	// {"code":"bad_request","message":"invalid payload","remediation":"Fix the request as the message describes, then resend it.","request_id":"req-1"}
 }
 
 func ExampleMethodNotAllowed() {
 	rr := httptest.NewRecorder()
 	// A route serving GET and POST refuses everything else, and RFC 9110
 	// requires the 405 to advertise BOTH permitted methods, not just one.
-	httpserver.MethodNotAllowed(rr, nil, http.MethodGet, http.MethodPost)
+	r := httptest.NewRequest(http.MethodDelete, "/things", nil)
+	r = r.WithContext(httpserver.WithRequestID(r.Context(), "req-2"))
+	httpserver.MethodNotAllowed(rr, r, http.MethodGet, http.MethodPost)
 	fmt.Println(rr.Code)
 	fmt.Println(rr.Header().Get("Allow"))
 	fmt.Print(rr.Body.String())
 	// Output:
 	// 405
 	// GET, POST
-	// {"error":"method not allowed","code":"method_not_allowed"}
+	// {"code":"method_not_allowed","message":"method not allowed","remediation":"Resend with a method the Allow header lists.","request_id":"req-2"}
 }
 
 func ExampleWithRecordRouteMetric() {

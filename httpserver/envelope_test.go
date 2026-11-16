@@ -178,6 +178,7 @@ func TestErrorResponseKeys(t *testing.T) {
 	limited := httpserver.RateLimiter(1, time.Hour)(okHandler())
 	authLimited := httpserver.FailedAuthRateLimit(nil, "")(okHandler())
 	slow := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	panicky := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("x") })
 	cases := []struct {
 		name    string
 		handler http.Handler
@@ -186,8 +187,7 @@ func TestErrorResponseKeys(t *testing.T) {
 		status  int
 		code    httpserver.ErrorCode
 	}{
-		{"Recoverer", httpserver.Recoverer(httpserver.WithRecoverLogger(discardLogger()))(
-			http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("x") })), 0, "", 500, "internal_error"},
+		{"Recoverer", httpserver.Recoverer(httpserver.WithRecoverLogger(discardLogger()))(panicky), 0, "", 500, "internal_error"},
 		{"MethodNotAllowed", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			httpserver.MethodNotAllowed(w, r, http.MethodPost)
 		}), 0, "", 405, "method_not_allowed"},

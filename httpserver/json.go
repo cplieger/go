@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"sync"
 )
@@ -48,42 +50,24 @@ func OK(w http.ResponseWriter) {
 	}{OK: true})
 }
 
-// ErrorCode is the MACHINE-READABLE token carried in the error envelope's
-// "code" field — the value a client switches on and an operator's log query and
-// alert rules key on. It is a distinct type from the human message so the two
-// cannot be transposed at a call site: WriteError, WithHostAllowlistError and
-// WithRateLimitError all take the pair (ErrorCode, string) in that order, and
-// handing them a message-shaped value where the code goes is a compile error
-// wherever either side is a typed constant or a variable.
+// ErrorCode is the machine token in the envelope's "code" field, the value a
+// client branches on and a log query keys on. It is typed apart from the
+// message so a call site cannot transpose the pair.
 //
-// The grammar is a token, not a sentence: lowercase ASCII letters, digits and
-// underscores — "host_not_allowed", "rate_limited", "too_many_auth_failures".
-// That is what every code in this library and in every consuming application
-// already spells, so it is written down here rather than left to convention. A
-// code containing a SPACE is a bug, not a message: the sentence belongs in the
-// msg argument beside it, and a code is not a place to put prose.
-//
-// The empty code is legal and means "omit the field": ErrorResponse.Code is
-// omitempty, so an application with a bare {"error":…} taxonomy passes "" and
-// gets no code on the wire.
-//
-// A malformed code is NOT repaired and does NOT panic — see errorEnvelope: the
-// envelope encoder substitutes the fixed InvalidErrorCode token so the machine
-// slot always holds a machine value, and logs the offending code once per
-// process.
+// The grammar is one or more lowercase ASCII letters, digits and underscores
+// ("host_not_allowed"). A code outside it, the empty code included, is never
+// repaired and never panics: the envelope carries InvalidErrorCode instead and
+// the offender is logged once per process.
 type ErrorCode string
 
-// InvalidErrorCode is what the envelope encoder emits in place of a code that
-// does not match ErrorCode's grammar. It is a code of its own rather than a
-// reused "internal_error" so that a broken code is distinguishable on the wire
-// from a genuine internal fault (the request's status is unchanged, and a 400
-// must not start claiming a server error), and rather than an empty code so it
-// is distinguishable from an application that deliberately omits the field.
-// This mirrors the access log's separation of "(path-redaction-failed)" — the
-// policy itself broke — from "(unmatched)", a routine outcome.
+// InvalidErrorCode is written in place of a malformed code. It is its own code,
+// not internal_error, so a broken code never relabels a 400 as a server fault.
 const InvalidErrorCode ErrorCode = "invalid_error_code"
 
-// ErrorResponse is the JSON error envelope written by WriteError.
+// ErrorResponse is the JSON error envelope every writer in this package
+// answers. Every key is always present: RequestID is the request's id, or a
+// fresh one when its context has none, and Remediation is the code's CodeSpec
+// default, or empty for a code outside CodeSpecs.
 type ErrorResponse struct {
 	Code        ErrorCode `json:"code"`
 	Message     string    `json:"message"`
@@ -91,44 +75,59 @@ type ErrorResponse struct {
 	RequestID   string    `json:"request_id"`
 }
 
-// CodeSpec is what an error code means to a client.
+// CodeSpec is what an error code means to a client: the status it is answered
+// with, one line telling a person or a script what to do next, and whether the
+// refused request changed nothing, so a resend is safe.
 type CodeSpec struct {
-	Status      int
 	Remediation string
+	Status      int
 	NoEffect    bool
 }
 
-// CodeSpecs returns the codes this package's writers answer.
-func CodeSpecs() map[ErrorCode]CodeSpec { return nil }
-
-// WriteError writes an ErrorResponse with the given HTTP status: msg becomes
-// Error, code becomes Code, and the request id is pulled from the request
-// context (via RequestIDFromContext) so a client can correlate the failure with
-// the access log. It is nil-safe: when r is nil the RequestID field stays
-// empty.
-//
-// The code is the machine token and msg is the sentence for a human; they are
-// separately typed so the pair cannot be handed over transposed (see
-// ErrorCode). A code that is not a well-formed token is replaced with
-// InvalidErrorCode rather than emitted, and never panics — this runs per
-// request on an error path.
-//
-// WriteError ships the MECHANISM only. Each consuming application keeps its own
-// named-helper and error-code taxonomy on top of it.
-func WriteError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string) {
-	WriteJSONStatus(w, status, errorEnvelope(r, code, msg))
+// codeSpecs holds exactly the codes this package's writers answer;
+// httpservertest.CheckCodeSpecs holds it to the source.
+var codeSpecs = map[ErrorCode]CodeSpec{
+	"internal_error":         {Status: http.StatusInternalServerError, Remediation: "Retry the request; if it fails again, report its request id."},
+	"method_not_allowed":     {Status: http.StatusMethodNotAllowed, Remediation: "Resend with a method the Allow header lists."},
+	"bad_request":            {Status: http.StatusBadRequest, Remediation: "Fix the request as the message describes, then resend it."},
+	"loopback_only":          {Status: http.StatusForbidden, Remediation: "Call this endpoint from the server's own host."},
+	"too_many_auth_failures": {Status: http.StatusTooManyRequests, Remediation: "Wait for the Retry-After delay, then retry with a valid credential.", NoEffect: true},
+	"rate_limited":           {Status: http.StatusTooManyRequests, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
+	"host_not_allowed":       {Status: http.StatusForbidden, Remediation: "Use one of the server's configured host names."},
+	"timeout":                {Status: http.StatusServiceUnavailable, Remediation: "Retry the request; it may have run."},
 }
 
-// errorEnvelope builds the ErrorResponse for r under the package's universal
-// correlation scheme: the request id is pulled from the request context when
-// present (nil-safe on r) and omitted otherwise. It is the single home of the
-// scheme AND of the code grammar; every library error body — written live by
-// WriteError or pre-rendered by errorBodyJSON — goes through it, so a malformed
-// code cannot reach the wire through any of them.
+// CodeSpecs returns every code a writer in this package answers, with its
+// status and default remediation. The map is the caller's own copy.
+func CodeSpecs() map[ErrorCode]CodeSpec {
+	return maps.Clone(codeSpecs)
+}
+
+// WriteError writes the ErrorResponse for code and msg with the given status.
+// It sets Content-Type, and X-Request-ID when the response has none, and keeps
+// every other header the caller set. r may be nil.
+//
+// WriteError ships the mechanism only; each application keeps its own code
+// taxonomy on top of it.
+func WriteError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string) {
+	resp := errorEnvelope(r, code, msg)
+	if w.Header().Get(HeaderRequestID) == "" {
+		w.Header().Set(HeaderRequestID, resp.RequestID)
+	}
+	WriteJSONStatus(w, status, resp)
+}
+
+// errorEnvelope builds the ErrorResponse for r. Every library error body, live
+// or pre-rendered by errorBodyJSON, goes through it, so the code grammar and
+// the request-id rule hold on all of them.
 func errorEnvelope(r *http.Request, code ErrorCode, msg string) ErrorResponse {
-	resp := ErrorResponse{Message: msg, Code: checkedErrorCode(code)}
+	resp := ErrorResponse{Code: checkedErrorCode(code), Message: msg}
+	resp.Remediation = codeSpecs[resp.Code].Remediation
 	if r != nil {
 		resp.RequestID = RequestIDFromContext(r.Context())
+	}
+	if resp.RequestID == "" {
+		resp.RequestID = rand.Text()
 	}
 	return resp
 }
@@ -174,10 +173,11 @@ func checkedErrorCode(code ErrorCode) ErrorCode {
 	return InvalidErrorCode
 }
 
-// validErrorCode reports whether code matches ErrorCode's grammar: any number
-// of lowercase ASCII letters, digits and underscores. The empty code is valid
-// and means "omit the field", so the loop's zero-iteration case is deliberate.
+// validErrorCode reports whether code matches ErrorCode's grammar.
 func validErrorCode(code ErrorCode) bool {
+	if code == "" {
+		return false
+	}
 	for i := range len(code) {
 		switch c := code[i]; {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
@@ -188,17 +188,10 @@ func validErrorCode(code ErrorCode) bool {
 	return true
 }
 
-// errorBodyJSON renders the exact ErrorResponse JSON that WriteError would
-// write for r, as a string, for APIs that require a pre-rendered body instead
-// of writing at request time (http.TimeoutHandler is the one such consumer
-// today). ErrorResponse is a fixed struct of string fields, so marshaling
-// cannot fail; the fallback literal keeps the body valid JSON even if that
-// ever changes.
+// errorBodyJSON renders the body WriteError would write for r, for an API
+// that takes its body before the request runs (http.TimeoutHandler).
 func errorBodyJSON(r *http.Request, code ErrorCode, msg string) string {
-	b, err := json.Marshal(errorEnvelope(r, code, msg))
-	if err != nil {
-		return `{"error":"internal error"}`
-	}
+	b, _ := json.Marshal(errorEnvelope(r, code, msg)) // a struct of strings always marshals
 	return string(b)
 }
 

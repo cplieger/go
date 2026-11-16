@@ -139,25 +139,11 @@ func TestWriteError_nilRequestIsSafe(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.RequestID != "" {
-		t.Errorf("RequestID = %q, want empty for nil request", got.RequestID)
+	if got.RequestID == "" {
+		t.Error("RequestID is empty, want a minted id for a nil request")
 	}
 	if got.Message != "boom" || got.Code != "internal" {
 		t.Errorf("body = %+v", got)
-	}
-}
-
-func TestWriteError_omitsEmptyOptionalFields(t *testing.T) {
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil) // no request id in context
-	httpserver.WriteError(rr, req, http.StatusBadRequest, "", "just a message")
-
-	body := rr.Body.String()
-	if strings.Contains(body, "\"code\"") {
-		t.Errorf("empty code not omitted: %s", body)
-	}
-	if strings.Contains(body, "request_id") {
-		t.Errorf("empty request_id not omitted: %s", body)
 	}
 }
 
