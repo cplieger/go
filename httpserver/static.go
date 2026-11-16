@@ -27,8 +27,8 @@ type staticConfig struct {
 // WithStaticCacheControl sets the per-asset Cache-Control policy, "no-cache"
 // for every asset by default. fn receives the asset path with no leading
 // slash, "index.html" for "/", and returns the header value; an empty value
-// omits the header. It chooses the value only: ETags, gzip and revalidation
-// are fixed. A nil fn keeps the default.
+// omits the header. It chooses the value only; WithStaticETags sets the tags.
+// A nil fn keeps the default.
 func WithStaticCacheControl(fn func(assetPath string) string) StaticOption {
 	return func(c *staticConfig) {
 		if fn != nil {

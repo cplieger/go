@@ -2,22 +2,22 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/httpserver/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=httpserver%2Fgo.mod)](https://github.com/cplieger/go/blob/main/httpserver/go.mod)
 
-httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown.
+httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy.
 
-It replaces the middleware, proxy-header parsing and shutdown sequence you would otherwise write around `http.ServeMux`, and every piece stays a plain `http.Handler`. It ships no router, and your app keeps its own routes and error codes. It depends only on the standard library and `go/textsafe`, and is licensed under Apache-2.0.
+Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library and `go/textsafe`, and is licensed under Apache-2.0.
 
 ## Why use it
 
 httpserver is built for a Go service on `http.ServeMux` that faces a browser or sits behind a proxy.
 
-- `ResolveClient` and `ClientIP` read `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ResolveClient` also reports whether the peer is a proxy you trust, and whether an unlisted proxy sent a forwarding header.
-- `ForwarderCheck` tells a private socket peer that is a container runtime's or router's forwarder, such as Docker's bridge gateway, from a client on your network.
-- A Host allowlist answers 403 to a `Host` you did not list, which stops DNS rebinding attacks.
-- The access log writes `log/slog` lines and caps the path at 512 bytes and the method at 24. Metric labels stay within ten method values and your registered routes.
-- `New` leaves the write timeout off, so SSE and WebSocket streams stay open. `Run` drains in-flight requests within a 5-second grace period by default.
-- `StaticHandler` serves an `embed.FS` with content-hash ETags and gzip computed once at startup.
+- `ResolveClient` reads `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ForwarderCheck` spots a container runtime's forwarder posing as a local client.
+- A Host allowlist stops DNS rebinding, and `CrossOrigin` refuses cross-site writes.
+- Every refusal is one JSON envelope with a code, a message, a remediation and the request id.
+- `SPA` serves only the files your bundle's manifest lists, with the policy on every answer and year-long caching for hashed assets. `httpservertest.CheckSPA` checks every path in a test.
+- The access log caps the path and method it writes, and metric labels stay bounded.
+- `New` leaves the write timeout off, so streams stay open. `Run` drains in-flight requests within a grace period, and the ops listener keeps `/healthz` answering through the drain.
 
-Consider [chi](https://github.com/go-chi/chi) if you want a router with route groups, inline middleware and sub-router mounting. Consider [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate) if you need a token bucket per client or one that waits instead of refusing.
+Consider [chi](https://github.com/go-chi/chi) for route groups and sub-routers, or [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate) for a limiter that waits instead of refusing.
 
 ## Install
 
@@ -93,15 +93,17 @@ func main() {
 }
 ```
 
-A service that browsers reach should also refuse unknown `Host` names. Build a `HostPolicy` with `ParseHostList` and put its `Middleware()` in the chain ahead of any cross-origin or CSRF check. Each refusal logs one Warn line naming the reason and the host. An API that only machines call can skip it. The examples on pkg.go.dev run under `go test`, which keeps them true.
+A service that browsers reach should also refuse unknown `Host` names. Build a `HostPolicy` with `ParseHostList` and put its `Middleware()` in the chain ahead of `CrossOrigin`, which guards the routes that change state. Each refusal logs one Warn line naming the reason and the host. An API that only machines call can skip it. The examples on pkg.go.dev run under `go test`, which keeps them true.
 
 ## API
 
-- Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
-- Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), `AddLogAttrs` for a handler's own access-line attributes, the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`), `StatusRecorder` and `NewStatusRecorder`.
-- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `LogRefusal`), `CanonicalHost`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
-- Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorCode` and `ErrorResponder`, `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
-- Static files: `StaticHandler`, `InlineScriptHashes`, `InlineStyleHashes`.
+- Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NewKeyedRateLimiter` (`KeyedRate`, `KeyedRateLimiter`), `NoStore`.
+- Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), `AddLogAttrs` for a handler's own access-line attributes, the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`, `WithRequestID`), `StatusRecorder` and `NewStatusRecorder`.
+- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `WithHostResponder` and `LogRefusal`), `CanonicalHost`, `CrossOrigin`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
+- Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorResponse`, `ErrorCode` and `ErrorResponder`, `CodeSpecs` (`CodeSpec`), `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
+- Static files: `StaticHandler` with `WithStaticCacheControl` and `WithStaticETags`, `ContentTypes`, `InlineScriptHashes`, `InlineStyleHashes`.
+- Single-page apps: `SPA` (`SPAConfig`), `Page`, `CheckPages`, `NewPageMatcher` (`PageMatcher`, `PageMatch`), `NotFound`, the manifest (`BundlePath`, `ReadBundle`, `Bundle`, `BundleEntry`, `BundleKind`), `SPAPolicy`, `CheckShell`, and `OutagePage` (`OutageConfig`, `OutageFile`, `OutageClass`).
+- Test helpers in `httpservertest`: `CheckSPA`, `CheckNoUI`, `CheckCodeSpecs`.
 - Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `OpsAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`) and `CheckListenAddrs` (`ListenSetting`).
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2).
@@ -114,7 +116,7 @@ Place a `HostPolicy` before any cross-origin or CSRF check. In a DNS rebinding a
 
 `SecurityHeaders` always sends `X-Content-Type-Options: nosniff`, and by default `X-Frame-Options: DENY` and `Referrer-Policy: strict-origin-when-cross-origin`. It builds no Content-Security-Policy and sends no HSTS until you pass `WithCSP` or `WithHSTS`. Enable HSTS only for a service reached over HTTPS alone. A browser that has seen the header refuses plain-HTTP and untrusted-certificate connections to the host for the whole max-age.
 
-`RouteTimeout` buffers the whole response, so never wrap a streaming or hijacking handler with it. If the handler is still running at its deadline, it answers 503 without stopping it, so never wrap a handler that changes state with it either; use `RouteDeadline` for that one. [Middleware](docs/middleware.md) has each option and default.
+`RouteTimeout` buffers the whole response, so never wrap a streaming or hijacking handler with it. If the handler is still running at its deadline, it answers 503 without stopping it, so never wrap a handler that changes state with it either. Use `RouteDeadline` for that one. [Middleware](docs/middleware.md) has each option and default.
 
 Behind a proxy, `ClientIP` is safe only when the trusted set holds every proxy hop. It reads at most 64 entries of each forwarding header and treats a longer header as invalid. `LoopbackOnly` is not authentication, because a proxy on the same host that sends no forwarding header passes it, and nginx sends none by default. An empty `NewStaticTokenVerifier` secret denies every value. When a page carries inline scripts, treat an empty `InlineScriptHashes` result as a startup error and never fall back to `'unsafe-inline'`.
 
@@ -124,6 +126,16 @@ When `ctx` is cancelled, `Run` runs the `WithPreDrain` hook, then `srv.Shutdown`
 
 When `Serve` returns before `ctx` is cancelled, for example because the listener failed, neither hook runs. Pass `WithServeExit` to run your teardown in that case too. A `Run` error caused by the grace running out wraps `ErrShutdownGraceExpired`. [Server and shutdown](docs/server.md) has the full sequence.
 
+## Moving from v1
+
+- Change every import of `github.com/cplieger/go/httpserver` to `github.com/cplieger/go/httpserver/v2`.
+- Read an error body's `message` key, which replaces `error`. `code`, `remediation` and `request_id` are always present.
+- Drop `WithHostAllowlistError`. The refusal is always 403 `host_not_allowed`, and `WithHostResponder` writes it through your own `ErrorResponder`.
+- Give every `WriteError` call and every `ErrorResponder` a non-empty code. The empty code is now malformed and answers `invalid_error_code`.
+- Replace `ListenMetrics`, `MetricsHandlers` and `MetricsServer` with `ListenOps` and `RunWithOps`, and pass every listener's address to `CheckListenAddrs` at start.
+- A client matching `Recoverer`'s 500 message reads `internal error`.
+- A `StaticHandler` file with an extension outside the content-type table, such as `.jpg` or `.woff`, now answers `application/octet-stream`. Convert it to a listed format, or serve it with your own handler.
+
 ## Related projects
 
 - [httpclient](https://github.com/cplieger/go/tree/main/httpclient) makes the requests your service sends out survive flaky servers. httpserver handles the requests coming in.
@@ -132,11 +144,12 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 
 ## Documentation
 
-- [Middleware](docs/middleware.md) covers ordering, recovery, security headers, compression, timeouts, rate limiting and `NoStore`.
-- [Access logging and metrics](docs/access-logging.md) covers request ids, the log line, its bounds and the metric hook.
-- [Client IP, hosts and credentials](docs/trust-checks.md) covers proxy trust, the Host allowlist, loopback checks, configured credentials, header-value checks, `WWW-Authenticate` challenges and failed-authentication limits.
-- [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope, body decoding and path checks.
-- [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, caching and hash-pinned inline scripts.
+- [Middleware](docs/middleware.md) covers ordering, recovery, security headers, compression, timeouts and rate limits.
+- [Access logging and metrics](docs/access-logging.md) covers request ids, the log line and the metric hook.
+- [Client IP, hosts and credentials](docs/trust-checks.md) covers proxy trust, the Host allowlist, cross-origin writes, loopback checks, credentials and failed-authentication limits.
+- [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope and its codes, body decoding and path checks.
+- [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, content types, caching and entity-tags.
+- [Single-page apps and the outage page](docs/spa.md) covers `SPA`, its manifest, pages, policy and caching, the test helpers and `OutagePage`.
 - [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the ops listener.
 
 ## Credits

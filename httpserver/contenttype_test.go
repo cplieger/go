@@ -12,7 +12,7 @@ import (
 	"github.com/cplieger/go/httpserver/v2"
 )
 
-// wantContentTypes is the table the kit's design fixes; .js is RFC 9239's
+// wantContentTypes is the table docs/static-assets.md publishes; .js is RFC 9239's
 // text/javascript, never mime.TypeByExtension's application/javascript.
 var wantContentTypes = map[string]string{
 	".html":        "text/html; charset=utf-8",

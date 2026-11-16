@@ -19,7 +19,7 @@ import (
 	"github.com/cplieger/go/httpserver/v2"
 )
 
-// defaultPolicy is the SPA policy the kit's design fixes, written out here as
+// defaultPolicy is the SPA policy docs/spa.md publishes, written out here as
 // the oracle rather than read from the package.
 const defaultPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 

@@ -1,6 +1,6 @@
 # Static assets and CSP hashes
 
-This page is for a developer serving an embedded web UI from a Go binary. It covers `StaticHandler`, its cache policy, and the helpers that hash inline scripts and styles for a Content-Security-Policy.
+This page is for a developer serving an embedded web UI from a Go binary. It covers `StaticHandler`, its content types, its cache policy and entity-tags, and the helpers that hash inline scripts and styles for a Content-Security-Policy.
 
 ## StaticHandler
 
@@ -8,9 +8,29 @@ This page is for a developer serving an embedded web UI from a Go binary. It cov
 
 The handler walks the tree once, when you build it. For each file it computes a SHA-256 content-hash ETag and a gzip copy at the best compression level, and it keeps the gzip copy only when it is smaller. Already-compressed formats such as woff2 and png, and tiny files, therefore stay uncompressed.
 
-It serves a known asset with its ETag, the cache policy's `Cache-Control` and `Vary: Accept-Encoding`. A matching `If-None-Match` gets a 304. A client that accepts gzip on a `GET` or `HEAD` without a `Range` header gets the gzip copy. That copy has its own ETag, the identity tag plus `-gz`, and its own 304 handling. Anything else, including `Range` requests, directories, unknown paths and 404s, falls through to the plain `http.FileServer`.
+It serves a known asset with its content type, its ETag, the cache policy's `Cache-Control` and `Vary: Accept-Encoding`. A directory path such as `/docs/` is its `index.html` and carries that file's headers. A matching `If-None-Match` gets a 304. A client that accepts gzip on a `GET` or `HEAD` without a `Range` header gets the gzip copy. That copy has its own ETag, the identity tag plus `-gz`, and its own 304 handling. Anything else, including `Range` requests, unknown paths and 404s, falls through to the plain `http.FileServer`.
 
-The error is non-nil only when walking `fsys` fails. A malformed embed is a build problem, so abort startup on it.
+The error is non-nil when walking `fsys` fails or `WithStaticETags` is refused. A malformed embed is a build problem, so abort startup on it.
+
+## Content types
+
+Every file answers its `Content-Type` from one fixed table, keyed by extension, which `SPA` uses too. `ContentTypes()` returns a copy of it, for a bundler that must refuse an extension outside it.
+
+| Extension | Content type |
+| --- | --- |
+| `.html` | `text/html; charset=utf-8` |
+| `.js`, `.mjs` | `text/javascript; charset=utf-8` (RFC 9239) |
+| `.css` | `text/css; charset=utf-8` |
+| `.json` | `application/json` |
+| `.webmanifest` | `application/manifest+json` |
+| `.svg` | `image/svg+xml` |
+| `.png`, `.webp`, `.avif` | `image/png`, `image/webp`, `image/avif` |
+| `.ico` | `image/vnd.microsoft.icon` |
+| `.woff2` | `font/woff2` |
+| `.txt` | `text/plain; charset=utf-8` |
+| `.wasm` | `application/wasm` |
+
+A file with any other extension answers `application/octet-stream`. The table never reads `mime.TypeByExtension`, which consults the host's registry and can answer `application/javascript` for `.js` on Windows, and never sniffs the body, which could answer `text/html` for a stray file.
 
 From Go 1.27, `net/http` answers 404 instead of 301 where `http.FileServer` would redirect a path whose escaped form holds `%2F`, such as `/sub%2Fdir` or `/sub%2Findex.html`. `StaticHandler` inherits this. Serving a file through an escaped slash, as in `/sub%2Fdir/leaf.txt`, still answers 200.
 
@@ -20,7 +40,16 @@ From Go 1.27, `net/http` answers 404 instead of 301 where `http.FileServer` woul
 
 The default is `no-cache` for every asset. With a content-hash ETag, revalidation is a cheap 304.
 
-The ETag, gzip and revalidation behaviour is not configurable. Only the cache policy is.
+## Your own entity-tags
+
+`WithStaticETags(tags)` gives each file its ETag by its path in the tree, with no leading slash, such as `assets/app-3f2a.js`. Use it when a build step already hashed every file, as a bundle manifest does. With it, `StaticHandler` hashes no file at start.
+
+- A named file answers its tag, and its gzip copy the tag plus `-gz`.
+- A file the map does not name is served with its content type only: no ETag, no `Cache-Control`, no `Vary` and no gzip copy.
+- Each tag must be a quoted strong entity-tag, such as `"3f2a"` (RFC 9110 section 8.8.3). A malformed tag, or a path that names no file in the tree, is an error naming the path.
+- A nil map names no file.
+
+The gzip and revalidation behaviour is not configurable.
 
 ## Inline script hashes
 

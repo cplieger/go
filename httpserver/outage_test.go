@@ -14,7 +14,7 @@ import (
 	"github.com/cplieger/go/httpserver/v2"
 )
 
-// The class sentences and the closing lines the kit's design fixes for the
+// The class sentences and the closing lines docs/spa.md publishes for the
 // page, with "seadex-scout" as the app.
 var outageSentences = map[httpserver.OutageClass]string{
 	httpserver.OutageDamaged:    "The file is damaged.",
