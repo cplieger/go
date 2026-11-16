@@ -254,6 +254,15 @@ describe("rule 8: lost track", () => {
     expect(h.reconnect).toHaveBeenCalledTimes(2);
   });
 
+  it("the reconnect's frame carrying wire ends the episode when its view no longer holds a source known at the start", () => {
+    const h = harness();
+    h.feed.onFrame(both({}, {}));
+    expect(() => h.feed.onFrame(malformed)).toThrow();
+    h.feed.onFrame(listening([{ source: "store", epoch: E1, floors: {} }], W1));
+    expect(() => h.feed.onFrame(malformed)).toThrow();
+    expect(h.reconnect).toHaveBeenCalledTimes(2);
+  });
+
   it("an episode entered before any listening frame ends at the first valid one", () => {
     const h = harness();
     expect(() => h.feed.onFrame(malformed)).toThrow();

@@ -91,4 +91,29 @@ describe("connectionOf over a running stream", () => {
     expect(now()).toEqual({ state: "live", since: null });
     stream.stop();
   });
+
+  it("says lost with no since while the server refuses a stream that never opened", async () => {
+    const sf = scriptedFetch();
+    sf.expect({ status: 503 });
+    sf.expect({ status: 503 });
+    const stream = createStream({
+      url: "/events",
+      fetch: sf.fetch,
+      versions: createVersionMap(),
+      onFrame: () => undefined,
+      revalidate: () => Promise.resolve(),
+    });
+    stream.start();
+    await flush(10);
+    expect(stream.state().kind).toBe("backoff");
+    expect(connectionOf(stream.state(), null)).toEqual({ state: "lost", since: null });
+
+    while (sf.connections.length < 2) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await flush(10);
+    expect(stream.state().kind).toBe("backoff");
+    expect(connectionOf(stream.state(), null)).toEqual({ state: "lost", since: null });
+    stream.stop();
+  });
 });

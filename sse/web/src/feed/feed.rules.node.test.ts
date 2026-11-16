@@ -16,6 +16,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 const COALESCE = 50;
@@ -389,6 +390,82 @@ describe("rule 5: apply", () => {
     await bySource("store")?.answer({ rev: 101, upserts: { runs: [{ id: "a" }] } });
     expect(settings.log).toEqual(["stale"]);
     expect(bare.log).toEqual(["stale"]);
+  });
+
+  it("a sink with no remove is staled by an answer that removes keys of its kind, before any upsert", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    const s = sink({ remove: false });
+    const sub = h.feed.watch("runs", s, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({
+      rev: 150,
+      upserts: { runs: [{ id: "a" }] },
+      removed: { runs: ["x"] },
+    });
+    expect(s.log).toEqual(["stale"]);
+
+    // The re-read's seed below the answer's rev is the watermark: the answer's rev is not.
+    sub.seed(position(["store", E1, 140]));
+    s.reads[0]?.resolve();
+    await settle();
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q.since)).toEqual([100, 140]);
+  });
+
+  it("a sink with no remove takes an answer that removes no key of its kind", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100, budgets: 100 }));
+    const s = sink({ remove: false });
+    h.feed.watch("runs", s, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({
+      rev: 150,
+      upserts: { runs: [{ id: "a" }] },
+      removed: { budgets: ["b"] },
+    });
+    expect(s.log).toEqual(["upsert a"]);
+  });
+
+  it("a sink's throw is reported and staled, and the answer's other subscriptions still apply", async () => {
+    const reported: unknown[] = [];
+    vi.stubGlobal("reportError", (e: unknown) => reported.push(e));
+    const boom = new Error("sink");
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    const bad = {
+      ...sink(),
+      upsert: (): void => {
+        throw boom;
+      },
+    };
+    const good = sink();
+    h.feed.watch("runs", bad, position(["store", E1, 100]));
+    h.feed.watch("runs", good, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({ rev: 150, upserts: { runs: [{ id: "a" }] } });
+    expect(reported).toEqual([boom]);
+    expect(bad.log).toEqual(["stale"]);
+    expect(good.log).toEqual(["upsert a"]);
+
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(1_000);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it("an answer on another epoch than its request's stales the subscription as a full answer does", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    const s = sink();
+    h.feed.watch("runs", s, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({ rev: 3, epoch: E2, upserts: { runs: [{ id: "a" }] } });
+    expect(s.log).toEqual(["stale"]);
   });
 
   it("two subscriptions of one kind seeded at 100 and 200 both show a commit at 150 after one catch-up from 100", async () => {

@@ -228,12 +228,16 @@ describe("rule 7: a catch-up that fails as retry", () => {
     h.feed.watch("runs", sink(), position(["store", E1, 100]));
     await advance(COALESCE);
     await h.calls[0]?.fail("retry");
+    const unseeded = sink();
+    h.feed.watch("runs", unseeded, position());
     for (let t = 1; t <= 49; t++) {
       await advance(10);
       h.feed.onFrame(changed("store", E1, 150 + t, ["runs"]));
     }
     expect(h.calls).toHaveLength(1);
+    expect(unseeded.log).toEqual([]);
     await advance(10);
+    expect(unseeded.log).toEqual(["stale"]);
     expect(h.calls.map((c) => c.q)).toEqual([
       { source: "store", epoch: E1, since: 100, kinds: ["runs"] },
       { source: "store", epoch: E1, since: 100, kinds: ["runs"] },

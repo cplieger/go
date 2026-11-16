@@ -108,7 +108,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
   const listeners = new Map<string, Set<() => void>>();
   // Rule 8. `otherFormat`: the newest listening frame was written in another feed format.
   // `lostTrack`: the sources whose next valid listening frame ends the lost-track episode, or
-  // `null` outside one.
+  // `null` outside one; a connection's frame ends it whatever it names.
   let otherFormat = false;
   let lostTrack: Set<Src> | null = null;
   const timing = {
@@ -231,6 +231,10 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
   // Rules 4 and 6: after coalesceMs, one catch-up of the source's marked subscriptions, and one
   // stale() for each marked one a catch-up cannot answer.
   function flush(src: Src): void {
+    // A retry wait holds every subscription of the source, a no-watermark one's stale() included.
+    if (src.retryWait !== null) {
+      return;
+    }
     const ask: Sub[] = [];
     for (const sub of src.subs) {
       if (!sub.marked || sub.rereading || sub.wait !== null) {
@@ -242,7 +246,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         ask.push(sub);
       }
     }
-    if (ask.length === 0 || src.epoch === null || src.retryWait !== null) {
+    if (ask.length === 0 || src.epoch === null) {
       return;
     }
     if (src.inFlight !== null) {
@@ -336,28 +340,45 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     const upserts = a.upserts as ByKind<unknown>;
     const removed = a.removed as ByKind<string>;
     for (const s of subs) {
-      const wm = s.watermark;
-      if (wm === null) {
-        continue;
-      }
-      if (signals.has(s.kind) || s.sink.upsert === undefined) {
+      try {
+        applyRows(s, epoch, a.rev, signals.has(s.kind), own(upserts, s.kind), own(removed, s.kind));
+      } catch (e: unknown) {
+        reportError(e);
         stale(s);
-        continue;
       }
-      // A seed newer than the answer already holds these rows or newer ones.
-      if (wm.rev <= a.rev) {
-        const rows = own(upserts, s.kind);
-        const keys = own(removed, s.kind);
-        if (rows.length > 0) {
-          s.sink.upsert(rows);
-        }
-        if (keys.length > 0) {
-          s.sink.remove?.(keys);
-        }
-        s.watermark = { epoch, rev: a.rev };
-      }
-      compare(s, s.watermark ?? wm);
     }
+  }
+
+  // A sink that cannot take the answer's rows of its kind (no upsert, or removals and no remove)
+  // is re-read: moving its watermark would show rows the answer changed as covered.
+  function applyRows(
+    s: Sub,
+    epoch: string,
+    rev: number,
+    signal: boolean,
+    rows: readonly unknown[],
+    keys: readonly string[],
+  ): void {
+    const wm = s.watermark;
+    if (wm === null) {
+      return;
+    }
+    const sink = s.sink;
+    if (signal || sink.upsert === undefined || (keys.length > 0 && sink.remove === undefined)) {
+      stale(s);
+      return;
+    }
+    // A seed newer than the answer already holds these rows or newer ones.
+    if (wm.rev <= rev) {
+      if (rows.length > 0) {
+        sink.upsert(rows);
+      }
+      if (keys.length > 0) {
+        sink.remove?.(keys);
+      }
+      s.watermark = { epoch, rev };
+    }
+    compare(s, s.watermark ?? wm);
   }
 
   // An app callback's throw is reported, never left to stop the frame that called it.
@@ -470,7 +491,9 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
       applied.push(src.name);
       lostTrack?.delete(src);
     }
-    if (lostTrack?.size === 0) {
+    // Only a connection's frame carries wire, and it names every source of that connection's view:
+    // a source the new view no longer holds never sends a frame again.
+    if (l.wire !== null || lostTrack?.size === 0) {
       lostTrack = null;
     }
     for (const name of applied) {

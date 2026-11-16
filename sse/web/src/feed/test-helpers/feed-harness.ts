@@ -107,7 +107,9 @@ export interface RecordingSink extends FeedSink<Row> {
   readonly removed: string[];
 }
 
-export function sink(opts: { readonly upsert?: boolean } = {}): RecordingSink {
+export function sink(
+  opts: { readonly upsert?: boolean; readonly remove?: boolean } = {},
+): RecordingSink {
   const log: string[] = [];
   const reads: Read[] = [];
   const upserted: Row[] = [];
@@ -117,10 +119,6 @@ export function sink(opts: { readonly upsert?: boolean } = {}): RecordingSink {
     reads,
     upserted,
     removed,
-    remove(keys) {
-      log.push(`remove ${keys.join(",")}`);
-      removed.push(...keys);
-    },
     stale() {
       log.push("stale");
       const d = deferred<undefined>();
@@ -133,6 +131,12 @@ export function sink(opts: { readonly upsert?: boolean } = {}): RecordingSink {
       return d.promise;
     },
   };
+  if (opts.remove !== false) {
+    s.remove = (keys: readonly string[]): void => {
+      log.push(`remove ${keys.join(",")}`);
+      removed.push(...keys);
+    };
+  }
   if (opts.upsert !== false) {
     s.upsert = (rows: readonly Row[]): void => {
       log.push(`upsert ${rows.map((r) => r.id).join(",")}`);
