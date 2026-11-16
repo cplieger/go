@@ -194,9 +194,9 @@ type matchWriter struct {
 	status int
 }
 
-func (w *matchWriter) Header() http.Header         { return w.header }
-func (w *matchWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (w *matchWriter) WriteHeader(status int)      { w.status = status }
+func (w *matchWriter) Header() http.Header       { return w.header }
+func (*matchWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (w *matchWriter) WriteHeader(status int)    { w.status = status }
 
 func pageHandler(p Page) http.Handler {
 	var wildcards []string

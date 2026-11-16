@@ -20,7 +20,7 @@ type recordingTB struct {
 	fatal  string
 }
 
-func (r *recordingTB) Helper() {}
+func (*recordingTB) Helper() {}
 
 func (r *recordingTB) Errorf(format string, args ...any) {
 	r.errors = append(r.errors, fmt.Sprintf(format, args...))

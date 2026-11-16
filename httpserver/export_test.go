@@ -57,7 +57,11 @@ func CountDigestCompares() (calls *int, restore func()) {
 func SetKeyedRateClock(l *KeyedRateLimiter, now func() time.Time) { l.now = now }
 
 // KeyedRateBuckets answers how many buckets l holds.
-func KeyedRateBuckets(l *KeyedRateLimiter) int { return l.len() }
+func KeyedRateBuckets(l *KeyedRateLimiter) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.buckets)
+}
 
 // OpsServer and OpsListener answer the server and listener ListenOps built.
 func OpsServer(o *Ops) *http.Server   { return o.srv }

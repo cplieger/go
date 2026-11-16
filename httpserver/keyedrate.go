@@ -167,12 +167,6 @@ func (l *KeyedRateLimiter) drop(b *keyBucket) {
 	heap.Remove(&l.byFull, b.index)
 }
 
-func (l *KeyedRateLimiter) len() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.buckets)
-}
-
 // Middleware takes one token of the bucket key names for each request. A
 // request whose key answers false passes untouched; a refused one answers
 // rate_limited (429) through errs (nil: WriteError) with Retry-After in whole
