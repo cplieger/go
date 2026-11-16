@@ -95,6 +95,8 @@ var codeSpecs = map[ErrorCode]CodeSpec{
 	"rate_limited":           {Status: http.StatusTooManyRequests, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
 	"host_not_allowed":       {Status: http.StatusForbidden, Remediation: "Use one of the server's configured host names."},
 	"timeout":                {Status: http.StatusServiceUnavailable, Remediation: "Retry the request; it may have run."},
+	"not_found":              {Status: http.StatusNotFound, Remediation: "Check the path; nothing is served at it."},
+	"ui_unbuilt":             {Status: http.StatusServiceUnavailable, Remediation: "Build the web UI with go generate ./..., then restart the server."},
 }
 
 // CodeSpecs returns every code a writer in this package answers, with its

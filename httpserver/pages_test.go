@@ -38,7 +38,7 @@ func TestCheckPagesRefusesConflict(t *testing.T) {
 }
 
 func TestCheckPagesRefusesBadTable(t *testing.T) {
-	many := func(n int, shells int) []httpserver.Page {
+	many := func(n, shells int) []httpserver.Page {
 		var out []httpserver.Page
 		for i := range n {
 			out = append(out, httpserver.Page{Name: fmt.Sprintf("p%d", i), Pattern: fmt.Sprintf("/p%d", i), Shell: fmt.Sprintf("s%d.html", i%shells)})

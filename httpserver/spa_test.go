@@ -610,7 +610,7 @@ func TestSPARefusesBrokenTree(t *testing.T) {
 		delete(tree, name)
 		return tree
 	}
-	listing := func(extra string, body string) fs.FS {
+	listing := func(extra, body string) fs.FS {
 		files := spaFiles()
 		files[extra] = body
 		return bundleTree(t, files, append(slices.Clone(spaListed), extra), spaEntries)
