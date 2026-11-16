@@ -2,7 +2,11 @@
 // instantiation tests.
 package generics
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/cplieger/go/wiregen/v2/testdata/generics/other"
+)
 
 // Peer is a struct a test registers and passes as a type argument.
 type Peer struct {
@@ -49,6 +53,31 @@ type Holder struct {
 // HasUnregistered carries an instantiation a test does not register.
 type HasUnregistered struct {
 	Names List[string] `json:"names"`
+}
+
+// HasPeerList carries List[Peer] alone, for a test that registers its
+// derived name's namesake List_Peer instead.
+type HasPeerList struct {
+	Peers List[Peer] `json:"peers"`
+}
+
+// HasOtherPeers carries a List whose argument is another package's Peer.
+type HasOtherPeers struct {
+	Peers List[other.Peer] `json:"peers"`
+}
+
+// ListAlias is a generic alias of List.
+type ListAlias[T any] = List[T]
+
+// Dir has a request schema apart from its response one: a nil map is
+// written omitted but may be read as null.
+type Dir[T any] struct {
+	M map[string]T `json:"m,omitempty"`
+}
+
+// Dir_PeerInput is spelled as Dir[Peer]'s request component.
+type Dir_PeerInput struct {
+	Z int `json:"z"`
 }
 
 // Aliased carries instantiations whose argument is a predeclared alias.

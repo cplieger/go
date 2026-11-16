@@ -12,10 +12,6 @@ import (
 	"github.com/cplieger/go/wiregen/v2/testdata/generics/other"
 )
 
-// Tests for registering and referencing an instantiation of a generic type.
-// The expected names follow the rule docs/type-mapping.md states: the origin's
-// name and each type argument's name joined by '_'.
-
 const genericsPkg = "github.com/cplieger/go/wiregen/v2/testdata/generics"
 
 // genericsReg registers instantiations whose type arguments are a registered
@@ -145,8 +141,8 @@ func TestGolden_Generics(t *testing.T) {
 	goldenCompare(t, "testdata/golden/generics.openapi.json", mustGen(t, r.openapiFile))
 }
 
-// embedReg registers a struct embedding an instantiation, which generated
-// before instantiations could be registered; its goldens hold that output.
+// embedReg registers a struct embedding an instantiation; its goldens pin the
+// embedding form's output.
 func embedReg(extra ...wiregen.Type) *testRegistry {
 	r := newTestRegistry()
 	r.Types = append([]wiregen.Type{wiregen.TypeRef[generics.Peer](), wiregen.TypeRef[generics.Page]()}, extra...)
@@ -332,9 +328,34 @@ func TestGenerics_Refusals(t *testing.T) {
 			[]string{inst("List[string]") + " is neither registered nor mapped"},
 		},
 		{
+			"a field instance whose argument is another package's namesake",
+			[]wiregen.Type{wiregen.TypeRef[generics.Peer](), wiregen.TypeRef[generics.List[generics.Peer]](), wiregen.TypeRef[generics.HasOtherPeers]()},
+			[]string{inst("List["+genericsPkg+"/other.Peer]") + " is neither registered nor mapped"},
+		},
+		{
+			"a field instance whose derived name a declared type holds",
+			[]wiregen.Type{wiregen.TypeRef[generics.Peer](), wiregen.TypeRef[generics.List_Peer](), wiregen.TypeRef[generics.HasPeerList]()},
+			[]string{inst("List["+genericsPkg+".Peer]") + " is neither registered nor mapped"},
+		},
+		{
 			"the generic declaration itself",
 			[]wiregen.Type{{PkgPath: genericsPkg, Name: "List"}},
 			[]string{inst("List") + " is generic; register an instantiation of it"},
+		},
+		{
+			"an instantiation of a generic alias",
+			[]wiregen.Type{{PkgPath: genericsPkg, Name: "ListAlias[int]"}},
+			[]string{inst("ListAlias") + " is an alias; register the type it stands for"},
+		},
+		{
+			"too many type arguments",
+			[]wiregen.Type{{PkgPath: genericsPkg, Name: "List[int,string]"}},
+			[]string{inst("List") + " has 1 type parameters, not 2"},
+		},
+		{
+			"type arguments to a type that takes none",
+			[]wiregen.Type{{PkgPath: genericsPkg, Name: "Unregistered[int]"}},
+			[]string{inst("Unregistered") + " has 0 type parameters, not 1"},
 		},
 	}
 	for _, tc := range cases {
@@ -344,6 +365,43 @@ func TestGenerics_Refusals(t *testing.T) {
 			requireGenerateError(t, r, tc.wants...)
 		})
 	}
+	t.Run("an enum argument whose namesake of another package is registered", func(t *testing.T) {
+		r := newTestRegistry()
+		r.Enums = []wiregen.EnumRef{wiregen.StringEnum[other.Status]()}
+		r.Types = []wiregen.Type{wiregen.TypeRef[generics.List[generics.Status]]()}
+		requireGenerateError(t, r, "type argument "+inst("Status"), inst("List["+genericsPkg+".Status]"))
+	})
+}
+
+// A collision found after an instantiation is renamed names it by its Go
+// spelling, as the app registered it.
+func TestGenerics_LateCollisionsNameTheGoType(t *testing.T) {
+	listPeer := "type " + genericsPkg + ".List[" + genericsPkg + ".Peer]"
+	t.Run("a TS identifier", func(t *testing.T) {
+		r := newTestRegistry()
+		r.Types = []wiregen.Type{wiregen.TypeRef[generics.Peer](), wiregen.TypeRef[generics.List[generics.Peer]]()}
+		r.TSNameOverride = map[string]string{"List_Peer": "Peer"}
+		requireGenerateError(t, r, listPeer+" and type "+genericsPkg+".Peer both emit the TS identifier Peer")
+	})
+	t.Run("a request component", func(t *testing.T) {
+		dirPeer := wiregen.TypeRef[generics.Dir[generics.Peer]]()
+		r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
+		r.Types = []wiregen.Type{wiregen.TypeRef[generics.Peer](), wiregen.TypeRef[generics.Dir_PeerInput]()}
+		r.Endpoints = []wiregen.Endpoint{{
+			Name: "putDir", Method: "POST", Path: "/api/dir", Kind: wiregen.KindJSON, Request: dirPeer, Response: dirPeer,
+		}}
+		r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
+		_, err := r.openapiFile(t.Context())
+		for _, want := range []string{
+			"OpenAPI component Dir_PeerInput is named by both",
+			"type " + genericsPkg + ".Dir[" + genericsPkg + ".Peer]",
+			"type " + genericsPkg + ".Dir_PeerInput",
+		} {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("openapi error = %v, want one naming %q", err, want)
+			}
+		}
+	})
 }
 
 // A component name outside OpenAPI's set is refused for the document, a
@@ -351,11 +409,11 @@ func TestGenerics_Refusals(t *testing.T) {
 // generate.
 func TestGenerics_OpenAPIRefusesANonASCIIComponent(t *testing.T) {
 	cases := []struct {
-		name, component string
-		types           []wiregen.Type
+		name, component, goType string
+		types                   []wiregen.Type
 	}{
-		{"a plain type", "Maß", []wiregen.Type{wiregen.TypeRef[generics.Maß]()}},
-		{"an instance", "List_Maß", []wiregen.Type{wiregen.TypeRef[generics.Maß](), wiregen.TypeRef[generics.List[generics.Maß]]()}},
+		{"a plain type", "Maß", genericsPkg + ".Maß", []wiregen.Type{wiregen.TypeRef[generics.Maß]()}},
+		{"an instance", "List_Maß", genericsPkg + ".List[" + genericsPkg + ".Maß]", []wiregen.Type{wiregen.TypeRef[generics.Maß](), wiregen.TypeRef[generics.List[generics.Maß]]()}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -364,8 +422,9 @@ func TestGenerics_OpenAPIRefusesANonASCIIComponent(t *testing.T) {
 			r.OpenAPI = wiregen.OpenAPIInfo{Title: "t", Version: "1"}
 			mustGen(t, r.typesFile)
 			_, err := r.openapiFile(t.Context())
-			if err == nil || !strings.Contains(err.Error(), `OpenAPI component name "`+tc.component+`"`) {
-				t.Errorf("openapi error = %v, want one naming component %q", err, tc.component)
+			want := `OpenAPI component name "` + tc.component + `", of type ` + tc.goType + ","
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("openapi error = %v, want one naming %q", err, want)
 			}
 		})
 	}
@@ -402,11 +461,27 @@ func TestDeadsetEdges_PairsAnInstanceWithItsOrigin(t *testing.T) {
 		{PkgPath: pkg, Name: "Peer"},
 		{PkgPath: pkg, Name: "List[" + pkg + ".Peer]"},
 		{PkgPath: pkg, Name: "List[int]"},
+		{PkgPath: pkg, Name: "List[" + pkg + ".List[" + pkg + ".Peer]]"},
 	}}
 	got := mustGenerateEdges(t, root, r)
 	want := strings.ReplaceAll(`{
   "description": "Edges between Go wire symbols and the TypeScript wiregen generates from them; wiregen rewrites every edge under wiregen/.",
   "edges": {
+    "wiregen/List_List_Peer": {
+      "because": "generated by wiregen",
+      "provides": "go://@PKG@#List",
+      "used_by": "ts://app/src/wire/types.gen.ts#List_List_Peer"
+    },
+    "wiregen/List_List_Peer/Items": {
+      "because": "generated by wiregen",
+      "provides": "go://@PKG@#List.Items",
+      "used_by": "ts://app/src/wire/types.gen.ts#List_List_Peer.items"
+    },
+    "wiregen/List_List_Peer/Next": {
+      "because": "generated by wiregen",
+      "provides": "go://@PKG@#List.Next",
+      "used_by": "ts://app/src/wire/types.gen.ts#List_List_Peer.next"
+    },
     "wiregen/List_Peer": {
       "because": "generated by wiregen",
       "provides": "go://@PKG@#List",

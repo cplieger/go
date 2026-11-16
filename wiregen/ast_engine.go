@@ -954,14 +954,12 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 	if ut.Obj().Pkg() != nil {
 		pkgPath = ut.Obj().Pkg().Path()
 	}
-	// An instantiation is keyed by its derived name, never its origin's.
-	generic := ut.TypeArgs().Len() > 0
 	key, fullName, registered := e.gen.namedRef(ut)
 
-	if !generic && stdlibWireType(pkgPath, name, fi) {
+	if stdlibWireType(pkgPath, name, fi) {
 		return
 	}
-	if en, ok := e.gen.enums[name]; ok && !generic && en.pkgPath == pkgPath {
+	if en, ok := e.gen.enums[name]; ok && en.pkgPath == pkgPath {
 		fi.Kind, fi.TSType, fi.GoTypeName = kindEnum, e.gen.tsEnumName(name), name
 		fi.needDecoder(ut)
 		return

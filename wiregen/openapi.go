@@ -423,14 +423,14 @@ func (b *docBuilder) componentSchemas() (map[string]any, error) {
 	c := components{schemas: map[string]any{}, owner: map[string]string{}}
 	for _, name := range enumNamesSlice(b.g.enums) {
 		values := b.g.enums[name].values
-		if err := c.add(b.g.tsEnumName(name), "enum "+name, map[string]any{kwType: schemaString, "enum": slices.Clone(values)}); err != nil {
+		if err := c.add(b.g.tsEnumName(name), b.g.enumLabel(name), map[string]any{kwType: schemaString, "enum": slices.Clone(values)}); err != nil {
 			return nil, err
 		}
 	}
 	for _, ti := range b.engine.types {
 		for _, d := range b.componentDirections(ti.Name) {
 			for name, s := range b.typeSchemas(ti, d) {
-				if err := c.add(name, "type "+ti.Name, s); err != nil {
+				if err := c.add(name, b.g.typeLabel(ti.Name), s); err != nil {
 					return nil, err
 				}
 			}

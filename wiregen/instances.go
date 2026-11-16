@@ -18,7 +18,7 @@ type typeSpelling struct {
 	args []typeSpelling
 }
 
-// text spells s as reflect does, with each package path unescaped.
+// text spells s as importpath.Name[args], the Go spelling an error names a type by.
 func (s *typeSpelling) text() string {
 	if s.pkg == "" {
 		return s.name
@@ -165,8 +165,8 @@ func spellingOf(t types.Type) (typeSpelling, bool) {
 	return typeSpelling{}, false
 }
 
-// eachType calls fn on every Type the registry names outside Enums, in
-// registry order, so fn can rewrite it.
+// eachType calls fn on every Type the registry names outside Enums, union
+// payloads last in case order, so fn can rewrite it.
 func (g *generator) eachType(fn func(*Type)) {
 	slots := make([]*Type, 0, 1+len(g.Types)+4*len(g.Endpoints)+len(g.Events)+len(g.Unions))
 	slots = append(slots, &g.ErrorEnvelope)
@@ -220,7 +220,8 @@ func (g *generator) nameInstances() error {
 	return err
 }
 
-// nameInstance renames wt, when it is an instantiation, to its wire name.
+// nameInstance renames instantiation wt to its wire name, refusing a name a
+// declared type or an earlier instantiation already holds.
 func (g *generator) nameInstance(wt *Type, declared map[string]Type) error {
 	sp, generic, err := parseInstance(*wt)
 	if err != nil || !generic {
@@ -290,6 +291,16 @@ func (g *generator) goName(wt Type) string {
 	return wt.PkgPath + "." + wt.Name
 }
 
+// typeLabel names registered type name for an error, by its Go spelling.
+func (g *generator) typeLabel(name string) string {
+	return "type " + g.goName(Type{PkgPath: g.typeNames[name], Name: name})
+}
+
+// enumLabel names registered enum name for an error, by its Go spelling.
+func (g *generator) enumLabel(name string) string {
+	return "enum " + g.enums[name].pkgPath + "." + name
+}
+
 // declaration is the Go type declaration registered type wt reads its
 // fields from: an instantiation's origin, else wt.
 func (g *generator) declaration(wt Type) Type {
@@ -305,10 +316,7 @@ func (e *astEngine) instantiate(sp *typeSpelling) (types.Type, error) {
 	if sp.pkg == "" {
 		return types.Universe.Lookup(sp.name).Type(), nil
 	}
-	pkg, ok := e.pkgs[sp.pkg]
-	if !ok || pkg.Types == nil {
-		return nil, fmt.Errorf("package %s of %s is not loaded", sp.pkg, sp.text())
-	}
+	pkg := e.pkgs[sp.pkg]
 	tn, ok := pkg.Types.Scope().Lookup(sp.name).(*types.TypeName)
 	if !ok {
 		return nil, fmt.Errorf("%s.%s is not a type in its package", sp.pkg, sp.name)
@@ -316,9 +324,15 @@ func (e *astEngine) instantiate(sp *typeSpelling) (types.Type, error) {
 	if len(sp.args) == 0 {
 		return tn.Type(), nil
 	}
-	origin, ok := types.Unalias(tn.Type()).(*types.Named)
-	if !ok || tn.IsAlias() || origin.TypeParams().Len() != len(sp.args) {
-		return nil, fmt.Errorf("%s.%s is not a generic type of %d type parameters", sp.pkg, sp.name, len(sp.args))
+	if tn.IsAlias() {
+		return nil, fmt.Errorf("%s.%s is an alias; register the type it stands for, spelled as TypeRef spells it", sp.pkg, sp.name)
+	}
+	var params *types.TypeParamList // a nil list has length 0
+	if origin, named := tn.Type().(*types.Named); named {
+		params = origin.TypeParams()
+	}
+	if n := params.Len(); n != len(sp.args) {
+		return nil, fmt.Errorf("%s.%s has %d type parameters, not %d", sp.pkg, sp.name, n, len(sp.args))
 	}
 	args := make([]types.Type, len(sp.args))
 	for i := range sp.args {
@@ -328,7 +342,7 @@ func (e *astEngine) instantiate(sp *typeSpelling) (types.Type, error) {
 		}
 		args[i] = arg
 	}
-	t, err := types.Instantiate(nil, origin, args, true)
+	t, err := types.Instantiate(nil, tn.Type(), args, true)
 	if err != nil {
 		return nil, fmt.Errorf("instantiate %s: %w", sp.text(), err)
 	}

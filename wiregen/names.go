@@ -334,15 +334,17 @@ func (g *generator) claimIdents() (map[string]string, error) {
 		claim("the arbitraries module", arbitrariesIdents...)
 	}
 	for _, name := range slices.Sorted(maps.Keys(g.typeNames)) {
-		claim("type "+name, g.tsName(name), g.decoderName(name))
+		label := g.typeLabel(name)
+		claim(label, g.tsName(name), g.decoderName(name))
 		if arbs {
-			claim("the arbitrary of type "+name, arbName(g.tsName(name)))
+			claim("the arbitrary of "+label, arbName(g.tsName(name)))
 		}
 	}
 	for _, name := range enumNamesSlice(g.enums) {
-		claim("enum "+name, g.tsEnumName(name), g.enumConstName(name))
+		label := g.enumLabel(name)
+		claim(label, g.tsEnumName(name), g.enumConstName(name))
 		if arbs {
-			claim("the arbitrary of enum "+name, arbName(g.tsEnumName(name)))
+			claim("the arbitrary of "+label, arbName(g.tsEnumName(name)))
 		}
 	}
 	return taken, errors.Join(errs...)
