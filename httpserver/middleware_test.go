@@ -90,7 +90,7 @@ func TestRecoverer_panicWrites500AndLogs(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal server error" {
 		t.Errorf("body = %+v, want code=internal_error error='internal server error'", body)
 	}
 
@@ -705,7 +705,7 @@ func TestRouteTimeout_slowHandlerTimesOut(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("timeout body is not JSON: %v (body=%q)", err, rr.Body.String())
 	}
-	if body.Code != "timeout" || body.Error != "server too slow" {
+	if body.Code != "timeout" || body.Message != "server too slow" {
 		t.Errorf("body = %+v, want code=timeout error='server too slow'", body)
 	}
 }
@@ -859,8 +859,8 @@ func TestRouteTimeout_emptyMsgDefaults(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Error != "request timed out" {
-		t.Errorf("default timeout message = %q, want 'request timed out'", body.Error)
+	if body.Message != "request timed out" {
+		t.Errorf("default timeout message = %q, want 'request timed out'", body.Message)
 	}
 	if body.Code != "timeout" {
 		t.Errorf("code = %q, want timeout", body.Code)
@@ -1006,7 +1006,7 @@ func TestRecoverer_nilResponderKeepsJSONDefault(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal server error" {
 		t.Errorf("body = %+v, want the default internal_error envelope", body)
 	}
 }
@@ -1068,7 +1068,7 @@ func TestRecoverer_panicHookPanicIsIsolated(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v (body=%q)", err, rr.Body.String())
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal server error" {
 		t.Errorf("body = %+v, want the default internal_error envelope", body)
 	}
 
@@ -1135,7 +1135,7 @@ func TestRecoverer_responderPanicBeforeCommitFallsBackToJSON500(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v (body=%q)", err, rr.Body.String())
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal server error" {
 		t.Errorf("body = %+v, want the default internal_error envelope", body)
 	}
 
@@ -1193,7 +1193,7 @@ func TestRouteTimeout_envelopeCarriesContextRequestID(t *testing.T) {
 	if body.RequestID != "corr-42" {
 		t.Errorf("timeout envelope request_id = %q, want %q", body.RequestID, "corr-42")
 	}
-	if body.Code != "timeout" || body.Error != "server too slow" {
+	if body.Code != "timeout" || body.Message != "server too slow" {
 		t.Errorf("body = %+v, want code=timeout error='server too slow'", body)
 	}
 }

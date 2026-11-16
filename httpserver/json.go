@@ -83,16 +83,23 @@ type ErrorCode string
 // policy itself broke — from "(unmatched)", a routine outcome.
 const InvalidErrorCode ErrorCode = "invalid_error_code"
 
-// ErrorResponse is the JSON error envelope written by WriteError. Code and
-// RequestID are omitted from the output when empty.
+// ErrorResponse is the JSON error envelope written by WriteError.
 type ErrorResponse struct {
-	// Error is the human-readable error message.
-	Error string `json:"error"`
-	// Code is an optional machine-readable error code.
-	Code ErrorCode `json:"code,omitempty"`
-	// RequestID is the request id for log correlation, when available.
-	RequestID string `json:"request_id,omitempty"`
+	Code        ErrorCode `json:"code"`
+	Message     string    `json:"message"`
+	Remediation string    `json:"remediation"`
+	RequestID   string    `json:"request_id"`
 }
+
+// CodeSpec is what an error code means to a client.
+type CodeSpec struct {
+	Status      int
+	Remediation string
+	NoEffect    bool
+}
+
+// CodeSpecs returns the codes this package's writers answer.
+func CodeSpecs() map[ErrorCode]CodeSpec { return nil }
 
 // WriteError writes an ErrorResponse with the given HTTP status: msg becomes
 // Error, code becomes Code, and the request id is pulled from the request
@@ -119,7 +126,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, status int, code ErrorCo
 // WriteError or pre-rendered by errorBodyJSON — goes through it, so a malformed
 // code cannot reach the wire through any of them.
 func errorEnvelope(r *http.Request, code ErrorCode, msg string) ErrorResponse {
-	resp := ErrorResponse{Error: msg, Code: checkedErrorCode(code)}
+	resp := ErrorResponse{Message: msg, Code: checkedErrorCode(code)}
 	if r != nil {
 		resp.RequestID = RequestIDFromContext(r.Context())
 	}

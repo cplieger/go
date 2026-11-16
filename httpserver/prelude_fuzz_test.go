@@ -118,7 +118,7 @@ func FuzzDecodeBody(f *testing.F) {
 		if err := json.Unmarshal(rr.Body.Bytes(), &er); err != nil {
 			t.Fatalf("DecodeBody failure envelope is not JSON: %v (raw=%q)", err, rr.Body.String())
 		}
-		if er.Code != "bad_request" || er.Error != wantMsg {
+		if er.Code != "bad_request" || er.Message != wantMsg {
 			t.Fatalf("DecodeBody failure envelope = %+v, want code=bad_request error=%q (body=%q)", er, wantMsg, body)
 		}
 	})

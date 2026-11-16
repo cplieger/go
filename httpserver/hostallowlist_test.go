@@ -456,8 +456,8 @@ func TestHostPolicyMiddleware(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &env); err != nil {
 			t.Fatalf("decode envelope: %v (body %q)", err, body)
 		}
-		if env.Code != "host_denied" || env.Error != "nope" {
-			t.Errorf("envelope = {code:%q error:%q}, want {host_denied nope}", env.Code, env.Error)
+		if env.Code != "host_denied" || env.Message != "nope" {
+			t.Errorf("envelope = {code:%q error:%q}, want {host_denied nope}", env.Code, env.Message)
 		}
 	})
 }

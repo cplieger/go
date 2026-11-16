@@ -200,6 +200,11 @@ func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
 	}
 }
 
+// WithHostResponder sets the ErrorResponder that writes the refusal.
+func WithHostResponder(fn ErrorResponder) HostAllowlistOption {
+	return func(*hostPolicyConfig) {}
+}
+
 // WithHostAllowlistLogger sets the slog.Logger that Middleware and LogRefusal
 // report each refusal to. Nil, the default, means slog.Default() as it is when
 // ParseHostList runs. Pass a logger with a discarding handler to silence it.

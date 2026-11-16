@@ -120,7 +120,7 @@ func TestMethodNotAllowed_multiMethodAllow(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Code != "method_not_allowed" || got.Error != "method not allowed" {
+	if got.Code != "method_not_allowed" || got.Message != "method not allowed" {
 		t.Errorf("body = %+v, want the standard method_not_allowed envelope", got)
 	}
 }
@@ -217,7 +217,7 @@ func TestDecodeBody_rejectsTrailingData(t *testing.T) {
 			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if got.Code != "bad_request" || got.Error != "exactly one value" {
+			if got.Code != "bad_request" || got.Message != "exactly one value" {
 				t.Errorf("body = %+v, want code=bad_request error='exactly one value'", got)
 			}
 		})
@@ -250,7 +250,7 @@ func TestDecodeBody_invalidJSON(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Code != "bad_request" || got.Error != "bad body" {
+	if got.Code != "bad_request" || got.Message != "bad body" {
 		t.Errorf("body = %+v, want code=bad_request error='bad body'", got)
 	}
 }

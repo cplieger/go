@@ -122,7 +122,7 @@ func TestWriteError_withRequestID(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Error != "no access" || got.Code != "forbidden" || got.RequestID != "rid-9" {
+	if got.Message != "no access" || got.Code != "forbidden" || got.RequestID != "rid-9" {
 		t.Errorf("body = %+v, want {no access forbidden rid-9}", got)
 	}
 }
@@ -142,7 +142,7 @@ func TestWriteError_nilRequestIsSafe(t *testing.T) {
 	if got.RequestID != "" {
 		t.Errorf("RequestID = %q, want empty for nil request", got.RequestID)
 	}
-	if got.Error != "boom" || got.Code != "internal" {
+	if got.Message != "boom" || got.Code != "internal" {
 		t.Errorf("body = %+v", got)
 	}
 }
@@ -194,8 +194,8 @@ func TestWriteError_malformedCodeIsReplaced(t *testing.T) {
 			if got.Code != httpserver.InvalidErrorCode {
 				t.Errorf("Code = %q, want %q", got.Code, httpserver.InvalidErrorCode)
 			}
-			if got.Error != "host not allowed" {
-				t.Errorf("Error = %q, want the human message untouched", got.Error)
+			if got.Message != "host not allowed" {
+				t.Errorf("Error = %q, want the human message untouched", got.Message)
 			}
 		})
 	}
