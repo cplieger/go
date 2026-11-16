@@ -106,10 +106,11 @@ type outageView struct {
 // OutagePage serves the static page an app shows while a file it needs
 // cannot open: every GET or HEAD outside APIPrefix answers 503, no-store,
 // under SPAPolicy's default policy, with the title, each file's name and its
-// class's sentence, the commands and the closing line. Names and commands are
-// cleaned through textsafe. A path at or under APIPrefix answers not_found and
-// another method method_not_allowed, through Errors. The error names the
-// class, style or prefix it refuses.
+// class's sentence, the commands and the closing line; a file the bundle
+// lists under assets/ answers as SPA serves it, so the page's style loads.
+// Names and commands are cleaned through textsafe. A path at or under
+// APIPrefix answers not_found and another method method_not_allowed, through
+// Errors. The error names the class, style, bundle or prefix it refuses.
 func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if c.Title == "" || c.App == "" {
 		return nil, errors.New("httpserver: an outage page needs a Title and an App")
@@ -117,6 +118,40 @@ func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hug
 	if err := checkAPIPrefix(c.APIPrefix); err != nil {
 		return nil, err
 	}
+	v, err := newOutageView(c)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := SPAPolicy(nil)
+	if err != nil {
+		return nil, err
+	}
+	p := &outagePage{policy: policy, apiPrefix: c.APIPrefix, errs: c.Errors}
+	if p.errs == nil {
+		p.errs = WriteError
+	}
+	b, built, err := ReadBundle(c.Assets)
+	if err != nil {
+		return nil, err
+	}
+	if built {
+		if p.assets, p.served, err = bundleAssets(c.Assets, b, policy); err != nil {
+			return nil, err
+		}
+		if v.Style, err = outageStyle(b, c.Style); err != nil {
+			return nil, err
+		}
+	}
+	var page bytes.Buffer
+	if err = outageTemplate.Execute(&page, v); err != nil {
+		return nil, fmt.Errorf("httpserver: render the outage page: %w", err)
+	}
+	p.page = page.Bytes()
+	return p, nil
+}
+
+// newOutageView is the page's text for c, each name and command cleaned.
+func newOutageView(c OutageConfig) (outageView, error) { //nolint:gocritic // hugeParam: OutagePage's config, read once
 	v := outageView{Title: c.Title, Closing: outageReload}
 	if c.Restart {
 		v.Closing = outageRestart
@@ -125,7 +160,7 @@ func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hug
 		name := textsafe.SanitizeSingleLineBounded(f.Name, maxOutageLine)
 		sentence, ok := outageSentence[f.Class]
 		if !ok {
-			return nil, fmt.Errorf("httpserver: outage file %q has class %q; want damaged, format, newer, unreadable or key",
+			return outageView{}, fmt.Errorf("httpserver: outage file %q has class %q; want damaged, format, newer, unreadable or key",
 				name, textsafe.SanitizeSingleLineBounded(string(f.Class), maxErrorValue))
 		}
 		v.Files = append(v.Files, outageFileView{Name: name, Sentence: strings.ReplaceAll(sentence, "<app>", c.App)})
@@ -133,35 +168,14 @@ func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hug
 	for _, cmd := range c.Commands {
 		v.Commands = append(v.Commands, textsafe.SanitizeSingleLineBounded(cmd, maxOutageLine))
 	}
-	var err error
-	if v.Style, err = outageStyle(c.Assets, c.Style); err != nil {
-		return nil, err
-	}
-	var b bytes.Buffer
-	if err = outageTemplate.Execute(&b, v); err != nil {
-		return nil, fmt.Errorf("httpserver: render the outage page: %w", err)
-	}
-	policy, err := SPAPolicy(nil)
-	if err != nil {
-		return nil, err
-	}
-	p := &outagePage{page: b.Bytes(), policy: policy, apiPrefix: c.APIPrefix, errs: c.Errors}
-	if p.errs == nil {
-		p.errs = WriteError
-	}
-	return p, nil
+	return v, nil
 }
 
 // outageStyle is the path the page links for the style entry named style
-// ("app.css" is the entry "app" of kind style), or "" when style is empty or
-// the bundle is unbuilt.
-func outageStyle(fsys fs.FS, style string) (string, error) {
+// ("app.css" is the entry "app" of kind style), or "" when style is empty.
+func outageStyle(b Bundle, style string) (string, error) {
 	if style == "" {
 		return "", nil
-	}
-	b, found, err := ReadBundle(fsys)
-	if err != nil || !found {
-		return "", err
 	}
 	if name, ok := strings.CutSuffix(style, ".css"); ok {
 		for _, e := range b.Entries {
@@ -175,6 +189,8 @@ func outageStyle(fsys fs.FS, style string) (string, error) {
 
 type outagePage struct {
 	errs      ErrorResponder
+	assets    http.Handler
+	served    map[string]bool // tree paths answered through assets
 	policy    string
 	apiPrefix string
 	page      []byte
@@ -190,6 +206,10 @@ func (p *outagePage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		h.Set("Allow", "GET, HEAD")
 		p.errs(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if p.served[strings.TrimPrefix(r.URL.Path, "/")] {
+		p.assets.ServeHTTP(w, r)
 		return
 	}
 	h.Set("Content-Type", contentTypes[htmlExt])

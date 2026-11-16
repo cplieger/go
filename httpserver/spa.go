@@ -134,17 +134,9 @@ func (s *spaServer) load(fsys fs.FS, b Bundle, pages []Page) error {
 	return nil
 }
 
-// loadFiles keeps the notices in memory and builds the StaticHandler for the
-// listed assets, every other listed root file being refused as a path.
+// loadFiles keeps the notices in memory and the listed assets' handler, every
+// other listed root file being refused as a path.
 func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
-	classic := make(map[string]bool)
-	for _, e := range b.Entries {
-		if e.Kind == BundleClassic {
-			classic[e.Path] = true
-		}
-	}
-	tags := make(map[string]string)
-	s.served = make(map[string]bool)
 	s.refused = map[string]bool{BundlePath: true}
 	s.notices = make(map[string]*spaFile)
 	for name, hash := range b.Files {
@@ -155,21 +147,42 @@ func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
 			if err := s.loadNotice(fsys, name, hash); err != nil {
 				return err
 			}
-		case contentTypes[path.Ext(name)] == "":
-		case classic[name]:
-			s.served[name], tags[name] = true, policyETag(hash, s.policy)
-		default:
-			s.served[name], tags[name] = true, `"`+hash+`"`
 		}
 	}
 	var err error
-	s.static, err = StaticHandler(fsys, WithStaticETags(tags), WithStaticCacheControl(func(name string) string {
+	s.static, s.served, err = bundleAssets(fsys, b, s.policy)
+	return err
+}
+
+// bundleAssets is the StaticHandler for the files b lists under assets/ with
+// a content-type table extension, and those files' tree paths: the manifest
+// hash and immutable for each, a BundleClassic entry no-cache under a tag
+// bound to policy. SPA and OutagePage both serve assets through it.
+func bundleAssets(fsys fs.FS, b Bundle, policy string) (http.Handler, map[string]bool, error) {
+	classic := make(map[string]bool)
+	for _, e := range b.Entries {
+		if e.Kind == BundleClassic {
+			classic[e.Path] = true
+		}
+	}
+	tags := make(map[string]string)
+	served := make(map[string]bool)
+	for name, hash := range b.Files {
+		switch {
+		case !strings.HasPrefix(name, "assets/"), contentTypes[path.Ext(name)] == "":
+		case classic[name]:
+			served[name], tags[name] = true, policyETag(hash, policy)
+		default:
+			served[name], tags[name] = true, `"`+hash+`"`
+		}
+	}
+	h, err := StaticHandler(fsys, WithStaticETags(tags), WithStaticCacheControl(func(name string) string {
 		if classic[name] {
 			return "no-cache"
 		}
 		return immutableCache
 	}))
-	return err
+	return h, served, err
 }
 
 func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
