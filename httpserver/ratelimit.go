@@ -76,8 +76,7 @@ func WithRateLimitWhen(pred func(*http.Request) bool) RateLimitOption {
 // requests and all clients — so it bounds the AGGREGATE rate of the wrapped
 // route. That is the right tool for capping an expensive shared resource (for
 // example, spawning a heavy child process per request), not for per-client
-// fairness. Per-client limiting is intentionally out of scope; a caller behind
-// a trusted proxy that needs it can key its own buckets on ClientIP.
+// fairness. Per-client and per-key limits are KeyedRateLimiter.
 //
 // A non-positive burst or a non-positive interval disables limiting: the
 // middleware returns the next handler unwrapped (mirroring RouteTimeout's

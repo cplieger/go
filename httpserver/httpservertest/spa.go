@@ -91,11 +91,22 @@ func (s *spaCheck) serve(method, target string, header ...string) *httptest.Resp
 	return w
 }
 
-// isPage reports whether target answers a page, so it is no probe of a
-// refusal or the unknown path.
-func (s *spaCheck) isPage(target string) bool {
-	_, ok := s.pages.Match(target)
+// mayBePage reports whether a page answers name, a path outside the bundle's
+// own (assets/, licenses/, the manifest and listed files), so it is no probe
+// of the unknown path or a dot-file refusal.
+func (s *spaCheck) mayBePage(name string) bool {
+	if inTree(name) || name == httpserver.BundlePath {
+		return false
+	}
+	if _, listed := s.b.Files[name]; listed {
+		return false
+	}
+	_, ok := s.pages.Match(escaped(name))
 	return ok
+}
+
+func inTree(name string) bool {
+	return strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "licenses/")
 }
 
 func (s *spaCheck) checkPages() {
@@ -148,7 +159,7 @@ func (s *spaCheck) listed(name string) (fileWant, bool) {
 func (s *spaCheck) checkFiles() {
 	for _, name := range slices.Sorted(maps.Keys(s.b.Files)) {
 		target := escaped(name)
-		if !strings.Contains(name, "/") || s.isPage(target) {
+		if !strings.Contains(name, "/") {
 			continue
 		}
 		if _, ok := httpserver.ContentTypes()[path.Ext(name)]; !ok && strings.HasPrefix(name, "assets/") {
@@ -223,10 +234,10 @@ func (s *spaCheck) checkUnlisted() {
 		s.t.Errorf("CheckSPA: walk the tree: %v", err)
 	}
 	for _, name := range names {
-		target := escaped(name)
-		if s.isPage(target) {
+		if s.mayBePage(name) {
 			continue
 		}
+		target := escaped(name)
 		where := "GET " + target
 		rec := s.serve(http.MethodGet, target)
 		if refusedPath(name) {
@@ -240,7 +251,7 @@ func (s *spaCheck) checkUnlisted() {
 // refusedPath reports whether SPA answers name, when it is not served, with
 // the not_found envelope rather than the 404 shell.
 func refusedPath(name string) bool {
-	if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "licenses/") {
+	if inTree(name) {
 		return true
 	}
 	for seg := range strings.SplitSeq(name, "/") {
@@ -260,19 +271,18 @@ func (s *spaCheck) checkRefusals() {
 	}
 	slices.Sort(probes)
 	for _, name := range probes {
-		if target := escaped(name); !s.isPage(target) {
+		if !s.mayBePage(name) {
+			target := escaped(name)
 			s.checkRefusal("GET "+target, s.serve(http.MethodGet, target), http.StatusNotFound, "not_found")
 		}
 	}
-	if unknown := "/" + sampleSegment + "-unknown/x"; !s.isPage(unknown) {
-		s.checkUnknown("GET "+unknown, s.serve(http.MethodGet, unknown))
+	if unknown := sampleSegment + "-unknown/x"; !s.mayBePage(unknown) {
+		s.checkUnknown("GET /"+unknown, s.serve(http.MethodGet, "/"+unknown))
 	}
-	if !s.isPage("/favicon.ico") {
-		rec := s.serve(http.MethodGet, "/favicon.ico")
-		s.checkPolicy("GET /favicon.ico", rec)
-		if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
-			s.t.Errorf("CheckSPA: GET /favicon.ico: status = %d with %d bytes, want 204 and no body", rec.Code, rec.Body.Len())
-		}
+	rec := s.serve(http.MethodGet, "/favicon.ico")
+	s.checkPolicy("GET /favicon.ico", rec)
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		s.t.Errorf("CheckSPA: GET /favicon.ico: status = %d with %d bytes, want 204 and no body", rec.Code, rec.Body.Len())
 	}
 	page := "/"
 	if len(s.c.Pages) > 0 {

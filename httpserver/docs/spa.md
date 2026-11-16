@@ -90,14 +90,17 @@ The first row that applies answers:
 | --- | --- |
 | A path at or under `APIPrefix`, by its raw or its cleaned path | `not_found` (404) |
 | A method other than `GET` or `HEAD` | `method_not_allowed` (405) with `Allow: GET, HEAD` |
-| A page path | Its shell, 200, or the 307 redirect `ServeMux` answers it with |
 | A listed file under `assets/` whose extension is in the content-type table | The file through `StaticHandler`, with gzip when offered |
 | A listed notice under `licenses/` | The notice as `text/plain; charset=utf-8`, whatever its extension |
 | `/favicon.ico` | 204 with no body |
-| Any other path under `assets/` or `licenses/`, the manifest, a shell's own file name such as `/index.html`, or a path with a segment starting with `.` | `not_found` (404) |
+| Any other path under `assets/` or `licenses/`, the manifest, or a shell's own file name such as `/index.html` | `not_found` (404) |
+| A page path | Its shell, 200, or the 307 redirect `ServeMux` answers it with |
+| A path with a segment starting with `.` | `not_found` (404) |
 | Any other path | The default shell, `index.html`, with 404, so the router draws its not-found screen |
 
-Every refusal is the error envelope written through `Errors`. A missing hashed asset or notice therefore never answers HTML. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
+Every refusal is the error envelope written through `Errors`. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest.
+
+The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. `/.env` and `/assets/.env` answer `not_found`. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
 
 ## Pages
 
@@ -159,6 +162,8 @@ The `httpservertest` package holds the checks, so `httpserver` itself imports no
 - every listed file, with and without gzip, checking its body, content type, cache policy and ETag, and for a `classic` entry or a notice the policy-bound tag
 - every unlisted file in the tree, a made-up file under `assets/` and `licenses/`, a sourcemap path, dot-files, the manifest and the shells' own file names
 - an unknown path, `/favicon.ico`, a same-origin and a cross-site `POST`, and a path under `APIPrefix`.
+
+The bundle's own paths are checked whatever the pages match. Only an unknown-path or dot-file probe outside `assets/` and `licenses/` that a page matches is left out, since that page answers it.
 
 Every answer outside `APIPrefix` must carry exactly the policy `SPAPolicy(c.CSPAdd)` returns, and every refusal must decode as the envelope with its `request_id` equal to `X-Request-ID`. A missing or unreadable bundle fails at once, so run it on a fixture tree or on the built one.
 

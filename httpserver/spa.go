@@ -24,11 +24,12 @@ type SPAConfig struct {
 
 const immutableCache = "public, max-age=31536000, immutable"
 
-// SPA serves a single-page app's bundle (BundlePath) for GET and HEAD. A page
-// path answers its shell, a listed asset answers through StaticHandler
-// (immutable; a BundleClassic entry no-cache), a notice answers text/plain,
-// /favicon.ico 204, and any other path the default shell with 404; a path at
-// or under assets/, licenses/ or APIPrefix, a dot segment and another method
+// SPA serves a single-page app's bundle (BundlePath) for GET and HEAD. A
+// listed asset answers through StaticHandler (immutable; a BundleClassic entry
+// no-cache), a notice answers text/plain, /favicon.ico 204, and any other path
+// under assets/ or licenses/ a refusal, whatever the pages match; then a page
+// path answers its shell, and any other path the default shell with 404. A
+// path at or under APIPrefix, a dot segment no page matches and another method
 // answer a refusal through Errors. Every answer carries SPAPolicy's policy and
 // every no-cache ETag binds it; unbuilt, a page answers ui_unbuilt. The error
 // names the bundle, shell, CSPAdd or page it refuses; docs/spa.md has each rule.
@@ -219,6 +220,9 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
+	if s.built && s.serveTree(w, r) {
+		return
+	}
 	target := r.URL.EscapedPath()
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
@@ -235,21 +239,33 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if !s.built || hasDotSegment(strings.TrimPrefix(p, "/")) {
+		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	s.notFound.serve(w, r, http.StatusNotFound)
+}
+
+// serveTree answers r when its path is the bundle's own: a listed file, a
+// notice, /favicon.ico, or a refused name or path under assets/ or
+// licenses/. It runs before the page match, so no page pattern shadows the
+// tree; a page capture holding a dot segment is still a page.
+func (s *spaServer) serveTree(w http.ResponseWriter, r *http.Request) bool {
+	p := r.URL.Path
 	name := strings.TrimPrefix(p, "/")
 	switch {
-	case !s.built:
-		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
 	case s.served[name]:
 		s.static.ServeHTTP(w, r)
 	case s.notices[name] != nil:
 		s.notices[name].serve(w, r, http.StatusOK)
 	case p == "/favicon.ico":
 		w.WriteHeader(http.StatusNoContent)
-	case hasDotSegment(name), s.refused[name], underPrefix(p, "/assets"), underPrefix(p, "/licenses"):
+	case s.refused[name], underPrefix(p, "/assets"), underPrefix(p, "/licenses"):
 		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
 	default:
-		s.notFound.serve(w, r, http.StatusNotFound)
+		return false
 	}
+	return true
 }
 
 func (s *spaServer) refuse(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string) {
