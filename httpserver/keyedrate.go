@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"container/heap"
 	"errors"
 	"fmt"
 	"math"
@@ -18,12 +19,14 @@ type KeyedRate struct {
 }
 
 // KeyedRateLimiter gives each key its own token bucket. A bucket refilled to
-// its burst is forgotten, and past MaxKeys the least recently used bucket is
-// dropped first, so memory is bounded by MaxKeys. It is safe for concurrent use.
+// its burst is forgotten wherever it sits, and past MaxKeys the least recently
+// used bucket is dropped, so memory is bounded by MaxKeys. It is safe for
+// concurrent use.
 type KeyedRateLimiter struct {
 	now      func() time.Time
 	buckets  map[string]*keyBucket
-	lru      keyBucket // ring sentinel: lru.next is the most recently used
+	byFull   bucketHeap // earliest fullAt first
+	lru      keyBucket  // ring sentinel: lru.next is the most recently used
 	interval time.Duration
 	burst    float64
 	maxKeys  int
@@ -32,9 +35,11 @@ type KeyedRateLimiter struct {
 
 type keyBucket struct {
 	last       time.Time
+	fullAt     time.Time // when tokens reach the burst again
 	prev, next *keyBucket
 	key        string
 	tokens     float64
+	index      int // position in byFull
 }
 
 func (b *keyBucket) unlink() {
@@ -46,6 +51,30 @@ func (l *KeyedRateLimiter) pushFront(b *keyBucket) {
 	b.prev, b.next = &l.lru, l.lru.next
 	l.lru.next.prev = b
 	l.lru.next = b
+}
+
+// bucketHeap is a container/heap of buckets ordered by fullAt.
+type bucketHeap []*keyBucket
+
+func (h bucketHeap) Len() int           { return len(h) }
+func (h bucketHeap) Less(i, j int) bool { return h[i].fullAt.Before(h[j].fullAt) }
+func (h bucketHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = i, j
+}
+
+func (h *bucketHeap) Push(x any) {
+	b, _ := x.(*keyBucket) // only bucket pushes, always a *keyBucket
+	b.index = len(*h)
+	*h = append(*h, b)
+}
+
+func (h *bucketHeap) Pop() any {
+	old := *h
+	b := old[len(old)-1]
+	old[len(old)-1] = nil
+	*h = old[:len(old)-1]
+	return b
 }
 
 // NewKeyedRateLimiter builds a limiter from c, refusing a field outside its
@@ -96,15 +125,18 @@ func (l *KeyedRateLimiter) Take(key string) (wait time.Duration, ok bool) {
 	b.last = now
 	if b.tokens >= 1 {
 		b.tokens--
-		return 0, true
+		wait, ok = 0, true
+	} else {
+		wait = time.Duration(math.Ceil((1 - b.tokens) * float64(l.interval)))
 	}
-	return time.Duration(math.Ceil((1 - b.tokens) * float64(l.interval))), false
+	// Rounded up, so a bucket is forgotten only once it is surely full.
+	b.fullAt = now.Add(time.Duration(math.Ceil((l.burst - b.tokens) * float64(l.interval))))
+	heap.Fix(&l.byFull, b.index)
+	return wait, ok
 }
 
-// bucket answers key's bucket marked most recently used, creating a full one.
-// A new key at maxKeys first forgets every refilled bucket, since one can sit
-// behind an older bucket still refilling, and only then drops the least
-// recently used. The caller holds l.mu.
+// bucket answers key's bucket marked most recently used, creating a full one
+// and dropping the least recently used at maxKeys. The caller holds l.mu.
 func (l *KeyedRateLimiter) bucket(key string, now time.Time) *keyBucket {
 	if b, ok := l.buckets[key]; ok {
 		b.unlink()
@@ -112,38 +144,27 @@ func (l *KeyedRateLimiter) bucket(key string, now time.Time) *keyBucket {
 		return b
 	}
 	if len(l.buckets) >= l.maxKeys {
-		for b := l.lru.prev; b != &l.lru; {
-			prev := b.prev
-			if l.refilled(b, now) {
-				l.drop(b)
-			}
-			b = prev
-		}
-	}
-	if len(l.buckets) >= l.maxKeys {
 		l.drop(l.lru.prev)
 	}
-	b := &keyBucket{key: key, tokens: l.burst, last: now}
+	b := &keyBucket{key: key, tokens: l.burst, last: now, fullAt: now}
 	l.buckets[key] = b
 	l.pushFront(b)
+	heap.Push(&l.byFull, b)
 	return b
 }
 
-// forgetRefilled drops least recently used buckets that are full again at
-// now, which bucket would rebuild identically. The caller holds l.mu.
+// forgetRefilled drops every bucket full again at now, which bucket would
+// rebuild identically. The caller holds l.mu.
 func (l *KeyedRateLimiter) forgetRefilled(now time.Time) {
-	for b := l.lru.prev; b != &l.lru && l.refilled(b, now); b = l.lru.prev {
-		l.drop(b)
+	for len(l.byFull) > 0 && !l.byFull[0].fullAt.After(now) {
+		l.drop(l.byFull[0])
 	}
-}
-
-func (l *KeyedRateLimiter) refilled(b *keyBucket, now time.Time) bool {
-	return b.tokens+float64(now.Sub(b.last))/float64(l.interval) >= l.burst
 }
 
 func (l *KeyedRateLimiter) drop(b *keyBucket) {
 	delete(l.buckets, b.key)
 	b.unlink()
+	heap.Remove(&l.byFull, b.index)
 }
 
 func (l *KeyedRateLimiter) len() int {

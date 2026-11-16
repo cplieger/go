@@ -31,8 +31,7 @@ const immutableCache = "public, max-age=31536000, immutable"
 // path answers its shell, and any other path the default shell with 404. A
 // path at or under APIPrefix, a dot segment no page matches and another method
 // answer a refusal through Errors. Every answer carries SPAPolicy's policy and
-// every no-cache ETag binds it; unbuilt, a page answers ui_unbuilt. The error
-// names the bundle, shell, CSPAdd or page it refuses; docs/spa.md has each rule.
+// every no-cache ETag binds it; unbuilt, a page answers ui_unbuilt.
 func SPA(c SPAConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	policy, err := SPAPolicy(c.CSPAdd)
 	if err != nil {
@@ -249,7 +248,8 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serveTree answers r when its path is the bundle's own: a listed file, a
 // notice, /favicon.ico, or a refused name or path under assets/ or
 // licenses/. It runs before the page match, so no page pattern shadows the
-// tree; a page capture holding a dot segment is still a page.
+// tree; a page capture holding a dot segment is still a page. The prefixes
+// are tested on the cleaned path, so /assets/../x is PageMatcher's to answer.
 func (s *spaServer) serveTree(w http.ResponseWriter, r *http.Request) bool {
 	p := r.URL.Path
 	name := strings.TrimPrefix(p, "/")
@@ -260,7 +260,7 @@ func (s *spaServer) serveTree(w http.ResponseWriter, r *http.Request) bool {
 		s.notices[name].serve(w, r, http.StatusOK)
 	case p == "/favicon.ico":
 		w.WriteHeader(http.StatusNoContent)
-	case s.refused[name], underPrefix(p, "/assets"), underPrefix(p, "/licenses"):
+	case s.refused[name], underPrefix(path.Clean(p), "/assets"), underPrefix(path.Clean(p), "/licenses"):
 		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
 	default:
 		return false

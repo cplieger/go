@@ -144,7 +144,7 @@ A field outside its range is an error naming it, and every such field is named i
 
 `Middleware(key, errs)` takes one token for each request. `key` answers the request's key, or false to let the request pass without taking one. A refused request answers 429 with the code `rate_limited` through `errs`, nil being `WriteError`, and a `Retry-After` of the wait in whole seconds, rounded up and never below 1. It never reaches the handler. A nil `key` panics when the middleware is built.
 
-A bucket that has refilled to `Burst` is forgotten, since a new one would be identical, and a new key at `MaxKeys` first forgets every refilled bucket, then drops the least recently used one only if the table is still full. Memory therefore stays bounded by `MaxKeys` under any key churn, and a key set far below it never loses its state. The buckets live in process memory, so replicas do not share them. It is safe for concurrent use.
+A bucket that has refilled to `Burst` is forgotten wherever it sits, since a new one would be identical, and past `MaxKeys` the least recently used bucket is dropped. Both take the same short time whatever the table holds. Memory therefore stays bounded by `MaxKeys` under any key churn, and a key set far below it never loses its state. The buckets live in process memory, so replicas do not share them. It is safe for concurrent use.
 
 `KeyedRateLimiter` throttles requests that were admitted. To throttle failed authentication by client address, use `FailureLimiter` ([Client IP, hosts and credentials](trust-checks.md#failed-authentication-limits)).
 

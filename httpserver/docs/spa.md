@@ -93,14 +93,14 @@ The first row that applies answers:
 | A listed file under `assets/` whose extension is in the content-type table | The file through `StaticHandler`, with gzip when offered |
 | A listed notice under `licenses/` | The notice as `text/plain; charset=utf-8`, whatever its extension |
 | `/favicon.ico` | 204 with no body |
-| Any other path under `assets/` or `licenses/`, the manifest, or a shell's own file name such as `/index.html` | `not_found` (404) |
+| Any other path under `assets/` or `licenses/` once its dot segments are cleaned, the manifest, or a shell's own file name such as `/index.html` | `not_found` (404) |
 | A page path | Its shell, 200, or the 307 redirect `ServeMux` answers it with |
 | A path with a segment starting with `.` | `not_found` (404) |
 | Any other path | The default shell, `index.html`, with 404, so the router draws its not-found screen |
 
-Every refusal is the error envelope written through `Errors`. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest.
+Every refusal is the error envelope written through `Errors`. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
 
-The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. `/.env` and `/assets/.env` answer `not_found`. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
+The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. `/.env` and `/assets/.env` answer `not_found`.
 
 ## Pages
 
