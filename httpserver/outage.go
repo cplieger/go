@@ -216,7 +216,5 @@ func (p *outagePage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Length", strconv.Itoa(len(p.page)))
 	w.WriteHeader(http.StatusServiceUnavailable)
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(p.page) //nolint:gosec // G705: rendered once through html/template at construction, never request data
-	}
+	writeBody(w, r, p.page)
 }
