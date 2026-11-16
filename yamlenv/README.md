@@ -66,3 +66,17 @@ Three of the steps `Load` runs stay exported for a pipeline with a different pol
 - `CheckSingleDocument(data)` rejects input with more than one YAML document. Its only error is the fixed `ErrMultipleDocuments`, which is safe to log as it is.
 
 Run the check on the raw bytes before expansion. Expansion changes string values only, so it cannot change how many documents there are, and the positions then match the file the operator wrote. The unknown-key check runs inside `Load` only, where its error is sanitized before you see it.
+
+## Contributing
+
+Issues and pull requests are welcome. The [shared contributing rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md) apply.
+
+## Disclaimer
+
+This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
+
+This project was built with AI assistance. The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
