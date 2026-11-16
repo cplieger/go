@@ -5,6 +5,7 @@ import type { Frame } from "../stream.js";
 import { advance, harness, listening, position, sink } from "./test-helpers/feed-harness.js";
 import type { Harness, RecordingSink } from "./test-helpers/feed-harness.js";
 import { encodeChanged, encodeListening, formatPosition } from "./test-helpers/wire-encode.js";
+import { retainListening } from "./retain.js";
 import { FEED_VERSION } from "./version.js";
 import {
   parseChanged,
@@ -134,6 +135,69 @@ describe("feed fixtures parse as the Go half encodes", () => {
     if (c.canonical !== false) {
       expect(formatPosition(want)).toBe(c.value);
     }
+  });
+});
+
+describe("feed fixtures through retainListening", () => {
+  const frameOf = (type: string, c: FrameCase): Frame => ({ type, data: frameData(c), id: null });
+  const lostData = (wire: string | null): string =>
+    `{"feed":${String(FEED_VERSION)}${wire === null ? "" : `,"wire":"${wire}"`},"sources":[],"lost":true}`;
+
+  it.each(cases.listening.filter((c) => c.valid))("listening $name is retained", (c) => {
+    const want = listeningOf(c.decoded as DecodedListening);
+    const got = retainListening(null, frameOf("listening", c));
+    expect(got?.type).toBe("listening");
+    expect(parseListening(got?.data ?? "")).toEqual({
+      kind: "ok",
+      frozen: { feed: FEED_VERSION, wire: want.wire },
+      listening: want,
+    });
+    if (c.canonical !== false) {
+      expect(got?.data).toBe(c.data);
+    }
+  });
+
+  it.each(cases.listening.filter((c) => c.error === "other_format"))(
+    "listening $name is retained as its frozen members",
+    (c) => {
+      const frozen = frozenOf(c.frozen ?? { feed: 0, wire: "" });
+      const got = retainListening(null, frameOf("listening", c));
+      expect(parseListening(got?.data ?? "")).toEqual({ kind: "other_format", frozen });
+    },
+  );
+
+  it.each(cases.listening.filter((c) => !c.valid && c.error === undefined))(
+    "listening $name sets lost",
+    (c) => {
+      const got = retainListening(null, frameOf("listening", c));
+      expect(got?.data).toBe(lostData(c.frozen === undefined ? null : frozenOf(c.frozen).wire));
+    },
+  );
+
+  it.each(cases.changed.filter((c) => c.valid))(
+    "changed $name raises its kinds' floors to its rev",
+    (c) => {
+      const d = c.decoded as ChangedFrame;
+      const retained = retainListening(null, {
+        type: "listening",
+        data: encodeListening({
+          wire: null,
+          sources: [{ source: d.source, epoch: d.epoch, floors: new Map() }],
+        }),
+        id: null,
+      });
+      const got = retainListening(retained, frameOf("changed", c));
+      const floors = new Map(d.kinds.map((k) => [k, d.rev]));
+      expect(parseListening(got?.data ?? "")).toEqual({
+        kind: "ok",
+        frozen: { feed: FEED_VERSION, wire: null },
+        listening: { wire: null, sources: [{ source: d.source, epoch: d.epoch, floors }] },
+      });
+    },
+  );
+
+  it.each(cases.changed.filter((c) => !c.valid))("changed $name sets lost", (c) => {
+    expect(retainListening(null, frameOf("changed", c))?.data).toBe(lostData(null));
   });
 });
 

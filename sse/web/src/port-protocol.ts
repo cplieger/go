@@ -70,13 +70,12 @@ export type TabToWorker =
   | { readonly type: "set_scope"; readonly seq: number; readonly topics: readonly string[] | null };
 
 /**
- * Every message the host sends a tab. Two of them are obligations rather than notifications: a
- * `heartbeat` must be answered with `heartbeat_ack` or the host expires the port and stops folding this
- * tab's readings, and a `revalidate_run` must be answered with `revalidate_done` or `revalidate_failed`
- * carrying the same `runId`, or the host's run stays pending until this port expires, leaves, or the
- * run's own signal aborts, which the runtime does at `revalidateTimeoutMs` and on `stop()`. A `state`
- * message precedes the `lifecycle` record of the same transition, so a tab reading its own state inside
- * that handler reads the new one.
+ * Every message the host sends a tab. A `heartbeat` must be answered with `heartbeat_ack`, or the
+ * host expires the port and stops folding this tab's readings; a `revalidate_run` must be answered
+ * with `revalidate_done` or `revalidate_failed` carrying its `runId`, or the run stays pending until
+ * the port expires or leaves, or the run's signal aborts (at `revalidateTimeoutMs` and on `stop()`).
+ * A `state` message precedes the `lifecycle` record of the same transition, so a handler of that
+ * record reads the new state.
  */
 export type WorkerToTab =
   | { readonly type: "frame"; readonly frame: Frame; readonly generation: number }

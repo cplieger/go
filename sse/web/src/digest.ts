@@ -47,13 +47,11 @@ export interface DigestClient {
 
 /**
  * How the client reaches the route. `url` is POSTed with `credentials: "same-origin"`; `fetch`
- * defaults to globalThis.fetch and is where a consumer merges its own credentials or bearer
- * header; `headers` is merged first, so it cannot displace the Accept and Content-Type the route
- * requires. `timeoutMs` defaults to digestTimeoutMs and bounds one POST's request and the wait for
- * its response headers, not the whole check and not the body read: it is released as soon as the
- * response object arrives, so the body read is bounded only by the signal passed to `check`, and
- * by nothing at all when that argument is omitted.
- * `maxSubjects` defaults to DIGEST_MAX_SUBJECTS, the cap the server enforces at its own default.
+ * (default globalThis.fetch) is where a consumer adds its credentials or bearer header; `headers`
+ * is merged first, so it cannot displace the Accept and Content-Type the route requires.
+ * `timeoutMs` (default digestTimeoutMs) bounds one POST up to its response headers only: the body
+ * read is bounded by `check`'s signal alone, and by nothing when it is omitted. `maxSubjects`
+ * defaults to DIGEST_MAX_SUBJECTS, the cap the server enforces at its own default.
  */
 export interface DigestClientOptions {
   readonly url: string;

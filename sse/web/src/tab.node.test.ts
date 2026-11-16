@@ -8,6 +8,7 @@ import {
   type TabFallback,
   type TabRevalidateContext,
   attachToWorker,
+  randomId,
 } from "./tab.js";
 import type { TabToWorker, WorkerToTab } from "./port-protocol.js";
 import { createVersionMap } from "./versions.js";
@@ -299,6 +300,44 @@ describe("attachToWorker: choosing the worker or the per-tab stream", () => {
       tag: "tab_b",
       visible: true,
     });
+  });
+
+  it("attaches with a v4 tab id where crypto.randomUUID is undefined, as on a plain-HTTP page", async () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: real.getRandomValues.bind(real) });
+    vi.stubGlobal("isSecureContext", false);
+    const h = harness({ supported: true });
+    await waitFor("attach", () => h.latest().sent.length > 0);
+    const attach = h.latest().sent[0];
+    expect(attach?.type).toBe("attach");
+    expect(attach?.type === "attach" ? attach.tabId : "").toMatch(V4);
+  });
+});
+
+const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+describe("randomId", () => {
+  it("the tab id is a v4 UUID from getRandomValues", () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 10_000; i++) {
+      const id = randomId();
+      expect(id).toMatch(V4);
+      ids.add(id);
+    }
+    expect(ids.size).toBe(10_000);
+  });
+
+  it("sets the version nibble and the variant bits over the drawn bytes", () => {
+    for (const [byte, want] of [
+      [0x00, "00000000-0000-4000-8000-000000000000"],
+      [0xff, "ffffffff-ffff-4fff-bfff-ffffffffffff"],
+      [0x5a, "5a5a5a5a-5a5a-4a5a-9a5a-5a5a5a5a5a5a"],
+    ] as const) {
+      vi.stubGlobal("crypto", {
+        getRandomValues: (b: Uint8Array) => b.fill(byte),
+      });
+      expect(randomId()).toBe(want);
+    }
   });
 });
 

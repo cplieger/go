@@ -1,4 +1,5 @@
 export { createFeed } from "./feed.js";
+export { retainListening } from "./retain.js";
 export type {
   CatchUp,
   CatchUpFailure,

@@ -72,9 +72,66 @@ The package typechecks under `lib: ["ESNext", "WebWorker"]` as well as under the
 
 `onLifecycle` receives every state change and diagnostic as one `LifecycleEvent` record (`state`, `hello`, `watchdog`, `reset`, `revalidate`, `hidden_closed`, `alive_ack`, `worker_dead` and the rest of the union), which is the surface to log and to count.
 
+### Connection state
+
+`connectionOf(state, lostAt)` reads a `StreamState` as a `Connection`: `{ state: "live", since: null }` while the stream is `open`, and `{ state: "lost", since: lostAt }` in every other kind, the first connect included. It reports facts and applies no delay, so a quick reconnect reads `lost` until the next hello. Set `lostAt` from the `state` record whose `from` is `open`:
+
+```ts
+let lostAt: number | null = null;
+// in onLifecycle:
+if (ev.kind === "state" && ev.from === "open") lostAt = Date.now();
+// on each state change:
+headerStatus.connection(connectionOf(attachment.state(), lostAt).state);
+```
+
+`@cplieger/ui`'s header status takes `state` as it is and owns both delays: the grace before a drop shows "Reconnecting…", and `offlineAfter`.
+
+### The change feed (`@cplieger/sse/feed`)
+
+The `./feed` entry keeps a tab's stores current from the server's `changed` and `listening` frames ([the feed](https://github.com/cplieger/go/blob/main/sse/feedwire/README.md)). Every store is read once in full, its response's `Feed-Position` header seeds its subscription, and from then on each frame either says nothing that store has not seen, or names the kinds to catch up from the store's position. A source whose log the server keeps answers a catch-up with rows; any other kind is read again in full.
+
+```ts
+import { catchUpOf, noteWireVersion } from "@cplieger/reactive/fetch";
+import { type TabAttachment, attachToWorker } from "@cplieger/sse";
+import { createFeed } from "@cplieger/sse/feed";
+import { FEED_VERSION, KINDS, LOGGED_SOURCES } from "./client.gen.js";
+
+let link: TabAttachment | null = null;
+const feed = createFeed({
+  feedVersion: FEED_VERSION,
+  kinds: KINDS,
+  logged: LOGGED_SOURCES,
+  catchUp: catchUpOf(changesRead),
+  onWire: noteWireVersion,
+  reconnect: () => link?.reconnect(),
+});
+link = attachToWorker({ spawn, fallback, onFrame: (frame) => feed.onFrame(frame) });
+
+const res = await readBudgets();
+const sub = feed.watch("budgets", budgetsSink, res.headers);
+```
+
+- `feedVersion` is the generated client's `FEED_VERSION`. `createFeed` throws `FeedVersionMismatch`, naming both numbers, when it is not this package's, so a build that pairs a frame encoder and a parser of different formats fails its first test that creates a feed.
+- A sink's `stale()` re-reads in full, calls `sub.seed(headers)` with that read's headers before its promise settles, and returns the promise. A read that settles with no seed backs off on the stream's reconnect curve (`timing` and `random` take the stream's).
+- `onFrame` returns `false` for an app event, so the same handler can pass it on. It throws on a feed frame that does not parse, so the stream reports `frame_rejected`; the feed has already called `reconnect` once for that episode, through the closure, because the link is made after the feed.
+- `onWire` gets every `listening` frame's `wire`, in any feed format. A `listening` frame of another feed format stops the feed applying frames until one of its own format arrives, with no read and no reconnect, so the page shows its reload banner instead of reading in a loop.
+
+In the worker script, pass `retainListening` as the host's `retain`, so a tab attaching to a running stream receives the connection's floors before any later frame:
+
+```ts
+import { createWorkerHost } from "@cplieger/sse";
+import { retainListening } from "@cplieger/sse/feed";
+
+const host = createWorkerHost({ url: "/api/events", versions, revalidate, retain: retainListening });
+```
+
+`retain` is folded over every frame the host's stream delivers, and its result is posted to each tab inside the attach, before any later frame. The host clears it when the connection ends, and a throw from `retain` drops it, is reported with `reportError`, and reconnects the stream.
+
+The tab id the worker host keys each tab by is a version 4 UUID drawn from `crypto.getRandomValues`, so a tab served over plain HTTP from a LAN address, which is not a secure context and has no `crypto.randomUUID`, attaches like any other. The package calls no `[SecureContext]` member, and a test over its published sources fails on one.
+
 ## Browser floor
 
-`Response.body` as a readable stream (Firefox 65, Chrome 43, Safari 10.1), `AbortSignal.reason` (Firefox 97, Chrome 98, Safari 15.4), `visibilitychange` (Chrome 62, Firefox 56, Safari 14.1), `pagehide` and `pageshow`, and `BigInt` (Chrome 67, Firefox 68, Safari 14). `AbortSignal.any` is not used; two signals are composed by hand. `SharedWorker` is needed by the worker host only and is not part of the floor: where it is absent (Chrome for Android before 148, Samsung Internet) the tab runs its own stream through the fallback.
+`Response.body` as a readable stream (Firefox 65, Chrome 43, Safari 10.1), `AbortSignal.reason` (Firefox 97, Chrome 98, Safari 15.4), `visibilitychange` (Chrome 62, Firefox 56, Safari 14.1), `pagehide` and `pageshow`, and `BigInt` (Chrome 67, Firefox 68, Safari 14). The change feed adds `Object.hasOwn` (Chrome 93, Firefox 92, Safari 15.4), and it and the worker host's `retain` add `reportError` (Chrome 95, Firefox 93, Safari 15.4). `AbortSignal.any` is not used; two signals are composed by hand. `SharedWorker` is needed by the worker host only and is not part of the floor: where it is absent (Chrome for Android before 148, Samsung Internet) the tab runs its own stream through the fallback.
 
 ## Full documentation
 
