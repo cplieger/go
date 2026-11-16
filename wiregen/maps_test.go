@@ -332,7 +332,11 @@ func TestMapType_GenericsAndSelfSlices(t *testing.T) {
 	}
 	loop := newTestRegistry()
 	loop.Types = []wiregen.Type{wiregen.TypeRef[maps.HasGLoop]()}
-	requireGenerateError(t, loop, pkg+".GLoop reaches itself; register it, so it is referenced by name")
+	requireGenerateError(t, loop, pkg+".GLoop[int] reaches itself; register it, so it is referenced by name")
+	loop.Types = append(loop.Types, wiregen.TypeRef[maps.GLoop[int]]())
+	if got := ifaceBody(mustGen(t, loop.typesFile), "HasGLoop"); !strings.Contains(got, "loop: GLoop_int;") {
+		t.Errorf("HasGLoop.loop should reference the registered GLoop[int], got:\n%s", got)
+	}
 	sl := newTestRegistry()
 	sl.Types = []wiregen.Type{wiregen.TypeRef[maps.HasSL]()}
 	requireGenerateError(t, sl, pkg+".SL reaches itself, which no inline shape can hold; route the cycle through a registered struct or named map")

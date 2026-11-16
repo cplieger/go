@@ -4,7 +4,7 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 
 ## Field rules
 
-- A registered type is a struct or a named map (see [Named maps](#named-maps)). Register an enum with `StringEnum` or `TextEnum`, and a type wiregen cannot read with a mapping.
+- A registered type is a struct or a named map (see [Named maps](#named-maps)), or an instantiation of a generic one (see [Generic types](#generic-types)). Register an enum with `StringEnum` or `TextEnum`, and a type wiregen cannot read with a mapping.
 - Doc comments on registered structs and their fields become `/** ... */` JSDoc on the generated interfaces and union cases. The text is go/ast's (`CommentGroup.Text`), so tool directive lines are left out by Go's own rule (`//go:generate`, `//nolint:...`, `//deadset:ignore ...`, `//line`, `//export`), and so are the space forms `// nolint` and `// #nosec` that linters also read. A `//` paragraph break becomes a blank JSDoc line, and a field's JSDoc is indented with the field.
 - Unexported fields are skipped, as `encoding/json` skips them. An embedded struct, exported or not, is flattened with the promotion rules of `encoding/json`: the shallowest field wins, a tagged field beats an untagged one at the same depth, and a field reached through two sibling embeds at the same depth is dropped as ambiguous.
 - A field with no `json` tag takes the name `encoding/json` gives it, its Go name. With `WithRequireJSONTags(true)` such a field is a generation error naming its path. A tag name may hold letters, digits, spaces and the punctuation `!#$%&()*+-./:;<=>?@[]^_{|}~`.
@@ -174,9 +174,35 @@ A registered named map type, `type Settings map[string]json.RawMessage`, is a bo
 - The types file carries `export type Settings = { [key: string]: unknown };`, with the type's doc comment.
 - The decoder refuses a body that is not an object and decodes each value with the value's decoder. `null` reads as `{}`, as for a map field, because encoding/json writes a nil map as `null`.
 - The OpenAPI component is `{"type": "object", "additionalProperties": <the value's schema>}`, with a separate request form when the value's schema differs by direction. A body, field or element of the map admits `null` where encoding/json writes or reads a nil map as `null`. An `omitempty` field of the map admits it only in a request form, since encoding/json never writes it as `null`; an `omitempty` pointer to the map admits it in a response too, because a non-nil pointer to a nil map is written as `null`.
-- A field whose type is a registered named map references it by name, as a field of a registered struct does: its TypeScript alias, its decoder, its `$ref` and its arbitrary, with a map field's null rule. That is also how a named map reaches itself, `type Tree map[string]Tree`. An unregistered named map or slice that reaches itself is refused, since it would be planned inline without end: register the map, or route a slice's cycle through a registered struct or named map. Two nested instances of one generic type, such as `G[G[int]]`, are two types and plan inline.
+- A field whose type is a registered named map references it by name, as a field of a registered struct does: its TypeScript alias, its decoder, its `$ref` and its arbitrary, with a map field's null rule. That is also how a named map reaches itself, `type Tree map[string]Tree`. An unregistered named map or slice that reaches itself is refused, since it would be planned inline without end: register the map, or route a slice's cycle through a registered struct or named map. Two nested instances of one unregistered generic map or slice type, such as `G[G[int]]`, are two types and plan inline.
 
 A union or an endpoint's `Params` or `Query` cannot be a named map, because both need a struct's fields.
+
+## Generic types
+
+An instantiation of a generic struct or named map is registered as any other type is, `wiregen.TypeRef[wire.List[wire.Peer]]()`, and an endpoint, event, union or `ErrorEnvelope` can name it the same way. A hand-written `Type` spells it as `TypeRef` does, `Type{PkgPath: "example.com/wire", Name: "List[example.com/wire.Peer]"}`. The generic declaration alone, `List`, is refused, since only an instantiation has a JSON shape. Each instantiation generates one TypeScript type, one decoder and one OpenAPI component, however many fields and endpoints name it.
+
+Its name is the generic type's name followed by each type argument's name, in order, joined by `_`:
+
+| Go type | Name |
+| --- | --- |
+| `List[Peer]` | `List_Peer` |
+| `List[int]` | `List_int` |
+| `Pair[string, Peer]` | `Pair_string_Peer` |
+| `List[List[Peer]]` | `List_List_Peer` |
+
+A registered type argument contributes its bare Go name, a builtin its predeclared name, with `byte` and `rune` spelled `uint8` and `int32` as Go's `reflect` spells them, and an instantiation its own name. That name stands wherever a type's bare Go name does: the TypeScript type, the decoder `decodeList_Peer`, the components `List_Peer` and `List_PeerInput`, the decoder's error path `$.list_peer`, the deadset edge `wiregen/List_Peer`, and the keys of `TSNameOverride` and `PathNameOverride`. `TSNameOverride["List_Peer"]` gives the TypeScript type another name.
+
+The name holds only ASCII letters, digits and `_`, which every TypeScript identifier, OpenAPI component name and edge identifier accepts, and it depends only on Go names, so every run derives the same one. The `_` separator keeps it apart from an ordinary Go name such as `ListPeer`, and since Go names rarely hold `_`, two types rarely derive one name. When they do, `Generate` refuses both, naming each Go type: two instantiations such as `Pair[A_B, C]` and `Pair[A, B_C]`, or an instantiation and a registered type or enum whose name it takes, such as a struct named `List_Peer` in any package.
+
+- Each type argument is a builtin (`string`, `bool`, an integer or a float type) or a registered type: a struct, a named map, an enum or a registered instantiation. Any other argument, such as `*Peer`, `[]Peer`, `any`, `time.Time`, an unregistered struct or an unregistered instantiation, is refused with an error naming it; declare and register a named type in its place.
+- A field whose type is an instantiation references it by name, as a field of a registered struct does, and is refused as an unregistered struct unless the instantiation is registered.
+- An instantiation that reaches itself, such as `Tree[int]` with a `Kids []Tree[T]` field, references its own type, `kids: Tree_int[]`, as a registered struct that reaches itself does.
+- The type's and fields' doc comments come from the generic declaration, and its deadset edges pair each instantiation with that declaration: `wiregen/List_Peer` provides `List` and `wiregen/List_Peer/Items` provides `List.Items`, as deadset records a generic type's fields on its declaration.
+
+A struct that embeds an instantiation, `type Page struct { List[Peer]; Total int }`, flattens the instantiation's fields as it flattens any embedded struct, and the instantiation itself needs no registration.
+
+Register the instantiation itself when it is the whole body, as a cursor page `List[T]` is for an endpoint that returns one page, and declare a struct that embeds it only to add fields beside it. The generic type then stays the one contract every list shares, no wrapper struct exists only to give a generated type its name, and every list's edges pair with the one generic declaration.
 
 ## Mappings
 
@@ -204,13 +230,15 @@ Every generated identifier is valid TypeScript. The struct and enum name overrid
 
 The generated modules import one another, so every name they bind shares one namespace: each type's and enum's TypeScript name, each decoder (`decode<Name>`), each enum's member list (`<NAME>S`), each arbitrary, each endpoint's bindings, the validators module's exports, and the fixed exports of the events, client and arbitraries modules. `Generate` refuses two of them with one name before writing anything. Rename one through `TSNameOverride` or `EnumTSNameOverride`. The generated code names every global it uses through `globalThis`, such as `globalThis.Object`, so a type may take a global's name. A keyword, a predefined type name such as `string`, `undefined` or `globalThis` takes the suffix `Val` as a type name and is refused as an endpoint name.
 
+An OpenAPI component name holds only ASCII letters, digits, `.`, `-` and `_`, as [OpenAPI's Components Object](https://spec.openapis.org/oas/v3.1.0#components-object) requires, so when OpenAPI files are written `Generate` refuses a type or enum whose TypeScript name holds any other character, such as `Maß`. Rename it through `TSNameOverride` or `EnumTSNameOverride`.
+
 A JSON key that is not a valid identifier, such as `content-type`, is emitted as a quoted property and read with bracket access, `out["content-type"]`.
 
 ## Unsupported by design
 
 | Feature | Reason |
 | --- | --- |
-| Go generics (type parameters) | wiregen cannot represent an uninstantiated generic type. Register concrete instantiations instead. |
+| A generic type itself | Only an instantiation has a JSON shape, so wiregen generates one type per registered instantiation, never a generic TypeScript type. See [Generic types](#generic-types). |
 | `T \| null` on a field | A field that can be absent or `null` is optional, `?:`, and a present `null` decodes as `undefined`. The OpenAPI document carries the exact nullability per direction. |
 | `tstype` struct tag hints | `Mappings` does the same job at the registry level. |
 | Interface-typed unions | Strict mode refuses an interface field. Declare a tagged struct and register it in `Unions`. |

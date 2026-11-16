@@ -1,0 +1,51 @@
+{
+  "components": {
+    "schemas": {
+      "Page": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Peer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "Peer": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "id"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "t",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}
