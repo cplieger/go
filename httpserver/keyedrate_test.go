@@ -122,6 +122,17 @@ func TestKeyedRateLimiterForgetsRefilledBucket(t *testing.T) {
 	drain(t, l, "a", 4)
 }
 
+func TestKeyedRateLimiterForgetsRefilledBucketBehindARefillingOne(t *testing.T) {
+	l, clock := newKeyed(t, httpserver.KeyedRate{Burst: 2, Interval: time.Second, MaxKeys: 16})
+	drain(t, l, "a", 2)
+	drain(t, l, "b", 1)
+	clock.advance(time.Second)
+	drain(t, l, "c", 1)
+	if n := httpserver.KeyedRateBuckets(l); n != 2 {
+		t.Errorf("buckets = %d, want 2 (a and c) once b refilled while a still refills", n)
+	}
+}
+
 func TestKeyedRateLimiterHoldsAtMostMaxKeys(t *testing.T) {
 	l, _ := newKeyed(t, httpserver.KeyedRate{Burst: 2, Interval: time.Hour, MaxKeys: 16})
 	drain(t, l, "kept", 2)

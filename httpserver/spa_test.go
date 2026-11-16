@@ -221,6 +221,9 @@ func TestSPARedirectIs307(t *testing.T) {
 		"//library?q=1":       "/library?q=1",
 		"/library/x/../a?q=1": "/library/a?q=1",
 		"/settings":           "/settings/",
+		// A dot segment leaving the tree is a page path once cleaned.
+		"/assets/../library":       "/library",
+		"/licenses/../library?q=1": "/library?q=1",
 	}
 	for target, want := range cases {
 		t.Run(pathName(target), func(t *testing.T) {
@@ -436,7 +439,7 @@ func TestSPATreeAnswersBeforeWildcardPages(t *testing.T) {
 					t.Errorf("status %d body %q, want 204 and none", rec.Code, rec.Body.String())
 				}
 			})
-			for _, target := range []string{"/assets/missing-1.js", "/licenses/nope.txt", "/bundle.json", "/index.html", "/login.html"} {
+			for _, target := range []string{"/assets/missing-1.js", "/assets//missing.js", "/assets/./x.js", "/licenses/nope.txt", "/bundle.json", "/index.html", "/login.html"} {
 				t.Run(pathName(target), func(t *testing.T) {
 					wantRefusal(t, spaServe(h, http.MethodGet, target), http.StatusNotFound, "not_found")
 				})
