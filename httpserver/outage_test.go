@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"bytes"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -358,4 +359,54 @@ func TestOutagePageHasNoInlineScriptOrStyle(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOutagePageServesListedAssets(t *testing.T) {
+	h := newOutage(t, outageConfig(t))
+	files := spaFiles()
+	t.Run("the stylesheet and a font answer their bytes", func(t *testing.T) {
+		for name, ct := range map[string]string{styleAsset: "text/css; charset=utf-8", fontAsset: "font/woff2"} {
+			rec := spaServe(h, http.MethodGet, "/"+name)
+			if rec.Code != http.StatusOK || rec.Body.String() != files[name] {
+				t.Errorf("GET /%s = %d %q, want 200 and the file", name, rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); got != ct {
+				t.Errorf("GET /%s Content-Type = %q, want %q", name, got, ct)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+				t.Errorf("GET /%s Cache-Control = %q, want immutable", name, got)
+			}
+			if got, want := rec.Header().Get("ETag"), `"`+sha256Hex(files[name])+`"`; got != want {
+				t.Errorf("GET /%s ETag = %q, want the manifest hash %q", name, got, want)
+			}
+			wantPolicy(t, rec, defaultPolicy)
+		}
+	})
+	t.Run("every listed asset answers as SPA answers it", func(t *testing.T) {
+		spa := newSPA(t, spaConfig(t, nil))
+		for _, name := range []string{moduleAsset, classicAsset, styleAsset, chunkAsset, fontAsset} {
+			for _, header := range [][]string{nil, {"Accept-Encoding", "gzip"}, {"If-None-Match", `"` + sha256Hex(files[name]) + `"`}} {
+				want := spaServe(spa, http.MethodGet, "/"+name, header...)
+				got := spaServe(h, http.MethodGet, "/"+name, header...)
+				if got.Code != want.Code || !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
+					t.Errorf("GET /%s %q = %d (%d bytes), SPA answers %d (%d bytes)", name, header, got.Code, got.Body.Len(), want.Code, want.Body.Len())
+				}
+				for _, k := range []string{"Content-Type", "Cache-Control", "ETag", "Vary", "Content-Encoding", "Content-Security-Policy"} {
+					if g, w := got.Header().Values(k), want.Header().Values(k); !slices.Equal(g, w) {
+						t.Errorf("GET /%s %q %s = %q, SPA answers %q", name, header, k, g, w)
+					}
+				}
+			}
+		}
+	})
+	t.Run("an unlisted path answers the page", func(t *testing.T) {
+		page := spaServe(h, http.MethodGet, "/").Body.String()
+		for _, target := range []string{"/assets/missing.css", "/" + moduleAsset + ".map", "/assets/.keep", "/stray.js", "/" + noticeIndex, "/" + httpserver.BundlePath, "/index.html"} {
+			rec := spaServe(h, http.MethodGet, target)
+			wantOutagePage(t, rec)
+			if rec.Body.String() != page {
+				t.Errorf("GET %s body = %q, want the page", target, rec.Body.String())
+			}
+		}
+	})
 }
