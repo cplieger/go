@@ -17,9 +17,12 @@ describe("package manifests", () => {
     expect(readManifest("package.json").dependencies).toBeUndefined();
   });
 
-  it("exports only .", () => {
-    expect(Object.keys(readManifest("package.json").exports)).toEqual(["."]);
-    expect(Object.keys(readManifest("jsr.json").exports)).toEqual(["."]);
+  it("exports . and ./feed", () => {
+    expect(readManifest("package.json").exports).toEqual({
+      ".": "./src/index.ts",
+      "./feed": "./src/feed/index.ts",
+    });
+    expect(readManifest("jsr.json").exports).toEqual(readManifest("package.json").exports);
   });
 
   it("package.json and jsr.json agree on the placeholder version", () => {

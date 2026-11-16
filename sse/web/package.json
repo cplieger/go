@@ -25,7 +25,8 @@
     "typescript"
   ],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./feed": "./src/feed/index.ts"
   },
   "files": [
     "src/",
