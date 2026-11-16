@@ -6,6 +6,7 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 - A change to a frame, the cursor grammar, the hello, a reset reason or a timing constant lands in Go and TypeScript in one commit. A one-sided change passes its own suite and breaks tabs talking to the other half.
 - When such a change is not additive, raise `wire` in `timing.json`, then `Wire` in `frame.go` and `WIRE` in `web/src/timing.ts` to match. Without the bump, tabs still running the old client accept the new frames and misread them.
+- A change to a change-feed frame or to the `Feed-Position` header changes `feedwire`, `testdata/feed/cases.json`, `feedwire.Version` and the TypeScript parser in `web/src/feed/` with its `FEED_VERSION`, in one pull request. Never add a member inside a version, and never rename, retype or move the `listening` frame's `feed` and `wire` members.
 - Keep `web/go.mod`, the placeholder module `web-ignore`. It stops `go test ./...` at `web/`, where `node_modules` holds Go files, and keeps the TypeScript tree out of the published Go module.
 
 ## Checks

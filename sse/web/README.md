@@ -135,7 +135,7 @@ The tab id the worker host keys each tab by is a version 4 UUID drawn from `cryp
 
 ## Full documentation
 
-The Go server API is in the [repository README](https://github.com/cplieger/go/tree/main/sse#readme). The hub options and the presence hook are in [Running the hub](https://github.com/cplieger/go/blob/main/sse/docs/hub.md), and the hello's verdicts and the digest are in [The wire contract](https://github.com/cplieger/go/blob/main/sse/docs/wire.md). The shared timing constants both halves pin are in [`timing.json`](https://github.com/cplieger/go/blob/main/sse/timing.json).
+The Go server API is in the [repository README](https://github.com/cplieger/go/tree/main/sse#readme). The hub options and the presence hook are in [Running the hub](https://github.com/cplieger/go/blob/main/sse/docs/hub.md), the change feed's frames and rules are in [The change feed](https://github.com/cplieger/go/blob/main/sse/docs/feed.md), and the hello's verdicts and the digest are in [The wire contract](https://github.com/cplieger/go/blob/main/sse/docs/wire.md). The shared timing constants both halves pin are in [`timing.json`](https://github.com/cplieger/go/blob/main/sse/timing.json).
 
 ## Disclaimer
 

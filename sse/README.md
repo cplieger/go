@@ -84,8 +84,9 @@ Three compiled examples in `example_test.go` cover the next steps, and `go test`
 - `DigestHandler`, which takes a `Resolver` and two `WithDigest*` options and returns an error wrapping `ErrConfig` for a refused one, answers a client that reconciles. A resolver receives `Held` subjects and answers one `State` each, with a `Subject`, a `Version` and a `Status` (`StatusCurrent`, `StatusGone` or `StatusForbidden`).
 - `Position`, `Snapshot`, `ClientCount`, `QueuedFrames` and `Shutdown` inspect and stop the hub.
 - `Hello`, `Verdict`, `Cursor`, `ParseCursor`, `Wire`, `MaxOffset` and `MaxFrameBytes` describe the wire. `PresenceEvent`, with its `PresenceKind`, `PresenceCause` and `PresenceWrite` values, is what the presence hook receives.
+- `feedwire` encodes and decodes the change feed's `changed` and `listening` frames and its `Feed-Position` header, with `Version`, `MaxRev` and the name checks.
 - `ssetest` holds `Serve`, `ReadFrames`, `FrameReader`, `Recorder` and `RetryEvent` for your tests.
-- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, and the types they take and return. Its parser, reducer and tab fold are internal.
+- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, `connectionOf`, and the types they take and return. Its parser, reducer and tab fold are internal. The `./feed` entry exports `createFeed`, `retainListening`, `FEED_VERSION`, `FeedVersionMismatch` and their types.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/sse/v2) and [JSR](https://jsr.io/@cplieger/sse/doc). [Running the hub](docs/hub.md) covers every option and method.
 
@@ -101,6 +102,10 @@ The TypeScript client treats a stream without a valid hello as a failed connecti
 
 [The wire contract](docs/wire.md) lists the hello's fields, every verdict, the digest JSON and its refusals.
 
+## A change feed for stores
+
+For a server whose state lives in stores with a change log, the [feedwire](feedwire) package and the `@cplieger/sse/feed` entry add a change feed on the same stream. A commit announces only its kinds in a `changed` frame, each connection opens with a `listening` frame giving the revision from which it hears every kind, and every read carries its position in a `Feed-Position` header. The tab compares each read's position with those revisions, so after any reconnect, worker restart or file restore only the stores that missed a commit read again: through a catch-up from their own position when the source keeps a log, in full otherwise. [The change feed](docs/feed.md) describes the frames, the header and every rule the client applies.
+
 ## The browser client follows the tab
 
 `createStream` owns the connection over `fetch` and `ReadableStream`, so it can send headers and see the response status. It presents the cursor it holds and treats the stream as dead after `max(3 × keepalive, 15s)` with no bytes, 45 seconds at the default keepalive. It closes a hidden tab's stream after 60 seconds and reopens it when the tab is shown. It reconnects with full-jitter backoff. While your `revalidate` callback runs, it holds incoming frames and then delivers them in order.
@@ -111,6 +116,8 @@ The client needs Chrome 98, Firefox 97 or Safari 15.4 or later. `SharedWorker` i
 
 - [Running the hub](docs/hub.md) covers every option, serving, publishing, presence and the test helpers, for anyone wiring the hub into a server.
 - [The wire contract](docs/wire.md) describes the cursor, the stream, the hello and the digest, for anyone writing a client or reading a stream by hand.
+- [The change feed](docs/feed.md) describes the `changed` and `listening` frames, the `Feed-Position` header and how the client applies them, for anyone emitting or reading the feed.
+- [feedwire](feedwire/README.md) lists the feed's bounds, its frozen members and the lockstep rule.
 - [web/README.md](web/README.md) documents the TypeScript client.
 
 ## Credits
