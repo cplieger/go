@@ -185,6 +185,33 @@ func TestFeedChangesAnswersSince(t *testing.T) {
 			t.Errorf("second answer = %d %+v, want budgets x", status, a)
 		}
 	})
+	t.Run("a held catch-up is counted until the release answers it", func(t *testing.T) {
+		feedControl(t, base, id, "changes-hold", `{"on":true}`, nil)
+		done := make(chan int, 1)
+		go func() {
+			resp, err := http.Get(base + "/feed/" + id + "/changes?source=store&epoch=" + resp.Epoch + "&since=102&kinds=budgets")
+			if err != nil {
+				done <- 0
+				return
+			}
+			resp.Body.Close()
+			done <- resp.StatusCode
+		}()
+		deadline := time.Now().Add(pollTimeout)
+		for feedState(t, base, id).HeldChanges != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("the held catch-up was never counted")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		feedControl(t, base, id, "changes-hold", `{"on":false}`, nil)
+		if status := <-done; status != http.StatusOK {
+			t.Errorf("released answer = %d, want 200", status)
+		}
+		if held := feedState(t, base, id).HeldChanges; held != 0 {
+			t.Errorf("heldChanges after the answer = %d, want 0", held)
+		}
+	})
 	t.Run("an unlogged source or a foreign kind is refused", func(t *testing.T) {
 		status, _ := getJSON(t, base+"/feed/"+id+"/changes?source=live&epoch="+resp.Epoch+"&since=7&kinds=queue", nil)
 		if status != http.StatusBadRequest {
@@ -198,7 +225,7 @@ func TestFeedChangesAnswersSince(t *testing.T) {
 	for _, q := range feedState(t, base, id).Queries {
 		answers = append(answers, q.Answer)
 	}
-	if want := []string{"rows", "full", "full", "full", "maintenance", "rows", "bad_query", "bad_query"}; !slices.Equal(answers, want) {
+	if want := []string{"rows", "full", "full", "full", "maintenance", "rows", "rows", "bad_query", "bad_query"}; !slices.Equal(answers, want) {
 		t.Errorf("recorded answers = %v, want %v", answers, want)
 	}
 }

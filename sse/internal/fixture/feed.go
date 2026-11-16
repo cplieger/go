@@ -93,6 +93,7 @@ type feedSession struct {
 	mu             sync.Mutex
 	nextConn       int
 	connects       int
+	changesHeld    int
 	format         int
 	changesFail    int
 	readFail       int
@@ -443,12 +444,8 @@ func (s *feedSession) serveChanges(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, http.StatusBadRequest, "bad_query", "malformed query, unknown kind, or an unlogged source")
 		return
 	}
-	if held != nil {
-		select {
-		case <-held:
-		case <-r.Context().Done():
-			return
-		}
+	if held != nil && !s.waitHeld(r.Context(), held) {
+		return
 	}
 	s.mu.Lock()
 	if s.changesFail > 0 {
@@ -467,6 +464,25 @@ func (s *feedSession) serveChanges(w http.ResponseWriter, r *http.Request) {
 	s.queries = append(s.queries, query)
 	s.mu.Unlock()
 	httpserver.WriteJSON(w, answer)
+}
+
+// waitHeld waits for the changes-hold release, counted in the state's
+// heldChanges meanwhile; false when the client left first.
+func (s *feedSession) waitHeld(ctx context.Context, held <-chan struct{}) bool {
+	s.mu.Lock()
+	s.changesHeld++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.changesHeld--
+		s.mu.Unlock()
+	}()
+	select {
+	case <-held:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (s *feedSession) record(q *changesQuery, answer string) {
@@ -894,20 +910,22 @@ type feedSourceState struct {
 }
 
 type feedStateResponse struct {
-	Reads     map[string]int    `json:"reads"`
-	Sources   []feedSourceState `json:"sources"`
-	Queries   []changesQuery    `json:"queries"`
-	Connects  int               `json:"connects"`
-	Connected int               `json:"connected"`
+	Reads       map[string]int    `json:"reads"`
+	Sources     []feedSourceState `json:"sources"`
+	Queries     []changesQuery    `json:"queries"`
+	Connects    int               `json:"connects"`
+	Connected   int               `json:"connected"`
+	HeldChanges int               `json:"heldChanges"`
 }
 
 func (s *feedSession) serveState(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	resp := feedStateResponse{
-		Reads:     maps.Clone(s.reads),
-		Queries:   slices.Clone(s.queries),
-		Connects:  s.connects,
-		Connected: len(s.conns),
+		Reads:       maps.Clone(s.reads),
+		Queries:     slices.Clone(s.queries),
+		Connects:    s.connects,
+		Connected:   len(s.conns),
+		HeldChanges: s.changesHeld,
 	}
 	for _, src := range s.sources {
 		resp.Sources = append(resp.Sources, feedSourceState{

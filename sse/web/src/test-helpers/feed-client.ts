@@ -45,6 +45,8 @@ interface FeedSessionState {
   readonly queries: FeedQuery[];
   readonly connects: number;
   readonly connected: number;
+  /** Catch-ups waiting on `changesHold(true)`. */
+  readonly heldChanges: number;
 }
 
 interface Position {
