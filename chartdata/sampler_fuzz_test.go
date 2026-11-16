@@ -218,9 +218,9 @@ func (m *refSampler) point(smp *measure.Sample, set string, next map[string]base
 		return nil
 	}
 	delta := slices.Clone(cur)
-	reset := false // a fall in any entry: the increase is cur
+	reset := false // a fall in any entry's own count: the increase is cur
 	for k := range cur {
-		reset = reset || cur[k] < b.cum[k]
+		reset = reset || cur[k]-below(cur, k) < b.cum[k]-below(b.cum, k)
 	}
 	for k := range delta {
 		if !reset {
@@ -275,7 +275,7 @@ func (m *refSampler) frame() map[string][]float64 {
 		}
 		for i := range m.bounds {
 			if sum != nil && (i > 0 || m.bounds[0] > 0) {
-				out[key] = append(out[key], max(0, sum[i]-below(sum, i)))
+				out[key] = append(out[key], sum[i]-below(sum, i))
 			}
 		}
 	}

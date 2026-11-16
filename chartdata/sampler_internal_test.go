@@ -15,8 +15,7 @@ import (
 )
 
 // A sampled histogram's cumulative counts take histogram_quantile's estimate
-// (promql/quantile.go), a count below the one before it forced up to it, and
-// NaN where Quantile answers none.
+// (promql/quantile.go), and NaN where Quantile answers none.
 func TestQuantileOfCumulativeCountsIsHistogramQuantile(t *testing.T) {
 	t.Parallel()
 	bounds := []float64{1, 2, 4}
@@ -29,8 +28,6 @@ func TestQuantileOfCumulativeCountsIsHistogramQuantile(t *testing.T) {
 	}{
 		{"median", bounds, []float64{1, 3, 4, 4}, 0.5, 1.5},
 		{"inTheInfBucket", bounds, []float64{1, 1, 1, 4}, 0.9, 4},
-		{"unsortedCountsMadeMonotonic", bounds, []float64{2, 1, 4, 4}, 0.5, 1},
-		{"fallInTheInfBucketMadeMonotonic", bounds, []float64{1, 2, 4, 3}, 0.75, 3},
 		{"noObservations", bounds, []float64{0, 0, 0, 0}, 0.5, math.NaN()},
 		{"onlyTheInfBucket", nil, []float64{5}, 0.5, math.NaN()},
 	} {

@@ -51,7 +51,7 @@ func TestQuantileIsHistogramQuantile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, ok := chartdata.Quantile(tc.edges, tc.counts, tc.q)
-			if ok != tc.ok || (ok && math.Abs(got-tc.want) > 1e-12) {
+			if ok != tc.ok || (!ok && got != 0) || (ok && math.Abs(got-tc.want) > 1e-12) {
 				t.Errorf("Quantile(%v, %v, %v) = %v, %v, want %v, %v", tc.edges, tc.counts, tc.q, got, ok, tc.want, tc.ok)
 			}
 		})

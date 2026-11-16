@@ -829,11 +829,12 @@ func (ts *tracked) bucketPoints(fam *measure.Family, next map[string]base, colum
 }
 
 // bucketIncrease is each cumulative bucket's increase from prev to cur, all
-// of cur when any bucket's count fell, a reset.
+// of cur when any bucket's own count fell, a reset: a live histogram's own
+// counts never fall, as Prometheus detects a native histogram's reset.
 func bucketIncrease(cur, prev []float64) []float64 {
 	delta := slices.Clone(cur)
 	for k := range cur {
-		if cur[k] < prev[k] {
+		if cur[k]-below(cur, k) < prev[k]-below(prev, k) {
 			return delta
 		}
 	}
@@ -890,15 +891,11 @@ func (ts *tracked) keys() []string {
 }
 
 // quantileOf is Quantile of the cumulative bucket counts cum, +Inf last, NaN
-// where it answers none. A count below the one before it adds nothing, as
-// histogram_quantile's monotonic fix takes it.
+// where it answers none.
 func quantileOf(q float64, bounds, cum []float64) float64 {
 	counts := make([]float64, len(cum))
-	top := 0.0
 	for i, c := range cum {
-		if c > top {
-			counts[i], top = c-top, c
-		}
+		counts[i] = c - below(cum, i)
 	}
 	v, ok := Quantile(bounds, counts, q)
 	if !ok {
@@ -1019,7 +1016,7 @@ func (ts *tracked) binsFrame() (BinsFrame, error) {
 		sum := sumColumns(ts.hists[key])
 		values := make([]float64, 0, len(bins))
 		for i := lowest; i < len(bounds); i++ {
-			values = append(values, max(0, sum[i]-below(sum, i)))
+			values = append(values, sum[i]-below(sum, i))
 		}
 		series = append(series, Series{Key: key, Values: values})
 	}
