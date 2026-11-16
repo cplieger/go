@@ -1,0 +1,157 @@
+{
+  "components": {
+    "schemas": {
+      "Holder": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/List_int"
+          },
+          "peers": {
+            "$ref": "#/components/schemas/List_Peer"
+          }
+        },
+        "required": [
+          "peers",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "List_List_Peer": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/List_Peer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "List_Peer": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Peer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "List_int": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "Pair_string_Peer": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "val": {
+            "$ref": "#/components/schemas/Peer"
+          }
+        },
+        "required": [
+          "key",
+          "val"
+        ],
+        "type": "object"
+      },
+      "Peer": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "id"
+        ],
+        "type": "object"
+      },
+      "Tree_int": {
+        "properties": {
+          "kids": {
+            "items": {
+              "$ref": "#/components/schemas/Tree_int"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kids",
+          "value"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "t",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/peers": {
+      "get": {
+        "operationId": "listPeers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List_Peer"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": []
+      }
+    }
+  }
+}

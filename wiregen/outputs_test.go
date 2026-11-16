@@ -150,18 +150,18 @@ func TestGenerate_RefusesIdentifierCollisions(t *testing.T) {
 		{"two types renamed alike", func(r *testRegistry) {
 			r.Types = append(r.Types, wiregen.TypeRef[basic.User]())
 			r.TSNameOverride = map[string]string{"User": "Address"}
-		}, "type Address and type User both emit the TS identifier Address"},
+		}, "type github.com/cplieger/go/wiregen/v2/testdata/basic.Address and type github.com/cplieger/go/wiregen/v2/testdata/basic.User both emit the TS identifier Address"},
 		{"an enum renamed onto a type", func(r *testRegistry) {
 			r.Enums = []wiregen.EnumRef{wiregen.TextEnum[enums.Level]()}
 			r.EnumTSNameOverride = map[string]string{"Level": "Address"}
-		}, "both emit the TS identifier Address"},
+		}, "type github.com/cplieger/go/wiregen/v2/testdata/basic.Address and enum github.com/cplieger/go/wiregen/v2/testdata/enums.Level both emit the TS identifier Address"},
 		{"a type renamed onto a decoder", func(r *testRegistry) {
 			r.Types = append(r.Types, wiregen.TypeRef[basic.User]())
 			r.TSNameOverride = map[string]string{"User": "decodeAddress"}
 		}, "both emit the TS identifier decodeAddress"},
 		{"a type renamed onto a validators export", func(r *testRegistry) {
 			r.TSNameOverride = map[string]string{"Address": "asObject"}
-		}, "the validators module and type Address"},
+		}, "the validators module and type github.com/cplieger/go/wiregen/v2/testdata/basic.Address"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

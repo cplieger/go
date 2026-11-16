@@ -96,7 +96,7 @@ func TestEndpoints_Validation(t *testing.T) {
 		})}, "kind redirect"},
 		{"extension outside x-", []wiregen.Endpoint{with(get("x", "/api/x"), func(e *wiregen.Endpoint) { e.Extensions = map[string]any{"access": "read"} })}, `extension "access", which must start with x-`},
 		{"bare x- extension", []wiregen.Endpoint{with(get("x", "/api/x"), func(e *wiregen.Endpoint) { e.Extensions = map[string]any{"x-": 1} })}, "must start with x-"},
-		{"name takes a registered type's name", []wiregen.Endpoint{get("decodeItem", "/api/x")}, "decodeItem, which type Item already uses"},
+		{"name takes a registered type's name", []wiregen.Endpoint{get("decodeItem", "/api/x")}, "decodeItem, which type github.com/cplieger/go/wiregen/v2/testdata/client.Item already uses"},
 		{"name takes a client binding", []wiregen.Endpoint{get("qs", "/api/x")}, "qs, which the client module already uses"},
 		{"two names collide on their types", []wiregen.Endpoint{get("x", "/api/x"), get("xEndpoint", "/api/y")}, "already uses"},
 		{"unregistered response", []wiregen.Endpoint{with(get("x", "/api/x"), func(e *wiregen.Endpoint) {
@@ -446,7 +446,7 @@ func TestEventUnion(t *testing.T) {
 		r := newTestRegistry()
 		r.Events = []wiregen.Event{{Name: "a", Data: wiregen.TypeRef[client.Tick]()}}
 		r.TSNameOverride = map[string]string{"Tick": "EventFrame"}
-		requireGenerateError(t, r, "the events module and type Tick both emit the TS identifier EventFrame")
+		requireGenerateError(t, r, "the events module and type github.com/cplieger/go/wiregen/v2/testdata/client.Tick both emit the TS identifier EventFrame")
 	})
 }
 
