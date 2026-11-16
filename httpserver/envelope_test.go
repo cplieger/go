@@ -76,6 +76,7 @@ func TestCodeSpecsDeclaredValues(t *testing.T) {
 		{code: "timeout", status: 503, remediation: "Retry the request; it may have run."},
 		{code: "not_found", status: 404},
 		{code: "ui_unbuilt", status: 503},
+		{code: "cross_origin_refused", status: 403, noEffect: true},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.code), func(t *testing.T) {

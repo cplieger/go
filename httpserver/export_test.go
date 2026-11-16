@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"net/netip"
+	"time"
 )
 
 // ForwardingFields projects parseForwarding's one parse of a request's
@@ -50,3 +51,9 @@ func CountDigestCompares() (calls *int, restore func()) {
 	compareDigest = func(x, y []byte) int { n++; return prev(x, y) }
 	return &n, func() { compareDigest = prev }
 }
+
+// SetKeyedRateClock replaces l's clock, so a test moves time without sleeping.
+func SetKeyedRateClock(l *KeyedRateLimiter, now func() time.Time) { l.now = now }
+
+// KeyedRateBuckets answers how many buckets l holds.
+func KeyedRateBuckets(l *KeyedRateLimiter) int { return l.len() }
