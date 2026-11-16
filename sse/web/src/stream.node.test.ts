@@ -500,6 +500,26 @@ describe("stream runtime", () => {
     expect(h.stream.state().kind).toBe("open");
   });
 
+  it("a reconnect() from inside onFrame resumes after the frame it was delivering", async () => {
+    let reconnect = (): void => undefined;
+    const h = harness({
+      onFrame(f) {
+        if (f.data === "bad") {
+          reconnect();
+          throw new Error("decoder rejected");
+        }
+      },
+    });
+    reconnect = () => {
+      h.stream.reconnect();
+    };
+    const conn = await h.open({ resumed: true, head: "0" });
+    conn.push(frame("message", "bad", id(1)));
+    await flush();
+    expect(conn.request.aborted).toBe(true);
+    expect(h.last().request.headers["Last-Event-ID"]).toBe(id(1));
+  });
+
   it("alive POSTs once per everyBeats keepalives, never for application frames, never after the connection ends, failures reported and not retried", async () => {
     const h = harness({ alive: { url: "/alive", everyBeats: 2 } });
     let status = 204;
