@@ -370,6 +370,10 @@ func newGenerator(r *Registry, opts []Option) (*generator, error) {
 	g.Enums = slices.Clone(r.Enums)
 	g.Types = slices.Clone(r.Types)
 	g.Endpoints = slices.Clone(r.Endpoints)
+	for i := range g.Endpoints {
+		// eachType rewrites these slots in place; shared, they would rewrite the caller's Registry.
+		g.Endpoints[i].ExtraSuccesses = slices.Clone(g.Endpoints[i].ExtraSuccesses)
+	}
 	g.Events = slices.Clone(r.Events)
 	if err := g.validate(); err != nil {
 		return nil, err
@@ -543,6 +547,9 @@ func (g *generator) referencedTypes() []typeReference {
 			wt   Type
 		}{{roleParams, e.Params}, {roleQuery, e.Query}, {"Request", e.Request}, {"Response", e.Response}} {
 			refs = append(refs, typeReference{role: "endpoint " + e.Name + " " + f.role + " type", wt: f.wt})
+		}
+		for _, s := range e.ExtraSuccesses {
+			refs = append(refs, typeReference{role: fmt.Sprintf("endpoint %s extra success %d Response type", e.Name, s.Status), wt: s.Response})
 		}
 	}
 	for _, ev := range g.Events {

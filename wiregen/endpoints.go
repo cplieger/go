@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -68,6 +69,14 @@ type Header struct {
 	Required               bool
 }
 
+// Success is one success response an endpoint answers besides its primary
+// one: Response as JSON at Status, or no body when Response is zero.
+type Success struct {
+	Response Type // zero: no body
+	Status   int  // required; ExtraSuccesses lists what each kind allows
+	Array    bool // the body is a JSON array of Response
+}
+
 // Endpoint is one HTTP operation of the wire contract. The table is
 // authoritative: generate the client and document from the same values the
 // server binds its routes from, so no second route list can drift from it.
@@ -96,8 +105,14 @@ type Endpoint struct {
 	// Servers are the servers this operation answers on, in place of the
 	// document's. nil: the document's.
 	Servers []Server
-	// Status is the success status: a 2xx, or a redirect's 3xx. Zero is 200,
-	// 204 for a KindJSON endpoint with no Response, and 302 for KindRedirect.
+	// ExtraSuccesses are the success statuses it answers besides Status,
+	// each with its own body. A KindJSON endpoint's are a 2xx other than
+	// 205 with a Response or a 204 with none, a KindRaw or KindEventStream
+	// endpoint's only a 204, and a KindRedirect endpoint's other redirects.
+	ExtraSuccesses []Success
+	// Status is the primary success status: a 2xx other than 205, or a
+	// redirect's 3xx. Zero is 200, 204 for a KindJSON endpoint with no
+	// Response, and 302 for KindRedirect.
 	Status int
 	Array  bool // the body is a JSON array of Response
 	Kind   Kind
@@ -129,7 +144,7 @@ type ServerVariable struct {
 	Enum        []string
 }
 
-// successStatus is e's success status, Status or its kind's default.
+// successStatus is e's primary success status, Status or its kind's default.
 func (e *Endpoint) successStatus() int {
 	switch {
 	case e.Status != 0:
@@ -275,6 +290,9 @@ func validateEndpoint(e *Endpoint) error {
 	if err := validateKind(e); err != nil {
 		return err
 	}
+	if err := validateExtraSuccesses(e); err != nil {
+		return err
+	}
 	if e.Request != (Type{}) && e.Method == http.MethodGet {
 		return fmt.Errorf("wiregen: endpoint %s is a GET and cannot take a Request body", e.Name)
 	}
@@ -321,23 +339,101 @@ func validateKind(e *Endpoint) error {
 }
 
 // validateStatus checks e's success status against its kind: a redirect
-// answers 301, 302, 303, 307 or 308; anything else a 2xx, 204 exactly when it
-// has no body.
+// answers 301, 302, 303, 307 or 308; anything else a 2xx other than 205, 204
+// exactly when it has no body.
 func validateStatus(e *Endpoint) error {
 	st := e.successStatus()
 	if e.Kind == KindRedirect {
-		switch st {
-		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		if isRedirectStatus(st) {
 			return nil
 		}
 		return fmt.Errorf("wiregen: endpoint %s is kind redirect and has status %d, which is not a redirect", e.Name, st)
 	}
-	if st < 200 || st > 299 || st == http.StatusResetContent {
-		return fmt.Errorf("wiregen: endpoint %s has success status %d, outside 2xx", e.Name, st)
+	if !isSuccess2xx(st) {
+		return fmt.Errorf("wiregen: endpoint %s has success status %d, which is not a 2xx other than 205", e.Name, st)
 	}
 	noBody := e.Kind == KindJSON && e.Response == (Type{})
 	if noBody != (st == http.StatusNoContent) {
 		return fmt.Errorf("wiregen: endpoint %s has status %d; 204 is exactly the status of a JSON endpoint with no Response", e.Name, st)
+	}
+	return nil
+}
+
+// isRedirectStatus reports whether st is a status a KindRedirect endpoint
+// answers.
+func isRedirectStatus(st int) bool {
+	switch st {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	}
+	return false
+}
+
+// isSuccess2xx reports whether st is a success status a non-redirect kind
+// answers. 205 is excluded: it carries no content and asks the user agent to reset its
+// view (RFC 9110 section 15.3.6), which no generated function can act on.
+func isSuccess2xx(st int) bool {
+	return st >= 200 && st <= 299 && st != http.StatusResetContent
+}
+
+// validateExtraSuccesses checks each of e's extra successes against its
+// kind, its primary and each other. It assumes validateKind accepted e's
+// primary.
+func validateExtraSuccesses(e *Endpoint) error {
+	primary := e.successStatus()
+	seen := make(map[int]bool, len(e.ExtraSuccesses))
+	for i := range e.ExtraSuccesses {
+		s := &e.ExtraSuccesses[i]
+		if err := validateExtraSuccess(e, s); err != nil {
+			return err
+		}
+		if s.Status == primary {
+			return fmt.Errorf("wiregen: endpoint %s extra success %d is its primary success status; drop it from ExtraSuccesses, or give the primary another Status", e.Name, s.Status)
+		}
+		if seen[s.Status] {
+			return fmt.Errorf("wiregen: endpoint %s lists extra success %d twice; drop one", e.Name, s.Status)
+		}
+		seen[s.Status] = true
+	}
+	return nil
+}
+
+// validateExtraSuccess checks one extra success's status and body against
+// e's kind. A raw endpoint's transport reads every 2xx as a Blob and an
+// EventSource reads a stream only at 200
+// (https://html.spec.whatwg.org/multipage/server-sent-events.html), so
+// their only sound extra is a bodiless 204.
+func validateExtraSuccess(e *Endpoint, s *Success) error {
+	hasBody := s.Response != (Type{})
+	if e.Kind != KindJSON && (hasBody || s.Array) {
+		return fmt.Errorf("wiregen: endpoint %s is kind %s, so its extra success %d cannot set Response or Array; drop them, since only kind json answers a JSON body", e.Name, e.Kind, s.Status)
+	}
+	if s.Array && !hasBody {
+		return fmt.Errorf("wiregen: endpoint %s extra success %d sets Array without a Response; set Response to the element type or drop Array", e.Name, s.Status)
+	}
+	if e.Kind == KindRedirect {
+		if !isRedirectStatus(s.Status) {
+			return fmt.Errorf("wiregen: endpoint %s is kind redirect and has extra success status %d, which is not a redirect; use 301, 302, 303, 307 or 308", e.Name, s.Status)
+		}
+		return nil
+	}
+	if !isSuccess2xx(s.Status) {
+		return fmt.Errorf("wiregen: endpoint %s has extra success status %d, which is not a 2xx other than 205; set Status to one, and list a failure in Errors instead", e.Name, s.Status)
+	}
+	return validateExtraBody(e, s)
+}
+
+// validateExtraBody checks a non-redirect extra success's body against its
+// status: a 204 exactly when it has no body, and only a 204 off kind json.
+func validateExtraBody(e *Endpoint, s *Success) error {
+	hasBody := s.Response != (Type{})
+	switch {
+	case hasBody && s.Status == http.StatusNoContent:
+		return fmt.Errorf("wiregen: endpoint %s extra success 204 sets a Response, but a 204 has no body; drop Response or use another 2xx", e.Name)
+	case e.Kind == KindJSON && !hasBody && s.Status != http.StatusNoContent:
+		return fmt.Errorf("wiregen: endpoint %s extra success %d has no Response, but only a 204 has no body; set Response or use 204", e.Name, s.Status)
+	case e.Kind != KindJSON && s.Status != http.StatusNoContent:
+		return fmt.Errorf("wiregen: endpoint %s is kind %s, whose only extra success is a 204 with no body, and has extra success status %d; use 204", e.Name, e.Kind, s.Status)
 	}
 	return nil
 }
@@ -388,14 +484,13 @@ func validateServer(sv *Server) error {
 }
 
 // serverPlaceholders returns the {name} placeholders of sv's URL, refusing
-// invalid UTF-8, an unbalanced brace, an empty or nested placeholder, one used
-// twice, one Variables does not define, and a literal character no server URL
-// holds. OAS 3.1.2 says a server URL has no query or fragment; the rest
-// follows OAS 3.2.0's server URL grammar
-// (https://spec.openapis.org/oas/v3.2.0#server-variable-object), which 3.1
-// leaves unstated: each variable once, named by one or more characters other
-// than braces, and literals with no space, control character, double quote,
-// any of <>\^`| or a % that starts no percent-encoding.
+// invalid UTF-8, an unbalanced brace and a placeholder Variables does not
+// define. OAS 3.1.2 says a server URL has no query or fragment; the rest
+// follows OAS 3.2.0's grammar, which 3.1 leaves unstated
+// (https://spec.openapis.org/oas/v3.2.0#server-variable-object): each
+// variable once, named by one or more characters other than braces, and
+// literals with no space, control character, double quote, any of <>\^`| or
+// a % that starts no percent-encoding.
 func serverPlaceholders(sv *Server) (map[string]bool, error) {
 	if !utf8.ValidString(sv.URL) {
 		return nil, fmt.Errorf("server %q is not valid UTF-8", sv.URL)
@@ -1004,26 +1099,87 @@ func pathExpr(path string, args *endpointArgs, st *clientState) string {
 }
 
 // endpointResult returns a function endpoint's success type and its decode
-// expression.
+// expression: the primary body's when it declares no extra successes, else a
+// dispatch on the answer's status.
 func (g *generator) endpointResult(e *Endpoint, st *clientState) (tsType, decode string) {
+	primary := g.primaryBody(e, st)
+	if len(e.ExtraSuccesses) == 0 {
+		return primary.tsType, primary.decode
+	}
+	return g.statusDispatch(e, primary, st)
+}
+
+// successBody is one success response's TypeScript type, its decode
+// expression as a whole function, and its decode call on v.
+type successBody struct {
+	tsType, decode, call string
+}
+
+// primaryBody returns e's primary success body.
+func (g *generator) primaryBody(e *Endpoint, st *clientState) successBody {
 	if e.Kind == KindRaw {
 		st.blob = true
-		return "globalThis.Blob", "decodeBlob"
+		return successBody{tsType: "globalThis.Blob", decode: "decodeBlob", call: "decodeBlob(v)"}
 	}
-	if e.Response == (Type{}) {
-		return "void", "(): void => undefined"
+	return g.jsonBody(e.Response, e.Array, st)
+}
+
+// jsonBody returns the success body that decodes t as JSON, an array of t
+// when array is set, or nothing when t is zero.
+func (g *generator) jsonBody(t Type, array bool, st *clientState) successBody {
+	if t == (Type{}) {
+		return successBody{tsType: tsVoid, decode: "(): void => undefined", call: tsUndefined}
 	}
-	tn := g.tsName(e.Response.Name)
-	dec := g.decoderName(e.Response.Name)
+	tn := g.tsName(t.Name)
+	dec := g.decoderName(t.Name)
 	st.used.typeRef(tn)
 	st.used.decoderRef(dec)
-	if e.Array {
+	if array {
 		// encoding/json writes a nil slice as null, so an array body reads it
 		// as [], as a required slice field does.
 		st.used.helper(helperDecodeArray)
-		return tn + "[]", "(v: unknown): " + tn + "[] => v === null ? [] : decodeArray(v, " + dec + ", \"$\")"
+		call := "v === null ? [] : decodeArray(v, " + dec + ", \"$\")"
+		return successBody{tsType: tn + "[]", decode: "(v: unknown): " + tn + "[] => " + call, call: call}
 	}
-	return tn, dec
+	return successBody{tsType: tn, decode: dec, call: dec + "(v)"}
+}
+
+// statusDispatch returns the union of e's declared bodies and a decode that
+// picks the body by status, primary first, and throws on any other status
+// in the decoders' TypeError form, which the transport reports as a decode
+// failure. Only one status is bodiless (validateExtraSuccesses), so some
+// case reads v.
+func (g *generator) statusDispatch(e *Endpoint, primary successBody, st *clientState) (tsType, decode string) {
+	statuses := make([]string, 0, 1+len(e.ExtraSuccesses))
+	statuses = append(statuses, strconv.Itoa(e.successStatus()))
+	bodies := make([]successBody, 0, 1+len(e.ExtraSuccesses))
+	bodies = append(bodies, primary)
+	for _, s := range e.ExtraSuccesses {
+		statuses = append(statuses, strconv.Itoa(s.Status))
+		bodies = append(bodies, g.jsonBody(s.Response, s.Array, st))
+	}
+	var union []string
+	var sw strings.Builder
+	for i, b := range bodies {
+		ts := b.tsType
+		if ts == tsVoid {
+			// A bodiless status returns the value undefined, which void does not name.
+			ts = tsUndefined
+		}
+		if !slices.Contains(union, ts) {
+			union = append(union, ts)
+		}
+		sw.WriteString("      case " + statuses[i] + ":\n        return " + b.call + ";\n")
+	}
+	tsType = strings.Join(union, " | ")
+	decode = "(v: unknown, status: number): " + tsType + " => {\n    switch (status) {\n" + sw.String() +
+		"      default:\n        throw new globalThis.TypeError(`$: expected status " + orList(statuses) + ", got ${status}`);\n    }\n  }"
+	return tsType, decode
+}
+
+// orList joins two or more items as "a, b or c".
+func orList(items []string) string {
+	return strings.Join(items[:len(items)-1], ", ") + " or " + items[len(items)-1]
 }
 
 // jsDoc renders summary and description as JSDoc, or "" when both are empty.

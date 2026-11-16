@@ -115,4 +115,4 @@ type Const struct {
 }
 ```
 
-`Endpoint`, `Kind`, `ErrorRef` and `Header` are on the [Typed HTTP client](http-client.md#the-endpoint-table) page.
+`Endpoint`, `Kind`, `ErrorRef`, `Header` and `Success` are on the [Typed HTTP client](http-client.md#the-endpoint-table) page.

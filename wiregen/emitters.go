@@ -14,6 +14,8 @@ const (
 	tsBoolean      = "boolean"
 	tsString       = "string"
 	tsNumber       = "number"
+	tsVoid         = "void"
+	tsUndefined    = "undefined"
 
 	helperDecodeArray  = "decodeArray"
 	helperDecodeRecord = "decodeRecord"
