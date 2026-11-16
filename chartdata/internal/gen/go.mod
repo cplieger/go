@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/cplieger/go/chartdata v0.0.0-00010101000000-000000000000
-	github.com/cplieger/go/wiregen/v2 v2.3.0-dev.6
+	github.com/cplieger/go/wiregen/v2 v2.3.0-dev.7
 )
 
 require (
