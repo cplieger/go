@@ -17,7 +17,7 @@ It suits a Go server that sends JSON or Server-Sent Events to a TypeScript clien
 - Client calls return per-endpoint error unions, and it can also write a decoder per Server-Sent Event and a fast-check arbitrary per type.
 - A configuration error stops it before any file is written, and its output is byte-identical between runs.
 
-Consider [tygo](https://github.com/gzuidhof/tygo) if you want TypeScript types alone from a `tygo.yaml` config. It keeps comments and supports Go generic types.
+Consider [tygo](https://github.com/gzuidhof/tygo) if you want TypeScript types alone from a `tygo.yaml` config. It keeps comments and writes a Go generic type as one generic TypeScript type, where wiregen writes one type per instantiation.
 
 ## Install
 
@@ -95,24 +95,25 @@ export const decodeUser: Decoder<User> = (v) => {
 
 ## API
 
-- A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. A type that an endpoint, event or union names is generated without being listed.
+- A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. An instantiation of a generic type, `TypeRef[wire.List[wire.Peer]]()`, generates under the name `List_Peer`, and each type argument must be registered or a builtin ([Generic types](docs/type-mapping.md#generic-types)). Register the instantiation itself when it is the whole body, and embed it in a struct of your own only to add fields beside it. A `Union` tags a struct by one field, lists each case's fields in `Cases`, types a `json.RawMessage` per case with `Payload` and `PayloadTypes`, and names the fields each case always sends in `Required` ([Unions](docs/type-mapping.md#unions)). A type that an endpoint, event or union names is generated without being listed.
 - Register an enum by its type: `StringEnum[T]()` for a string type, `TextEnum[T]()` for a `uint8` type whose `MarshalText` names its members.
-- `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
+- `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithDeadsetEdges(targetRoot)` writes a deadset [edges document](https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md), and `WithDeadsetEdgesFile(path)` writes it elsewhere. A CI check can use that to regenerate into a temporary tree and compare it with the committed files ([Writing into another tree](docs/generated-files.md#writing-into-another-tree)). `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
 
 `Generate` returns an error for a configuration problem, a nil `Registry` or a nil context, and nothing exported panics. [Options and fields](docs/configuration.md) lists each option with its default, and the full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/wiregen/v2).
 
 ## The endpoint table is authoritative
 
-Bind your server's routes, generate the client and write the OpenAPI document from one `[]wiregen.Endpoint`, so no second route list can drift from it. Each endpoint gets an arguments interface, an error union from its declared codes, a descriptor, and a function over one transport you supply, `clientRequest(spec, decode, opts)`, returning `ApiResult<T, E>`. Declared request headers, such as `Idempotency-Key`, become typed arguments. [Typed HTTP client](docs/http-client.md) has the table, the client and the transport contract.
+Bind your server's routes, generate the client and write the OpenAPI document from one `[]wiregen.Endpoint`, so no second route list can drift from it. Each endpoint gets an arguments interface, an error union from its declared codes, a descriptor, and a function over one transport you supply, `clientRequest(spec, decode, opts)`, returning `ApiResult<T, E>`. Declared request headers, such as `Idempotency-Key`, become typed arguments. An endpoint can answer several success statuses, each with its own body, and its function decodes the body the answer's status declares. [Typed HTTP client](docs/http-client.md) has the table, the client and the transport contract.
 
 ## Decoders follow encoding/json
 
 wiregen reads your types from source with `go/packages` and applies the field rules of `encoding/json`, so the TypeScript matches what your server puts on the wire.
 
-- Unexported fields are skipped. A field `encoding/json` can leave out, or a pointer field, such as an `omitempty` or `omitzero` field or one promoted through an embedded pointer, becomes optional, `key?: T`. An untagged field takes its Go name.
+- Unexported fields are skipped. A field `encoding/json` can leave out, such as an `omitempty` or `omitzero` field or one promoted through an embedded pointer, becomes optional, `key?: T`. A pointer field with no omit option is always written, as `null` when nil, so it is required and nullable, `key: T | null`. An untagged field takes its Go name.
+- A string or string enum field tagged `wiregen:"const=<value>"` becomes that literal, such as `type: "bins"`, and its decoder accepts that value alone, so a union of such types narrows on the field.
 - `time.Time` becomes `string`, `json.Number` becomes `number`, `[]byte` becomes a base64 `string`, and a type implementing `encoding.TextMarshaler` becomes `string`.
 - `json.RawMessage` becomes `unknown`, and is the one opaque type allowed.
-- A JSON `null` decodes to the field's empty value instead of an error: `undefined` for an optional field, `[]` or `{}` for a required slice or map, and `""` for a required `[]byte`.
+- A JSON `null` decodes to `null` for a required pointer field, and otherwise to the field's empty value instead of an error: `undefined` for an optional field, `[]` or `{}` for a required slice or map, and `""` for a required `[]byte`.
 - A field the Go type does not declare is ignored, as `encoding/json` ignores it, and only the object's own properties are read, so a key such as `__proto__` or `constructor` is plain data.
 
 ## Strict mode
@@ -121,15 +122,14 @@ wiregen reads your types from source with `go/packages` and applies the field ru
 
 ## Unsupported by design
 
-- Go generic types. Register each concrete instantiation instead.
-- `T | null` on a field. A field that can be absent or `null` is optional, `key?: T`, and the OpenAPI document carries the exact nullability.
+- A Go generic type itself. Register each instantiation, which generates one TypeScript type of its own.
 - `tstype` struct tags. `Mappings` does the same job for the whole registry.
 
 ## Documentation
 
 - [Options and fields](docs/configuration.md) lists every option, registry field and helper type, with defaults.
 - [Type mapping](docs/type-mapping.md) shows how each Go type becomes TypeScript and a schema, with strict mode, enums, bounds, unions and mappings.
-- [Generated files](docs/generated-files.md) covers which files `Generate` writes, its errors, and the validators and events modules.
+- [Generated files](docs/generated-files.md) covers the files `Generate` writes, its errors, the validators and events modules and the deadset edges.
 - [Typed HTTP client](docs/http-client.md) covers the endpoint table, the generated client, the transport module and the OpenAPI document.
 - [Property-test arbitraries](docs/arbitraries.md) describes the fast-check module and how its values are drawn.
 
@@ -141,7 +141,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using [Claude](https://claude.com), [GPT](https://openai.com), and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+This project was built with AI assistance. The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 

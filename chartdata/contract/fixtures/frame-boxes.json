@@ -1,0 +1,40 @@
+{
+  "type": "boxes",
+  "name": "wait_seconds",
+  "unit": "seconds",
+  "names": [
+    "scan",
+    "fetch"
+  ],
+  "series": [
+    {
+      "key": "wait_seconds",
+      "low": [
+        0.1,
+        null
+      ],
+      "q1": [
+        0.2,
+        null
+      ],
+      "median": [
+        0.3,
+        null
+      ],
+      "q3": [
+        0.5,
+        null
+      ],
+      "high": [
+        0.9,
+        null
+      ],
+      "outliers": [
+        [
+          2.5
+        ],
+        []
+      ]
+    }
+  ]
+}

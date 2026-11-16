@@ -32,6 +32,11 @@ type ClientResolution struct {
 	// IgnoredPublic reports that such an ignored header named a public
 	// address: global unicast and outside RFC 1918 and RFC 4193.
 	IgnoredPublic bool
+	// ForwardedHTTPS reports that a trusted peer said the client reached it
+	// over TLS: exactly one X-Forwarded-Proto field holding the one token
+	// https, any case. A list, a repeated field or an untrusted peer reads as
+	// plain, so a proxy must overwrite the client's field, not append to it.
+	ForwardedHTTPS bool
 }
 
 // ResolveClient resolves r's client against the trusted proxy prefixes, which
@@ -58,7 +63,15 @@ func ResolveClient(r *http.Request, trusted ...netip.Prefix) ClientResolution {
 	if ip, ok := fwd.client(trusted); ok {
 		res.IP, res.Forwarded = ip, true
 	}
+	res.ForwardedHTTPS = forwardedHTTPS(r.Header)
 	return res
+}
+
+// forwardedHTTPS reads X-Forwarded-Proto for ClientResolution.ForwardedHTTPS;
+// only a trusted peer's request reaches it.
+func forwardedHTTPS(h http.Header) bool {
+	v := h.Values("X-Forwarded-Proto")
+	return len(v) == 1 && strings.EqualFold(strings.TrimSpace(v[0]), "https")
 }
 
 // ClientIP returns ResolveClient's IP as text, for a log line or a rate-limit

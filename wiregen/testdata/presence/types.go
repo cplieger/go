@@ -2,6 +2,8 @@
 // pointers, collections and embeds, and for keys a JS object inherits.
 package presence
 
+import "encoding/json"
+
 // Base is embedded through a pointer, whose fields encoding/json skips when
 // it is nil.
 type Base struct {
@@ -52,4 +54,34 @@ type Inherited struct {
 // ProtoReq has a required field named __proto__.
 type ProtoReq struct {
 	P string `json:"__proto__"`
+}
+
+// Required holds a required field of each kind whose decoder reads the key
+// whole, so only a presence check refuses it absent.
+type Required struct {
+	Raw    json.RawMessage `json:"raw"`
+	Mapped Mapped          `json:"mapped"`
+	Struct Inner           `json:"struct"`
+	Named  Named           `json:"named"`
+}
+
+// Mapped is mapped to a TS type with no Decoder.
+type Mapped struct{ V string }
+
+// Named is a registered map type.
+type Named map[string]int
+
+// Nullable holds pointers encoding/json always writes, as null when nil,
+// beside one omitempty drops.
+type Nullable struct {
+	Num   *float64  `json:"num"`
+	Opt   *float64  `json:"opt,omitempty"`
+	Inner *Inner    `json:"inner"`
+	Items *[]string `json:"items"`
+}
+
+// Node reaches itself through a pointer encoding/json always writes.
+type Node struct {
+	Next *Node `json:"next"`
+	V    int   `json:"v"`
 }

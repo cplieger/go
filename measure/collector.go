@@ -12,41 +12,104 @@ import (
 	"sync/atomic"
 )
 
-// Desc declares one family a [Collector] emits: its name, HELP text, type and
-// label names. Build it with [NewGaugeDesc] or [NewCounterDesc] and hand it to
-// exactly one [NewCollector].
+// Desc declares one family a [Collector] emits: its name, HELP text, kind,
+// unit and label names. Build it with [NewGaugeDesc], [NewCounterDesc],
+// [NewHistogramDesc], [NewStateSetDesc] or [NewInfoDesc] and hand it to
+// exactly one [NewCollector]. Its source is [SourceRead], so it is never
+// seeded: it serves what the collector emits at each read. An
+// [ExportChartdata] Desc may instead be registered on its own: it reserves
+// its name, serves nothing, and [Registry.GatherOf] reads it with no samples.
 type Desc struct {
 	err    error
 	owner  atomic.Pointer[Collector] // claimed by NewCollector; nil until then
 	name   string                    // prefixed by the registry at registration
-	base   string                    // the declared name, never written after construction
 	help   string
 	typ    Type
 	labels []string
+	bounds []float64 // a histogram's bucket bounds; nil otherwise
+	meta   declMeta
 }
 
-// NewGaugeDesc declares a gauge family for a [Collector]. Unlike the
-// instruments, a collector family takes any number of labels. An invalid
-// metric name, or an invalid, reserved or duplicate label name, is captured and
+// NewGaugeDesc declares a gauge family for a [Collector], its values in
+// unit. Unlike the instruments, a collector family takes any number of
+// labels. An invalid declaration is captured and surfaces at
+// [Registry.Register].
+func NewGaugeDesc(name, help string, unit Unit, labels []string, opts ...Option) *Desc {
+	return newDesc(KindGauge, name, help, unit, labels, opts)
+}
+
+// NewCounterDesc declares a counter family for a [Collector], its values in
+// unit. Its values are float64, because a collector reports a total it reads
+// elsewhere. Per Prometheus convention the name should end in `_total`.
+func NewCounterDesc(name, help string, unit Unit, labels []string, opts ...Option) *Desc {
+	return newDesc(KindCounter, name, help, unit, labels, opts)
+}
+
+// NewHistogramDesc declares a histogram family for a [Collector], its
+// observations in unit, with the finite, strictly increasing bucket bounds
+// its samples count against; the le="+Inf" bucket is implicit, and nil
+// bounds leave only it. Emit its samples with [Emitter.EmitHistogram]. A bad
+// bound, or the label name "le", which the buckets use, is captured and
 // surfaces at [Registry.Register].
-func NewGaugeDesc(name, help string, labels []string) *Desc {
-	return newDesc(TypeGauge, name, help, labels)
-}
-
-// NewCounterDesc declares a counter family for a [Collector]. Its values are
-// float64, because a collector reports a total it reads elsewhere. Per
-// Prometheus convention the name should end in `_total`.
-func NewCounterDesc(name, help string, labels []string) *Desc {
-	return newDesc(TypeCounter, name, help, labels)
-}
-
-func newDesc(typ Type, name, help string, labels []string) *Desc {
-	err := checkMetricName(name)
-	owned, lerr := checkLabelNames(name, labels)
-	if err == nil {
-		err = lerr
+func NewHistogramDesc(name, help string, unit Unit, labels []string, bounds []float64, opts ...Option) *Desc {
+	d := newDesc(KindHistogram, name, help, unit, labels, opts)
+	if d.err == nil && slices.Contains(d.labels, "le") {
+		d.err = fmt.Errorf(`measure: label name "le" for metric %q is reserved for the histogram bucket bound`, name)
 	}
-	return &Desc{err: err, name: name, base: name, help: sanitizeHelp(name, help), typ: typ, labels: owned}
+	if err := checkBuckets(name, bounds); d.err == nil && err != nil {
+		d.err = err
+	}
+	d.bounds = slices.Clone(bounds)
+	d.meta.buckets = d.bounds
+	return d
+}
+
+// NewStateSetDesc declares a state set family for a [Collector], as
+// [NewStateSet] declares one: the last label is the state label, whose
+// values are states. Emit its samples with [Emitter.EmitState]. The errors
+// NewStateSet captures, other than seeding, are captured here too.
+func NewStateSetDesc(name, help string, labels, states []string, opts ...Option) *Desc {
+	d := newDesc(KindStateSet, name, help, UnitNone, labels, opts)
+	d.meta.states = slices.Clone(states)
+	if err := checkStates(name, d.labels, d.meta.states); d.err == nil && err != nil {
+		d.err = err
+	}
+	return d
+}
+
+// NewInfoDesc declares an info family for a [Collector], as [NewInfo]
+// declares one. Emit each of its label sets with value 1.
+func NewInfoDesc(name, help string, labels []string, opts ...Option) *Desc {
+	return newDesc(KindInfo, name, help, UnitNone, labels, opts)
+}
+
+func newDesc(kind Kind, name, help string, unit Unit, labels []string, opts []Option) *Desc {
+	o := applyOptions(opts)
+	help = sanitizeHelp(name, help)
+	owned, lerr := checkLabelNames(name, labels)
+	typ := TypeGauge
+	switch kind {
+	case KindCounter:
+		typ = TypeCounter
+	case KindHistogram:
+		typ = TypeHistogram
+	}
+	d := &Desc{name: name, help: help, typ: typ, labels: owned}
+	d.meta.fill(name, help, kind, unit, owned, &o)
+	d.meta.source = SourceRead
+	d.err = firstErr(checkMetricName(name), lerr, checkOptionFits(name, &o, false, -1),
+		checkDeclaration(name, kind, unit, owned, &o))
+	return d
+}
+
+// Declaration returns the family's metadata.
+func (d *Desc) Declaration() Declaration { return d.meta.declaration() }
+
+func (d *Desc) declared() *declMeta {
+	if d == nil {
+		return nil
+	}
+	return &d.meta
 }
 
 // Collector emits families whose values are read when Prometheus scrapes, not
@@ -65,12 +128,13 @@ type Collector struct {
 }
 
 // NewCollector returns a collector that runs collect, with the request's
-// context, on every scrape of [Registry.Handler] and every [Registry.Gather],
-// and serves what it emits for descs. Concurrent scrapes run collect
-// concurrently, each with its own [Emitter]. Construction errors surface at
+// context, on every scrape of [Registry.Handler], every [Registry.Gather] and
+// every [Registry.GatherOf] that names one of its descs, and serves what it
+// emits for descs. Concurrent reads run collect concurrently, each with its
+// own [Emitter]. Construction errors surface at
 // [Registry.Register]: no descs, a nil desc or collect, two descs with one
-// name, a desc another collector holds or not built by [NewGaugeDesc] or
-// [NewCounterDesc], and any desc's own error.
+// name, a desc another collector holds or not built by a NewXDesc
+// constructor, and any desc's own error.
 func NewCollector(collect func(ctx context.Context, e *Emitter), descs ...*Desc) *Collector {
 	c := &Collector{collect: collect, active: make(map[problemKey]bool)}
 	c.err = c.adopt(descs)
@@ -93,25 +157,73 @@ func (c *Collector) adopt(descs []*Desc) error {
 		switch {
 		case d == nil:
 			return errors.New("measure: NewCollector called with a nil desc")
-		case d.typ != TypeGauge && d.typ != TypeCounter:
-			return errors.New("measure: desc was not built with NewGaugeDesc or NewCounterDesc")
+		case d.meta.kind == "":
+			return errors.New("measure: desc was not built by a NewXDesc constructor")
 		case d.err != nil:
 			return d.err
-		case seen[d.base]:
-			return fmt.Errorf("measure: collector declares %q twice", d.base)
+		case seen[d.meta.base]:
+			return fmt.Errorf("measure: collector declares %q twice", d.meta.base)
 		}
-		seen[d.base] = true
+		seen[d.meta.base] = true
 	}
 	for i, d := range descs {
 		if !d.owner.CompareAndSwap(nil, c) {
 			for _, claimed := range descs[:i] {
 				claimed.owner.Store(nil)
 			}
-			return fmt.Errorf("measure: desc %q already belongs to another collector", d.base)
+			if d.owner.Load() == standalone {
+				return fmt.Errorf("measure: desc %q is registered on its own", d.meta.base)
+			}
+			return fmt.Errorf("measure: desc %q already belongs to another collector", d.meta.base)
 		}
 	}
 	c.descs = slices.Clone(descs)
 	return nil
+}
+
+// standalone owns every Desc registered on its own, so no collector can
+// adopt it and no registry can register it twice. It is never run.
+var standalone = new(Collector)
+
+func (d *Desc) registerInto(r *Registry) error {
+	switch {
+	case d == nil:
+		return errNilMetric
+	case r.err != nil:
+		return r.err
+	case d.meta.kind == "":
+		return errors.New("measure: desc was not built by a NewXDesc constructor")
+	case d.err != nil:
+		return d.err
+	case d.meta.export != ExportChartdata:
+		return fmt.Errorf("measure: desc %q registered on its own serves nothing, so it must be ExportChartdata; "+
+			"a desc served on the page belongs to a NewCollector", d.meta.base)
+	}
+	if !d.owner.CompareAndSwap(nil, standalone) {
+		if d.owner.Load() == standalone {
+			return fmt.Errorf("measure: desc %q already registered", d.meta.base)
+		}
+		return fmt.Errorf("measure: desc %q belongs to a collector; register the collector", d.meta.base)
+	}
+	name := r.prefixed(d.name)
+	reserve := r.reserveName
+	if d.typ == TypeHistogram {
+		reserve = r.reserveHistogramFamily
+	}
+	if err := reserve(name, "desc"); err != nil {
+		d.owner.Store(nil)
+		return err
+	}
+	d.name = name
+	d.meta.final.Store(&name)
+	r.members[&d.meta] = struct{}{}
+	r.descs = append(r.descs, d)
+	return nil
+}
+
+// family is a Desc registered on its own as Gather reads it: no samples.
+func (d *Desc) family() Family {
+	return Family{Name: d.name, Help: d.help, Type: d.typ, Samples: []Sample{}}
 }
 
 func (c *Collector) registerInto(r *Registry) error {
@@ -136,9 +248,13 @@ func (c *Collector) registerInto(r *Registry) error {
 	names := make([]string, len(c.descs))
 	for i, d := range c.descs {
 		names[i] = r.prefixed(d.name)
-		if err := r.reserveName(names[i], "collector family"); err != nil {
-			for _, claimed := range names[:i] {
-				delete(r.names, claimed)
+		reserve := r.reserveName
+		if d.typ == TypeHistogram {
+			reserve = r.reserveHistogramFamily
+		}
+		if err := reserve(names[i], "collector family"); err != nil {
+			for j, claimed := range names[:i] {
+				r.releaseFamily(claimed, c.descs[j].typ == TypeHistogram)
 			}
 			c.registered.Store(false)
 			return err
@@ -146,6 +262,8 @@ func (c *Collector) registerInto(r *Registry) error {
 	}
 	for i, d := range c.descs {
 		d.name = names[i]
+		d.meta.final.Store(&names[i])
+		r.members[&d.meta] = struct{}{}
 	}
 	r.collectors = append(r.collectors, c)
 	r.collectorFamilies += len(c.descs)
@@ -164,35 +282,133 @@ type Emitter struct {
 // keySep joins label values into one map key; it cannot occur in valid UTF-8.
 const keySep = "\xff"
 
-// Emit records value for d with labelValues, one per label name d declares,
-// in order. A desc this collector did not declare, the wrong number of label
-// values, a label set already emitted in this run (the first stands) and a
-// negative or NaN counter value drop the sample: the scrape still answers,
-// and [Registry.Gather] reports the drop. An Emit after collect returned
-// records nothing. Label values are sanitized to valid UTF-8.
+// Emit records value for d, a gauge, counter or info family, with
+// labelValues, one per label name d declares, in order. A desc this
+// collector did not declare, a histogram or state set desc, the wrong number
+// of label values, a label set already emitted in this run (the first
+// stands), a negative or NaN counter value and an info value other than 1
+// drop the sample: the scrape still answers, and [Registry.Gather] reports
+// the drop. An Emit after collect returned records nothing. Label values are
+// sanitized to valid UTF-8.
 func (e *Emitter) Emit(d *Desc, value float64, labelValues ...string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.done {
+	if !e.accepts(d, len(labelValues)) {
 		return
 	}
+	switch kind := d.meta.kind; {
+	case kind == KindHistogram || kind == KindStateSet || (kind == KindInfo && value != 1):
+		e.problems[problemKey{d.name, problemShape}]++
+		return
+	case kind == KindCounter && (value < 0 || math.IsNaN(value)):
+		e.problems[problemKey{d.name, problemCounterValue}]++
+		return
+	}
+	e.record(d, Sample{Value: value}, labelValues)
+}
+
+// EmitState records the current state of one state set of d, a state set
+// family: a sample of 1 for state and of 0 for each other state, with
+// labelValues, one per label before the state label, in order. A state d
+// does not declare, a desc that is not a state set and the problems
+// [Emitter.Emit] drops for drop every sample of the set.
+func (e *Emitter) EmitState(d *Desc, state string, labelValues ...string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.accepts(d, len(labelValues)+1) {
+		return
+	}
+	if d.meta.kind != KindStateSet || !slices.Contains(d.meta.states, state) {
+		e.problems[problemKey{d.name, problemShape}]++
+		return
+	}
+	vals := append(slices.Clone(labelValues), state)
+	if _, dup := e.samples[d][sanitizedKey(vals)]; dup {
+		e.problems[problemKey{d.name, problemDuplicate}]++
+		return
+	}
+	for _, st := range d.meta.states {
+		value := 0.0
+		if st == state {
+			value = 1
+		}
+		vals[len(vals)-1] = st
+		e.record(d, Sample{Value: value}, vals)
+	}
+}
+
+// EmitHistogram records one series of d, a histogram family: buckets holds
+// the cumulative count of observations at or below each of d's bounds, in
+// order, count the total (the le="+Inf" bucket) and sum their sum. Buckets of
+// the wrong length or falling, a count below the last bucket, a NaN sum and a
+// desc that is not a histogram drop the sample, as do the problems [Emitter.Emit]
+// drops for.
+func (e *Emitter) EmitHistogram(d *Desc, buckets []uint64, count uint64, sum float64, labelValues ...string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.accepts(d, len(labelValues)) {
+		return
+	}
+	if d.typ != TypeHistogram || !cumulative(buckets, len(d.bounds), count) || math.IsNaN(sum) {
+		e.problems[problemKey{d.name, problemShape}]++
+		return
+	}
+	v := &HistogramValue{Buckets: make([]Bucket, len(buckets)), Count: count, Sum: sum}
+	for i, n := range buckets {
+		v.Buckets[i] = Bucket{UpperBound: d.bounds[i], Count: n}
+	}
+	e.record(d, Sample{Histogram: v}, labelValues)
+}
+
+// cumulative reports whether buckets has n entries that never fall and end at
+// or below count.
+func cumulative(buckets []uint64, n int, count uint64) bool {
+	if len(buckets) != n {
+		return false
+	}
+	for i, b := range buckets {
+		if (i > 0 && b < buckets[i-1]) || b > count {
+			return false
+		}
+	}
+	return true
+}
+
+// accepts reports whether a sample for d with n label values may be recorded
+// in this run, counting the problem when not. e.mu is held.
+func (e *Emitter) accepts(d *Desc, n int) bool {
 	switch {
+	case e.done:
+		return false
 	case d == nil || d.owner.Load() != e.c:
 		// Another collector's desc may be renamed by its own registration right
 		// now, so only its declared name is read.
 		name := "<nil>"
 		if d != nil {
-			name = d.base
+			name = d.meta.base
 		}
 		e.problems[problemKey{name, problemUndeclared}]++
-		return
-	case len(labelValues) != len(d.labels):
+		return false
+	case n != len(d.labels):
 		e.problems[problemKey{d.name, problemArity}]++
-		return
-	case d.typ == TypeCounter && (value < 0 || math.IsNaN(value)):
-		e.problems[problemKey{d.name, problemCounterValue}]++
-		return
+		return false
 	}
+	return true
+}
+
+// sanitizedKey is the map key of labelValues once sanitized, as record
+// stores it.
+func sanitizedKey(labelValues []string) string {
+	vals := make([]string, len(labelValues))
+	for i, v := range labelValues {
+		vals[i], _ = sanitizeUTF8(v)
+	}
+	return strings.Join(vals, keySep)
+}
+
+// record stores s for d under labelValues, sanitized, unless this run already
+// emitted that label set. e.mu is held.
+func (e *Emitter) record(d *Desc, s Sample, labelValues []string) {
 	labels := make([]Label, len(d.labels))
 	vals := make([]string, len(d.labels))
 	for i, v := range labelValues {
@@ -213,7 +429,8 @@ func (e *Emitter) Emit(d *Desc, value float64, labelValues ...string) {
 		e.problems[problemKey{d.name, problemDuplicate}]++
 		return
 	}
-	fam[key] = Sample{Labels: labels, Value: value}
+	s.Labels = labels
+	fam[key] = s
 }
 
 // problemKind is one reason a collector sample was dropped or warned about.
@@ -224,6 +441,7 @@ const (
 	problemArity
 	problemDuplicate
 	problemCounterValue
+	problemShape       // a sample that does not fit its family's type or buckets
 	problemCardinality // a warning only: nothing is dropped
 	problemSanitized   // a warning only: the value was kept with U+FFFD
 )
@@ -242,6 +460,8 @@ func (k problemKind) String() string {
 		return "a label set already emitted in this scrape"
 	case problemCounterValue:
 		return "a negative or NaN counter value"
+	case problemShape:
+		return "values that do not fit the family's type or buckets"
 	case problemCardinality:
 		return fmt.Sprintf("%d or more series", cardinalityWarnThreshold)
 	case problemSanitized:
@@ -367,10 +587,9 @@ func compareLabelValues(a, b Sample) int {
 }
 
 // pageFamily renders a collector or runtime family into the exposition IR:
-// labels sorted by name and escaped as the instruments' are. A summary series
-// expands into its quantile, _sum and _count lines; histograms never come
-// here, because only instruments make them. ok is false for a family with no
-// samples, which the page omits.
+// labels sorted by name and escaped as the instruments' are. A summary or
+// histogram series expands into its quantile or bucket lines, then _sum and
+// _count. ok is false for a family with no samples, which the page omits.
 func pageFamily(f *Family) (metricFamily, bool) {
 	if len(f.Samples) == 0 {
 		return metricFamily{}, false
@@ -381,13 +600,19 @@ func pageFamily(f *Family) (metricFamily, bool) {
 		typ = typeCounter
 	case TypeSummary:
 		typ = typeSummary
+	case TypeHistogram:
+		typ = typeHistogram
 	}
 	samples := make([]sample, 0, len(f.Samples))
 	for i := range f.Samples {
 		s := &f.Samples[i]
 		labels := renderLabels(s.Labels)
-		if f.Type == TypeSummary {
+		switch f.Type {
+		case TypeSummary:
 			samples = summarySamples(samples, labels, s.Summary)
+			continue
+		case TypeHistogram:
+			samples = histogramValueSamples(samples, labels, s.Histogram)
 			continue
 		}
 		samples = append(samples, sample{labels: labels, value: formatValue(s.Value)})

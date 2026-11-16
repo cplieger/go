@@ -188,20 +188,20 @@ func TestTriplePointer(t *testing.T) {
 	}
 }
 
-func TestAllPointerFieldsOptional(t *testing.T) {
+func TestAllPointerFieldsRequiredAndNullable(t *testing.T) {
 	r := edgesReg(wiregen.TypeRef[edges.AllPointerFields]())
 	out := mustGen(t, r.typesFile)
-	if !strings.Contains(out, "a?: string") {
-		t.Errorf("*string should be optional, got:\n%s", out)
+	if !strings.Contains(out, "a: string | null;") {
+		t.Errorf("*string with no omit option should be required and nullable, got:\n%s", out)
 	}
-	if !strings.Contains(out, "b?: number") {
-		t.Errorf("*int should be optional, got:\n%s", out)
+	if !strings.Contains(out, "b: number | null;") {
+		t.Errorf("*int with no omit option should be required and nullable, got:\n%s", out)
 	}
-	if !strings.Contains(out, "c?: boolean") {
-		t.Errorf("*bool should be optional, got:\n%s", out)
+	if !strings.Contains(out, "c: boolean | null;") {
+		t.Errorf("*bool with no omit option should be required and nullable, got:\n%s", out)
 	}
-	if !strings.Contains(out, "d?: number") {
-		t.Errorf("*float64 should be optional, got:\n%s", out)
+	if !strings.Contains(out, "d: number | null;") {
+		t.Errorf("*float64 with no omit option should be required and nullable, got:\n%s", out)
 	}
 }
 

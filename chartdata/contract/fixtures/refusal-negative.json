@@ -1,0 +1,15 @@
+{
+  "frame": {
+    "name": "depth",
+    "parts": [
+      {
+        "key": "a",
+        "value": -1
+      }
+    ],
+    "type": "tree",
+    "unit": "count"
+  },
+  "rule": "negative",
+  "field": "parts[0].value"
+}

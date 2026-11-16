@@ -21,6 +21,12 @@ export interface HasMap {
   name: string;
 }
 
+/** HasRaw has a json.RawMessage field. */
+export interface HasRaw {
+  data: unknown;
+  name: string;
+}
+
 /** HasTime has a time.Time field. */
 export interface HasTime {
   /**

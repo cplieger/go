@@ -15,16 +15,10 @@ import (
 // value) into an actionable, alertable signal before memory is exhausted.
 const cardinalityWarnThreshold = 1000
 
-// warnInertOnce emits the one-time warning for a record dropped on a metric
-// carrying a construction error, naming the metric and the error; the CAS on
-// warned keeps every later drop a silent no-op (mirroring the one-time
-// cardinality warning). Registration is the designed reporting door, but a
-// metric constructed and never registered would otherwise fail with no
-// diagnostic at all, and recording is the operation such code actually
-// performs. Called only inside a record path's err != nil branch, so the
-// valid-metric fast path stays a single nil check; name is read via pointer
-// there, which is race-free because a metric carrying a construction error is
-// unregistrable and thus never concurrently renamed by a registration.
+// warnInertOnce logs the first record dropped on a metric carrying a
+// construction error, so a metric never registered still leaves a trace.
+// Reading *name is race-free: such a metric cannot be registered, so nothing
+// renames it.
 func warnInertOnce(err error, warned *atomic.Bool, name *string) {
 	if warned.CompareAndSwap(false, true) {
 		slog.Warn("measure: record dropped, metric carries a construction error",
@@ -37,18 +31,35 @@ type Counter struct {
 	err        error // construction-time validation error; surfaces at registration
 	name       string
 	help       string
+	meta       declMeta
 	val        atomic.Int64
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewCounter creates a named counter. Per Prometheus convention the name
-// should end in `_total` (e.g. "http_requests_total"). An invalid name is
-// captured into the counter rather than panicking: the counter records
-// nothing, Handler never emits it, and the error surfaces at registration.
-func NewCounter(name, help string) *Counter {
+// NewCounter creates a named counter whose values are in unit. Per
+// Prometheus convention the name should end in `_total` (e.g.
+// "http_requests_total"). An invalid declaration is captured into the
+// counter rather than panicking: the counter records nothing, Handler never
+// emits it, and the error surfaces at registration.
+func NewCounter(name, help string, unit Unit, opts ...Option) *Counter {
 	help = sanitizeHelp(name, help)
-	return &Counter{name: name, help: help, err: checkMetricName(name)}
+	o := applyOptions(opts)
+	c := &Counter{name: name, help: help}
+	c.meta.fill(name, help, KindCounter, unit, nil, &o)
+	c.err = firstErr(checkMetricName(name), checkOptionFits(name, &o, false, -1),
+		checkDeclaration(name, KindCounter, unit, nil, &o))
+	return c
+}
+
+// Declaration returns the counter's metadata.
+func (c *Counter) Declaration() Declaration { return c.meta.declaration() }
+
+func (c *Counter) declared() *declMeta {
+	if c == nil {
+		return nil
+	}
+	return &c.meta
 }
 
 // Inc increments the counter by 1. The counter saturates at math.MaxInt64
@@ -89,21 +100,10 @@ func addSaturating(v *atomic.Int64, n int64) {
 const maxLabels = 8
 
 // series carries the state every per-label-combination operation needs: the
-// lock guarding the series map and the metric name a warning reports. The three
-// labeled metric types embed it, so those operations are METHODS on the state
-// they mutate instead of package-level functions taking a mutex and a name
-// pointer.
-//
-// It is deliberately NOT generic: the map's value type arrives on each method
-// instead (Go 1.27 generic methods). A generic carrier — series[V] holding vals
-// — would drop one more argument per call, and it was measured and rejected,
-// twice over. Embedded, `go doc` renders `series[*atomic.Int64]` inside the
-// public body of LabeledCounter (an embedded unexported GENERIC instantiation
-// is printed, where an embedded plain unexported type and a named unexported
-// field are both folded into "Has unexported fields"), so all three exported
-// types would advertise a type no caller can name. Held as a named field
-// instead, godoc stays clean but 84 lc.name/lc.mu/lc.vals references gain a
-// level of indirection to save one argument at 9 call sites.
+// lock guarding the series map and the metric name a warning reports. It is
+// not generic, and the map's value type arrives on each method: an embedded
+// generic instantiation shows in the exported types' godoc as a type no
+// caller can name.
 type series struct {
 	name       string
 	mu         sync.RWMutex
@@ -129,28 +129,49 @@ type LabeledCounter struct {
 	help   string
 	err    error // construction-time validation error; surfaces at registration
 	labels []string
+	meta   declMeta
 	series
 	registered atomic.Bool
 	warned     atomic.Bool // one-time inert-record warning emitted
 }
 
-// NewLabeledCounter creates a labeled counter with the given label names. As
-// with NewCounter, the name should end in `_total` per Prometheus convention.
+// NewLabeledCounter creates a labeled counter with the given label names,
+// its values in unit. As with NewCounter, the name should end in `_total`
+// per Prometheus convention. [WithSeed] creates label sets at 0.
 // Construction through NewLabeledCounter is mandatory: the zero
 // LabeledCounter has a nil series map and panics on the first record. An
-// invalid metric name, an invalid/reserved/duplicate label name, or more than
-// 8 labels is captured into the counter rather than panicking: the counter
-// records nothing and the error surfaces at registration.
-func NewLabeledCounter(name, help string, labels []string) *LabeledCounter {
+// invalid declaration, including more than 8 labels, is captured into the
+// counter rather than panicking: the counter records nothing and the error
+// surfaces at registration.
+func NewLabeledCounter(name, help string, unit Unit, labels []string, opts ...Option) *LabeledCounter {
 	help = sanitizeHelp(name, help)
+	o := applyOptions(opts)
 	owned, err := checkNameAndLabels("LabeledCounter", name, labels)
-	return &LabeledCounter{
-		name:   name,
+	lc := &LabeledCounter{
 		help:   help,
-		err:    err,
 		labels: owned,
 		vals:   make(map[labelKey]*atomic.Int64),
 	}
+	lc.name = name
+	lc.meta.fill(name, help, KindCounter, unit, owned, &o)
+	lc.err = firstErr(err, checkOptionFits(name, &o, false, len(owned)),
+		checkDeclaration(name, KindCounter, unit, owned, &o))
+	if lc.err == nil {
+		for _, set := range o.seeds {
+			lc.Add(0, set...)
+		}
+	}
+	return lc
+}
+
+// Declaration returns the counter's metadata.
+func (lc *LabeledCounter) Declaration() Declaration { return lc.meta.declaration() }
+
+func (lc *LabeledCounter) declared() *declMeta {
+	if lc == nil {
+		return nil
+	}
+	return &lc.meta
 }
 
 // Inc increments the counter for the given label values.
@@ -199,17 +220,9 @@ func (lc *LabeledCounter) Delete(labelVals ...string) {
 }
 
 // loadOrStore returns the entry for key, creating it with makeV under the
-// write lock when absent. loaded reports whether the entry already existed.
-// The hot loaded-path never reads s.name. Label values carrying invalid UTF-8
-// are sanitized with U+FFFD on the series-creation path (see storeNewSeries),
-// and when storing a new series pushes the map exactly to
-// cardinalityWarnThreshold, a one-time warning names the metric so a
-// label-cardinality explosion is observable before it exhausts memory. All
-// warning captures (the metric name, the representative sanitized value)
-// happen under the lock in storeNewSeries, so exactly one inserter observes
-// each event and the name read is synchronized with the mutex-guarded rename
-// in Register*; the warnings themselves are emitted AFTER the write lock is
-// released so arbitrary slog handler code never runs under the metric lock.
+// write lock when absent; loaded reports whether it existed. The warnings
+// storeNewSeries captures under the lock are logged after the lock is
+// released, so slog handler code never runs under the metric lock.
 func (s *series) loadOrStore[V any](m map[labelKey]V, key *labelKey, makeV func() V) (v V, loaded bool) {
 	s.mu.RLock()
 	v, loaded = m[*key]
@@ -258,20 +271,12 @@ func sanitizeLabelKey(key *labelKey) (rep string, changed bool) {
 	return rep, changed
 }
 
-// storeNewSeries sanitizes key's label values to valid UTF-8 (in place, so the
-// caller's key holds the sanitized values afterwards) and inserts the sanitized
-// key under the write lock (double-checked). A raw invalid-UTF-8 key is never
-// stored, so records carrying invalid UTF-8 always miss loadOrStore's RLock
-// fast path and re-take this slow path, landing on the same sanitized series —
-// deliberate: degraded input gets the slow path. Distinct raw values may merge
-// into one sanitized series — also deliberate. The returned seriesWarnings is
-// captured under the lock (the metric name reads are synchronized with the
-// mutex-guarded rename in Register*): w.san fires only when a sanitization
-// actually CREATED a new series (the double-check-found path never warns), and
-// w.card fires the first time an insert pushes the map to
-// cardinalityWarnThreshold; the latch on the carrier keeps a later dip (a
-// Delete or Reset) and re-crossing from re-emitting it, so the warning is
-// one-time per metric. The defer keeps the unlock on a makeV panic path.
+// storeNewSeries sanitizes key in place and inserts it under the write lock,
+// double-checked. A raw invalid-UTF-8 key is never stored, so such records
+// always take this slow path onto the sanitized series. The warnings are
+// captured under the lock, so exactly one inserter reports each event and
+// the name read is ordered with registration's rename; the cardinality latch
+// keeps the warning one-time per metric across a Delete and a re-crossing.
 func (s *series) storeNewSeries[V any](m map[labelKey]V, key *labelKey, makeV func() V) (v V, loaded bool, w seriesWarnings) {
 	sanValue, sanitized := sanitizeLabelKey(key)
 	s.mu.Lock()

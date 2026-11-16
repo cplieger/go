@@ -1,0 +1,26 @@
+{
+  "type": "bins",
+  "name": "wait_seconds",
+  "unit": "seconds",
+  "axis": "value",
+  "x1": [
+    0,
+    1,
+    2
+  ],
+  "x2": [
+    1,
+    2,
+    5
+  ],
+  "series": [
+    {
+      "key": "wait_seconds",
+      "values": [
+        12,
+        4,
+        1
+      ]
+    }
+  ]
+}

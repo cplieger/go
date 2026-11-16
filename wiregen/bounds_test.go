@@ -82,7 +82,7 @@ func TestBoundsByMethod(t *testing.T) {
 			if files == nil {
 				files = []string{}
 			}
-			b, _ := json.Marshal(map[string]any{"item": nil, "labels": nil, "files": files, "shared": map[string]any{}, "limit": 1, "level": "low"})
+			b, _ := json.Marshal(map[string]any{"item": nil, "labels": nil, "files": files, "shared": map[string]any{"hint": nil}, "limit": 1, "level": "low"})
 			return string(b)
 		}
 		cases := []struct {

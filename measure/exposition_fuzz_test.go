@@ -23,7 +23,7 @@ func FuzzPrometheusHelpExposition(f *testing.F) {
 	f.Fuzz(func(t *testing.T, help string) {
 		c := &Counter{name: "test_counter", help: help}
 		var b strings.Builder
-		writeCounter(&b, c)
+		writeFamily(&b, c)
 		out := b.String()
 		for line := range strings.SplitSeq(out, "\n") {
 			if !strings.HasPrefix(line, "# HELP ") {
@@ -65,16 +65,16 @@ func FuzzRegistryFullExposition(f *testing.F) {
 			t.Skip()
 		}
 		reg := NewRegistry("")
-		c := NewCounter("fuzz_counter", "counter help")
+		c := NewCounter("fuzz_counter", "counter help", UnitCount)
 		c.Inc()
 		reg.MustRegister(c)
-		g := NewGauge("fuzz_gauge", "gauge help")
+		g := NewGauge("fuzz_gauge", "gauge help", UnitNone)
 		g.Set(42)
 		reg.MustRegister(g)
-		h := NewHistogram("fuzz_histogram", "hist help")
+		h := NewHistogram("fuzz_histogram", "hist help", UnitNone)
 		h.Observe(0.1)
 		reg.MustRegister(h)
-		lc := NewLabeledCounter("fuzz_labeled", "labeled help", []string{"a", "b"})
+		lc := NewLabeledCounter("fuzz_labeled", "labeled help", UnitCount, []string{"a", "b"})
 		lc.Inc(lv1, lv2)
 		reg.MustRegister(lc)
 
@@ -110,8 +110,8 @@ func FuzzRegistryFullExposition(f *testing.F) {
 }
 
 // FuzzLabeledExposition_balanced asserts that for any label value, the labeled
-// counter and gauge exposition keep braces and quotes balanced — i.e. the
-// label-value escaping can never break the line structure.
+// counter, gauge, state set and info exposition keep braces and quotes
+// balanced — i.e. the label-value escaping can never break the line structure.
 func FuzzLabeledExposition_balanced(f *testing.F) {
 	f.Add("simple", 1.0)
 	f.Add("with\"quote", 0.0)
@@ -137,17 +137,19 @@ func FuzzLabeledExposition_balanced(f *testing.F) {
 		if !utf8.ValidString(val) {
 			t.Skip()
 		}
-		lc := NewLabeledCounter("fuzz_counter", "fuzz help", []string{"v"})
+		lc := NewLabeledCounter("fuzz_counter", "fuzz help", UnitCount, []string{"v"})
 		lc.Inc(val)
-		lg := NewLabeledGauge("fuzz_gauge", "fuzz help", []string{"v"})
+		lg := NewLabeledGauge("fuzz_gauge", "fuzz help", UnitNone, []string{"v"})
 		lg.Set(gaugeVal, val)
+		ss := NewStateSet("fuzz_state", "fuzz help", []string{"v", "state"}, []string{"a", "b"})
+		ss.Set("b", val)
+		info := NewInfo("fuzz_info", "fuzz help", []string{"v"})
+		info.Set(val)
 
-		var b strings.Builder
-		writeLabeledCounter(&b, lc)
-		assertExpositionLabelsBalanced(t, b.String())
-
-		b.Reset()
-		writeLabeledGauge(&b, lg)
-		assertExpositionLabelsBalanced(t, b.String())
+		for _, m := range []instrument{lc, lg, ss, info} {
+			var b strings.Builder
+			writeFamily(&b, m)
+			assertExpositionLabelsBalanced(t, b.String())
+		}
 	})
 }

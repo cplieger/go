@@ -9,27 +9,31 @@ import (
 )
 
 // Union declares Type, a registered struct, a union tagged by its Tag field,
-// named by wire name. Each Cases key is a tag value and lists the wire names
-// of the other fields that case allows; a listed field keeps its own presence
-// rule. The TS type is a discriminated union, the decoder refuses a field
-// another case owns, and OpenAPI gets a oneOf with a discriminator whose cases
-// admit no other property.
-//
-// Payload, when set, names a json.RawMessage field of Type whose type the tag
-// selects: PayloadTypes maps every Cases key to the type that field decodes as
-// in that case, or to the zero Type for a case that carries no payload. The
-// payload field is listed in no case; it belongs to each case with a payload
-// type, keeps its own omit options there, and is refused in the others. A
-// json.RawMessage can always be null on the wire, so the typed payload's
-// TypeScript member is optional, its schemas are nullable, and a decoder
-// reads null as absent. Each payload type is a struct or a named map, as
-// every registered type is, and joins the registry's types.
+// named by wire name. The TS type is a discriminated union, the decoder
+// refuses a field another case owns, and OpenAPI gets a oneOf with a
+// discriminator whose cases admit no other property.
 type Union struct {
-	Cases        map[string][]string
+	// Cases maps each tag value to the wire names of the other fields that
+	// case allows, each keeping its own presence rule unless Required lists it.
+	Cases map[string][]string
+	// PayloadTypes maps every Cases key to the struct or named map Payload
+	// decodes as in that case, joining the registry's types; zero: no payload.
 	PayloadTypes map[string]Type
-	Type         Type
-	Tag          string
-	Payload      string
+	// Required maps a Cases key to the fields that case always sends, the
+	// payload included: the TS member drops `?`, OpenAPI requires it, and the
+	// decoder refuses it absent or null. A non-payload json.RawMessage keeps
+	// null as data; a Mapping's Decoder judges both, and with none only
+	// presence is checked. The server must write it; the tag, a field every
+	// case sends non-null, or one the case lacks is refused.
+	Required map[string][]string
+	Type     Type
+	Tag      string
+	// Payload, when set, names a json.RawMessage field of Type, listed in no
+	// case, that each case with a payload type decodes as that type, keeping
+	// its omit options, and the other cases refuse. Its bytes can be null, so
+	// it is a pointer field: optional with an omit option, null read as
+	// absent; required and nullable with none; not null if Required lists it.
+	Payload string
 }
 
 // unionInfo is one resolved Union: its tag's and payload's wire names and
@@ -38,15 +42,20 @@ type unionInfo struct {
 	tag     string
 	payload string // "" when the union types no payload
 	cases   []unionCase
+	// end indexes the case a depth-capped arbitrary draws first, one whose
+	// required fields reach no type that cannot end (rankEnds).
+	end int
 }
 
 // unionCase is one tag value and the non-tag fields it allows, in field
 // order. payload is the payload field as this case types it, nil when the
-// case carries none.
+// case carries none; required holds the case's copies of the other fields
+// Required lists for it.
 type unionCase struct {
-	payload *fieldInfo
-	value   string
-	fields  []string
+	payload  *fieldInfo
+	required map[string]*fieldInfo
+	value    string
+	fields   []string
 }
 
 // resolveUnions attaches each registered Union to its type, reporting every
@@ -56,16 +65,16 @@ func (e *astEngine) resolveUnions() error {
 	for _, u := range e.gen.Unions {
 		ti := e.byName[u.Type.Name]
 		if ti.Map != nil {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: a union type is a struct, not a map", u.Type.PkgPath, u.Type.Name))
+			errs = append(errs, fmt.Errorf("wiregen: union %s: a union type is a struct, not a map", e.gen.goName(u.Type)))
 			continue
 		}
 		if ti.Union != nil {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s is declared twice", u.Type.PkgPath, u.Type.Name))
+			errs = append(errs, fmt.Errorf("wiregen: union %s is declared twice", e.gen.goName(u.Type)))
 			continue
 		}
 		ui, err := e.resolveUnion(&u, ti)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: %w", u.Type.PkgPath, u.Type.Name, err))
+			errs = append(errs, fmt.Errorf("wiregen: union %s: %w", e.gen.goName(u.Type), err))
 			continue
 		}
 		ti.Union = ui
@@ -98,7 +107,148 @@ func (e *astEngine) resolveUnion(u *Union, ti *typeInfo) (*unionInfo, error) {
 			return nil, fmt.Errorf("field %q is not in every case, but encoding/json writes it in every case; tag it omitempty or omitzero", f.WireName)
 		}
 	}
+	if err := ui.checkRequired(u, ti); err != nil {
+		return nil, err
+	}
+	ui.require(u, ti)
 	return ui, nil
+}
+
+// checkRequired checks u.Required against ui's cases before any is applied,
+// so one case's entry never makes another's look redundant.
+func (ui *unionInfo) checkRequired(u *Union, ti *typeInfo) error {
+	for _, v := range slices.Sorted(maps.Keys(u.Required)) {
+		uc := ui.caseOf(v)
+		if uc == nil {
+			return fmt.Errorf("the Required key %q is no case", v)
+		}
+		seen := map[string]bool{}
+		for _, name := range u.Required[v] {
+			switch {
+			case seen[name]:
+				return fmt.Errorf("case %q requires %q twice", v, name)
+			case ui.requiredInEveryCase(ti, name):
+				return fmt.Errorf("case %q requires %q, which every case already sends, never null", v, name)
+			case !slices.Contains(uc.fields, name):
+				return fmt.Errorf("case %q requires %q, which the case does not carry", v, name)
+			}
+			seen[name] = true
+		}
+	}
+	return nil
+}
+
+// require marks each field u.Required lists as required in its case, on a
+// copy, so the other cases keep the field's own rule.
+func (ui *unionInfo) require(u *Union, ti *typeInfo) {
+	for v, names := range u.Required {
+		uc := ui.caseOf(v)
+		for _, name := range names {
+			if name == ui.payload {
+				uc.payload.CaseRequired = true
+				continue
+			}
+			f := *ti.field(name)
+			f.CaseRequired = true
+			if uc.required == nil {
+				uc.required = map[string]*fieldInfo{}
+			}
+			uc.required[name] = &f
+		}
+	}
+}
+
+func (ui *unionInfo) caseOf(value string) *unionCase {
+	for i := range ui.cases {
+		if ui.cases[i].value == value {
+			return &ui.cases[i]
+		}
+	}
+	return nil
+}
+
+// requiredInEveryCase reports whether every case carries name and its own
+// rule already makes it present and not null, the tag included.
+func (ui *unionInfo) requiredInEveryCase(ti *typeInfo, name string) bool {
+	if name == ui.tag {
+		return true
+	}
+	for i := range ui.cases {
+		uc := &ui.cases[i]
+		if !slices.Contains(uc.fields, name) {
+			return false
+		}
+		f := ti.field(name)
+		if name == ui.payload {
+			f = uc.payload
+		}
+		if f.optional() || f.nullOut() {
+			return false
+		}
+	}
+	return true
+}
+
+// rankEnds checks every union has a finite value and sets its end case. A
+// value ends when each required struct field's type does: a type ends in
+// round n when every tie its value must hold ended in an earlier round, a
+// union through its first case that does. Collections can be empty and
+// optional fields absent, so only required struct ties count, and only a
+// Required entry can close a cycle of them, since Go refuses a struct that
+// holds itself by value.
+func (e *astEngine) rankEnds() error {
+	ended := map[string]bool{}
+	for {
+		var next []string
+		for _, ti := range e.types {
+			if !ended[ti.Name] && e.endsWith(ti, ended) {
+				next = append(next, ti.Name)
+			}
+		}
+		if len(next) == 0 {
+			break
+		}
+		for _, name := range next {
+			ended[name] = true
+		}
+	}
+	var errs []error
+	for _, u := range e.gen.Unions {
+		if !ended[u.Type.Name] {
+			errs = append(errs, fmt.Errorf("wiregen: union %s: every case requires a field no finite value fills", e.gen.goName(u.Type)))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// endsWith reports whether ti's value can end given the types in ended,
+// setting a union's end to its first case that can.
+func (*astEngine) endsWith(ti *typeInfo, ended map[string]bool) bool {
+	if ti.Union == nil {
+		fields := make([]*fieldInfo, 0, len(ti.Fields))
+		for i := range ti.Fields {
+			fields = append(fields, &ti.Fields[i])
+		}
+		return tiesEnded(fields, ended)
+	}
+	for i := range ti.Union.cases {
+		if tiesEnded(ti.caseFields(&ti.Union.cases[i]), ended) {
+			ti.Union.end = i
+			return true
+		}
+	}
+	return false
+}
+
+// tiesEnded reports whether every required struct field of fields that
+// cannot be null names a type in ended.
+func tiesEnded(fields []*fieldInfo, ended map[string]bool) bool {
+	for _, f := range fields {
+		if f.Kind == kindStruct && !f.optional() && !f.nullable() && !ended[f.GoTypeName] {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveCases resolves each case of u into ui, typing its payload, and
@@ -202,8 +352,11 @@ func (e *astEngine) caseValues(u *Union, ti *typeInfo) ([]string, error) {
 	if tag == nil {
 		return nil, fmt.Errorf("has no field %q to tag it", u.Tag)
 	}
-	if tag.optional() || (tag.Kind != kindString && tag.Kind != kindEnum) {
-		return nil, fmt.Errorf("tag %q must be a required string or enum field", u.Tag)
+	if tag.optional() || tag.nullable() || (tag.Kind != kindString && tag.Kind != kindEnum) {
+		return nil, fmt.Errorf("tag %q must be a required string or enum field that is never null", u.Tag)
+	}
+	if tag.Const != "" {
+		return nil, fmt.Errorf("tag %q is pinned by a wiregen const, but a union's tag varies by case", u.Tag)
 	}
 	if len(u.Cases) == 0 {
 		return nil, errors.New("declares no case")
@@ -257,16 +410,19 @@ func (ti *typeInfo) field(name string) *fieldInfo {
 }
 
 // caseFields returns ti's fields uc allows, the tag first, the payload as uc
-// types it.
+// types it and a field uc requires as its copy.
 func (ti *typeInfo) caseFields(uc *unionCase) []*fieldInfo {
 	out := make([]*fieldInfo, 0, 1+len(uc.fields))
 	out = append(out, ti.field(ti.Union.tag))
 	for _, name := range uc.fields {
-		if name == ti.Union.payload {
+		switch {
+		case name == ti.Union.payload:
 			out = append(out, uc.payload)
-			continue
+		case uc.required[name] != nil:
+			out = append(out, uc.required[name])
+		default:
+			out = append(out, ti.field(name))
 		}
-		out = append(out, ti.field(name))
 	}
 	return out
 }
@@ -318,20 +474,24 @@ func isComponentNamePart(s string) bool {
 	return true
 }
 
+// emitUnionType writes ti's union alias, each case a multi-line object type
+// in prettier's layout. tsc and typedoc attach no JSDoc written inside a
+// one-line object type, and a case that is multi-line whether documented or
+// not changes only its doc lines when a field gains a doc.
 func (g *generator) emitUnionType(w *strings.Builder, ti *typeInfo) {
 	w.WriteString(ti.Doc)
 	w.WriteString("export type " + g.tsName(ti.Name) + " =")
 	for i := range ti.Union.cases {
 		uc := &ti.Union.cases[i]
-		members := []string{tsPropName(ti.Union.tag) + ": \"" + tsStringLiteral(uc.value) + "\""}
-		for _, f := range ti.caseFields(uc)[1:] {
-			q := ""
-			if f.optional() {
-				q = "?"
-			}
-			members = append(members, tsPropName(f.WireName)+q+": "+f.TSType)
+		fields := ti.caseFields(uc)
+		tag := *fields[0]
+		tag.TSType = "\"" + tsStringLiteral(uc.value) + "\""
+		fields[0] = &tag
+		w.WriteString("\n  | {\n")
+		for _, f := range fields {
+			emitInterfaceField(w, f, "      ")
 		}
-		w.WriteString("\n  | { " + strings.Join(members, "; ") + " }")
+		w.WriteString("    }")
 	}
 	w.WriteString(";\n\n")
 }
@@ -381,7 +541,9 @@ func (g *generator) emitUnionDecoder(w *strings.Builder, ti *typeInfo, used *use
 
 // arbForUnion renders a union's arbitrary: a draw from any case, the tag
 // fixed to the case's value. A union that can reach itself is depth-capped
-// like a recursive struct.
+// like a recursive struct, its end case's leaf first, since fast-check's
+// oneof draws only its first arbitrary at maxDepth
+// (https://fast-check.dev/docs/core-blocks/arbitraries/combiners/any/#oneof).
 func (g *generator) arbForUnion(ti *typeInfo, recursive func(*fieldInfo) bool) string {
 	render := func(indent string, rec func(*fieldInfo) bool) []string {
 		out := make([]string, 0, len(ti.Union.cases))
@@ -396,6 +558,8 @@ func (g *generator) arbForUnion(ti *typeInfo, recursive func(*fieldInfo) bool) s
 		return "fc.oneof(\n    " + strings.Join(render("    ", nil), ",\n    ") + ",\n  )"
 	}
 	leaves := render("    ", recursive)
+	end := ti.Union.end
+	leaves = append(append([]string{leaves[end]}, leaves[:end]...), leaves[end+1:]...)
 	full := render("    ", nil)
 	return "fc.oneof(\n    " + arbRecursionCap + ",\n    " + strings.Join(append(leaves, full...), ",\n    ") + ",\n  )"
 }

@@ -39,6 +39,7 @@ type SecurityScheme struct {
 const (
 	kwType        = "type"
 	kwRef         = "$ref"
+	kwConst       = "const"
 	kwRequired    = "required"
 	kwDescription = "description"
 	kwName        = "name"
@@ -403,6 +404,9 @@ func (b *docBuilder) usedDirections() map[string]map[direction]bool {
 		e := &b.g.Endpoints[i]
 		b.engine.reach(used, e.Request, dirRequest)
 		b.engine.reach(used, e.Response, dirResponse)
+		for _, s := range e.ExtraSuccesses {
+			b.engine.reach(used, s.Response, dirResponse)
+		}
 		params[e.Params.Name], params[e.Query.Name] = true, true
 	}
 	for _, ev := range b.g.Events {
@@ -420,32 +424,44 @@ func (b *docBuilder) usedDirections() map[string]map[direction]bool {
 // componentSchemas renders every component schema, refusing two that share a
 // name.
 func (b *docBuilder) componentSchemas() (map[string]any, error) {
-	out := map[string]any{}
-	owner := map[string]string{}
-	add := func(name, who string, schema any) error {
-		if prev, dup := owner[name]; dup {
-			return fmt.Errorf("wiregen: OpenAPI component %s is named by both %s and %s; rename one through TSNameOverride or EnumTSNameOverride", name, prev, who)
-		}
-		owner[name] = who
-		out[name] = schema
-		return nil
-	}
+	c := components{schemas: map[string]any{}, owner: map[string]string{}}
 	for _, name := range enumNamesSlice(b.g.enums) {
 		values := b.g.enums[name].values
-		if err := add(b.g.tsEnumName(name), "enum "+name, map[string]any{kwType: schemaString, "enum": slices.Clone(values)}); err != nil {
+		if err := c.add(b.g.tsEnumName(name), b.g.enumLabel(name), map[string]any{kwType: schemaString, "enum": slices.Clone(values)}); err != nil {
 			return nil, err
 		}
 	}
 	for _, ti := range b.engine.types {
 		for _, d := range b.componentDirections(ti.Name) {
 			for name, s := range b.typeSchemas(ti, d) {
-				if err := add(name, "type "+ti.Name, s); err != nil {
+				if err := c.add(name, b.g.typeLabel(ti.Name), s); err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
-	return out, nil
+	return c.schemas, nil
+}
+
+// components collects component schemas by name, with the registered type or
+// enum each name came from.
+type components struct {
+	schemas map[string]any
+	owner   map[string]string
+}
+
+// add files schema under name for who, refusing a name OpenAPI does not allow
+// or one another type or enum already took.
+func (c *components) add(name, who string, schema any) error {
+	if !isComponentNamePart(name) {
+		return fmt.Errorf("wiregen: OpenAPI component name %q, of %s, holds a character outside ASCII letters, digits, '.', '-' and '_' (https://spec.openapis.org/oas/v3.1.0#components-object); rename it through TSNameOverride or EnumTSNameOverride", name, who)
+	}
+	if prev, dup := c.owner[name]; dup {
+		return fmt.Errorf("wiregen: OpenAPI component %s is named by both %s and %s; rename one through TSNameOverride or EnumTSNameOverride", name, prev, who)
+	}
+	c.owner[name] = who
+	c.schemas[name] = schema
+	return nil
 }
 
 // componentDirections returns the forms of type name the document carries:
@@ -514,7 +530,7 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 	for i := range ti.Union.cases {
 		uc := &ti.Union.cases[i]
 		caseName := name + "." + uc.value
-		s := b.objectSchema(ti.caseFields(uc), d, map[string]any{ti.Union.tag: map[string]any{"const": uc.value}})
+		s := b.objectSchema(ti.caseFields(uc), d, map[string]any{ti.Union.tag: map[string]any{kwConst: uc.value}})
 		s["additionalProperties"] = false
 		out[caseName] = s
 		refs = append(refs, map[string]any{kwRef: componentsRef + caseName})
@@ -528,9 +544,8 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 }
 
 // objectSchema is the object schema of fields in direction d, override
-// replacing a property's schema by wire name. A response field is required
-// unless omitempty or omitzero, since the encoder always writes it; a
-// request field also unless a pointer, as the decoder leaves it nil.
+// replacing a property's schema by wire name. Required follows optional in
+// a response and optionalIn in a request (presence.go).
 func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map[string]any) map[string]any {
 	props := map[string]any{}
 	required := []any{}
@@ -539,7 +554,7 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 		if s, ok := override[f.WireName]; ok {
 			props[f.WireName] = s
 		}
-		if (d == dirResponse && !f.absentOut()) || (d == dirRequest && !f.optional()) {
+		if (d == dirResponse && !f.optional()) || (d == dirRequest && !f.optionalIn()) {
 			required = append(required, f.WireName)
 		}
 	}
@@ -554,8 +569,8 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 // []byte is nullable: in a request always, since null decodes to nil, and in
 // a response unless omitempty or omitzero, since nil encodes as null. A typed
 // union payload is nullable in a response even with an omit option, since its
-// bytes can be JSON null. A Count lower bound of 1 or more makes it never
-// nullable.
+// bytes can be JSON null. A Count lower bound of 1 or more, or a union
+// case's Required, makes it never nullable.
 func (b *docBuilder) fieldSchema(f *fieldInfo, d direction) any {
 	s := b.valueSchema(f, d)
 	null := f.nullIn()
@@ -580,6 +595,9 @@ func (b *docBuilder) elemSchema(f *fieldInfo, d direction) any {
 
 // valueSchema is the schema of f's non-null values.
 func (b *docBuilder) valueSchema(f *fieldInfo, d direction) map[string]any {
+	if f.Const != "" {
+		return map[string]any{kwType: schemaString, kwConst: f.Const}
+	}
 	var s map[string]any
 	switch f.Kind {
 	case kindRaw:
@@ -628,7 +646,7 @@ var scalarTypes = map[wireKind]string{
 // nullable widens s to admit null: a plain type keyword becomes a type list,
 // anything else is wrapped in anyOf.
 func nullable(s map[string]any) map[string]any {
-	if t, ok := s[kwType].(string); ok && s["enum"] == nil && s["const"] == nil {
+	if t, ok := s[kwType].(string); ok && s["enum"] == nil && s[kwConst] == nil {
 		out := maps.Clone(s)
 		out[kwType] = []any{t, schemaNull}
 		return out
@@ -649,6 +667,9 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 		}
 	}
 	responses := map[string]any{strconv.Itoa(e.successStatus()): b.successResponse(e)}
+	for _, s := range e.ExtraSuccesses {
+		responses[strconv.Itoa(s.Status)] = b.extraResponse(e, s)
+	}
 	maps.Copy(responses, b.errorResponses(e))
 	op["responses"] = responses
 	op["security"] = securityValue(e.Security)
@@ -707,7 +728,7 @@ func (b *docBuilder) parameters(e *Endpoint) []any {
 		ti := b.engine.byName[e.Query.Name]
 		for i := range ti.Fields {
 			f := &ti.Fields[i]
-			out = append(out, map[string]any{kwName: f.WireName, "in": "query", kwRequired: !f.optional(), kwSchema: b.valueSchema(f, dirRequest)})
+			out = append(out, map[string]any{kwName: f.WireName, "in": "query", kwRequired: !f.optionalIn(), kwSchema: b.valueSchema(f, dirRequest)})
 		}
 	}
 	for _, h := range e.Headers {
@@ -728,15 +749,7 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 	resp := map[string]any{kwDescription: http.StatusText(e.successStatus())}
 	switch e.Kind {
 	case KindJSON:
-		if e.Response == (Type{}) {
-			return resp
-		}
-		schema := b.bodyRef(e.Response.Name, dirResponse)
-		if e.Array {
-			// encoding/json writes a nil slice as null.
-			schema = nullable(map[string]any{kwType: schemaArray, "items": schema})
-		}
-		resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: schema}}
+		b.addJSONBody(resp, e.Response, e.Array)
 	case KindRaw:
 		resp[kwContent] = map[string]any{e.ContentType: map[string]any{}}
 	case KindEventStream:
@@ -750,9 +763,41 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 		}
 		resp[kwContent] = map[string]any{"text/event-stream": media}
 	case KindRedirect:
-		resp["headers"] = map[string]any{"Location": map[string]any{kwRequired: true, kwSchema: map[string]any{kwType: schemaString, "format": "uri-reference"}}}
+		resp["headers"] = locationHeader()
 	}
 	return resp
+}
+
+// extraResponse renders one of e's extra success responses: a JSON body, a
+// redirect's Location, or a description alone for a bodiless status.
+func (b *docBuilder) extraResponse(e *Endpoint, s Success) map[string]any {
+	resp := map[string]any{kwDescription: http.StatusText(s.Status)}
+	switch e.Kind {
+	case KindJSON:
+		b.addJSONBody(resp, s.Response, s.Array)
+	case KindRedirect:
+		resp["headers"] = locationHeader()
+	}
+	return resp
+}
+
+// addJSONBody sets resp's JSON content to body, or to an array of body when
+// array is set; a zero body leaves resp without content.
+func (b *docBuilder) addJSONBody(resp map[string]any, body Type, array bool) {
+	if body == (Type{}) {
+		return
+	}
+	schema := b.bodyRef(body.Name, dirResponse)
+	if array {
+		// encoding/json writes a nil slice as null.
+		schema = nullable(map[string]any{kwType: schemaArray, "items": schema})
+	}
+	resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: schema}}
+}
+
+// locationHeader renders a redirect response's required Location header.
+func locationHeader() map[string]any {
+	return map[string]any{"Location": map[string]any{kwRequired: true, kwSchema: map[string]any{kwType: schemaString, "format": "uri-reference"}}}
 }
 
 // errorResponses renders e's errors grouped by status, each code's

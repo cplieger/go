@@ -11,6 +11,7 @@ It replaces the middleware, proxy-header parsing and shutdown sequence you would
 httpserver is built for a Go service on `http.ServeMux` that faces a browser or sits behind a proxy.
 
 - `ResolveClient` and `ClientIP` read `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ResolveClient` also reports whether the peer is a proxy you trust, and whether an unlisted proxy sent a forwarding header.
+- `ForwarderCheck` tells a private socket peer that is a container runtime's or router's forwarder, such as Docker's bridge gateway, from a client on your network.
 - A Host allowlist answers 403 to a `Host` you did not list, which stops DNS rebinding attacks.
 - The access log writes `log/slog` lines and caps the path at 512 bytes and the method at 24. Metric labels stay within ten method values and your registered routes.
 - `New` leaves the write timeout off, so SSE and WebSocket streams stay open. `Run` drains in-flight requests within a 5-second grace period by default.
@@ -98,7 +99,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 
 - Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NoStore`.
 - Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), `AddLogAttrs` for a handler's own access-line attributes, the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`), `StatusRecorder` and `NewStatusRecorder`.
-- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `LogRefusal`), `CanonicalHost`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewStaticTokenVerifier`.
+- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `LogRefusal`), `CanonicalHost`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
 - Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorCode` and `ErrorResponder`, `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler`, `InlineScriptHashes`, `InlineStyleHashes`.
 - Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and `ListenMetrics` (`MetricsHandlers`, `MetricsServer`) for an app's opt-in metrics and health listener.
@@ -127,13 +128,13 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 
 - [httpclient](https://github.com/cplieger/go/tree/main/httpclient) makes the requests your service sends out survive flaky servers. httpserver handles the requests coming in.
 - [health](https://github.com/cplieger/go/tree/main/health) is the container liveness probe for a Docker `HEALTHCHECK`, and its `CheckHandler` answers a load balancer's readiness check.
-- [access](https://github.com/cplieger/access) handles user logins and sessions. `NewStaticTokenVerifier` checks one configured machine credential.
+- [access](https://github.com/cplieger/access) handles user logins and sessions. `NewStaticTokenVerifier` checks one configured machine credential, and `TokenSet` several.
 
 ## Documentation
 
 - [Middleware](docs/middleware.md) covers ordering, recovery, security headers, compression, timeouts, rate limiting and `NoStore`.
 - [Access logging and metrics](docs/access-logging.md) covers request ids, the log line, its bounds and the metric hook.
-- [Client IP, hosts and credentials](docs/trust-checks.md) covers proxy trust, the Host allowlist and loopback checks.
+- [Client IP, hosts and credentials](docs/trust-checks.md) covers proxy trust, the Host allowlist, loopback checks, configured credentials, header-value checks, `WWW-Authenticate` challenges and failed-authentication limits.
 - [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope, body decoding and path checks.
 - [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, caching and hash-pinned inline scripts.
 - [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the metrics listener.
@@ -150,7 +151,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using [Claude](https://claude.com), [GPT](https://openai.com), and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+This project was built with AI assistance. The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 

@@ -83,12 +83,12 @@ func TestDecoders_OptionalEnumUsesReqOneOf(t *testing.T) {
 
 // TestDecoders_OptionalByteSliceIsGuardedString pins the optional []byte branch
 // of emitOptionalField: a *[]byte field keeps the []byte-as-string mapping
-// into the optional path, decoding via reqStr under the presence guard and
-// never decodeArray.
+// into the optional path, decoding via reqStr under the presence guard, which
+// already read null as absent, and never decodeArray.
 func TestDecoders_OptionalByteSliceIsGuardedString(t *testing.T) {
 	r := edgesReg(wiregen.TypeRef[edges.OptionalByteSlice]())
 	dec := mustGen(t, r.decodersFile)
-	if !strings.Contains(dec, `if ($v !== undefined && $v !== null) out.data = own(o, "data") === null ? "" : reqStr(o, "data",`) {
+	if !strings.Contains(dec, `if ($v !== undefined && $v !== null) out.data = reqStr(o, "data",`) {
 		t.Errorf("optional *[]byte should decode as a string, got:\n%s", dec)
 	}
 	if strings.Contains(dec, `decodeArray(own(o, "data")`) {
@@ -147,9 +147,8 @@ func TestDecoders_UncoveredEmitBranches(t *testing.T) {
 
 // TestDecoders_NullHandling pins the JSON-null decode contract: a required
 // slice/map accepts null as empty (encoding/json marshals a nil non-omitempty
-// slice/map to null), an optional field treats present-null as absent, and
-// the json.RawMessage
-// pass-through keeps null as data. The decoders read null and absent alike
+// slice/map to null), an optional field treats present-null as absent, and a
+// required json.RawMessage is checked present and keeps null as data
 // (docs/type-mapping.md "Null and presence").
 func TestDecoders_NullHandling(t *testing.T) {
 	dec := mustGen(t, edgesReg(wiregen.TypeRef[edges.AllKinds]()).decodersFile)
@@ -160,8 +159,8 @@ func TestDecoders_NullHandling(t *testing.T) {
 		`bytes: own(o, "bytes") === null ? "" : reqStr(o, "bytes", "$.all_kinds"),`,
 		// required map (no omitempty — maps keep source optionality): null -> {}
 		`map: own(o, "map") === null ? {} : decodeRecord(own(o, "map"),`,
-		// a required json.RawMessage keeps null as data (bare cast)
-		`raw: own(o, "raw") as unknown,`,
+		// a required json.RawMessage is refused absent and keeps null as data
+		`raw: reqRaw(o, "raw", "$.all_kinds"),`,
 	}
 	for _, want := range wants {
 		if !strings.Contains(dec, want) {
@@ -190,7 +189,7 @@ func TestDecoders_OptionalPassthroughKeepsNull(t *testing.T) {
 	r.Types = []wiregen.Type{wiregen.TypeRef[basic.HasOptionalPassthrough]()}
 	dec := mustGen(t, r.decodersFile)
 	for _, want := range []string{
-		`if ($v !== undefined) out.raw = own(o, "raw") as unknown;`,
+		`if ($v !== undefined) out.raw = own(o, "raw");`,
 	} {
 		if !strings.Contains(dec, want) {
 			t.Errorf("HasOptionalPassthrough decoder missing %q\n--- output ---\n%s", want, dec)

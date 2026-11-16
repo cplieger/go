@@ -22,6 +22,7 @@ type OtherParams struct {
 
 // ListQuery is a query of an optional cursor, limit and kind.
 type ListQuery struct {
+	// Cursor resumes the list after the item it names.
 	Cursor string `json:"cursor,omitempty"`
 	Kind   Kind   `json:"kind,omitempty"`
 	Limit  int    `json:"limit,omitempty"`

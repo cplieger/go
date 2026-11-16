@@ -29,9 +29,18 @@ type typeInfo struct {
 	Name   string
 	Doc    string
 	Fields []fieldInfo
+	// Embeds are the struct embeds Fields are flattened from, at any depth.
+	Embeds []embedInfo
 	// InRefusals are why encoding/json cannot decode the type itself, which
 	// refuse it wherever a request reaches it.
 	InRefusals []string
+}
+
+// embedInfo is one flattened struct embed.
+type embedInfo struct {
+	// Owner is the struct declaration holding the embed.
+	Owner  *Type
+	GoName string // the selector from the registered type, through embeds
 }
 
 // fieldInfo is one field's wire plan, decided once from encoding/json's
@@ -47,10 +56,14 @@ type fieldInfo struct {
 	// Refusals are why this field cannot cross the wire; Generate fails
 	// listing every one.
 	Refusals []string
+	// Owner is the struct declaration holding the field: the registered type,
+	// or the embedded struct a promoted field comes from.
+	Owner    *Type
 	WireName string
 	GoName   string // the Go selector a refusal's path names, through embeds
 	TSType   string
 	Doc      string // JSDoc for the field
+	Const    string // the one value a wiregen const tag pins; "" for none
 	// GoTypeName keys the registered struct, enum or Mappings entry a value
 	// names.
 	GoTypeName string
@@ -71,7 +84,10 @@ type fieldInfo struct {
 	// RawNull: raw JSON typed as another shape (a union payload), whose bytes
 	// can be JSON null, which no omit option drops.
 	RawNull bool
-	Tagged  bool // wire name came from an explicit json tag
+	// CaseRequired: a union case's copy of a field its Required lists;
+	// presence.go derives its rules.
+	CaseRequired bool
+	Tagged       bool // wire name came from an explicit json tag
 }
 
 // wireKind is the one wire form encoding/json gives a value.
@@ -157,6 +173,9 @@ func newASTEngine(ctx context.Context, g *generator) (*astEngine, error) {
 	if err := e.resolveUnions(); err != nil {
 		return nil, err
 	}
+	if err := e.rankEnds(); err != nil {
+		return nil, err
+	}
 	if err := e.checkURLArguments(); err != nil {
 		return nil, err
 	}
@@ -187,7 +206,7 @@ func (e *astEngine) refuseUndecodable() {
 	}
 	for _, ti := range e.types {
 		if used[ti.Name][dirRequest] {
-			e.refusals = append(e.refusals, ti.inRefusals(e.gen.typeNames[ti.Name]+"."+ti.Name)...)
+			e.refusals = append(e.refusals, ti.inRefusals(e.gen.goName(Type{PkgPath: e.gen.typeNames[ti.Name], Name: ti.Name}))...)
 		}
 	}
 }
@@ -316,37 +335,38 @@ func indexPackages(pkgs []*packages.Package) map[string]*packages.Package {
 func (g *generator) discoverEnums(allPkgs map[string]*packages.Package) error {
 	var errs []error
 	for _, ref := range g.Enums {
-		values, err := enumMembers(ref, allPkgs[ref.Type.PkgPath])
+		values, consts, err := enumMembers(ref, allPkgs[ref.Type.PkgPath])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("wiregen: enum %s.%s: %w", ref.Type.PkgPath, ref.Type.Name, err))
 			continue
 		}
-		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath, values: values}
+		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath, values: values, consts: consts}
 	}
 	return errors.Join(errs...)
 }
 
 // enumMembers returns ref's wire members: the constants of exactly ref's type
-// in pkg, in declaration order, each named by its value or by ref.Wire.
-func enumMembers(ref EnumRef, pkg *packages.Package) ([]string, error) {
+// in pkg, in declaration order, each named by its value or by ref.Wire, and
+// the Go constants on the wire.
+func enumMembers(ref EnumRef, pkg *packages.Package) (names, consts []string, err error) {
 	if pkg == nil || pkg.Types == nil {
-		return nil, errors.New("package not loaded")
+		return nil, nil, errors.New("package not loaded")
 	}
 	tn, ok := pkg.Types.Scope().Lookup(ref.Type.Name).(*types.TypeName)
 	if !ok {
-		return nil, errors.New("no such type")
+		return nil, nil, errors.New("no such type")
 	}
-	if err := checkEnumKind(ref, tn.Type()); err != nil {
-		return nil, err
+	if kindErr := checkEnumKind(ref, tn.Type()); kindErr != nil {
+		return nil, nil, kindErr
 	}
-	names, err := memberNames(ref, typedConsts(pkg.Types.Scope(), tn.Type()))
+	names, consts, err = memberNames(ref, typedConsts(pkg.Types.Scope(), tn.Type()))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(names) == 0 {
-		return nil, errors.New("declares no constant with a wire name")
+		return nil, nil, errors.New("declares no constant with a wire name")
 	}
-	return names, nil
+	return names, consts, nil
 }
 
 // checkEnumKind rejects an enum type whose kind ref cannot name: a string
@@ -378,30 +398,35 @@ func checkEnumKind(ref EnumRef, t types.Type) error {
 
 // memberNames names consts on the wire, skipping a repeated value and a
 // constant Wire refuses, and rejects two values encoding alike, which no
-// decoder could tell apart.
-func memberNames(ref EnumRef, consts []*types.Const) ([]string, error) {
+// decoder could tell apart. goNames holds every constant on the wire, a
+// repeated value's included.
+func memberNames(ref EnumRef, consts []*types.Const) (names, goNames []string, err error) {
 	byName := map[string]string{}
-	seenVal := map[string]bool{}
-	var names []string
+	onWire := map[string]bool{} // by value: whether its first constant is
 	for _, c := range consts {
-		if seenVal[c.Val().ExactString()] {
+		val := c.Val().ExactString()
+		if wired, seen := onWire[val]; seen {
+			if wired {
+				goNames = append(goNames, c.Name())
+			}
 			continue
 		}
-		seenVal[c.Val().ExactString()] = true
 		name, member, err := wireName(ref, c)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		onWire[val] = member
 		if !member {
 			continue
 		}
 		if prev, dup := byName[name]; dup {
-			return nil, fmt.Errorf("constants %s and %s both encode as %q", prev, c.Name(), name)
+			return nil, nil, fmt.Errorf("constants %s and %s both encode as %q", prev, c.Name(), name)
 		}
 		byName[name] = c.Name()
 		names = append(names, name)
+		goNames = append(goNames, c.Name())
 	}
-	return names, nil
+	return names, goNames, nil
 }
 
 // typedConsts returns the constants of exactly type t declared at scope, in
@@ -431,43 +456,64 @@ func wireName(ref EnumRef, c *types.Const) (name string, member bool, err error)
 	return name, werr == nil, nil
 }
 
-// lookupType finds wt's struct or named map in pkg, setting exactly one of
-// st and mp. A type an endpoint, event, union or ErrorEnvelope names is refused
-// under that role, with no hint a role cannot use.
-func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (tn *types.TypeName, st *types.Struct, mp *types.Named, err error) {
+// lookupType finds wt's struct or named map, setting exactly one of st and
+// mp; an instantiation is built from its origin in pkg. A type an endpoint,
+// event, union or ErrorEnvelope names is refused under that role, with no
+// hint a role cannot use.
+func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (t types.Type, st *types.Struct, mp *types.Named, err error) {
 	role, named := e.gen.typeRoles[wt.Name]
+	full := e.gen.goName(wt)
+	if sp, generic := e.gen.instances[wt.Name]; generic {
+		if t, err = e.instantiate(&sp); err != nil {
+			if named {
+				return nil, nil, nil, fmt.Errorf("wiregen: %s %s: %w", role, full, err)
+			}
+			return nil, nil, nil, fmt.Errorf("wiregen: registered type %s: %w", full, err)
+		}
+	} else if t, err = lookupDeclared(pkg, wt, role, named); err != nil {
+		return nil, nil, nil, err
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		return t, u, nil, nil
+	case *types.Map:
+		return t, nil, t.(*types.Named), nil //nolint:errcheck // lookupDeclared refuses an alias, so a defined type or an instantiation is left, which go/types gives as a *types.Named
+	}
+	if named {
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s is not %s", role, full, roleShape(role))
+	}
+	return nil, nil, nil, fmt.Errorf("wiregen: registered type %s is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type", full)
+}
+
+// lookupDeclared finds the type wt declares in pkg, refusing it under role
+// when the registry names it in one.
+func lookupDeclared(pkg *packages.Package, wt Type, role string, named bool) (types.Type, error) {
 	obj := pkg.Types.Scope().Lookup(wt.Name)
 	switch {
 	case obj == nil && named:
-		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
+		return nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
 	case obj == nil:
-		return nil, nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
+		return nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
 	}
 	tn, ok := obj.(*types.TypeName)
 	switch {
 	case !ok && named:
-		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
+		return nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
 	case !ok:
-		return nil, nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
+		return nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
 	}
 	// TypeRef resolves an alias to the type it names, so only a hand-written
 	// Type names one; registering it would emit the named type twice.
 	if tn.IsAlias() {
 		if named {
-			return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is an alias; name the type it stands for", role, wt.PkgPath, wt.Name)
+			return nil, fmt.Errorf("wiregen: %s %s.%s is an alias; name the type it stands for", role, wt.PkgPath, wt.Name)
 		}
-		return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is an alias; register the type it stands for", wt.PkgPath, wt.Name)
+		return nil, fmt.Errorf("wiregen: registered type %s.%s is an alias; register the type it stands for", wt.PkgPath, wt.Name)
 	}
-	switch u := tn.Type().Underlying().(type) {
-	case *types.Struct:
-		return tn, u, nil, nil
-	case *types.Map:
-		return tn, nil, tn.Type().(*types.Named), nil //nolint:errcheck // the alias refusal above leaves a defined type, which go/types gives as a *types.Named
+	if n, ok := tn.Type().(*types.Named); ok && n.TypeParams().Len() > 0 {
+		return nil, fmt.Errorf("wiregen: %s.%s is generic; register an instantiation of it, such as TypeRef[%s[T]]() for a T registered or builtin", wt.PkgPath, wt.Name, wt.Name)
 	}
-	if named {
-		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not %s", role, wt.PkgPath, wt.Name, roleShape(role))
-	}
-	return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
+	return tn.Type(), nil
 }
 
 func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (*typeInfo, error) {
@@ -476,34 +522,37 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 		return nil, fmt.Errorf("wiregen: package %q not loaded, and type %s needs it", wt.PkgPath, wt.Name)
 	}
 
-	tn, st, mp, err := e.lookupType(pkg, wt)
+	t, st, mp, err := e.lookupType(pkg, wt)
 	if err != nil {
 		return nil, err
 	}
 
 	ti := &typeInfo{Name: wt.Name}
+	decl, full := e.gen.declaration(wt), e.gen.goName(wt)
 
-	ti.Doc = commentToJSDoc(typeDoc(pkg, wt.Name))
+	ti.Doc = commentToJSDoc(typeDoc(pkg, decl.Name))
 	// A type with a marshaler is refused for it below, and is written as
 	// its marshaler's output, so only a plain one is checked here.
-	if why := textOnlyDecoder(tn.Type()); why != "" && marshalCodec(tn.Type()) == codecPlain {
+	if why := textOnlyDecoder(t); why != "" && marshalCodec(t) == codecPlain {
 		ti.InRefusals = append(ti.InRefusals, why)
 	}
 
-	switch c, role := marshalCodec(tn.Type()), e.gen.typeRoles[wt.Name]; {
+	switch c, role := marshalCodec(t), e.gen.typeRoles[wt.Name]; {
 	case c != codecPlain && role != "":
-		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is the "+role+", but "+c.why()+"; drop the method")
+		e.refusals = append(e.refusals, full+": is the "+role+", but "+c.why()+"; drop the method")
 	case c != codecPlain:
-		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
+		e.refusals = append(e.refusals, full+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
 	}
 	if mp != nil {
-		e.resolveMapTypeInfo(ti, mp, wt)
+		e.resolveMapTypeInfo(ti, mp, full)
 		return ti, nil
 	}
-	ti.Fields = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
+	ti.Fields, ti.Embeds = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
+	ownFields(ti.Fields, decl)
+	ownEmbeds(ti.Embeds, decl)
 	for i := range ti.Fields {
 		for _, why := range ti.Fields[i].Refusals {
-			e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+"."+ti.Fields[i].GoName+": "+why)
+			e.refusals = append(e.refusals, full+"."+ti.Fields[i].GoName+": "+why)
 		}
 	}
 
@@ -552,8 +601,7 @@ func (e *astEngine) checkURLArguments() error {
 // resolveMapTypeInfo plans a named map type as an inline field of its
 // underlying map would be planned, its Elem the plan of the value, and lists
 // its refusals; a bound it declares is refused, as none applies to a map.
-func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, wt Type) {
-	full := wt.PkgPath + "." + wt.Name
+func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, full string) {
 	fi := fieldInfo{}
 	e.resolveInto(named.Underlying(), &fi)
 	e.applyBounds(named, full, &fi)
@@ -564,12 +612,12 @@ func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, wt Type
 	ti.Map = &fi
 }
 
-func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package, allPkgs map[string]*packages.Package, depth int, visited map[*types.Struct]bool) []fieldInfo {
+func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package, allPkgs map[string]*packages.Package, depth int, visited map[*types.Struct]bool) ([]fieldInfo, []embedInfo) {
 	if visited == nil {
 		visited = make(map[*types.Struct]bool)
 	}
 	if visited[st] {
-		return nil
+		return nil, nil
 	}
 	visited[st] = true
 	// Scope visited to the current ancestry path: a struct on its own path is
@@ -579,38 +627,44 @@ func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package,
 	defer delete(visited, st)
 
 	var raw []fieldInfo
+	var embeds []embedInfo
 	for i := range st.NumFields() {
 		f := st.Field(i)
 		tag := parseJSONTag(st.Tag(i))
 		if f.Anonymous() {
-			raw = append(raw, e.resolveEmbeddedField(f, tag, depth, pkg, allPkgs, visited)...)
+			fields, inner := e.resolveEmbeddedField(f, tag, depth, pkg, allPkgs, visited)
+			raw = append(raw, fields...)
+			embeds = append(embeds, inner...)
 			continue
 		}
 		if f.Exported() && !tag.skip {
 			raw = append(raw, e.resolveNamedField(f, tag, depth, pkg, allPkgs))
 		}
 	}
-	return dedupJSONFields(raw)
+	return dedupJSONFields(raw), embeds
 }
 
 // jsonTag is a struct field's json tag as encoding/json's typeFields reads
-// it.
+// it, and its wiregen tag.
 type jsonTag struct {
-	name      string // "" when absent or not a valid key name
-	badName   string // a name isValidJSONName refuses
-	skip      bool   // json:"-"
-	omitEmpty bool
-	omitZero  bool
-	quoted    bool // the ,string option is present
+	name       string // "" when absent or not a valid key name
+	badName    string // a name isValidJSONName refuses
+	wiregen    string
+	skip       bool // json:"-"
+	omitEmpty  bool
+	omitZero   bool
+	quoted     bool // the ,string option is present
+	hasWiregen bool // tells an empty wiregen tag from none
 }
 
 func parseJSONTag(tag string) jsonTag {
 	v := reflect.StructTag(tag).Get("json")
+	wg, hasWG := reflect.StructTag(tag).Lookup("wiregen")
 	if v == "-" {
 		return jsonTag{skip: true}
 	}
 	name, opts, _ := strings.Cut(v, ",")
-	t := jsonTag{name: name}
+	t := jsonTag{name: name, wiregen: wg, hasWiregen: hasWG}
 	if name != "" && !isValidJSONName(name) {
 		t.name, t.badName = "", name
 	}
@@ -647,30 +701,87 @@ func isValidJSONName(s string) bool {
 // resolveEmbeddedField applies encoding/json's typeFields rules to an
 // embedded field: an untagged struct embed, exported or not, is flattened
 // into the parent; an unexported non-struct embed is skipped; any other embed
-// is a field named by its tag or its type name.
-func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package, visited map[*types.Struct]bool) []fieldInfo {
-	embType := types.Unalias(f.Type())
-	ptr, viaPtr := embType.(*types.Pointer)
+// is a field named by its tag or its type name. A flattened embed is
+// returned with the embeds below it; it alone is unowned until its declaring
+// struct claims it.
+func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package, visited map[*types.Struct]bool) ([]fieldInfo, []embedInfo) {
+	declared := f.Type()
+	ptr, viaPtr := types.Unalias(declared).(*types.Pointer)
 	if viaPtr {
-		embType = types.Unalias(ptr.Elem())
+		declared = ptr.Elem()
 	}
+	embType := types.Unalias(declared)
 	embSt, isStruct := embType.Underlying().(*types.Struct)
 	if (!f.Exported() && !isStruct) || tag.skip {
-		return nil
+		return nil, nil
 	}
 	if tag.name != "" || tag.badName != "" || !isStruct {
-		return []fieldInfo{e.resolveNamedField(f, tag, depth, pkg, allPkgs)}
+		return []fieldInfo{e.resolveNamedField(f, tag, depth, pkg, allPkgs)}, nil
 	}
-	promoted := e.resolveStructFields(embSt, pkg, allPkgs, depth+1, visited)
+	promoted, inner := e.resolveStructFields(embSt, pkg, allPkgs, depth+1, visited)
+	owner := structDeclaration(declared)
+	ownFields(promoted, owner)
+	ownEmbeds(inner, owner)
 	for i := range promoted {
-		p := &promoted[i]
-		p.GoName = f.Name() + "." + p.GoName
-		p.ViaEmbedPtr = p.ViaEmbedPtr || viaPtr
-		if viaPtr && !f.Exported() {
-			p.InRefusals = append(p.InRefusals, "is promoted through the embedded pointer to unexported "+embType.String()+", which encoding/json cannot allocate to decode into")
+		promote(&promoted[i], f, embType, viaPtr, tag.hasWiregen)
+	}
+	embeds := []embedInfo{{GoName: f.Name()}}
+	for _, in := range inner {
+		embeds = append(embeds, embedInfo{Owner: in.Owner, GoName: f.Name() + "." + in.GoName})
+	}
+	return promoted, embeds
+}
+
+// promote applies to p, promoted through embedded field f of type embType,
+// what the embed changes: its selector, its absence through a pointer, and
+// the refusals of a wiregen tag on the embed and of a pointer encoding/json
+// cannot allocate.
+func promote(p *fieldInfo, f *types.Var, embType types.Type, viaPtr, tagged bool) {
+	p.GoName = f.Name() + "." + p.GoName
+	p.ViaEmbedPtr = p.ViaEmbedPtr || viaPtr
+	if tagged {
+		p.refuse("the wiregen tag on embedded " + f.Name() + " pins no field; tag the field itself")
+	}
+	if viaPtr && p.Const != "" {
+		p.refuse(constAbsent)
+	}
+	if viaPtr && !f.Exported() {
+		p.InRefusals = append(p.InRefusals, "is promoted through the embedded pointer to unexported "+embType.String()+", which encoding/json cannot allocate to decode into")
+	}
+}
+
+// structDeclaration is the type declaration an embedded struct type name t
+// reaches its fields through, as deadset-go records them: the alias whose
+// right-hand side is the struct literal, else the named struct. The origin
+// names a generic one.
+func structDeclaration(t types.Type) Type {
+	for a, ok := t.(*types.Alias); ok; a, ok = a.Rhs().(*types.Alias) {
+		if _, literal := a.Rhs().(*types.Struct); literal {
+			obj := a.Origin().Obj()
+			return Type{PkgPath: obj.Pkg().Path(), Name: obj.Name()}
 		}
 	}
-	return promoted
+	obj := types.Unalias(t).(*types.Named).Origin().Obj() //nolint:errcheck // an embedded field is a type name, so one ending at no literal is a defined type
+	return Type{PkgPath: obj.Pkg().Path(), Name: obj.Name()}
+}
+
+// ownFields gives owner to each of fields an embedded struct deeper down has
+// not already claimed.
+func ownFields(fields []fieldInfo, owner Type) {
+	for i := range fields {
+		if fields[i].Owner == nil {
+			fields[i].Owner = &owner
+		}
+	}
+}
+
+// ownEmbeds is ownFields for embeds.
+func ownEmbeds(embeds []embedInfo, owner Type) {
+	for i := range embeds {
+		if embeds[i].Owner == nil {
+			embeds[i].Owner = &owner
+		}
+	}
 }
 
 func (e *astEngine) resolveNamedField(f *types.Var, tag jsonTag, depth int, pkg *packages.Package, allPkgs map[string]*packages.Package) fieldInfo {
@@ -693,7 +804,39 @@ func (e *astEngine) resolveNamedField(f *types.Var, tag jsonTag, depth int, pkg 
 	if !fi.Tagged && e.gen.o.requireJSONTags {
 		fi.Refusals = append(fi.Refusals, "no json tag names it")
 	}
+	if tag.hasWiregen {
+		e.applyConst(tag.wiregen, &fi)
+	}
 	return fi
+}
+
+// constAbsent refuses a const on a field encoding/json can leave out.
+const constAbsent = "the wiregen const tag pins a field encoding/json always writes, but this one can be left out"
+
+// applyConst pins fi to the value a wiregen tag of the form const=<value>
+// names, so its TS type is that literal, or refuses a tag wiregen cannot
+// hold the field to: the value must be what encoding/json writes for it
+// every time.
+func (e *astEngine) applyConst(tag string, fi *fieldInfo) {
+	v, ok := strings.CutPrefix(tag, "const=")
+	switch {
+	case !ok:
+		fi.refuse(fmt.Sprintf("wiregen tag %q is not const=<value>", tag))
+	case v == "":
+		fi.refuse("the wiregen const tag names no value")
+	case fi.Kind != kindString && fi.Kind != kindEnum:
+		fi.refuse("the wiregen const tag pins a string or string enum field")
+	case fi.Ptrs > 0:
+		fi.refuse("the wiregen const tag pins a field encoding/json always writes as its value, but a pointer can be null")
+	case fi.Omittable:
+		fi.refuse(constAbsent)
+	case fi.Bounds != nil:
+		fi.refuse("the wiregen const tag pins one value, which leaves its bounds nothing to check; drop one")
+	case fi.Kind == kindEnum && !slices.Contains(e.gen.enums[fi.GoTypeName].values, v):
+		fi.refuse(fmt.Sprintf("the wiregen const %q is no member of enum %s", v, fi.GoTypeName))
+	default:
+		fi.Const, fi.TSType = v, "\""+tsStringLiteral(v)+"\""
+	}
 }
 
 // quote plans fi under the ,string option, which encoding/json applies to
@@ -860,7 +1003,7 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 	if ut.Obj().Pkg() != nil {
 		pkgPath = ut.Obj().Pkg().Path()
 	}
-	fullName := pkgPath + "." + name
+	key, fullName, registered := e.gen.namedRef(ut)
 
 	if stdlibWireType(pkgPath, name, fi) {
 		return
@@ -876,8 +1019,8 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 		return
 	}
 	codec := marshalCodec(ut)
-	if pkg, ok := e.gen.typeNames[name]; ok && pkg == pkgPath {
-		e.referenceRegistered(ut, name, fullName, codec, fi)
+	if registered {
+		e.referenceRegistered(ut, key, fullName, codec, fi)
 		return
 	}
 	switch codec {
@@ -1093,8 +1236,8 @@ func (e *astEngine) resolveSliceType(ut *types.Slice, fi *fieldInfo) {
 		return
 	}
 	elemFI := e.resolveFieldType(elem, 0)
-	ts := elemFI.elemTS()
-	if elemFI.nullElem() {
+	ts := elemFI.memberTS()
+	if elemFI.nullable() {
 		ts = "(" + ts + ")"
 	}
 	fi.Kind, fi.TSType, fi.Elem = kindSlice, ts+"[]", &elemFI
@@ -1103,7 +1246,7 @@ func (e *astEngine) resolveSliceType(ut *types.Slice, fi *fieldInfo) {
 
 func (e *astEngine) resolveMapType(ut *types.Map, fi *fieldInfo) {
 	valFI := e.resolveFieldType(ut.Elem(), 0)
-	fi.Kind, fi.TSType, fi.Elem = kindMap, "{ [key: string]: "+valFI.elemTS()+" }", &valFI
+	fi.Kind, fi.TSType, fi.Elem = kindMap, "{ [key: string]: "+valFI.memberTS()+" }", &valFI
 	fi.inheritRefusals("map value", &valFI)
 	planMapKey(ut.Key(), fi)
 }
@@ -1282,7 +1425,17 @@ func commentToJSDoc(cg *ast.CommentGroup) string {
 		}
 	}
 	for i, l := range lines {
-		lines[i] = strings.ReplaceAll(strings.TrimPrefix(l, indent), "*/", "*\\/")
+		lines[i] = strings.TrimPrefix(l, indent)
+	}
+	return linesToJSDoc(lines)
+}
+
+// linesToJSDoc renders lines, the first not blank, as `/** x */` for one
+// line and a block otherwise, a blank line as a bare " *". Trailing space is
+// dropped and "*/" is broken so it cannot close the comment.
+func linesToJSDoc(lines []string) string {
+	for i, l := range lines {
+		lines[i] = strings.ReplaceAll(strings.TrimRight(l, " \t"), "*/", "*\\/")
 	}
 	if len(lines) == 1 {
 		return "/** " + lines[0] + " */\n"
@@ -1321,14 +1474,21 @@ func typeKey(t types.Type) string {
 // resolves an alias past its name, and the stdlib re-homes types behind
 // aliases (json.RawMessage became an alias of jsontext.Value in Go 1.27), so
 // a mapping keyed by the spelling the consumer's source shows must still match.
+// An instantiation matches importpath.Name[args] before its generic's key,
+// which typeKey names it by and which maps every instantiation.
 func (g *generator) mappingKey(t types.Type) string {
-	a, ok := t.(*types.Alias)
-	if !ok {
-		return typeKey(t)
+	if a, ok := t.(*types.Alias); ok {
+		if alias := aliasKey(a); alias != "" {
+			if _, ok := g.Mappings[alias]; ok {
+				return alias
+			}
+		}
 	}
-	if alias := aliasKey(a); alias != "" {
-		if _, ok := g.Mappings[alias]; ok {
-			return alias
+	if n, ok := types.Unalias(t).(*types.Named); ok && n.TypeArgs().Len() > 0 {
+		if sp, ok := spellingOf(n); ok {
+			if _, ok := g.Mappings[sp.text()]; ok {
+				return sp.text()
+			}
 		}
 	}
 	return typeKey(t)

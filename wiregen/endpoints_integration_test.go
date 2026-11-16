@@ -23,8 +23,8 @@ func transportTS(t *testing.T) string {
 
 const clientMain = `import { recorded, respondWith } from "./api-client.js";
 import {
-  adminUsers, deleteItem, eventsStreamEndpoint, getItem, listItems, oidcCallbackEndpoint, poster, startJob,
-  startJobEndpoint,
+  adminUsers, deleteItem, eventsStreamEndpoint, getItem, listItems, oidcCallbackEndpoint, poster, register, startJob,
+  startJobEndpoint, thumbnail, waitEvents,
 } from "./client.gen.js";
 import type { StartJobError } from "./client.gen.js";
 import { decodeEventFrame } from "./events.gen.js";
@@ -67,6 +67,24 @@ const p = await poster({ id: "r1" });
 log("poster", p.ok && p.data instanceof Blob ? [p.data.type, await p.data.text()] : p);
 log("poster.spec", last());
 
+respondWith(() => ({ status: 201, body: { id: "j1" } }));
+log("register.201", await register({ body: { item: "a" } }));
+respondWith(() => ({ status: 200, body: { id: "j1" } }));
+log("register.200", await register({ body: { item: "a" } }));
+respondWith(() => ({ status: 202, body: { id: "j1" } }));
+log("register.202", await register({ body: { item: "a" } }));
+respondWith(() => ({ status: 200, body: { rev: 4 } }));
+log("waitEvents.200", await waitEvents());
+respondWith(() => ({ status: 204 }));
+log("waitEvents.204", await waitEvents());
+respondWith(() => ({ status: 200, body: { rev: "x" } }));
+log("waitEvents.bad", await waitEvents());
+respondWith(() => ({ status: 204 }));
+log("thumbnail.204", await thumbnail({ id: "r1" }));
+respondWith(() => ({ status: 200, body: "png" }));
+const th = await thumbnail({ id: "r1" });
+log("thumbnail.200", th.ok && th.data instanceof Blob ? await th.data.text() : th);
+
 log("events.spec", eventsStreamEndpoint.request());
 log("oidc.spec", oidcCallbackEndpoint.request());
 log("frame", decodeEventFrame("position", { rev: 3 }));
@@ -83,7 +101,8 @@ try {
 `
 
 // clientRegistry is a registry over every kind, with params, a query, a
-// body, a declared header, an array response, no-body responses and events.
+// body, a declared header, an array response, no-body responses, extra
+// successes and events.
 func clientRegistry() *testRegistry {
 	r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
 	params := wiregen.TypeRef[client.ItemParams]()
@@ -116,6 +135,20 @@ func clientRegistry() *testRegistry {
 		{
 			Name: "poster", Method: "GET", Path: "/api/items/{id}/poster", Kind: wiregen.KindRaw,
 			Params: params, ContentType: "image/jpeg", Errors: []wiregen.ErrorRef{internal},
+		},
+		{
+			Name: "register", Method: "POST", Path: "/api/register", Kind: wiregen.KindJSON, Status: 201,
+			Request: wiregen.TypeRef[client.StartRequest](), Response: wiregen.TypeRef[client.Job](),
+			ExtraSuccesses: []wiregen.Success{{Status: 200, Response: wiregen.TypeRef[client.Job]()}},
+			Errors:         []wiregen.ErrorRef{internal},
+		},
+		{
+			Name: "waitEvents", Method: "POST", Path: "/api/events/wait", Kind: wiregen.KindJSON,
+			Response: wiregen.TypeRef[client.Position](), ExtraSuccesses: []wiregen.Success{{Status: 204}},
+		},
+		{
+			Name: "thumbnail", Method: "GET", Path: "/api/items/{id}/thumbnail", Kind: wiregen.KindRaw,
+			Params: params, ContentType: "image/jpeg", ExtraSuccesses: []wiregen.Success{{Status: 204}},
 		},
 		{Name: "eventsStream", Method: "GET", Path: "/api/events", Kind: wiregen.KindEventStream},
 		{Name: "oidcCallback", Method: "GET", Path: "/api/oidc/callback", Kind: wiregen.KindRedirect},
@@ -151,6 +184,14 @@ func TestClientAgainstTransport(t *testing.T) {
 		`adminUsers.spec "/api/users?key=7"`,
 		`poster ["image/jpeg","jpeg"]`,
 		`poster.spec {"method":"GET","path":"/api/items/r1/poster","raw":true,"codes":["internal_error"]}`,
+		`register.201 {"ok":true,"data":{"id":"j1"}}`,
+		`register.200 {"ok":true,"data":{"id":"j1"}}`,
+		`register.202 {"ok":false,"status":202,"code":"decode"}`,
+		`waitEvents.200 {"ok":true,"data":{"rev":4}}`,
+		`waitEvents.204 {"ok":true}`,
+		`waitEvents.bad {"ok":false,"status":200,"code":"decode"}`,
+		`thumbnail.204 {"ok":true}`,
+		`thumbnail.200 "png"`,
 		`events.spec {"method":"GET","path":"/api/events","codes":[]}`,
 		`oidc.spec {"method":"GET","path":"/api/oidc/callback","codes":[]}`,
 		`frame {"event":"position","data":{"rev":3}}`,
@@ -187,6 +228,18 @@ void getItem; void listItems; void startJob;
 		{"transport with the v3 functions only", importing(""), "clientRequest", func(ts string) string {
 			return strings.Replace(ts, "export function clientRequest<", "export function clientRequestV3<", 1)
 		}},
+		{"transport whose decode takes no status", `import { register } from "./client.gen.js"; void register;`, "Target signature provides too few arguments", func(ts string) string {
+			ts = strings.Replace(ts, "  decode: (v: unknown, status: number) => T,\n", "  decode: (v: unknown) => T,\n", 1)
+			return strings.Replace(ts, "decode(body, answer.status)", "decode(body)", 1)
+		}},
+		{"bodiless status in the union", `import { waitEvents } from "./client.gen.js";
+import type { Position } from "./types.gen.js";
+const r = await waitEvents();
+if (r.ok) {
+  const p: Position = r.data;
+  void p;
+}
+`, "Position | undefined", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

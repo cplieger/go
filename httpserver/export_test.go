@@ -42,3 +42,11 @@ func ParseForwarding(h http.Header) ForwardingFields {
 // RouteMetricLabelsForTest exposes the label derivation WithRecordRouteMetric
 // documents, so the external tests can pin it directly.
 var RouteMetricLabelsForTest = routeMetricLabels
+
+// CountDigestCompares counts Match's digest comparisons until the returned
+// restore runs.
+func CountDigestCompares() (calls *int, restore func()) {
+	n, prev := 0, compareDigest
+	compareDigest = func(x, y []byte) int { n++; return prev(x, y) }
+	return &n, func() { compareDigest = prev }
+}

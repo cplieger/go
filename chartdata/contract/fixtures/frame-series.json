@@ -1,0 +1,48 @@
+{
+  "type": "series",
+  "name": "wait_seconds",
+  "unit": "seconds",
+  "x": [
+    1772323200000,
+    1772323260000,
+    1772323320000
+  ],
+  "series": [
+    {
+      "key": "p50",
+      "values": [
+        0.1,
+        null,
+        0.2
+      ]
+    },
+    {
+      "key": "p95",
+      "values": [
+        0.4,
+        null,
+        0.9
+      ]
+    }
+  ],
+  "domain": [
+    1772323140000,
+    1772323320000
+  ],
+  "resets": [
+    1772323200000
+  ],
+  "refs": [
+    {
+      "key": "target",
+      "value": 0.5
+    }
+  ],
+  "notes": [
+    {
+      "key": "deploy",
+      "at": 1772323260000
+    }
+  ],
+  "open": true
+}

@@ -1,6 +1,6 @@
 # Client IP, hosts and credentials
 
-This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, classifying a listen address and checking one static credential.
+This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address, checking configured credentials and the values they travel in, writing a `WWW-Authenticate` challenge and limiting failed authentication.
 
 ## Client IP
 
@@ -30,6 +30,7 @@ The answer is a `ClientResolution`:
 | `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
 | `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |
 | `IgnoredPublic` | One of those ignored headers named a public address, meaning global unicast and outside the private ranges |
+| `ForwardedHTTPS` | A trusted peer sent exactly one `X-Forwarded-Proto` field holding the one token `https`, any case. A list such as `https, http`, a repeated field, an empty value or an untrusted peer reads as plain, and `Forwarded: proto=` is not read. A listed proxy must overwrite the client's field, as Caddy does, not append to it |
 
 Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `PeerTrusted` tells that proxy apart from a direct client, so read another header a proxy sets, such as `X-Forwarded-Proto`, only when it is true. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
 
@@ -97,6 +98,22 @@ The check has a limit. It admits a same-host proxy that sends none of these head
 
 This is a different question from `HostPolicy`. The allowlist asks whether the `Host` is one the operator named, so it admits a remote client sending `Host: localhost` when the operator lists that name. `LoopbackOnly` asks whether the request came from inside.
 
+## Forwarders in front of the host
+
+A container runtime, a tunnel or a router can relay a remote client under its own address, which is often private. Docker's bridge gateway, rootless Podman's slirp4netns address and the Swarm routing mesh's ingress addresses all do this. So a direct private peer is not proof of a local client. Ask `ForwarderCheck` before you trust one more, for example before a first-run setup asks no token of a local client.
+
+`NewForwarderCheck(opts...)` returns a check, and `IsForwarder(peer)` reports that the peer is one of these forwarders when it is:
+
+- a gateway of any route;
+- an address of a non-loopback interface;
+- inside the connected subnet of an interface that carries no default route of the peer's family.
+
+The check reads Linux's `/proc/net/route` and `/proc/net/ipv6_route` and the host's interfaces on every call, so a network connected after start counts. A missing IPv6 route file reads as no IPv6 routes. Any other failed read, as on a host without these files, answers true, so the caller fails closed and logs one Warn line per source, `httpserver: forwarder check could not read the host's network`. An invalid address and a nil check also answer true. The peer's zone is dropped, and an IPv4-mapped address compares as IPv4.
+
+- `WithRouteFiles(ipv4, ipv6)` reads the route tables from other paths, in the same formats.
+- `WithInterfaceAddrs(read)` replaces the read of the interfaces, each an `InterfaceAddrs` of name, prefixes and loopback flag.
+- `WithForwarderLogger(logger)` sends the Warn line to `logger`. Nil, the default, means `slog.Default()` as it is when `NewForwarderCheck` runs.
+
 ## Bind classification
 
 `ClassifyBind(addr)` classifies a configured listen address, given as `host:port`, by exposure. Use it at startup to warn when an unauthenticated service listens beyond loopback.
@@ -120,3 +137,58 @@ The configured secret is hashed with SHA-256 once, at construction. `Verify` has
 An empty configured secret fails closed. `Verify` then returns false for every value, the empty string included. Otherwise `sha256("")` would equal `sha256("")`, and an unset secret would admit a client presenting nothing. Treat an empty configured value as "auth not configured", never as "no credential required".
 
 This checks one shared secret, not user identities. Per-user credentials, password hashing and sessions belong to the [access](https://github.com/cplieger/access) library.
+
+## Several static credentials
+
+`NewTokenSet(configured)` builds a `TokenSet` from secrets your operator configures, one per caller, for an endpoint where each caller holds its own. `Match(presented)` reports the position of the secret that matched, so your app can tell which caller it is, and is safe for concurrent use.
+
+Each secret is hashed with SHA-256 once, at construction. `Match` hashes the presented value once and compares it with every configured digest, with no early exit, so the time taken depends only on how many secrets the set holds. A presented value longer than `MaxTokenBytes` (512) answers no match without being hashed. The zero `TokenSet` matches nothing.
+
+`NewTokenSet` refuses an empty list, an empty secret, one longer than `MaxTokenBytes` and one given twice, because a repeated secret would make the position ambiguous. The refusal is a `*TokenSetError`. Its `Err` is `ErrNoTokens`, `ErrTokenEmpty`, `ErrTokenTooLong` or `ErrTokenRepeated`, which `errors.Is` matches. `Index` is the refused secret's position and `First` the earlier position a repeated secret equals. The error names positions only and never quotes a secret, so you can log it as it is.
+
+## A value that must travel in a header
+
+`CheckFieldValue(v)` reports whether `v` can be sent as an HTTP field value (RFC 9110 section 5.5) and arrive unchanged and unambiguous. Use it at startup on a configured credential that a client sends in a header, so a value that could never match is refused there rather than on every request. It refuses:
+
+- an ASCII control byte other than HTAB, or DEL, which the grammar forbids and `net/http` refuses to send;
+- a space or tab at either edge, which a recipient strips, so the value read back is not the one sent;
+- invalid UTF-8;
+- an invisible rune: a C1 control, a Unicode format character (bidi controls, zero-width characters, the byte order mark) or a line or paragraph separator. Each is legal on the wire but invisible where a person reads or pastes the value.
+
+The refusal is a `*FieldValueError`. Its `Err` is `ErrFieldControl`, `ErrFieldEdgeSpace`, `ErrFieldInvalidUTF8` or `ErrFieldInvisible`, which `errors.Is` matches, and `Offset` is the byte offset of the first refused byte. The error never quotes the value, so it can name a secret's problem without leaking it. Length limits, blank values and the message the operator reads stay your app's policy. The empty string passes.
+
+## The 401 challenge
+
+A `401` must carry at least one `WWW-Authenticate` challenge (RFC 9110 section 11.6.1). `SetChallenge(h, c, more...)` replaces `h`'s `WWW-Authenticate` field with one line per challenge, in order, and sets nothing else, so the status and body stay yours:
+
+```go
+httpserver.SetChallenge(w.Header(), httpserver.Challenge{
+    Scheme: "Bearer",
+    Params: []httpserver.AuthParam{{Name: "realm", Value: "myapp"}},
+})
+```
+
+That writes `Bearer realm="myapp"`. Each parameter's value is written as a quoted-string, with `"` and `\` escaped. A scheme or parameter name that is not an HTTP token, or a value no quoted-string can carry, panics, since those come from your program. Check a value taken from configuration with `CheckFieldValue` first.
+
+## Failed-authentication limits
+
+`FailureLimiter` throttles clients that keep failing to authenticate. Use it in a handler that must check a credential before it can answer anything, such as a webhook endpoint. `RateLimiter`'s `FailedAuthRateLimit` preset is a single bucket for the whole process; `FailureLimiter` counts per client and across clients, and a request it throttles never moves its counts.
+
+`NewFailureLimiter(limits)` checks a `FailureLimits` and returns a limiter, or an error naming the first field out of range:
+
+| Field | Meaning |
+| --- | --- |
+| `PerKey`, `PerKeyWindow` | Failures one client key may make per window before it is throttled. Both must be positive |
+| `Global`, `GlobalWindow` | Failures every key together may make per window before keys that are not exempt are throttled. Both zero turns the global window off |
+| `MaxKeys` | How many keys' failures are held. Charging a new key past it forgets the least recently charged one |
+| `TrustPerGroup`, `TrustWindow` | How many keys one group trusts at once, and how long a mark lasts |
+| `IPv6Prefix` | Leading bits of an IPv6 address that make its key, 1 to 128. Zero means 64, RFC 6177's end-site `/64` |
+| `Now` | The clock. Nil means `time.Now`; a test passes a fake one |
+
+Call `Decide(client, failure)` once per request, before you write anything. It answers whether the client is throttled, and for how long, from the state before this request. A throttled answer changes nothing, so a flood of throttled requests can neither fill a window nor push a key out of the held set. Answer a throttled request the same way whatever it presented. When the answer is not throttled and `failure` is true, the failure is charged to the client's key and to the global window. Asking once per request under the limiter's lock is what keeps concurrent requests from passing a full window together.
+
+A key is a client address: an IPv4 address whole, and an IPv6 address masked to `IPv6Prefix` bits. Every invalid address shares one key.
+
+After a request that was not throttled succeeds, call `MarkGood(group, client)` with a group name taken from your configuration, never from the request. While its mark lasts and its own window holds no failure, a marked key is exempt from the global window. So a spray of failures across many addresses cannot lock out a caller that recently succeeded. Each group holds at most `TrustPerGroup` keys and replaces its own oldest mark, never another group's.
+
+The limiter keeps its state in memory, so it resets at a restart and replicas do not share it. It logs nothing and returns no error after construction, so a group name never leaves it.

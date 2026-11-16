@@ -1,0 +1,256 @@
+# Every series name the cplieger apps export through measure v1, read from
+# each app's default branch at the commit below. measure/v2 must register
+# every one with no rename and no refusal (consumers_test.go). The unit is
+# the one the name states, count for a counter with no unit suffix, none
+# otherwise. seadex-scout imports no measure, so it has no rows.
+#
+# app	commit	series
+# grelot	15564f0c297a81e0552c979d15850a6736fb4ac0	24
+# marotte	8bf67de8ef066e2bd52edbbafc3e6f9b40f1451d	16
+# manade	cba435db30e9b8f67e4614dc9bea67dfc44935ca	27
+# knell	a7b27ce5494e1476f2558da1a6087dc8adb6df0e	14
+# subflux	1933f19ebaabb91e4868bd19ea5a9c6f93cb2d1c	21
+# plex-exporter	170e4ae2c47419c45a19e666c63f7f5c0f705d69	49
+# pg-autodump	6b49c708ca0ff947b47843d6989539df9739bbb7	10
+# docker-fclones-scheduler	6b6df8eedd9efa08b166f08ad09c0346c1a130a3	15
+# plex-language-sync	511a81beed9b697e6ee3f3c42b3da72c9ee6e6ad	12
+# docker-renovate-scheduler	83e94ba5160c209c1d1d1cf7ce18e6ca4ac2235d	12
+# cert-converter	9286787c2c44abb7f1af0663573840d96d0e0056	10
+# docker-nut-upsd	ca747c71e2a784aa9018d00a6ddc42dfb408e696	25
+#
+# app	path	prefix	name	kind	unit	source	labels
+grelot	internal/obs/obs.go	grelot	sweep_last_success_timestamp_seconds	gauge	seconds	instrument	
+grelot	internal/obs/obs.go	grelot	sweep_failures_total	counter	count	instrument	
+grelot	internal/obs/obs.go	grelot	store_started_empty_total	counter	count	instrument	reason
+grelot	internal/obs/obs.go	grelot	posts_total	counter	count	instrument	thread_kind
+grelot	internal/obs/obs.go	grelot	posts_refused_total	counter	count	instrument	reason
+grelot	internal/obs/obs.go	grelot	writes_replayed_total	counter	count	instrument	
+grelot	internal/obs/obs.go	grelot	push_door_up	gauge	none	instrument	door
+grelot	internal/obs/obs.go	grelot	push_sends_total	counter	count	instrument	door,outcome
+grelot	internal/obs/obs.go	grelot	providers_invalid	gauge	none	instrument	
+grelot	internal/obs/obs.go	grelot	nudges_total	counter	count	instrument	via,attempt
+grelot	internal/obs/obs.go	grelot	nudge_delay_seconds	histogram	seconds	instrument	via
+grelot	internal/obs/obs.go	grelot	http_requests_total	counter	count	instrument	route,code
+grelot	internal/obs/obs.go	grelot	http_request_duration_seconds	histogram	seconds	instrument	route
+grelot	internal/obs/obs.go	grelot	build_info	gauge	none	instrument	version
+grelot	internal/obs/obs.go	grelot	identities	gauge	none	collector	state
+grelot	internal/obs/obs.go	grelot	identities_online	gauge	none	collector	
+grelot	internal/obs/obs.go	grelot	threads	gauge	none	collector	kind
+grelot	internal/obs/obs.go	grelot	reservations	gauge	none	collector	state
+grelot	internal/obs/obs.go	grelot	unread_backlog	gauge	none	collector	
+grelot	internal/obs/obs.go	grelot	unread_oldest_seconds	gauge	seconds	collector	
+grelot	internal/obs/obs.go	grelot	store_in_use_bytes	gauge	bytes	collector	
+grelot	internal/obs/obs.go	grelot	store_file_bytes	gauge	bytes	collector	
+grelot	internal/obs/obs.go	grelot	store_free_bytes	gauge	bytes	collector	
+grelot	internal/obs/obs.go	grelot	store_max_bytes	gauge	bytes	collector	
+marotte	internal/obs/obs.go	marotte	build_info	gauge	none	instrument	version
+marotte	internal/obs/obs.go	marotte	engine_exits_total	counter	count	instrument	cause
+marotte	internal/obs/obs.go	marotte	prompt_failures_total	counter	count	instrument	class
+marotte	internal/obs/obs.go	marotte	signin_save_failures_total	counter	count	instrument	backend,reason
+marotte	internal/obs/obs.go	marotte	engine_up	gauge	none	instrument	
+marotte	internal/obs/obs.go	marotte	engine_resident_memory_bytes	gauge	bytes	instrument	
+marotte	internal/obs/obs.go	marotte	engine_heap_limit_bytes	gauge	bytes	instrument	
+marotte	internal/obs/obs.go	marotte	unattended_run_failures_total	counter	count	instrument	origin,reason
+marotte	internal/obs/obs.go	marotte	unattended_approvals_total	counter	count	instrument	origin
+marotte	internal/obs/obs.go	marotte	schedule_slots_not_started_total	counter	count	instrument	event
+marotte	internal/obs/obs.go	marotte	schedule_failed_slots	gauge	none	instrument	rule_id
+marotte	internal/obs/obs.go	marotte	schedule_next_due_timestamp_seconds	gauge	seconds	instrument	rule_id
+marotte	internal/obs/obs.go	marotte	trigger_rule_blocked	gauge	none	instrument	rule_id,reason
+marotte	internal/obs/obs.go	marotte	trigger_queue_full	gauge	none	instrument	rule_id
+marotte	internal/obs/obs.go	marotte	trigger_poll_failures	gauge	none	instrument	rule_id
+marotte	internal/obs/obs.go	marotte	trigger_catch_up_gaps	gauge	none	instrument	rule_id
+manade	internal/r5/obs/obs.go	manade	capacity_cpus	gauge	none	instrument	
+manade	internal/r5/obs/obs.go	manade	capacity_memory_bytes	gauge	bytes	instrument	
+manade	internal/r5/obs/obs.go	manade	profile_elevated	gauge	none	instrument	profile,grant
+manade	internal/r5/obs/obs.go	manade	rest_reads_total	counter	count	instrument	result
+manade	internal/r5/obs/obs.go	manade	queue_read_last_success_timestamp_seconds	gauge	seconds	instrument	scope
+manade	internal/r5/obs/obs.go	manade	runner_starts_total	counter	count	instrument	scope,profile,result
+manade	internal/r5/obs/obs.go	manade	runner_exits_total	counter	count	instrument	scope,profile,reason
+manade	internal/r5/obs/obs.go	manade	job_queue_seconds	histogram	seconds	instrument	profile
+manade	internal/r5/obs/obs.go	manade	job_duration_seconds	histogram	seconds	instrument	profile,result
+manade	internal/r5/obs/obs.go	manade	poll_last_success_timestamp_seconds	gauge	seconds	instrument	scope,profile
+manade	internal/r5/obs/obs.go	manade	reconcile_last_success_timestamp_seconds	gauge	seconds	instrument	
+manade	internal/r5/obs/obs.go	manade	booting	gauge	none	instrument	
+manade	internal/r5/obs/obs.go	manade	scope_serving	gauge	none	instrument	scope
+manade	internal/r5/obs/obs.go	manade	scale_sets_orphaned	gauge	none	instrument	scope
+manade	internal/r5/obs/obs.go	manade	image_checked_timestamp_seconds	gauge	seconds	instrument	profile
+manade	internal/r5/obs/obs.go	manade	github_errors_total	counter	count	instrument	op
+manade	internal/r5/obs/obs.go	manade	docker_errors_total	counter	count	instrument	op
+manade	internal/r5/obs/obs.go	manade	capacity_disk_bytes	gauge	bytes	instrument	
+manade	internal/r5/obs/pass.go	manade	runners	gauge	none	collector	scope,profile,state
+manade	internal/r5/obs/pass.go	manade	jobs_queued	gauge	none	collector	scope,profile
+manade	internal/r5/obs/pass.go	manade	jobs_assigned_unstarted	gauge	none	collector	scope,profile
+manade	internal/r5/obs/pass.go	manade	jobs_unassignable	gauge	none	collector	scope,profile
+manade	internal/r5/obs/pass.go	manade	jobs_unfundable	gauge	none	collector	scope,profile,reason
+manade	internal/r5/obs/pass.go	manade	reserved_cpus	gauge	none	collector	
+manade	internal/r5/obs/pass.go	manade	reserved_memory_bytes	gauge	bytes	collector	
+manade	internal/r5/obs/pass.go	manade	queue_head_wait_seconds	gauge	seconds	collector	
+manade	internal/r5/obs/pass.go	manade	reserved_disk_bytes	gauge	bytes	collector	
+knell	internal/obs/obs.go	knell	beat_fresh	gauge	none	instrument	beat
+knell	internal/obs/obs.go	knell	beat_last_seen_timestamp_seconds	gauge	seconds	instrument	beat
+knell	internal/obs/obs.go	knell	beat_deadline_seconds	gauge	seconds	instrument	beat
+knell	internal/obs/obs.go	knell	beats_received_total	counter	count	instrument	beat
+knell	internal/obs/obs.go	knell	beat_outages_total	counter	count	instrument	beat
+knell	internal/obs/obs.go	knell	outage_records_dropped_total	counter	count	instrument	beat
+knell	internal/obs/obs.go	knell	notifications_sent_total	counter	count	instrument	kind
+knell	internal/obs/obs.go	knell	notifications_failed_total	counter	count	instrument	kind
+knell	internal/obs/obs.go	knell	notifications_dropped_total	counter	count	instrument	kind
+knell	internal/obs/obs.go	knell	pre_route_refusals_total	counter	count	instrument	reason
+knell	internal/obs/obs.go	knell	http_requests_total	counter	count	instrument	method,path,status
+knell	internal/obs/obs.go	knell	listener_accept_errors_total	counter	count	instrument	
+knell	internal/obs/obs.go	knell	http_request_duration_seconds	histogram	seconds	instrument	
+knell	internal/obs/obs.go	knell	build_info	gauge	none	instrument	version
+subflux	internal/obs/obs.go	subflux	http_requests_total	counter	count	instrument	method,path,status
+subflux	internal/obs/obs.go	subflux	http_request_duration_seconds	histogram	seconds	instrument	
+subflux	internal/obs/obs.go	subflux	panics_total	counter	count	instrument	
+subflux	internal/obs/obs.go	subflux	config_mode	gauge	none	instrument	mode
+subflux	internal/obs/obs.go	subflux	alerts_active	gauge	none	instrument	kind,id
+subflux	internal/obs/obs.go	subflux	auth_events_dropped_total	counter	count	instrument	
+subflux	internal/obs/obs.go	subflux	backup_enabled	gauge	none	instrument	
+subflux	internal/obs/obs.go	subflux	backup_interval_seconds	gauge	seconds	instrument	
+subflux	internal/obs/obs.go	subflux	backup_last_success_timestamp_seconds	gauge	seconds	instrument	
+subflux	internal/obs/obs.go	subflux	backup_failures_total	counter	count	instrument	
+subflux	internal/obs/obs.go	subflux	build_info	gauge	none	instrument	version
+subflux	internal/providercalls/metrics.go	subflux	provider_calls_total	counter	count	instrument	provider,op,result
+subflux	internal/providercalls/metrics.go	subflux	provider_call_duration_seconds	histogram	seconds	instrument	provider,op
+subflux	internal/providercalls/metrics.go	subflux	provider_health	gauge	none	instrument	provider,health
+subflux	internal/scan/metrics.go	subflux	scan_last_complete_timestamp_seconds	gauge	seconds	instrument	source
+subflux	internal/scan/metrics.go	subflux	scan_whole_interval_seconds	gauge	seconds	instrument	
+subflux	internal/syncsched/metrics.go	subflux	sync_runs_total	counter	count	instrument	origin,method,verdict
+subflux	internal/syncsched/metrics.go	subflux	sync_failures_total	counter	count	instrument	stage
+subflux	internal/syncsched/metrics.go	subflux	sync_slot_wait_seconds	histogram	seconds	instrument	
+subflux	internal/syncsched/metrics.go	subflux	sync_run_seconds	histogram	seconds	instrument	method
+subflux	internal/syncsched/metrics.go	subflux	sync_queue_depth	gauge	none	instrument	class
+plex-exporter	internal/metrics/descs.go		plex_server_info	gauge	none	collector	server,server_id,version,platform,platform_version,plex_pass
+plex-exporter	internal/metrics/descs.go		plex_host_cpu_utilization_ratio	gauge	ratio	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_host_memory_utilization_ratio	gauge	ratio	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_library_duration_milliseconds	gauge	none	collector	server,server_id,library_type,library,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_storage_bytes	gauge	bytes	collector	server,server_id,library_type,library,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_items	gauge	none	collector	server,server_id,library_type,library,library_id,content_type
+plex-exporter	internal/metrics/descs.go		plex_transmit_bytes_total	counter	bytes	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_active_transcode_sessions	gauge	none	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_plays_active	gauge	none	collector	server,server_id,library,library_id,library_type,media_type,title,child_title,grandchild_title,grandchild_index,stream_type,stream_resolution,stream_file_resolution,device,device_type,user,session,transcode_type,subtitle_action,location,local
+plex-exporter	internal/metrics/descs.go		plex_play_seconds_total	counter	seconds	collector	server,server_id,library,library_id,library_type,media_type,title,child_title,grandchild_title,grandchild_index,stream_type,stream_resolution,stream_file_resolution,device,device_type,user,session,transcode_type,subtitle_action,location,local
+plex-exporter	internal/metrics/descs.go		plex_session_bandwidth_kbps	gauge	none	collector	server,server_id,session,user,location
+plex-exporter	internal/metrics/descs.go		plex_session_bitrate_kbps	gauge	none	collector	server,server_id,session,user,location
+plex-exporter	internal/metrics/descs.go		plex_http_reachable	gauge	none	collector	
+plex-exporter	internal/metrics/descs.go		plex_session_poll_reachable	gauge	none	collector	
+plex-exporter	internal/metrics/descs.go		plex_http_retries_total	counter	count	collector	
+plex-exporter	internal/metrics/descs.go		plex_exporter_errors_total	counter	count	collector	type
+plex-exporter	internal/metrics/descs.go		plex_exporter_build_info	gauge	none	collector	version
+plex-exporter	internal/metrics/descs.go		plex_sessions_tracked	gauge	none	collector	
+plex-exporter	internal/metrics/descs.go		plex_sessions_dropped_total	counter	count	collector	
+plex-exporter	internal/metrics/descs.go		plex_refresh_deadline_exceeded_total	counter	count	collector	fetch
+plex-exporter	internal/metrics/descs.go		plex_library_top_item_bytes	gauge	bytes	collector	server,server_id,library_type,library_id,rating_key,title,year
+plex-exporter	internal/metrics/descs.go		plex_library_top_item_last_played_timestamp_seconds	gauge	seconds	collector	server,server_id,library_type,library_id,rating_key,title,year
+plex-exporter	internal/metrics/descs.go		plex_library_recent_item_added_timestamp_seconds	gauge	seconds	collector	server,server_id,library_type,library_id,rating_key,title,year,episode
+plex-exporter	internal/metrics/descs.go		plex_library_watch_age_bytes	gauge	bytes	collector	server,server_id,library_type,library_id,last_watched
+plex-exporter	internal/metrics/descs.go		plex_library_watch_age_items	gauge	none	collector	server,server_id,library_type,library_id,last_watched
+plex-exporter	internal/metrics/descs.go		plex_library_resolution_bytes	gauge	bytes	collector	server,server_id,library_type,library_id,video_resolution
+plex-exporter	internal/metrics/descs.go		plex_library_codec_bytes	gauge	bytes	collector	server,server_id,library_type,library_id,video_codec
+plex-exporter	internal/metrics/descs.go		plex_library_multi_version_items	gauge	none	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_extra_version_bytes	gauge	bytes	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_newest_item_added_timestamp_seconds	gauge	seconds	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_added_items	gauge	none	collector	server,server_id,library_type,library_id,window
+plex-exporter	internal/metrics/descs.go		plex_library_walkable	gauge	none	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_last_scan_timestamp_seconds	gauge	seconds	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_walk_last_success_timestamp_seconds	gauge	seconds	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_walk_duration_seconds	gauge	seconds	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_unsized_items	gauge	none	collector	server,server_id,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_library_walk_pass_duration_seconds	gauge	seconds	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_library_walk_skipped_libraries	gauge	none	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_library_walk_complete	gauge	none	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_library_watch_age_complete	gauge	none	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_history_read_status	gauge	none	collector	server,server_id,status
+plex-exporter	internal/metrics/descs.go		plex_history_last_success_timestamp_seconds	gauge	seconds	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_history_unmatched_rows	gauge	none	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_history_deleted_item_rows	gauge	none	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_server_activity_progress_ratio	gauge	ratio	collector	server,server_id,activity_type,library_type,library_id
+plex-exporter	internal/metrics/descs.go		plex_server_update_available	gauge	none	collector	server,server_id,state
+plex-exporter	internal/metrics/descs.go		plex_server_update_checked_timestamp_seconds	gauge	seconds	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_server_scheduled_scan_interval_seconds	gauge	seconds	collector	server,server_id
+plex-exporter	internal/metrics/descs.go		plex_session_video_transcode	gauge	none	collector	server,server_id,session,decode,encode,source_codec,target_codec
+pg-autodump	internal/obs/metrics.go	pg_autodump	dumps_total	counter	count	instrument	server,db,result
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_ok	gauge	none	instrument	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_duration_seconds	gauge	seconds	instrument	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	last_cycle_timestamp_seconds	gauge	seconds	instrument	
+pg-autodump	internal/obs/metrics.go	pg_autodump	last_cycle_ok	gauge	none	instrument	
+pg-autodump	internal/obs/metrics.go	pg_autodump	cycle_deadline_timestamp_seconds	gauge	seconds	instrument	
+pg-autodump	internal/obs/metrics.go	pg_autodump	build_info	gauge	none	instrument	version
+pg-autodump	internal/obs/metrics.go	pg_autodump	newest_dump_timestamp_seconds	gauge	seconds	collector	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_bytes	gauge	bytes	collector	server,db
+pg-autodump	internal/obs/metrics.go	pg_autodump	dump_dir_free_bytes	gauge	bytes	collector	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	runs_total	counter	count	instrument	result
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_run_result	gauge	none	instrument	result
+docker-fclones-scheduler	metrics.go	fclones_scheduler	phase_duration_seconds	gauge	seconds	instrument	phase
+docker-fclones-scheduler	metrics.go	fclones_scheduler	info	gauge	none	instrument	mode,action
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_run_ok	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_run_timestamp_seconds	gauge	seconds	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	last_success_timestamp_seconds	gauge	seconds	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	duplicate_groups	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	duplicate_files	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	redundant_bytes	gauge	bytes	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	action_summary_recognized	gauge	none	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	files_processed_total	counter	count	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	reclaimed_bytes_total	counter	bytes	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	run_deadline_timestamp_seconds	gauge	seconds	instrument	
+docker-fclones-scheduler	metrics.go	fclones_scheduler	build_info	gauge	none	instrument	version
+plex-language-sync	internal/obs/obs.go	plex_language_sync	build_info	gauge	none	instrument	version
+plex-language-sync	internal/obs/obs.go	plex_language_sync	websocket_connected	gauge	none	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	websocket_reconnects_total	counter	count	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_last_success_timestamp_seconds	gauge	seconds	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_interval_seconds	gauge	seconds	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_deadline_timestamp_seconds	gauge	seconds	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	deep_scan_runs_total	counter	count	instrument	result
+plex-language-sync	internal/obs/obs.go	plex_language_sync	user_resolution_stalled	gauge	none	instrument	cause
+plex-language-sync	internal/obs/obs.go	plex_language_sync	play_events_total	counter	count	instrument	outcome
+plex-language-sync	internal/obs/obs.go	plex_language_sync	track_updates_total	counter	count	instrument	kind,result
+plex-language-sync	internal/obs/obs.go	plex_language_sync	cache_save_failures_total	counter	count	instrument	
+plex-language-sync	internal/obs/obs.go	plex_language_sync	shared_users	gauge	none	instrument	
+docker-renovate-scheduler	metrics.go	renovate_scheduler	runs_total	counter	count	instrument	scope,result
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_ok	gauge	none	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_result	gauge	none	instrument	scope,result
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_exit_code	gauge	none	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_timestamp_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_success_timestamp_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	last_run_duration_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	failing_since_timestamp_seconds	gauge	seconds	instrument	scope
+docker-renovate-scheduler	metrics.go	renovate_scheduler	trigger_rejected_total	counter	count	instrument	reason
+docker-renovate-scheduler	metrics.go	renovate_scheduler	info	gauge	none	instrument	mode,auth
+docker-renovate-scheduler	metrics.go	renovate_scheduler	run_deadline_timestamp_seconds	gauge	seconds	instrument	
+docker-renovate-scheduler	metrics.go	renovate_scheduler	build_info	gauge	none	instrument	version
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_sources	gauge	none	instrument	outcome
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_sources_found	gauge	none	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_timestamp_seconds	gauge	seconds	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_scan_outcome	gauge	none	instrument	outcome
+cert-converter	internal/scanreport/scanreport.go	cert_converter	change_detection_mode	gauge	none	instrument	mode
+cert-converter	internal/scanreport/scanreport.go	cert_converter	condition	gauge	none	instrument	condition
+cert-converter	internal/scanreport/scanreport.go	cert_converter	removed_artifacts_total	counter	count	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	scan_deadline_timestamp_seconds	gauge	seconds	instrument	
+cert-converter	internal/scanreport/scanreport.go	cert_converter	last_success_timestamp_seconds	gauge	seconds	instrument	
+cert-converter	main.go	cert_converter	build_info	gauge	none	instrument	version
+docker-nut-upsd	collector.go	nut_upsd	upsd_up	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_data_fresh	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_status	gauge	none	collector	flag
+docker-nut-upsd	collector.go	nut_upsd	driver_restarts_total	counter	count	collector	
+docker-nut-upsd	collector.go	nut_upsd	upsmon_parent_alive	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	host_poweroff_enabled	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	poweroff_path_ok	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	poweroff_path_probe_timestamp_seconds	gauge	seconds	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_charge_ratio	gauge	ratio	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_charge_low_ratio	gauge	ratio	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_runtime_seconds	gauge	seconds	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_runtime_low_seconds	gauge	seconds	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_voltage_volts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	battery_temperature_celsius	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	input_voltage_volts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	input_frequency_hertz	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	output_voltage_volts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	output_frequency_hertz	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_load_ratio	gauge	ratio	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_realpower_watts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_realpower_nominal_watts	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_power_voltamperes	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_power_nominal_voltamperes	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	ups_temperature_celsius	gauge	none	collector	
+docker-nut-upsd	collector.go	nut_upsd	build_info	gauge	none	instrument	version,nut_version

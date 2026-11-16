@@ -24,6 +24,13 @@ const (
 	typeSummary   = "summary"
 )
 
+// The series suffixes of a histogram's or summary's lines.
+const (
+	suffixBucket = "_bucket"
+	suffixSum    = "_sum"
+	suffixCount  = "_count"
+)
+
 // metricFamily is one "# TYPE"/"# HELP" block: a metric name, its type, its
 // HELP text (raw, escaped by the encoder), and the samples it emits.
 type metricFamily struct {
@@ -48,13 +55,13 @@ type sample struct {
 
 // family materialises an unlabeled counter into the IR. An unlabeled counter is
 // always emitted.
-func (c *Counter) family() metricFamily {
+func (c *Counter) family() (metricFamily, bool) {
 	return metricFamily{
 		name:    c.name,
 		typ:     typeCounter,
 		help:    c.help,
 		samples: []sample{{value: strconv.FormatInt(c.val.Load(), 10)}},
-	}
+	}, true
 }
 
 // family materialises a labeled counter. ok is false when no label combination
@@ -83,13 +90,13 @@ func (lc *LabeledCounter) family() (fam metricFamily, ok bool) {
 }
 
 // family materialises an unlabeled gauge. An unlabeled gauge is always emitted.
-func (g *Gauge) family() metricFamily {
+func (g *Gauge) family() (metricFamily, bool) {
 	return metricFamily{
 		name:    g.name,
 		typ:     typeGauge,
 		help:    g.help,
 		samples: []sample{{value: formatValue(g.Value())}},
-	}
+	}, true
 }
 
 // family materialises a labeled gauge. ok is false when no label combination
@@ -118,13 +125,13 @@ func (lg *LabeledGauge) family() (fam metricFamily, ok bool) {
 
 // family materialises an unlabeled histogram. An unlabeled histogram is always
 // emitted.
-func (h *Histogram) family() metricFamily {
+func (h *Histogram) family() (metricFamily, bool) {
 	return metricFamily{
 		name:    h.name,
 		typ:     typeHistogram,
 		help:    h.help,
 		samples: histogramSamples(h, ""),
-	}
+	}, true
 }
 
 // family materialises a labeled histogram. ok is false when no label
@@ -159,15 +166,15 @@ func histogramSamples(h *Histogram, labelStr string) []sample {
 	samples := make([]sample, 0, len(h.bounds)+3)
 	for i, bound := range h.bounds {
 		samples = append(samples, sample{
-			nameSuffix: "_bucket",
+			nameSuffix: suffixBucket,
 			labels:     withLabel(labelStr, "le", formatValue(bound)),
 			value:      strconv.FormatInt(bucketVals[i], 10),
 		})
 	}
 	samples = append(samples,
-		sample{nameSuffix: "_bucket", labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatInt(bucketVals[len(h.bounds)], 10)},
-		sample{nameSuffix: "_sum", labels: labelStr, value: formatValue(sum)},
-		sample{nameSuffix: "_count", labels: labelStr, value: strconv.FormatInt(count, 10)},
+		sample{nameSuffix: suffixBucket, labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatInt(bucketVals[len(h.bounds)], 10)},
+		sample{nameSuffix: suffixSum, labels: labelStr, value: formatValue(sum)},
+		sample{nameSuffix: suffixCount, labels: labelStr, value: strconv.FormatInt(count, 10)},
 	)
 	return samples
 }
@@ -190,44 +197,41 @@ func summarySamples(samples []sample, labelStr string, v *SummaryValue) []sample
 		samples = append(samples, sample{labels: withLabel(labelStr, "quantile", formatValue(q.Quantile)), value: formatValue(q.Value)})
 	}
 	return append(samples,
-		sample{nameSuffix: "_sum", labels: labelStr, value: formatValue(v.Sum)},
-		sample{nameSuffix: "_count", labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
+		sample{nameSuffix: suffixSum, labels: labelStr, value: formatValue(v.Sum)},
+		sample{nameSuffix: suffixCount, labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
 	)
 }
 
-// collect materialises the whole registry into a flat []metricFamily in the
-// canonical scrape order (labeled counters, counters, labeled gauges, gauges,
-// histograms, labeled histograms, collectors, then process metrics). Registry
-// metrics are read under the registry read lock; collectors and process
-// metrics run afterwards, outside the lock, because they call app code and
-// perform /proc and runtime reads that must not block registration.
+// histogramValueSamples expands one collector histogram series in the order
+// histogramSamples gives an instrument's.
+func histogramValueSamples(samples []sample, labelStr string, v *HistogramValue) []sample {
+	for _, b := range v.Buckets {
+		samples = append(samples, sample{nameSuffix: suffixBucket, labels: withLabel(labelStr, "le", formatValue(b.UpperBound)), value: strconv.FormatUint(b.Count, 10)})
+	}
+	return append(samples,
+		sample{nameSuffix: suffixBucket, labels: withLabel(labelStr, "le", "+Inf"), value: strconv.FormatUint(v.Count, 10)},
+		sample{nameSuffix: suffixSum, labels: labelStr, value: formatValue(v.Sum)},
+		sample{nameSuffix: suffixCount, labels: labelStr, value: strconv.FormatUint(v.Count, 10)},
+	)
+}
+
+// collect materialises the page into a flat []metricFamily in the canonical
+// scrape order (the instrument groups, collectors, then process metrics),
+// leaving out every ExportChartdata family. Instruments are read under the
+// registry read lock; collectors and process metrics run afterwards, outside
+// it, because they call app code and perform /proc and runtime reads that
+// must not block registration.
 func (r *Registry) collect(ctx context.Context) []metricFamily {
 	r.mu.RLock()
-	fams := make([]metricFamily, 0,
-		len(r.labeledCounters)+len(r.counters)+len(r.labeledGauges)+
-			len(r.gauges)+len(r.histograms)+len(r.labeledHistograms)+r.collectorFamilies+len(processFamilyNames))
-	for _, lc := range r.labeledCounters {
-		if f, ok := lc.family(); ok {
-			fams = append(fams, f)
-		}
-	}
-	for _, c := range r.counters {
-		fams = append(fams, c.family())
-	}
-	for _, lg := range r.labeledGauges {
-		if f, ok := lg.family(); ok {
-			fams = append(fams, f)
-		}
-	}
-	for _, g := range r.gauges {
-		fams = append(fams, g.family())
-	}
-	for _, h := range r.histograms {
-		fams = append(fams, h.family())
-	}
-	for _, lh := range r.labeledHistograms {
-		if f, ok := lh.family(); ok {
-			fams = append(fams, f)
+	fams := make([]metricFamily, 0, r.instrumentCount()+r.collectorFamilies+len(processFamilyNames))
+	for _, group := range r.groups {
+		for _, m := range group {
+			if !m.declared().export.onPage() {
+				continue
+			}
+			if f, ok := m.family(); ok {
+				fams = append(fams, f)
+			}
 		}
 	}
 	collectors := r.collectors
@@ -237,11 +241,15 @@ func (r *Registry) collect(ctx context.Context) []metricFamily {
 }
 
 // appendCollectorFamilies runs each collector and appends its non-empty
-// families. The page serves what survived; run logs the drops.
+// families served on the page. The page serves what survived; run logs the
+// drops.
 func appendCollectorFamilies(ctx context.Context, fams []metricFamily, collectors []*Collector) []metricFamily {
 	for _, c := range collectors {
 		cf, _ := c.run(ctx)
 		for i := range cf {
+			if !c.descs[i].meta.export.onPage() {
+				continue
+			}
 			if f, ok := pageFamily(&cf[i]); ok {
 				fams = append(fams, f)
 			}

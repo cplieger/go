@@ -23,7 +23,7 @@ func TestNewCounter_InvalidNameErrorsAtRegister(t *testing.T) {
 	}
 	for _, name := range invalid {
 		t.Run(name, func(t *testing.T) {
-			c := NewCounter(name, "test") // must not panic
+			c := NewCounter(name, "test", UnitCount) // must not panic
 			mustRegisterError(t, NewRegistry(""), c, fmt.Sprintf("invalid metric name %q", name))
 		})
 	}
@@ -41,7 +41,7 @@ func TestNewCounter_ValidNameRegisters(t *testing.T) {
 	}
 	for _, name := range valid {
 		t.Run(name, func(t *testing.T) {
-			if err := NewRegistry("").Register(NewCounter(name, "test")); err != nil {
+			if err := NewRegistry("").Register(NewCounter(name, "test", UnitCount)); err != nil {
 				t.Errorf("Register(%q) = %v, want nil", name, err)
 			}
 		})
@@ -58,7 +58,7 @@ func TestNewLabeledCounter_InvalidLabelNameErrorsAtRegister(t *testing.T) {
 	}
 	for _, name := range invalid {
 		t.Run(name, func(t *testing.T) {
-			lc := NewLabeledCounter("valid_metric", "test", []string{name}) // must not panic
+			lc := NewLabeledCounter("valid_metric", "test", UnitCount, []string{name}) // must not panic
 			mustRegisterError(t, NewRegistry(""), lc, fmt.Sprintf(`invalid label name %q for metric "valid_metric"`, name))
 		})
 	}
@@ -74,14 +74,14 @@ func TestNewLabeledCounter_InvalidLabelNameErrorsAtRegister(t *testing.T) {
 func TestErroredMetric_RecordPathsAreInert(t *testing.T) {
 	_ = captureDebugLogs(t) // absorb the expected one-time inert-record warnings
 
-	c := NewCounter("bad name", "x")
+	c := NewCounter("bad name", "x", UnitCount)
 	c.Inc()
 	c.Add(-1) // would panic on a valid counter
 	if got := c.val.Load(); got != 0 {
 		t.Errorf("errored Counter value = %d, want 0", got)
 	}
 
-	g := NewGauge("bad name", "x")
+	g := NewGauge("bad name", "x", UnitNone)
 	g.Set(3)
 	g.Add(1)
 	g.Sub(1)
@@ -89,7 +89,7 @@ func TestErroredMetric_RecordPathsAreInert(t *testing.T) {
 		t.Errorf("errored Gauge value = %v, want 0", got)
 	}
 
-	lc := NewLabeledCounter("inert_total", "x", []string{"bad-label", "m"})
+	lc := NewLabeledCounter("inert_total", "x", UnitCount, []string{"bad-label", "m"})
 	lc.Inc("wrong", "arity", "here") // would panic on a valid counter
 	lc.Add(-5)                       // negative AND wrong arity: still a no-op
 	lc.Delete("wrong")
@@ -98,21 +98,22 @@ func TestErroredMetric_RecordPathsAreInert(t *testing.T) {
 		t.Errorf("errored LabeledCounter series = %d, want 0", got)
 	}
 
-	lg := NewLabeledGauge("inert_gauge", "x", []string{"__rsv"})
+	lg := NewLabeledGauge("inert_gauge", "x", UnitNone, []string{"__rsv"})
 	lg.Set(1, "too", "many")
 	lg.Delete("too", "many")
 	if got := len(lg.vals); got != 0 {
 		t.Errorf("errored LabeledGauge series = %d, want 0", got)
 	}
 
-	h := NewHistogram("inert_hist", "x", WithBuckets([]float64{2, 1}))
+	h := NewHistogram("inert_hist", "x", UnitNone, WithBuckets([]float64{2, 1}))
 	h.Observe(0.5)
 	if got := h.count.Load(); got != 0 {
 		t.Errorf("errored Histogram count = %d, want 0", got)
 	}
 
-	lh := NewLabeledHistogram("inert_seconds", "x", []string{"le"})
+	lh := NewLabeledHistogram("inert_seconds", "x", UnitSeconds, []string{"le"})
 	lh.Observe(0.5, "too", "many")
+	lh.Seed("too", "many")
 	tm := lh.NewTimer("wrong", "arity") // eager arity check is skipped when errored
 	tm.ObserveDuration()                // observes into the inert histogram: no-op
 	lh.Delete("v")
@@ -125,7 +126,7 @@ func TestErroredMetric_RecordPathsAreInert(t *testing.T) {
 // sees several violations: the metric-name error is captured, and it is what
 // registration reports (naming the offending metric).
 func TestConstruction_FirstErrorWins(t *testing.T) {
-	lc := NewLabeledCounter("bad name", "x", []string{"also-bad"})
+	lc := NewLabeledCounter("bad name", "x", UnitCount, []string{"also-bad"})
 	mustRegisterError(t, NewRegistry(""), lc, `invalid metric name "bad name"`)
 }
 
@@ -144,32 +145,37 @@ func TestErroredMetric_FirstDropWarnsOnce(t *testing.T) {
 		record func()
 	}{
 		{"Counter", "bad name", func() {
-			c := NewCounter("bad name", "x")
+			c := NewCounter("bad name", "x", UnitCount)
 			c.Inc()
 			c.Add(3)
 		}},
 		{"Gauge Set then Add", "bad gauge", func() {
-			g := NewGauge("bad gauge", "x")
+			g := NewGauge("bad gauge", "x", UnitNone)
 			g.Set(1)
 			g.Add(2)
 		}},
 		{"LabeledCounter", "inert_total", func() {
-			lc := NewLabeledCounter("inert_total", "x", []string{"bad-label"})
+			lc := NewLabeledCounter("inert_total", "x", UnitCount, []string{"bad-label"})
 			lc.Inc("v")
 			lc.Add(2, "v")
 		}},
 		{"LabeledGauge", "inert_gauge", func() {
-			lg := NewLabeledGauge("inert_gauge", "x", []string{"__rsv"})
+			lg := NewLabeledGauge("inert_gauge", "x", UnitNone, []string{"__rsv"})
 			lg.Set(1, "v")
 			lg.Set(2, "v")
 		}},
 		{"Histogram", "inert_hist", func() {
-			h := NewHistogram("inert_hist", "x", WithBuckets([]float64{2, 1}))
+			h := NewHistogram("inert_hist", "x", UnitNone, WithBuckets([]float64{2, 1}))
 			h.Observe(0.5)
 			h.Observe(0.7)
 		}},
+		{"LabeledHistogram Seed then Observe", "inert_seconds", func() {
+			lh := NewLabeledHistogram("inert_seconds", "x", UnitSeconds, []string{"le"})
+			lh.Seed("v")
+			lh.Observe(0.5, "v")
+		}},
 		{"LabeledHistogram via Timer", "inert_seconds", func() {
-			lh := NewLabeledHistogram("inert_seconds", "x", []string{"le"})
+			lh := NewLabeledHistogram("inert_seconds", "x", UnitSeconds, []string{"le"})
 			lh.NewTimer("v").ObserveDuration()
 			lh.Observe(0.5, "v")
 		}},
@@ -197,7 +203,7 @@ func TestErroredMetric_FirstDropWarnsOnce(t *testing.T) {
 // when a construction error was captured). Serial: it captures slog.Default.
 func TestValidMetric_RecordPathNeverWarns(t *testing.T) {
 	buf := captureDebugLogs(t)
-	c := NewCounter("valid_total", "x")
+	c := NewCounter("valid_total", "x", UnitCount)
 	c.Inc()
 	c.Add(2)
 	if logs := buf.String(); strings.Contains(logs, "record dropped") {
@@ -253,9 +259,9 @@ func TestNewLabeled_DuplicateLabelErrorsAtRegister(t *testing.T) {
 		metric string
 		make   func() Metric
 	}{
-		{"LabeledCounter", "dup_counter_total", func() Metric { return NewLabeledCounter("dup_counter_total", "test", dup) }},
-		{"LabeledGauge", "dup_gauge", func() Metric { return NewLabeledGauge("dup_gauge", "test", dup) }},
-		{"LabeledHistogram", "dup_hist_seconds", func() Metric { return NewLabeledHistogram("dup_hist_seconds", "test", dup) }},
+		{"LabeledCounter", "dup_counter_total", func() Metric { return NewLabeledCounter("dup_counter_total", "test", UnitCount, dup) }},
+		{"LabeledGauge", "dup_gauge", func() Metric { return NewLabeledGauge("dup_gauge", "test", UnitNone, dup) }},
+		{"LabeledHistogram", "dup_hist_seconds", func() Metric { return NewLabeledHistogram("dup_hist_seconds", "test", UnitSeconds, dup) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,12 +276,12 @@ func TestNewLabeled_DuplicateLabelErrorsAtRegister(t *testing.T) {
 // does not alter the emitted label names.
 func TestNewLabeledCounter_MutatingCallerSliceIsolated(t *testing.T) {
 	labels := []string{"region"}
-	lc := NewLabeledCounter("iso_counter_total", "test", labels)
+	lc := NewLabeledCounter("iso_counter_total", "test", UnitCount, labels)
 	labels[0] = "zone" // mutate caller slice after construction
 	lc.Inc("us-east")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, `region="us-east"`) {
 		t.Errorf("expected owned label name region, got: %s", out)
@@ -290,12 +296,12 @@ func TestNewLabeledCounter_MutatingCallerSliceIsolated(t *testing.T) {
 // from injecting the reserved "le" name into the emitted series.
 func TestNewLabeledHistogram_MutationCannotBypassLeGuard(t *testing.T) {
 	labels := []string{"path"}
-	lh := NewLabeledHistogram("iso_hist_seconds", "test", labels)
+	lh := NewLabeledHistogram("iso_hist_seconds", "test", UnitSeconds, labels)
 	labels[0] = "le" // would collide with the reserved bucket-bound label if not owned
 	lh.Observe(0.5, "/api")
 
 	var b strings.Builder
-	writeLabeledHistogram(&b, lh)
+	writeFamily(&b, lh)
 	out := b.String()
 	if !strings.Contains(out, `path="/api"`) {
 		t.Errorf("expected owned label name path, got: %s", out)
@@ -321,9 +327,9 @@ func TestNewLabeled_ReservedPrefixErrorsAtRegister(t *testing.T) {
 				metric string
 				make   func() Metric
 			}{
-				{"LabeledCounter", "rsv_counter_total", func() Metric { return NewLabeledCounter("rsv_counter_total", "test", []string{name}) }},
-				{"LabeledGauge", "rsv_gauge", func() Metric { return NewLabeledGauge("rsv_gauge", "test", []string{name}) }},
-				{"LabeledHistogram", "rsv_hist_seconds", func() Metric { return NewLabeledHistogram("rsv_hist_seconds", "test", []string{name}) }},
+				{"LabeledCounter", "rsv_counter_total", func() Metric { return NewLabeledCounter("rsv_counter_total", "test", UnitCount, []string{name}) }},
+				{"LabeledGauge", "rsv_gauge", func() Metric { return NewLabeledGauge("rsv_gauge", "test", UnitNone, []string{name}) }},
+				{"LabeledHistogram", "rsv_hist_seconds", func() Metric { return NewLabeledHistogram("rsv_hist_seconds", "test", UnitSeconds, []string{name}) }},
 			}
 			for _, tc := range cases {
 				t.Run(tc.kind, func(t *testing.T) {
@@ -343,9 +349,9 @@ func TestValidateLabelNames_SingleUnderscoreValid(t *testing.T) {
 		kind string
 		make func() Metric
 	}{
-		{"LabeledCounter", func() Metric { return NewLabeledCounter("us_counter_total", "test", []string{"_foo"}) }},
-		{"LabeledGauge", func() Metric { return NewLabeledGauge("us_gauge", "test", []string{"_foo"}) }},
-		{"LabeledHistogram", func() Metric { return NewLabeledHistogram("us_hist_seconds", "test", []string{"_foo"}) }},
+		{"LabeledCounter", func() Metric { return NewLabeledCounter("us_counter_total", "test", UnitCount, []string{"_foo"}) }},
+		{"LabeledGauge", func() Metric { return NewLabeledGauge("us_gauge", "test", UnitNone, []string{"_foo"}) }},
+		{"LabeledHistogram", func() Metric { return NewLabeledHistogram("us_hist_seconds", "test", UnitSeconds, []string{"_foo"}) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -365,11 +371,11 @@ func TestValidateLabelNames_SingleUnderscoreValid(t *testing.T) {
 func TestSanitizeLabelValues_InvalidUTF8NoPanic(t *testing.T) {
 	buf := captureDebugLogs(t)
 	bad := "\xff\xfe"
-	lc := NewLabeledCounter("sanval_counter_total", "test", []string{"m"})
+	lc := NewLabeledCounter("sanval_counter_total", "test", UnitCount, []string{"m"})
 	lc.Inc(bad) // must not panic
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	if out := b.String(); !strings.Contains(out, "\uFFFD") {
 		t.Errorf("exposition missing U+FFFD replacement: %q", out)
 	}
@@ -399,9 +405,11 @@ func TestSanitizeLabelValues_NoPanicAllTypes(t *testing.T) {
 		kind string
 		fn   func()
 	}{
-		{"LabeledCounter", func() { NewLabeledCounter("sanval2_counter_total", "test", []string{"m"}).Inc(bad) }},
-		{"LabeledGauge", func() { NewLabeledGauge("sanval_gauge", "test", []string{"m"}).Set(1, bad) }},
-		{"LabeledHistogram", func() { NewLabeledHistogram("sanval_hist_seconds", "test", []string{"m"}).Observe(0.5, bad) }},
+		{"LabeledCounter", func() { NewLabeledCounter("sanval2_counter_total", "test", UnitCount, []string{"m"}).Inc(bad) }},
+		{"LabeledGauge", func() { NewLabeledGauge("sanval_gauge", "test", UnitNone, []string{"m"}).Set(1, bad) }},
+		{"LabeledHistogram", func() {
+			NewLabeledHistogram("sanval_hist_seconds", "test", UnitSeconds, []string{"m"}).Observe(0.5, bad)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -423,7 +431,7 @@ func TestSanitizeLabelValues_LongInvalidUTF8LogTruncated(t *testing.T) {
 	buf := captureDebugLogs(t)
 	longInvalid := strings.Repeat("a", maxLogValueLen) + "\xff" + strings.Repeat("b", 64)
 
-	NewLabeledCounter("long_sanval_total", "test", []string{"m"}).Inc(longInvalid) // must not panic
+	NewLabeledCounter("long_sanval_total", "test", UnitCount, []string{"m"}).Inc(longInvalid) // must not panic
 
 	logs := buf.String()
 	if !strings.Contains(logs, "label value contained invalid UTF-8") {
@@ -445,7 +453,7 @@ func TestSanitizeLabelValues_LongInvalidUTF8LogTruncated(t *testing.T) {
 	// (truncateForLog backs the cut off to the previous rune boundary).
 	buf.Reset()
 	straddle := strings.Repeat("a", maxLogValueLen-1) + "\u00e9\xff" + strings.Repeat("b", 64)
-	NewLabeledCounter("long_sanval_straddle_total", "test", []string{"m"}).Inc(straddle) // must not panic
+	NewLabeledCounter("long_sanval_straddle_total", "test", UnitCount, []string{"m"}).Inc(straddle) // must not panic
 
 	attr := loggedValueAttr(t, buf.String(), "long_sanval_straddle_total")
 	if !utf8.ValidString(attr) {
@@ -470,7 +478,7 @@ func TestSanitizeLabelValues_ValueExactlyAtLogCapLoggedWhole(t *testing.T) {
 	buf := captureDebugLogs(t)
 	atCap := strings.Repeat("a", maxLogValueLen-3) + "\xff"
 
-	NewLabeledCounter("logcap_exact_total", "test", []string{"m"}).Inc(atCap) // must not panic
+	NewLabeledCounter("logcap_exact_total", "test", UnitCount, []string{"m"}).Inc(atCap) // must not panic
 
 	attr := loggedValueAttr(t, buf.String(), "logcap_exact_total")
 	want := strings.Repeat("a", maxLogValueLen-3) + "\uFFFD"
@@ -493,12 +501,12 @@ func TestSanitizeHelp_InvalidUTF8NoPanic(t *testing.T) {
 		metric string
 		fn     func()
 	}{
-		{"Counter", "sanhelp_counter_total", func() { NewCounter("sanhelp_counter_total", badHelp) }},
-		{"LabeledCounter", "sanhelp_lcounter_total", func() { NewLabeledCounter("sanhelp_lcounter_total", badHelp, []string{"m"}) }},
-		{"Gauge", "sanhelp_gauge", func() { NewGauge("sanhelp_gauge", badHelp) }},
-		{"LabeledGauge", "sanhelp_lgauge", func() { NewLabeledGauge("sanhelp_lgauge", badHelp, []string{"m"}) }},
-		{"Histogram", "sanhelp_hist_seconds", func() { NewHistogram("sanhelp_hist_seconds", badHelp) }},
-		{"LabeledHistogram", "sanhelp_lhist_seconds", func() { NewLabeledHistogram("sanhelp_lhist_seconds", badHelp, []string{"m"}) }},
+		{"Counter", "sanhelp_counter_total", func() { NewCounter("sanhelp_counter_total", badHelp, UnitCount) }},
+		{"LabeledCounter", "sanhelp_lcounter_total", func() { NewLabeledCounter("sanhelp_lcounter_total", badHelp, UnitCount, []string{"m"}) }},
+		{"Gauge", "sanhelp_gauge", func() { NewGauge("sanhelp_gauge", badHelp, UnitNone) }},
+		{"LabeledGauge", "sanhelp_lgauge", func() { NewLabeledGauge("sanhelp_lgauge", badHelp, UnitNone, []string{"m"}) }},
+		{"Histogram", "sanhelp_hist_seconds", func() { NewHistogram("sanhelp_hist_seconds", badHelp, UnitSeconds) }},
+		{"LabeledHistogram", "sanhelp_lhist_seconds", func() { NewLabeledHistogram("sanhelp_lhist_seconds", badHelp, UnitSeconds, []string{"m"}) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -522,18 +530,18 @@ func TestSanitizeHelp_InvalidUTF8NoPanic(t *testing.T) {
 func TestSanitizeHelp_ExpositionCarriesReplacement(t *testing.T) {
 	_ = captureDebugLogs(t) // absorb the expected sanitize warnings
 
-	c := NewCounter("sanhelp_expo_counter_total", "bad\xff\xfehelp")
+	c := NewCounter("sanhelp_expo_counter_total", "bad\xff\xfehelp", UnitCount)
 	c.Inc()
 	var cb strings.Builder
-	writeCounter(&cb, c)
+	writeFamily(&cb, c)
 	if out := cb.String(); !strings.Contains(out, "# HELP sanhelp_expo_counter_total bad\uFFFDhelp") {
 		t.Errorf("counter HELP = %q, want U+FFFD replacement", out)
 	}
 
-	lh := NewLabeledHistogram("sanhelp_expo_hist_seconds", "bad\xff\xfehelp", []string{"m"})
+	lh := NewLabeledHistogram("sanhelp_expo_hist_seconds", "bad\xff\xfehelp", UnitSeconds, []string{"m"})
 	lh.Observe(0.5, "x")
 	var hb strings.Builder
-	writeLabeledHistogram(&hb, lh)
+	writeFamily(&hb, lh)
 	if out := hb.String(); !strings.Contains(out, "# HELP sanhelp_expo_hist_seconds bad\uFFFDhelp") {
 		t.Errorf("labeled histogram HELP = %q, want U+FFFD replacement", out)
 	}
@@ -543,12 +551,12 @@ func TestSanitizeHelp_ExpositionCarriesReplacement(t *testing.T) {
 // values (including multi-byte runes) create series without panicking and are
 // emitted in the exposition.
 func TestValidateLabelValues_ValidSucceeds(t *testing.T) {
-	lc := NewLabeledCounter("okval_counter_total", "test", []string{"lang"})
+	lc := NewLabeledCounter("okval_counter_total", "test", UnitCount, []string{"lang"})
 	lc.Inc("héllo") // multi-byte UTF-8
 	lc.Inc("plain")
 
 	var b strings.Builder
-	writeLabeledCounter(&b, lc)
+	writeFamily(&b, lc)
 	out := b.String()
 	if !strings.Contains(out, `lang="héllo"`) {
 		t.Errorf("expected multi-byte UTF-8 label value in output, got: %s", out)
@@ -568,7 +576,7 @@ func TestSanitizeHelp_LongInvalidUTF8LogTruncated(t *testing.T) {
 	buf := captureDebugLogs(t)
 	longInvalid := strings.Repeat("a", maxLogValueLen) + "\xff" + strings.Repeat("b", 64)
 
-	NewCounter("long_sanhelp_total", longInvalid) // must not panic
+	NewCounter("long_sanhelp_total", longInvalid, UnitCount) // must not panic
 
 	logs := buf.String()
 	if !strings.Contains(logs, "help text contained invalid UTF-8") {

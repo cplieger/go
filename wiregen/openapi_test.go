@@ -82,6 +82,28 @@ func fullReg() *testRegistry {
 		{Name: "poster", Method: "GET", Path: "/api/items/{id}/poster", Kind: wiregen.KindRaw, Params: params, ContentType: "image/jpeg"},
 		{Name: "events", Method: "GET", Path: "/api/events", Kind: wiregen.KindEventStream},
 		{Name: "signIn", Method: "GET", Path: "/api/sign-in", Kind: wiregen.KindRedirect, Status: 303},
+		{
+			Name: "register", Method: "POST", Path: "/api/register", Kind: wiregen.KindJSON, Status: 201,
+			Response: wiregen.TypeRef[openapi.Item](), ExtraSuccesses: []wiregen.Success{{Status: 200, Response: wiregen.TypeRef[openapi.Item]()}},
+		},
+		{
+			Name: "waitTick", Method: "POST", Path: "/api/tick/wait", Kind: wiregen.KindJSON,
+			Response: wiregen.TypeRef[openapi.Tick](), ExtraSuccesses: []wiregen.Success{{Status: 204}},
+		},
+		{
+			Name: "batch", Method: "POST", Path: "/api/batch", Kind: wiregen.KindJSON, Response: wiregen.TypeRef[openapi.Detail](),
+			ExtraSuccesses: []wiregen.Success{{Status: 202, Response: wiregen.TypeRef[openapi.Item](), Array: true}},
+		},
+		{
+			Name: "thumb", Method: "GET", Path: "/api/items/{id}/thumb", Kind: wiregen.KindRaw, Params: params, ContentType: "image/png",
+			ExtraSuccesses: []wiregen.Success{{Status: 204}},
+		},
+		{Name: "feed", Method: "GET", Path: "/api/feed", Kind: wiregen.KindEventStream, ExtraSuccesses: []wiregen.Success{{Status: 204}}},
+		{Name: "signOut", Method: "GET", Path: "/api/sign-out", Kind: wiregen.KindRedirect, Status: 303, ExtraSuccesses: []wiregen.Success{{Status: 307}}},
+		{
+			Name: "ping", Method: "POST", Path: "/api/ping", Kind: wiregen.KindJSON,
+			ExtraSuccesses: []wiregen.Success{{Status: 200, Response: wiregen.TypeRef[openapi.Item]()}},
+		},
 	}
 	return r
 }
@@ -185,6 +207,22 @@ func TestOpenAPIComponents(t *testing.T) {
 			t.Errorf("components = %v, want the response forms only", got)
 		}
 	})
+	t.Run("an extra success's body is documented when its type is also a parameters type", func(t *testing.T) {
+		r := fullReg()
+		r.Endpoints = append(r.Endpoints, wiregen.Endpoint{
+			Name: "touch", Method: "POST", Path: "/api/items/{id}/touch", Kind: wiregen.KindJSON,
+			Params: wiregen.TypeRef[openapi.ItemParams](), Response: wiregen.TypeRef[openapi.Item](),
+			ExtraSuccesses: []wiregen.Success{{Status: 202, Response: wiregen.TypeRef[openapi.ItemParams]()}},
+		})
+		doc := mustGen(t, r.openapiFile)
+		if !slices.Contains(componentNames(t, doc), "ItemParams") {
+			t.Errorf("components = %v, want ItemParams among them", componentNames(t, doc))
+		}
+		want := `{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ItemParams"}}},"description":"Accepted"}`
+		if got := mustJSON(t, operation(t, doc, "post", "/api/items/{id}/touch")["responses"].(map[string]any)["202"]); got != want {
+			t.Errorf("202 = %s\nwant %s", got, want)
+		}
+	})
 }
 
 // componentNames returns doc's component schema names, sorted.
@@ -257,7 +295,9 @@ func TestNullabilityByDirection(t *testing.T) {
 		if err := validates(t, create, with("files", nil)); err == nil {
 			t.Error(`{"files": null} validates`)
 		}
-		if got := decodeVerdicts(t, boundsReg(), "decodeCreate", []string{with("files", nil)}); !strings.Contains(got[0], "expected array, got null") {
+		sent := maps.Clone(validCreate)
+		sent["item"], sent["files"], sent["shared"] = nil, nil, map[string]any{"hint": nil}
+		if got := decodeVerdicts(t, boundsReg(), "decodeCreate", []string{mustJSON(t, sent)}); !strings.Contains(got[0], "expected array, got null") {
 			t.Errorf("the generated validator answered %q to null files", got[0])
 		}
 	})
@@ -470,6 +510,13 @@ func TestOpenAPIOperations(t *testing.T) {
 		{"raw", "get", "/api/items/{id}/poster", "responses", `{"200":{"content":{"image/jpeg":{}},"description":"OK"}}`},
 		{"event stream", "get", "/api/events", "responses", `{"200":{"content":{"text/event-stream":{"schema":{"type":"string"},"x-events":{"tick":{"$ref":"#/components/schemas/Tick"}}}},"description":"OK"}}`},
 		{"redirect", "get", "/api/sign-in", "responses", `{"303":{"description":"See Other","headers":{"Location":{"required":true,"schema":{"format":"uri-reference","type":"string"}}}}}`},
+		{"extra success with the primary's body", "post", "/api/register", "responses", `{"200":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}},"description":"OK"},"201":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}},"description":"Created"}}`},
+		{"extra success with no body", "post", "/api/tick/wait", "responses", `{"200":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Tick"}}},"description":"OK"},"204":{"description":"No Content"}}`},
+		{"extra success with an array body", "post", "/api/batch", "responses", `{"200":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Detail"}}},"description":"OK"},"202":{"content":{"application/json":{"schema":{"items":{"$ref":"#/components/schemas/Item"},"type":["array","null"]}}},"description":"Accepted"}}`},
+		{"raw extra success", "get", "/api/items/{id}/thumb", "responses", `{"200":{"content":{"image/png":{}},"description":"OK"},"204":{"description":"No Content"}}`},
+		{"event-stream extra success", "get", "/api/feed", "responses", `{"200":{"content":{"text/event-stream":{"schema":{"type":"string"},"x-events":{"tick":{"$ref":"#/components/schemas/Tick"}}}},"description":"OK"},"204":{"description":"No Content"}}`},
+		{"redirect extra success", "get", "/api/sign-out", "responses", `{"303":{"description":"See Other","headers":{"Location":{"required":true,"schema":{"format":"uri-reference","type":"string"}}}},"307":{"description":"Temporary Redirect","headers":{"Location":{"required":true,"schema":{"format":"uri-reference","type":"string"}}}}}`},
+		{"bodiless primary with an extra body", "post", "/api/ping", "responses", `{"200":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}},"description":"OK"},"204":{"description":"No Content"}}`},
 		{"summary", "get", "/api/items/{id}", "summary", `"Read an item."`},
 		{"operation id", "get", "/api/items/{id}", "operationId", `"getItem"`},
 	} {
@@ -492,8 +539,8 @@ func TestEndpointStatus(t *testing.T) {
 	}{
 		{"204 with a body", func(e *wiregen.Endpoint) { e.Status = 204 }, "204 is exactly the status of a JSON endpoint with no Response"},
 		{"200 without a body", func(e *wiregen.Endpoint) { e.Response = wiregen.Type{}; e.Status = 200 }, "204 is exactly"},
-		{"3xx on JSON", func(e *wiregen.Endpoint) { e.Status = 302 }, "success status 302, outside 2xx"},
-		{"205", func(e *wiregen.Endpoint) { e.Status = 205 }, "success status 205"},
+		{"3xx on JSON", func(e *wiregen.Endpoint) { e.Status = 302 }, "success status 302, which is not a 2xx other than 205"},
+		{"205", func(e *wiregen.Endpoint) { e.Status = 205 }, "success status 205, which is not a 2xx other than 205"},
 		{"2xx on a redirect", func(e *wiregen.Endpoint) {
 			e.Kind, e.Response, e.Status = wiregen.KindRedirect, wiregen.Type{}, 200
 		}, "is kind redirect and has status 200"},

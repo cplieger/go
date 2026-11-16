@@ -50,6 +50,13 @@ func (g *generator) outputs() ([]genFile, error) {
 	for _, p := range g.o.openAPIFiles {
 		out = append(out, genFile{role: roleOpenAPI, name: p})
 	}
+	edges, on, err := g.o.edgesOutput()
+	if err != nil {
+		return nil, err
+	}
+	if on {
+		out = append(out, edges)
+	}
 	tsDir, err := locate(g.o.tsDir)
 	if err != nil {
 		return nil, fmt.Errorf("wiregen: the TS directory %q: %w", g.o.tsDir, err)

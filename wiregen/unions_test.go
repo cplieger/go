@@ -43,16 +43,43 @@ func unionReg() *testRegistry {
 	return r
 }
 
+// TestUnion_TypeAlias: each case is a multi-line object type whose members,
+// the tag included, carry their field's JSDoc as an interface's do.
 func TestUnion_TypeAlias(t *testing.T) {
 	out := mustGen(t, unionReg().typesFile)
 	for _, want := range []string{
 		"export type Timing =\n" +
-			"  | { kind: \"identity\" }\n" +
-			"  | { kind: \"shift\"; ms?: number }\n" +
-			"  | { kind: \"linear\"; scale?: number; offset_ms?: number };",
+			"  | {\n" +
+			"      /** Kind names the case. */\n" +
+			"      kind: \"identity\";\n" +
+			"    }\n" +
+			"  | {\n" +
+			"      /** Kind names the case. */\n" +
+			"      kind: \"shift\";\n" +
+			"      ms?: number;\n" +
+			"    }\n" +
+			"  | {\n" +
+			"      /** Kind names the case. */\n" +
+			"      kind: \"linear\";\n" +
+			"      /**\n" +
+			"       * Scale multiplies each instant.\n" +
+			"       *\n" +
+			"       * One leaves the timing unchanged.\n" +
+			"       */\n" +
+			"      scale?: number;\n" +
+			"      offset_ms?: number;\n" +
+			"    };",
 		"export type Shape =\n" +
-			"  | { type: \"circle\"; radius?: number; tags: string[] }\n" +
-			"  | { type: \"square\"; side?: number; tags: string[] };",
+			"  | {\n" +
+			"      type: \"circle\";\n" +
+			"      radius?: number;\n" +
+			"      tags: string[];\n" +
+			"    }\n" +
+			"  | {\n" +
+			"      type: \"square\";\n" +
+			"      side?: number;\n" +
+			"      tags: string[];\n" +
+			"    };",
 		"export interface Holder {\n  timing: Timing;\n  shapes: Shape[];\n}",
 	} {
 		if !strings.Contains(out, want) {
@@ -76,7 +103,8 @@ func TestUnion_Decoder(t *testing.T) {
 		`      refuseKeys(o, ["scale", "offset_ms"], "$.timing");`,
 		`      const out: globalThis.Extract<Timing, { kind: "shift" }> = {`,
 		`      refuseKeys(o, ["side"], "$.shape");`,
-		"import { own, asObject, reqNum, reqOneOf, decodeArray, refuseKeys, type Decoder }",
+		"import { own, asObject, reqNum, reqRaw, reqOneOf, decodeArray, refuseKeys, type Decoder }",
+		`timing: decodeTiming(reqRaw(o, "timing", "$.holder")),`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("decoders missing %q, got:\n%s", want, out)
@@ -237,6 +265,14 @@ func commandUnion() wiregen.Union {
 	}
 }
 
+// TestGolden_UnionTypes pins the whole types file of the enum-tagged,
+// string-tagged and payload-typed unions.
+func TestGolden_UnionTypes(t *testing.T) {
+	r := unionReg()
+	r.Unions = append(r.Unions, commandUnion())
+	goldenCompare(t, "testdata/golden/unions.gen.ts", mustGen(t, r.typesFile))
+}
+
 // commandReg registers Command alone: its payload types join the registry
 // through the Union.
 func commandReg() *testRegistry {
@@ -249,9 +285,21 @@ func TestUnion_PayloadTypes(t *testing.T) {
 	types := mustGen(t, commandReg().typesFile)
 	for _, want := range []string{
 		"export type Command =\n" +
-			"  | { type: \"close\"; chat_id?: string }\n" +
-			"  | { type: \"create\"; payload?: CreateChat }\n" +
-			"  | { type: \"rename\"; chat_id?: string; payload?: Rename };",
+			"  | {\n" +
+			"      type: \"close\";\n" +
+			"      chat_id?: string;\n" +
+			"    }\n" +
+			"  | {\n" +
+			"      type: \"create\";\n" +
+			"      /** Payload is the command's argument, typed by its case. */\n" +
+			"      payload?: CreateChat;\n" +
+			"    }\n" +
+			"  | {\n" +
+			"      type: \"rename\";\n" +
+			"      chat_id?: string;\n" +
+			"      /** Payload is the command's argument, typed by its case. */\n" +
+			"      payload?: Rename;\n" +
+			"    };",
 		"export interface CreateChat {",
 		"export interface Rename {",
 	} {
@@ -426,8 +474,9 @@ func TestUnion_PayloadRecursionCapped(t *testing.T) {
 
 // Each way encoding/json writes a typed payload as null (a nil RawMessage with
 // no omit option, the bytes null under omitempty or omitzero, and a pointer to
-// a nil RawMessage) validates against the response component, and the TS
-// member stays optional.
+// a nil RawMessage) validates against the response component; the TS member
+// is required and nullable where no omit option can drop the key, and
+// optional otherwise.
 func TestUnion_PayloadNilWritesNull(t *testing.T) {
 	null := json.RawMessage("null")
 	nilRaw := json.RawMessage(nil)
@@ -436,11 +485,12 @@ func TestUnion_PayloadNilWritesNull(t *testing.T) {
 		typ    wiregen.Type
 		fields []string
 		value  any
+		member string
 	}{
-		{"a nil payload with no omit option", wiregen.TypeRef[unions.RequiredPayload](), nil, unions.RequiredPayload{Type: "create"}},
-		{"omitempty over the bytes null", wiregen.TypeRef[unions.Command](), []string{"chat_id"}, unions.Command{Type: "create", Payload: null}},
-		{"omitzero over the bytes null", wiregen.TypeRef[unions.OmitZeroPayload](), nil, unions.OmitZeroPayload{Type: "create", Payload: null}},
-		{"a pointer to a nil payload", wiregen.TypeRef[unions.PtrPayload](), nil, unions.PtrPayload{Type: "create", Payload: &nilRaw}},
+		{"a nil payload with no omit option", wiregen.TypeRef[unions.RequiredPayload](), nil, unions.RequiredPayload{Type: "create"}, "payload: CreateChat | null;"},
+		{"omitempty over the bytes null", wiregen.TypeRef[unions.Command](), []string{"chat_id"}, unions.Command{Type: "create", Payload: null}, "payload?: CreateChat;"},
+		{"omitzero over the bytes null", wiregen.TypeRef[unions.OmitZeroPayload](), nil, unions.OmitZeroPayload{Type: "create", Payload: null}, "payload?: CreateChat;"},
+		{"a pointer to a nil payload", wiregen.TypeRef[unions.PtrPayload](), nil, unions.PtrPayload{Type: "create", Payload: &nilRaw}, "payload?: CreateChat;"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newTestRegistry()
@@ -462,8 +512,8 @@ func TestUnion_PayloadNilWritesNull(t *testing.T) {
 			if err := validates(t, compiled(t, doc, "#/components/schemas/"+tc.typ.Name), string(body)); err != nil {
 				t.Errorf("the encoding fails its response schema: %v", err)
 			}
-			if types := mustGen(t, r.typesFile); !strings.Contains(types, `; payload?: CreateChat }`) {
-				t.Errorf("a payload that can be null is not optional:\n%s", types)
+			if types := mustGen(t, r.typesFile); !strings.Contains(types, "      "+tc.member+"\n") {
+				t.Errorf("the payload member is not %q:\n%s", tc.member, types)
 			}
 		})
 	}

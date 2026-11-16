@@ -1,0 +1,32 @@
+{
+  "frame": {
+    "name": "depth",
+    "names": [
+      "a"
+    ],
+    "series": [
+      {
+        "high": [
+          5
+        ],
+        "key": "depth",
+        "low": [
+          1
+        ],
+        "median": [
+          null
+        ],
+        "q1": [
+          2
+        ],
+        "q3": [
+          4
+        ]
+      }
+    ],
+    "type": "boxes",
+    "unit": "count"
+  },
+  "rule": "shape",
+  "field": "series[0][0]"
+}

@@ -22,6 +22,8 @@ Options apply in the order you pass them, and a later option for the same settin
 | `WithArbitrariesFile(name string)` | _(unset)_ | Writes the fast-check arbitraries module at this path. See [Property-test arbitraries](arbitraries.md). |
 | `WithArbitrariesImport(module string)` | `"fast-check"` | Specifier the arbitraries module imports fast-check's default export from. |
 | `WithOpenAPIFiles(paths ...string)` | _(unset)_ | Writes the OpenAPI 3.1 document at each path, relative to the working directory and outside the TS directory's confinement, in the same pass as the TypeScript files. `Registry.OpenAPI` must name a title and a version. |
+| `WithDeadsetEdges(targetRoot string)` | _(unset)_ | Writes the [deadset](https://github.com/cplieger/deadset) edges file in `targetRoot`, relative to the working directory, which must contain the TS directory unless `WithDeadsetEdgesFile` moves the file, and, when a type or an enum is registered, a Go package that gets an edge: one of theirs, or one declaring a struct they embed, directly or through another embed. See [Deadset edges file](generated-files.md#deadset-edges-file). |
+| `WithDeadsetEdgesFile(path string)` | `targetRoot/deadset-edges.json` | Writes the `WithDeadsetEdges` file at `path`, relative to the working directory, instead. The TS directory must then lie below the file's directory, and the Go packages are still found in `targetRoot`. Refused without `WithDeadsetEdges`. See [Writing into another tree](generated-files.md#writing-into-another-tree). |
 | `WithRequireJSONTags(require bool)` | off | With `true`, makes an exported field without a `json` tag a generation error naming its path. Otherwise such a field takes its Go name, as `encoding/json` gives it. |
 
 The generated files import each other by their paths relative to one another, so a module in a subdirectory imports `../types.gen.js`. Two outputs that are one file, however spelled, through a symlink or differing only in case, are refused before anything is written. The final extension is rewritten the way TypeScript rewrites it, so `.mts` becomes `.mjs`, `.cts` becomes `.cjs` and any other extension becomes `.js`.
@@ -30,7 +32,7 @@ The generated files import each other by their paths relative to one another, so
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `Types` | `[]Type` | Structs, and named maps (see [Type mapping](type-mapping.md#named-maps)), to generate types, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
+| `Types` | `[]Type` | Structs, and named maps (see [Type mapping](type-mapping.md#named-maps)), or instantiations of generic ones (see [Generic types](type-mapping.md#generic-types)), to generate types, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
 | `Enums` | `[]EnumRef` | Enums, each registered with `StringEnum[T]()` or `TextEnum[T]()`. See [Type mapping](type-mapping.md#enums). |
 | `Unions` | `[]Union` | Registered structs tagged by one field. See [Type mapping](type-mapping.md#unions). |
 | `Mappings` | `map[string]Mapping` | The consumer's own TypeScript type, decoder and schema for a Go type, keyed by full `importpath.Type`. See [Type mapping](type-mapping.md#mappings). |
@@ -39,16 +41,19 @@ The generated files import each other by their paths relative to one another, so
 | `ErrorEnvelope` | `Type` | The JSON body of every error response. Zero when none is declared. |
 | `OpenAPI` | `OpenAPIInfo` | The document's title, version, description and security schemes. |
 | `Constants` | `[]Const` | Integer constants to write into the constants file. |
-| `TSNameOverride` | `map[string]string` | TypeScript name for a struct, keyed by Go name. |
+| `TSNameOverride` | `map[string]string` | TypeScript name for a struct, keyed by Go name, or by an instantiation's derived name such as `List_Peer`. |
 | `EnumTSNameOverride` | `map[string]string` | TypeScript name for an enum, keyed by Go name. |
-| `PathNameOverride` | `map[string]string` | Path segment a decoder reports in its errors for a type, keyed by Go name. |
+| `PathNameOverride` | `map[string]string` | Path segment a decoder reports in its errors for a type, keyed by Go name, or by an instantiation's derived name. |
 
-Types and enums are keyed by bare Go name, so one name registered from two packages is refused. Rename one, or override its TypeScript name. A key in one of the three override maps that names no registered type or enum, and a `Mappings` key that no registered type's field reaches, is a generation error that lists every such key, so a misspelt key cannot leave a rename or a mapping silently off. `Generate` reads the registry and never modifies it, so one `Registry` can be generated more than once.
+Types and enums are keyed by bare Go name, so one name registered from two packages is refused: rename one, or register only one. An instantiation whose derived name another registered type, enum or instantiation takes is refused too: rename the declared type, or register a named type in place of the instantiation. A key in one of the three override maps that names no registered type or enum, and a `Mappings` key that no registered type's field reaches, is a generation error that lists every such key, so a misspelt key cannot leave a rename or a mapping silently off. `Generate` reads the registry and never modifies it, so one `Registry` can be generated more than once.
 
 ## Helper types
 
 ```go
-// Type names a registered Go type by package path and name.
+// Type names a registered Go type by package path and name. An
+// instantiation of a generic type is named as reflect names it
+// (List[example.com/wire.Peer]) and generates under its derived name
+// (docs/type-mapping.md "Generic types").
 type Type struct {
     PkgPath string
     Name    string
@@ -69,10 +74,12 @@ func TextEnum[T interface{ ~uint8; encoding.TextMarshaler }]() EnumRef
 
 // Union tags Type by its Tag field; each Cases key is a tag value listing the
 // other fields that case allows, all by wire name. Payload names a
-// json.RawMessage field whose type PayloadTypes gives per case.
+// json.RawMessage field whose type PayloadTypes gives per case. Required
+// lists, per case, the fields that case always sends.
 type Union struct {
     Cases        map[string][]string
-    PayloadTypes map[string]Type // every Cases key; the zero Type: no payload
+    PayloadTypes map[string]Type     // every Cases key; the zero Type: no payload
+    Required     map[string][]string // Cases keys; nil: each field keeps its own rule
     Type         Type
     Tag          string
     Payload      string // "": no typed payload
@@ -108,4 +115,4 @@ type Const struct {
 }
 ```
 
-`Endpoint`, `Kind`, `ErrorRef` and `Header` are on the [Typed HTTP client](http-client.md#the-endpoint-table) page.
+`Endpoint`, `Kind`, `ErrorRef`, `Header` and `Success` are on the [Typed HTTP client](http-client.md#the-endpoint-table) page.

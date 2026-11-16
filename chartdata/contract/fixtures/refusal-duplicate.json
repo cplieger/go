@@ -1,0 +1,14 @@
+{
+  "frame": {
+    "name": "depth",
+    "names": [
+      "a",
+      "a"
+    ],
+    "series": [],
+    "type": "categories",
+    "unit": "count"
+  },
+  "rule": "duplicate",
+  "field": "names[1]"
+}

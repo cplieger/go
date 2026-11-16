@@ -1,10 +1,11 @@
 package measure
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,51 +14,52 @@ import (
 // type (labeled + unlabeled) plus the Prometheus 0.0.4 escaping edge cases.
 // Process metrics are added by the handlers automatically. The fixture is fully
 // deterministic so the user-metric portion of the exposition can be
-// byte-compared against committed golden files; process-metric VALUES are
+// byte-compared against v1's golden page; process-metric VALUES are
 // non-deterministic and are masked before comparison (see maskProcessValues).
+// Its declarations are v1's with a unit added: change none of them.
 func goldenFixtureRegistry() *Registry {
 	r := NewRegistry("")
 
 	// Labeled counter, including a _total-suffixed name (the common convention)
 	// and a label value containing backslash, quote, and newline to lock label
 	// escaping.
-	lc := NewLabeledCounter("http_requests_total", "Total HTTP requests", []string{"method", "path", "status"})
+	lc := NewLabeledCounter("http_requests_total", "Total HTTP requests", UnitCount, []string{"method", "path", "status"})
 	r.MustRegister(lc)
 	lc.Add(3, "GET", "/api", "200")
 	lc.Add(1, "POST", `/a"b\c`, "500")
 	lc.Add(7, "GET", "/health", "200")
 
 	// Unlabeled counter WITH _total suffix.
-	tasks := NewCounter("tasks_total", "Total tasks processed")
+	tasks := NewCounter("tasks_total", "Total tasks processed", UnitCount)
 	r.MustRegister(tasks)
 	tasks.Add(42)
 
 	// Unlabeled counter WITHOUT _total suffix — locks the raw-name rendering
 	// (no suffix is appended or stripped).
-	events := NewCounter("events", "Total events")
+	events := NewCounter("events", "Total events", UnitCount)
 	r.MustRegister(events)
 	events.Add(5)
 
 	// Labeled gauge.
-	lg := NewLabeledGauge("queue_depth", "Items queued", []string{"queue"})
+	lg := NewLabeledGauge("queue_depth", "Items queued", UnitNone, []string{"queue"})
 	r.MustRegister(lg)
 	lg.Set(12, "ingest")
 	lg.Set(0.5, "egress")
 
 	// Unlabeled gauge, fractional value (shortest round-trip rendering).
-	temp := NewGauge("temperature_celsius", "Ambient temperature")
+	temp := NewGauge("temperature_celsius", "Ambient temperature", UnitNone)
 	r.MustRegister(temp)
 	temp.Set(23.5)
 
 	// Unlabeled gauge, whole value (bare-integer rendering).
-	conns := NewGauge("active_connections", "Active connections")
+	conns := NewGauge("active_connections", "Active connections", UnitNone)
 	r.MustRegister(conns)
 	conns.Set(8)
 
 	// Unlabeled histogram with HELP text containing backslash, newline, and a
 	// double-quote — locks the HELP escaping rule (backslash and newline
 	// escaped, the double-quote left raw).
-	hist := NewHistogram("request_duration_seconds", "Request latency in \"seconds\"\nline2\\end", WithBuckets([]float64{0.1, 0.5, 1}))
+	hist := NewHistogram("request_duration_seconds", "Request latency in \"seconds\"\nline2\\end", UnitSeconds, WithBuckets([]float64{0.1, 0.5, 1}))
 	r.MustRegister(hist)
 	hist.Observe(0.05)
 	hist.Observe(0.1) // exactly on a bound
@@ -65,7 +67,7 @@ func goldenFixtureRegistry() *Registry {
 	hist.Observe(2.0)
 
 	// Labeled histogram.
-	lh := NewLabeledHistogram("api_latency_seconds", "API latency", []string{"endpoint"}, WithBuckets([]float64{0.25, 1}))
+	lh := NewLabeledHistogram("api_latency_seconds", "API latency", UnitSeconds, []string{"endpoint"}, WithBuckets([]float64{0.25, 1}))
 	r.MustRegister(lh)
 	lh.Observe(0.1, "list")
 	lh.Observe(5.0, "create")
@@ -74,15 +76,10 @@ func goldenFixtureRegistry() *Registry {
 	return r
 }
 
-// maskProcessValues normalises non-deterministic process-metric sample VALUES
-// so the exposition format (family ordering, HELP/TYPE lines and their order,
-// sample series names) can be locked in a golden file while the volatile
-// numeric values are ignored. Sample lines whose series name begins with
-// "process_" or "go_" (the built-in Go runtime / process families, e.g.
-// go_goroutines and go_memstats_heap_alloc_bytes) are masked; comment lines
-// (# HELP / # TYPE) are deterministic and pass through untouched. The fixture
-// registers no user metric under those prefixes, so the mask targets only the
-// built-ins.
+// maskProcessValues masks the values of the Go and process families' sample
+// lines, which vary between runs, so the page's families, HELP and TYPE
+// lines and series names compare exactly. The fixture registers no metric
+// named go_ or process_, so the mask touches only the built-ins.
 func maskProcessValues(exposition string) string {
 	lines := strings.Split(exposition, "\n")
 	for i, line := range lines {
@@ -111,40 +108,64 @@ func serve(t *testing.T, h http.HandlerFunc) string {
 	return rec.Body.String()
 }
 
-// assertGolden compares got against the committed golden file. Set
-// UPDATE_GOLDEN=1 to (re)generate the fixtures.
-func assertGolden(t *testing.T, name, got string) {
+// v1Golden is measure v1's committed page for goldenFixtureRegistry, copied
+// byte for byte from `git show measure/v1.3.0-dev.1:measure/testdata/prometheus.golden`.
+// It is the oracle for v2's page, so it is never regenerated from v2: its
+// hash pins it to v1's bytes.
+const (
+	v1Golden       = "testdata/prometheus-v1.golden"
+	v1GoldenSHA256 = "c66023aafd877187aa1883e37229f93d7b51534fbfe2ed8b6bd01fec473af9db"
+	// v1FixtureFamilies is the number of families v1's fixture registers.
+	v1FixtureFamilies = 8
+)
+
+func readV1Golden(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join("testdata", name)
-	if os.Getenv("UPDATE_GOLDEN") == "1" {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatalf("mkdir testdata: %v", err)
-		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
-			t.Fatalf("write golden %s: %v", name, err)
-		}
-		t.Logf("updated golden %s (%d bytes)", name, len(got))
-		return
-	}
-	want, err := os.ReadFile(path)
+	want, err := os.ReadFile(v1Golden)
 	if err != nil {
-		t.Fatalf("read golden %s (run with UPDATE_GOLDEN=1 to create): %v", name, err)
+		t.Fatalf("read %s: %v", v1Golden, err)
 	}
-	if string(want) != got {
-		t.Errorf("exposition does not match golden %s.\n--- want ---\n%s\n--- got ---\n%s", name, want, got)
+	if sum := sha256.Sum256(want); hex.EncodeToString(sum[:]) != v1GoldenSHA256 {
+		t.Fatalf("%s is not measure v1's file (sha256 %x); restore it with git show measure/v1.3.0-dev.1:measure/testdata/prometheus.golden", v1Golden, sum)
 	}
+	return string(want)
 }
 
-// TestGolden_PrometheusExposition locks the Prometheus 0.0.4 exposition bytes.
-// The page holds every process family, as Linux serves it;
-// TestProcessFamiliesMatchClientGolang checks the macOS set.
-func TestGolden_PrometheusExposition(t *testing.T) {
-	if procExpected != procOKAll {
-		t.Skip("the golden page holds every process family, which this platform does not serve")
-	}
+// userFamilies is the part of a page before the Go and process families.
+func userFamilies(page string) string {
+	user, _, _ := strings.Cut(page, "# HELP go_")
+	return user
+}
+
+// TestGolden_V1ExpositionIsByteIdentical is the release gate on every v2
+// tag: v1's fixture, ported to v2's declarations, serves v1's page byte for
+// byte. The fixture's instruments are checked on every platform; the whole
+// page, which holds every process family, where Linux serves them all.
+func TestGolden_V1ExpositionIsByteIdentical(t *testing.T) {
+	want := readV1Golden(t)
 	r := goldenFixtureRegistry()
+	r.mu.RLock()
+	registered := r.instrumentCount() + r.collectorFamilies
+	r.mu.RUnlock()
+	if registered != v1FixtureFamilies || strings.Count(userFamilies(want), "# TYPE ") != v1FixtureFamilies {
+		t.Fatalf("the fixture registers %d families and v1's page holds %d, want %d: a case was dropped",
+			registered, strings.Count(userFamilies(want), "# TYPE "), v1FixtureFamilies)
+	}
 	got := maskProcessValues(serve(t, r.Handler()))
-	assertGolden(t, "prometheus.golden", got)
+
+	t.Run("instruments", func(t *testing.T) {
+		if g, w := userFamilies(got), userFamilies(want); g != w {
+			t.Errorf("the fixture's families differ from measure v1's page %s.\n--- want ---\n%s\n--- got ---\n%s", v1Golden, w, g)
+		}
+	})
+	t.Run("wholePage", func(t *testing.T) {
+		if procExpected != procOKAll {
+			t.Skip("v1's page holds every process family, which this platform does not serve")
+		}
+		if got != want {
+			t.Errorf("the page differs from measure v1's page %s.\n--- want ---\n%s\n--- got ---\n%s", v1Golden, want, got)
+		}
+	})
 }
 
 // TestGolden_ContentType locks the exposition content type, which is part of

@@ -10,7 +10,7 @@ import (
 )
 
 func TestGaugeFloat64(t *testing.T) {
-	g := NewGauge("test_gauge_f64", "test")
+	g := NewGauge("test_gauge_f64", "test", UnitNone)
 	g.Set(3.14)
 	if got := g.Value(); math.Abs(got-3.14) > 0.001 {
 		t.Errorf("Gauge.Set(3.14) = %f", got)
@@ -34,7 +34,7 @@ func TestGaugeFloat64(t *testing.T) {
 }
 
 func TestGaugeIncDec(t *testing.T) {
-	g := NewGauge("test_gauge", "test")
+	g := NewGauge("test_gauge", "test", UnitNone)
 	g.Inc()
 	g.Inc()
 	g.Dec()
@@ -44,12 +44,12 @@ func TestGaugeIncDec(t *testing.T) {
 }
 
 func TestLabeledGauge(t *testing.T) {
-	lg := NewLabeledGauge("lg_test", "test", []string{"host"})
+	lg := NewLabeledGauge("lg_test", "test", UnitNone, []string{"host"})
 	lg.Set(42.5, "server1")
 	lg.Set(10, "server2")
 
 	var b strings.Builder
-	writeLabeledGauge(&b, lg)
+	writeFamily(&b, lg)
 	out := b.String()
 
 	if !strings.Contains(out, "# TYPE lg_test gauge") {
@@ -64,26 +64,26 @@ func TestLabeledGauge(t *testing.T) {
 }
 
 func TestLabeledGauge_Reset(t *testing.T) {
-	lg := NewLabeledGauge("lg_reset", "test", []string{"host"})
+	lg := NewLabeledGauge("lg_reset", "test", UnitNone, []string{"host"})
 	lg.Set(1, "a")
 	lg.Set(2, "b")
 	lg.Reset()
 
 	var b strings.Builder
-	writeLabeledGauge(&b, lg)
+	writeFamily(&b, lg)
 	if b.Len() != 0 {
 		t.Errorf("expected empty output after Reset, got: %s", b.String())
 	}
 }
 
 func TestLabeledGauge_Delete(t *testing.T) {
-	lg := NewLabeledGauge("lg_delete", "test", []string{"host"})
+	lg := NewLabeledGauge("lg_delete", "test", UnitNone, []string{"host"})
 	lg.Set(1, "a")
 	lg.Set(2, "b")
 	lg.Delete("a")
 
 	var b strings.Builder
-	writeLabeledGauge(&b, lg)
+	writeFamily(&b, lg)
 	out := b.String()
 	if strings.Contains(out, `host="a"`) {
 		t.Errorf("deleted key still present: %s", out)
@@ -99,12 +99,12 @@ func TestLabeledGauge_DeleteArityPanic(t *testing.T) {
 			t.Error("expected panic for arity mismatch")
 		}
 	}()
-	lg := NewLabeledGauge("lg_del_panic", "test", []string{"a", "b"})
+	lg := NewLabeledGauge("lg_del_panic", "test", UnitNone, []string{"a", "b"})
 	lg.Delete("only_one")
 }
 
 func TestLabeledGauge_SetArityPanic(t *testing.T) {
-	lg := NewLabeledGauge("arity_g", "test", []string{"a", "b"})
+	lg := NewLabeledGauge("arity_g", "test", UnitNone, []string{"a", "b"})
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("expected panic for wrong arity")
@@ -116,31 +116,31 @@ func TestLabeledGauge_SetArityPanic(t *testing.T) {
 // TestNewLabeledGauge_TooManyLabelsErrorsAtRegister pins the maxLabels cap:
 // a ninth label is captured at construction and surfaces at registration.
 func TestNewLabeledGauge_TooManyLabelsErrorsAtRegister(t *testing.T) {
-	lg := NewLabeledGauge("lg_many", "test", []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
+	lg := NewLabeledGauge("lg_many", "test", UnitNone, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"})
 	mustRegisterError(t, NewRegistry(""), lg, `LabeledGauge "lg_many" supports at most 8 labels`)
 }
 
 // TestNewLabeledGauge_ExactlyMaxLabelsAllowed pins the arity guard at its
 // inclusive maximum: eight labels is the legal maximum (the guard is > 8).
 func TestNewLabeledGauge_ExactlyMaxLabelsAllowed(t *testing.T) {
-	lg := NewLabeledGauge("mk_lg8", "test", []string{"a", "b", "c", "d", "e", "f", "g", "h"})
+	lg := NewLabeledGauge("mk_lg8", "test", UnitNone, []string{"a", "b", "c", "d", "e", "f", "g", "h"})
 	lg.Set(9, "1", "2", "3", "4", "5", "6", "7", "8") // must not panic with eight labels
 
 	var b strings.Builder
-	writeLabeledGauge(&b, lg)
+	writeFamily(&b, lg)
 	if out := b.String(); !strings.Contains(out, `a="1",b="2",c="3",d="4",e="5",f="6",g="7",h="8"`) {
 		t.Errorf("eight-label gauge not exposed correctly:\n%s", out)
 	}
 }
 
 func TestWriteGaugeFormat(t *testing.T) {
-	g := NewGauge("active_connections", "Active connection count")
+	g := NewGauge("active_connections", "Active connection count", UnitNone)
 	g.Inc()
 	g.Inc()
 	g.Dec()
 
 	var b strings.Builder
-	writeGauge(&b, g)
+	writeFamily(&b, g)
 	out := b.String()
 
 	if !strings.Contains(out, "# HELP active_connections Active connection count") {
@@ -173,11 +173,11 @@ func TestGauge_specialValues(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := NewGauge("rt6_special_"+tt.name, "test")
+			g := NewGauge("rt6_special_"+tt.name, "test", UnitNone)
 			g.Set(tt.val)
 
 			var b strings.Builder
-			writeGauge(&b, g)
+			writeFamily(&b, g)
 			out := b.String()
 			if !strings.Contains(out, "rt6_special_"+tt.name+" "+tt.prom) {
 				t.Errorf("Prometheus: expected %q in:\n%s", tt.prom, out)
@@ -187,13 +187,13 @@ func TestGauge_specialValues(t *testing.T) {
 }
 
 func TestLabeledGauge_specialValues(t *testing.T) {
-	lg := NewLabeledGauge("rt6_lg_special", "test", []string{"v"})
+	lg := NewLabeledGauge("rt6_lg_special", "test", UnitNone, []string{"v"})
 	lg.Set(math.Inf(1), "inf")
 	lg.Set(math.NaN(), "nan")
 	lg.Set(math.Inf(-1), "neginf")
 
 	var b strings.Builder
-	writeLabeledGauge(&b, lg)
+	writeFamily(&b, lg)
 	out := b.String()
 	posInf := "+" + "Inf"
 	negInf := "-" + "Inf"
@@ -212,11 +212,11 @@ func TestLabeledGauge_specialValues(t *testing.T) {
 // TestLabeledGauge_emptyLabelSet exercises a labeled gauge declared with no
 // label names: Set with no values is valid and the family is still emitted.
 func TestLabeledGauge_emptyLabelSet(t *testing.T) {
-	lg := NewLabeledGauge("rt6_empty_lg", "test", []string{})
+	lg := NewLabeledGauge("rt6_empty_lg", "test", UnitNone, []string{})
 	lg.Set(42)
 
 	var b strings.Builder
-	writeLabeledGauge(&b, lg)
+	writeFamily(&b, lg)
 	out := b.String()
 	if !strings.Contains(out, "rt6_empty_lg") {
 		t.Errorf("empty label gauge missing: %s", out)
@@ -226,7 +226,7 @@ func TestLabeledGauge_emptyLabelSet(t *testing.T) {
 // TestGauge_AddSub_Concurrent exercises the float64 CAS loop under contention:
 // balanced concurrent Add/Sub must leave the gauge near zero (no lost update).
 func TestGauge_AddSub_Concurrent(t *testing.T) {
-	g := NewGauge("race_gauge_cas", "test")
+	g := NewGauge("race_gauge_cas", "test", UnitNone)
 	var wg sync.WaitGroup
 	for range 100 {
 		wg.Go(func() {
@@ -243,7 +243,7 @@ func TestGauge_AddSub_Concurrent(t *testing.T) {
 }
 
 func TestLabeledGauge_ResetConcurrent(t *testing.T) {
-	lg := NewLabeledGauge("lg_conc_reset", "test", []string{"id"})
+	lg := NewLabeledGauge("lg_conc_reset", "test", UnitNone, []string{"id"})
 	var wg sync.WaitGroup
 	for i := range 50 {
 		wg.Go(func() {
@@ -261,7 +261,7 @@ func TestLabeledGauge_ResetConcurrent(t *testing.T) {
 }
 
 func TestLabeledGauge_DeleteConcurrent(t *testing.T) {
-	lg := NewLabeledGauge("lg_conc_del", "test", []string{"id"})
+	lg := NewLabeledGauge("lg_conc_del", "test", UnitNone, []string{"id"})
 	var wg sync.WaitGroup
 	for i := range 50 {
 		wg.Go(func() {
@@ -277,7 +277,7 @@ func TestLabeledGauge_DeleteConcurrent(t *testing.T) {
 // against a concurrent scrape (writeLabeledGauge) to pin the nil-map-slot skip
 // in the family materialiser: a key nulled mid-scrape must not be dereferenced.
 func TestLabeledGauge_SetResetDelete_ConcurrentScrape(t *testing.T) {
-	lg := NewLabeledGauge("rt6_race_gauge", "race test", []string{"id"})
+	lg := NewLabeledGauge("rt6_race_gauge", "race test", UnitNone, []string{"id"})
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
@@ -327,7 +327,7 @@ func TestLabeledGauge_SetResetDelete_ConcurrentScrape(t *testing.T) {
 					return
 				default:
 					var b strings.Builder
-					writeLabeledGauge(&b, lg)
+					writeFamily(&b, lg)
 				}
 			}
 		})
@@ -338,21 +338,21 @@ func TestLabeledGauge_SetResetDelete_ConcurrentScrape(t *testing.T) {
 }
 
 // TestGauge_reservedSuffixNamesRenderVerbatim verifies suffix conventions
-// never mangle other metric types: a gauge whose name ends in _total or
+// never mangle other metric types: a gauge whose name ends in _count or
 // _bucket is exposed under its exact name (no stripping, no derived series).
 func TestGauge_reservedSuffixNamesRenderVerbatim(t *testing.T) {
-	gt := NewGauge("weird_total", "a gauge whose name ends in _total")
+	gt := NewGauge("weird_count", "a gauge whose name ends in _count", UnitCount)
 	gt.Set(7)
 	var b strings.Builder
-	writeGauge(&b, gt)
-	if out := b.String(); !strings.Contains(out, "# TYPE weird_total gauge") || !strings.Contains(out, "weird_total 7") {
-		t.Errorf("gauge named _total mangled:\n%s", out)
+	writeFamily(&b, gt)
+	if out := b.String(); !strings.Contains(out, "# TYPE weird_count gauge") || !strings.Contains(out, "weird_count 7") {
+		t.Errorf("gauge named _count mangled:\n%s", out)
 	}
 
-	gb := NewGauge("my_bucket", "a gauge whose name ends in _bucket")
+	gb := NewGauge("my_bucket", "a gauge whose name ends in _bucket", UnitNone)
 	gb.Set(3)
 	b.Reset()
-	writeGauge(&b, gb)
+	writeFamily(&b, gb)
 	if out := b.String(); !strings.Contains(out, "my_bucket 3") {
 		t.Errorf("gauge named _bucket mangled: %s", out)
 	}
@@ -365,8 +365,8 @@ func TestGauge_reservedSuffixNamesRenderVerbatim(t *testing.T) {
 // labeled series is created in setup, so every run of that closure takes
 // loadOrStore's fast path.
 func TestGaugeRecordPathIsAllocationFree(t *testing.T) {
-	g := NewGauge("alloc_gauge", "allocation contract")
-	lg := NewLabeledGauge("alloc_labeled_gauge", "allocation contract", []string{"kind"})
+	g := NewGauge("alloc_gauge", "allocation contract", UnitNone)
+	lg := NewLabeledGauge("alloc_labeled_gauge", "allocation contract", UnitNone, []string{"kind"})
 	lg.Set(1, "scan")
 
 	cases := []struct {
@@ -392,14 +392,10 @@ func TestGaugeRecordPathIsAllocationFree(t *testing.T) {
 }
 
 // TestLabeledGaugeNewSeriesCostIsConstant is the gauge half of the
-// series-creation contract. LabeledGauge stores an *atomic.Uint64 where the
-// counter stores an *atomic.Int64, so the constant is its own measurement
-// rather than one inherited from the counter, and the two axes asserted here
-// are the ones a gauge is exposed to: caller-owned label values whose length
-// it does not choose, and a series map that only grows in a long-running
-// process. Arity independence is pinned once, on the counter.
-//
-// Each run creates a NEW series; the label values are pre-built.
+// series-creation contract: its *atomic.Uint64 is its own measurement, along
+// the two axes a gauge meets, label value length and a series map that only
+// grows. Arity independence is pinned once, on the counter. Each run creates
+// a new series from pre-built values.
 func TestLabeledGaugeNewSeriesCostIsConstant(t *testing.T) {
 	// The 20k-series pre-fill crosses cardinalityWarnThreshold; keep its
 	// warning out of the test output. The crossing is in setup.
@@ -410,7 +406,7 @@ func TestLabeledGaugeNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(lengths))
 		for i, n := range lengths {
 			keys := newSeriesLabelValues(allocRuns, 1, n)
-			lg := NewLabeledGauge("alloc_gauge_vallen", "allocation contract", []string{"k"})
+			lg := NewLabeledGauge("alloc_gauge_vallen", "allocation contract", UnitNone, []string{"k"})
 			next := 0
 			counts[i] = testing.AllocsPerRun(allocRuns, func() {
 				lg.Set(1, keys[next]...)
@@ -431,7 +427,7 @@ func TestLabeledGaugeNewSeriesCostIsConstant(t *testing.T) {
 		counts := make([]float64, len(existing))
 		for i, n := range existing {
 			keys := newSeriesLabelValues(allocRuns, 1, 8)
-			lg := NewLabeledGauge("alloc_gauge_existing", "allocation contract", []string{"k"})
+			lg := NewLabeledGauge("alloc_gauge_existing", "allocation contract", UnitNone, []string{"k"})
 			for k := range n {
 				lg.Set(1, "pre"+strconv.Itoa(k))
 			}

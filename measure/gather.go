@@ -3,6 +3,7 @@ package measure
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -72,39 +73,26 @@ type SummaryValue struct {
 type Quantile struct{ Quantile, Value float64 }
 
 // Gather reads the whole registry as structured families: the instruments,
-// then the collectors' families, then the Go and process families sorted by
-// name, in the order the page shows them. Unlike the page, it lists a
-// declared family that has no series yet, with no samples. It runs every
+// then the collectors' families, then the descs registered on their own,
+// then the Go and process families sorted by name, in the order the page
+// shows them. Unlike the page, it lists a declared family that has no series
+// yet, with no samples, and every [ExportChartdata] family. It runs every
 // collector with ctx, and returns every sample a collector dropped as one
 // error naming the family; the families it returns hold what survived. A
 // counter instrument's int64 value becomes a float64, exact up to 2^53.
 func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 	r.mu.RLock()
-	fams := make([]Family, 0,
-		len(r.labeledCounters)+len(r.counters)+len(r.labeledGauges)+
-			len(r.gauges)+len(r.histograms)+len(r.labeledHistograms)+r.collectorFamilies+len(processFamilyNames))
-	for _, lc := range r.labeledCounters {
-		fams = append(fams, lc.gather())
-	}
-	for _, c := range r.counters {
-		fams = append(fams, scalarFamily(c.name, c.help, TypeCounter, float64(c.val.Load())))
-	}
-	for _, lg := range r.labeledGauges {
-		fams = append(fams, lg.gather())
-	}
-	for _, g := range r.gauges {
-		fams = append(fams, scalarFamily(g.name, g.help, TypeGauge, g.Value()))
-	}
-	for _, h := range r.histograms {
-		fams = append(fams, Family{
-			Name: h.name, Help: h.help, Type: TypeHistogram,
-			Samples: []Sample{{Labels: []Label{}, Histogram: histogramValue(h)}},
-		})
-	}
-	for _, lh := range r.labeledHistograms {
-		fams = append(fams, lh.gather())
+	fams := make([]Family, 0, r.instrumentCount()+r.collectorFamilies+len(r.descs)+len(processFamilyNames))
+	for _, group := range r.groups {
+		for _, m := range group {
+			fams = append(fams, m.gather())
+		}
 	}
 	collectors := r.collectors
+	bare := make([]Family, len(r.descs))
+	for i, d := range r.descs {
+		bare[i] = d.family()
+	}
 	r.mu.RUnlock()
 
 	var errs []error
@@ -115,8 +103,108 @@ func (r *Registry) Gather(ctx context.Context) ([]Family, error) {
 			errs = append(errs, err)
 		}
 	}
+	fams = append(fams, bare...)
 	fams = append(fams, processGather()...)
 	return fams, errors.Join(errs...)
+}
+
+// GatherOf reads only decls, each registered in r, as one [Family] each, in
+// the order given and as [Registry.Gather] reads them, whatever their
+// export: an instrument from its current values, a collector's [Desc] by
+// running its collector with ctx, once for all the decls it serves, and a
+// Desc registered on its own with no samples. It runs no other collector and
+// reads no Go or process family. It returns an error and no families for a
+// nil declaration or one not registered in r, and otherwise the drops of the
+// collectors it ran, as Gather does.
+func (r *Registry) GatherOf(ctx context.Context, decls ...Declared) ([]Family, error) {
+	fams, runs, err := r.gatherInstruments(decls)
+	if err != nil {
+		return nil, err
+	}
+	var errs []error
+	for _, c := range runs {
+		cf, err := c.run(ctx)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		for i, d := range decls {
+			if desc, ok := d.(*Desc); ok && desc.owner.Load() == c {
+				fams[i] = cf[slices.Index(c.descs, desc)]
+			}
+		}
+	}
+	return fams, errors.Join(errs...)
+}
+
+// gatherInstruments reads the instruments among decls into their places and
+// returns the collectors the rest need, each once, after checking that r
+// holds every declaration.
+func (r *Registry) gatherInstruments(decls []Declared) ([]Family, []*Collector, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	fams := make([]Family, len(decls))
+	var runs []*Collector
+	for i, d := range decls {
+		var meta *declMeta
+		if d != nil {
+			meta = d.declared()
+		}
+		if meta == nil {
+			return nil, nil, errNilDeclared
+		}
+		if _, ok := r.members[meta]; !ok {
+			return nil, nil, fmt.Errorf("measure: GatherOf: %q is not registered in this registry", meta.base)
+		}
+		switch m := d.(type) {
+		case instrument:
+			fams[i] = m.gather()
+		case *Desc:
+			switch c := m.owner.Load(); {
+			case c == standalone:
+				fams[i] = m.family()
+			case !slices.Contains(runs, c):
+				runs = append(runs, c)
+			}
+		}
+	}
+	return fams, runs, nil
+}
+
+// Find returns the family named name in fams, as [Registry.Gather] or
+// [Registry.GatherOf] returned them.
+func Find(fams []Family, name string) (Family, bool) {
+	for i := range fams {
+		if fams[i].Name == name {
+			return fams[i], true
+		}
+	}
+	return Family{}, false
+}
+
+// Sample returns the series of f whose label values are labelValues, in the
+// order f declares its labels.
+func (f *Family) Sample(labelValues ...string) (Sample, bool) {
+	for _, s := range f.Samples {
+		if slices.EqualFunc(s.Labels, labelValues, func(l Label, v string) bool { return l.Value == v }) {
+			return s, true
+		}
+	}
+	return Sample{}, false
+}
+
+func (c *Counter) gather() Family {
+	return scalarFamily(c.name, c.help, TypeCounter, float64(c.val.Load()))
+}
+
+func (g *Gauge) gather() Family {
+	return scalarFamily(g.name, g.help, TypeGauge, g.Value())
+}
+
+func (h *Histogram) gather() Family {
+	return Family{
+		Name: h.name, Help: h.help, Type: TypeHistogram,
+		Samples: []Sample{{Labels: []Label{}, Histogram: histogramValue(h)}},
+	}
 }
 
 func scalarFamily(name, help string, typ Type, v float64) Family {

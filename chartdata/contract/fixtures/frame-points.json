@@ -1,0 +1,30 @@
+{
+  "type": "points",
+  "name": "wait_seconds",
+  "units": {
+    "x": "bytes",
+    "y": "seconds",
+    "r": "count"
+  },
+  "series": [
+    {
+      "key": "hosts",
+      "names": [
+        "a",
+        "b"
+      ],
+      "x": [
+        1024,
+        2048
+      ],
+      "y": [
+        0.2,
+        null
+      ],
+      "r": [
+        3,
+        0
+      ]
+    }
+  ]
+}

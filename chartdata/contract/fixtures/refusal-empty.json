@@ -1,0 +1,13 @@
+{
+  "frame": {
+    "name": "depth",
+    "names": [
+      ""
+    ],
+    "series": [],
+    "type": "categories",
+    "unit": "count"
+  },
+  "rule": "empty",
+  "field": "names[0]"
+}

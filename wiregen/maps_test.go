@@ -47,6 +47,9 @@ func TestMapType_Decoder(t *testing.T) {
 	for _, want := range []string{
 		`export const decodeLabels: Decoder<Labels> = (v) => v === null ? {} : decodeRecord(v, decodeItem, "$.labels");`,
 		`export const decodeSettings: Decoder<Settings> = (v) => v === null ? {} : decodeRecord(v, (v) => v as unknown, "$.settings");`,
+		// A required field of a named map type is checked present; the map's
+		// decoder reads null as {}.
+		`labels: decodeLabels(reqRaw(o, "labels", "$.holder")),`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("decoders file missing %q, got:\n%s", want, out)
@@ -251,7 +254,7 @@ func TestMapType_BodyRoles(t *testing.T) {
 	if events := mustGen(t, r.eventsFile); !strings.Contains(events, "labels: decodeLabels,") {
 		t.Errorf("events module does not decode the map's data:\n%s", events)
 	}
-	if types := mustGen(t, r.typesFile); !strings.Contains(types, `{ type: "create"; payload?: Labels }`) {
+	if types := mustGen(t, r.typesFile); !strings.Contains(types, "      type: \"create\";\n      /** Payload is the command's argument, typed by its case. */\n      payload?: Labels;\n") {
 		t.Errorf("types file does not type the payload as the map:\n%s", types)
 	}
 	doc := mustGen(t, r.openapiFile)
@@ -329,7 +332,11 @@ func TestMapType_GenericsAndSelfSlices(t *testing.T) {
 	}
 	loop := newTestRegistry()
 	loop.Types = []wiregen.Type{wiregen.TypeRef[maps.HasGLoop]()}
-	requireGenerateError(t, loop, pkg+".GLoop reaches itself; register it, so it is referenced by name")
+	requireGenerateError(t, loop, pkg+".GLoop[int] reaches itself; register it, so it is referenced by name")
+	loop.Types = append(loop.Types, wiregen.TypeRef[maps.GLoop[int]]())
+	if got := ifaceBody(mustGen(t, loop.typesFile), "HasGLoop"); !strings.Contains(got, "loop: GLoop_int;") {
+		t.Errorf("HasGLoop.loop should reference the registered GLoop[int], got:\n%s", got)
+	}
 	sl := newTestRegistry()
 	sl.Types = []wiregen.Type{wiregen.TypeRef[maps.HasSL]()}
 	requireGenerateError(t, sl, pkg+".SL reaches itself, which no inline shape can hold; route the cycle through a registered struct or named map")

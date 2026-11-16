@@ -8,8 +8,8 @@ import (
 
 func TestRecordHTTPNilSafe(t *testing.T) {
 	RecordHTTP(nil, nil, time.Second) // must not panic
-	c := NewLabeledCounter("req_total", "", []string{"method", "status"})
-	h := NewHistogram("req_seconds", "")
+	c := NewLabeledCounter("req_total", "", UnitCount, []string{"method", "status"})
+	h := NewHistogram("req_seconds", "", UnitSeconds)
 	RecordHTTP(c, h, 250*time.Millisecond, "GET", "200")
 	r := NewRegistry("")
 	r.MustRegister(c)
