@@ -31,7 +31,8 @@ type Union struct {
 	// Payload, when set, names a json.RawMessage field of Type, listed in no
 	// case, that each case with a payload type decodes as that type, keeping
 	// its omit options, and the other cases refuse. Its bytes can be null, so
-	// it is optional and nullable unless Required lists it for the case.
+	// it is a pointer field: optional with an omit option, null read as
+	// absent; required and nullable with none; not null if Required lists it.
 	Payload string
 }
 

@@ -90,7 +90,7 @@ The decoders follow what `encoding/json` writes:
 
 The OpenAPI schemas say the same thing in each direction:
 
-- A response field is required unless `encoding/json` can leave it out: `omitzero`, `omitempty` on a type it can find empty, or a field promoted through an embedded pointer. A request field is also optional when it is a pointer, as the decoder leaves it nil. The TypeScript type follows the response rule, since it is what the client reads.
+- A response field is required unless `encoding/json` can leave it out: `omitzero`, `omitempty` on a type it can find empty, or a field promoted through an embedded pointer. A request field is also optional when it is a pointer, as the decoder leaves it nil. The TypeScript interface is one type for both directions and follows the response rule, so a request body built in TypeScript sets each pointer key with no omit option, to `null` for none.
 - A response field is nullable, `{"type": [T, "null"]}` or an `anyOf` with `null` around a `$ref`, when `encoding/json` can write `null` for it: a nil pointer or collection no omit option drops, or anything nil under a non-nil pointer, such as a `*[]string` holding a nil slice or a `**T` holding a nil `*T`. A request field is nullable when it is a pointer, slice, map or `[]byte`, since `null` decodes to nil. A `Count` lower bound of 1 or more makes a collection with no pointer above it never nullable.
 - An array response's schema admits `null` beside the array, for the same nil slice.
 - A type whose two schemas differ gets two components, the request one suffixed `Input`, and the document references each in its own direction. A registered type no endpoint reaches is documented in its response form, and so is every type its fields name.

@@ -43,9 +43,9 @@ func (f *fieldInfo) nilValue() bool {
 	return f.Kind == kindSlice || f.Kind == kindMap || f.Kind == kindBytes
 }
 
-// nullable reports whether f decodes null as null: it has a pointer level.
-// A required one's TS type admits null; a nil collection with none instead
-// reads as empty, and an optional field reads null as absent.
+// nullable reports whether f has a pointer level that can hold null. A
+// required one keeps null and an optional one reads it as absent; a nil
+// collection with no pointer is not nullable and reads as empty.
 func (f *fieldInfo) nullable() bool { return f.Ptrs > 0 && f.Kind != kindRaw && !f.CaseRequired }
 
 // memberTS is f's TS type as a required member or a collection element.
