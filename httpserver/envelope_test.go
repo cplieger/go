@@ -74,6 +74,8 @@ func TestCodeSpecsDeclaredValues(t *testing.T) {
 		{code: "rate_limited", status: 429, noEffect: true},
 		{code: "host_not_allowed", status: 403, remediation: "Use one of the server's configured host names."},
 		{code: "timeout", status: 503, remediation: "Retry the request; it may have run."},
+		{code: "not_found", status: 404},
+		{code: "ui_unbuilt", status: 503},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.code), func(t *testing.T) {
