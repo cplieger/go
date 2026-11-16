@@ -1,4 +1,6 @@
+import { jitter } from "../reducer.js";
 import type { Frame } from "../stream.js";
+import { DEFAULT_TIMING } from "../timing.js";
 import type { CatchUp, ChangesAnswer, Feed, FeedOptions, FeedSink, Subscription } from "./types.js";
 import { FEED_VERSION, FeedVersionMismatch } from "./version.js";
 import type { ChangedFrame, ListeningFrame } from "./wire.js";
@@ -23,6 +25,10 @@ interface Sub {
   reseed: Watermark | null | undefined;
   /** Rule 1's allowance: an other-epoch seed was staled since the source's last listening frame. */
   otherEpochStaled: boolean;
+  /** Consecutive failed re-reads; the next seed resets it. */
+  failures: number;
+  /** The backoff wait after a failed re-read. */
+  wait: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
 }
 
@@ -41,6 +47,10 @@ interface Src {
   timer: ReturnType<typeof setTimeout> | null;
   inFlight: Flight | null;
   again: boolean;
+  /** Consecutive `retry` catch-ups; an applied answer resets it. */
+  retries: number;
+  /** The backoff wait after a `retry` catch-up: no catch-up of the source goes out during it. */
+  retryWait: ReturnType<typeof setTimeout> | null;
 }
 
 type ByKind<T> = Readonly<Record<string, readonly T[] | undefined>>;
@@ -88,12 +98,31 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         timer: null,
         inFlight: null,
         again: false,
+        retries: 0,
+        retryWait: null,
       };
       sources.set(source, src);
     }
     kindSource.set(kind, src);
   }
   const listeners = new Map<string, Set<() => void>>();
+  const timing = {
+    baseMs: o.timing?.baseMs ?? DEFAULT_TIMING.baseMs,
+    capMs: o.timing?.capMs ?? DEFAULT_TIMING.capMs,
+  };
+  const random = o.random ?? Math.random;
+
+  // The wait after the nth consecutive failure: the stream runtime's reconnect delay for attempt n.
+  function backoff(n: number): number {
+    return Math.max(coalesceMs, jitter(n - 1, random(), timing));
+  }
+
+  function endWait(sub: Sub): void {
+    if (sub.wait !== null) {
+      clearTimeout(sub.wait);
+      sub.wait = null;
+    }
+  }
 
   function positionOf(src: Src, headers: Headers): Watermark | null {
     const value = headers.get("Feed-Position");
@@ -142,6 +171,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
   }
 
   function stale(sub: Sub): void {
+    endWait(sub);
     sub.watermark = null;
     sub.marked = false;
     sub.rereading = true;
@@ -169,9 +199,15 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     if (wm !== undefined) {
       sub.marked = false;
       check(sub, wm);
-    } else if (sub.marked) {
-      schedule(sub.src);
+      return;
     }
+    sub.failures++;
+    sub.wait = setTimeout(() => {
+      sub.wait = null;
+      if (sub.marked) {
+        stale(sub);
+      }
+    }, backoff(sub.failures));
   }
 
   // Rule 3's check of one subscription of a kind a frame names. A watermark on another epoch is a
@@ -192,7 +228,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
   function flush(src: Src): void {
     const ask: Sub[] = [];
     for (const sub of src.subs) {
-      if (!sub.marked || sub.rereading) {
+      if (!sub.marked || sub.rereading || sub.wait !== null) {
         continue;
       }
       if (sub.watermark === null || !src.logged) {
@@ -201,7 +237,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         ask.push(sub);
       }
     }
-    if (ask.length === 0 || src.epoch === null) {
+    if (ask.length === 0 || src.epoch === null || src.retryWait !== null) {
       return;
     }
     if (src.inFlight !== null) {
@@ -257,6 +293,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     );
     try {
       if (r.ok) {
+        src.retries = 0;
         applyAnswer(flight.epoch, subs, r.answer);
       } else if (r.failure === "refused") {
         subs.forEach(stale);
@@ -264,6 +301,11 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         for (const s of subs) {
           s.marked = true;
         }
+        src.retries++;
+        src.retryWait = setTimeout(() => {
+          src.retryWait = null;
+          flush(src);
+        }, backoff(src.retries));
       }
     } finally {
       endFlight(src);
@@ -316,6 +358,10 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         continue;
       }
       const floors = [...ls.floors].filter(([k]) => kindSource.get(k) === src);
+      if (src.retryWait !== null) {
+        clearTimeout(src.retryWait);
+        src.retryWait = null;
+      }
       if (src.epoch === ls.epoch) {
         for (const [k, f] of floors) {
           src.floors.set(k, Math.max(f, src.floors.get(k) ?? 0));
@@ -327,7 +373,9 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
       for (const sub of src.subs) {
         sub.otherEpochStaled = false;
         const wm = sub.watermark;
-        if (!sub.rereading && wm !== null && wm.epoch !== src.epoch) {
+        if (sub.wait !== null) {
+          stale(sub);
+        } else if (!sub.rereading && wm !== null && wm.epoch !== src.epoch) {
           sub.otherEpochStaled = true;
           stale(sub);
         } else {
@@ -364,6 +412,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
       return;
     }
     sub.stopped = true;
+    endWait(sub);
     sub.src.subs.delete(sub);
     const flight = sub.src.inFlight;
     if (flight?.subs.every((s) => s.stopped) === true) {
@@ -387,6 +436,8 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         rereading: false,
         reseed: undefined,
         otherEpochStaled: false,
+        failures: 0,
+        wait: null,
         stopped: false,
       };
       src.subs.add(sub);
@@ -400,9 +451,11 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
             return;
           }
           const wm = positionOf(src, headers);
+          sub.failures = 0;
           if (sub.rereading) {
             sub.reseed = wm;
           } else {
+            endWait(sub);
             check(sub, wm);
           }
         },

@@ -142,12 +142,46 @@ export function sink(opts: { readonly upsert?: boolean } = {}): RecordingSink {
   return s;
 }
 
+/** A sink whose every `stale()` fails at once; `times` holds the fake clock at each call. */
+export function failingSink(
+  how: "reject" | "noseed" = "reject",
+): FeedSink<Row> & { readonly times: number[] } {
+  const times: number[] = [];
+  return {
+    times,
+    upsert() {
+      // Rows are not this sink's subject.
+    },
+    stale() {
+      times.push(Date.now());
+      return how === "reject" ? Promise.reject(new Error("read failed")) : Promise.resolve();
+    },
+  };
+}
+
 /** Lets every settled promise run its continuations. */
 export async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 export async function advance(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
+}
+
+/** Sends one `changed` frame for `kind` every 10 ms, each at the next revision, until the clock reads `to`. */
+export function bumper(
+  feed: Feed<Rows>,
+  kind: string,
+  source: string,
+  epoch: string,
+  rev = 1_000,
+): (to: number) => Promise<void> {
+  let next = rev;
+  return async (to) => {
+    while (Date.now() < to) {
+      await advance(10);
+      feed.onFrame(changed(source, epoch, ++next, [kind]));
+    }
+  };
 }
 
 export interface Harness {
