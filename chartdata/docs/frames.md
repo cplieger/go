@@ -110,7 +110,7 @@ wait := measure.NewHistogram("job_wait_seconds", "Time a job waits to start", me
 
 ## Quantiles of a stored histogram
 
-`Quantile(edges, counts, q)` estimates the q-quantile of a histogram your store holds, such as the bucket counts of each day's rollup, with the same estimate an `AsQuantile` track takes, so a built frame and a sampled one agree to the number. `edges` are the finite bucket bounds, strictly increasing, and `counts` hold each bucket's observations, not cumulative ones, with one more count than edges: the last counts the observations above every edge.
+`Quantile(edges, counts, q)` estimates the q-quantile of a histogram your store holds, such as the bucket counts of each day's rollup, with the same estimate an `AsQuantile` track takes, so a built frame and a sampled one agree to the number. Both obey ±`MaxMagnitude`: an estimate beyond it is a gap on the track, and a frame constructor refuses it. `edges` are the finite bucket bounds, strictly increasing, and `counts` hold each bucket's observations, not cumulative ones, with one more count than edges: the last counts the observations above every edge.
 
 ```go
 edges := []float64{0.5, 1, 2, 5}

@@ -1,9 +1,10 @@
-package chartdata
+package chartdata_test
 
 import (
-	"math"
 	"math/rand/v2"
 	"testing"
+
+	"github.com/cplieger/go/chartdata"
 )
 
 // cdf is histogram_quantile's model of where observations lie, the reference
@@ -30,8 +31,7 @@ func cdf(edges, counts []float64, x float64) float64 {
 
 // Over random integer edges and counts and a dyadic q, so the rank is exact,
 // Quantile returns the least x whose cdf reaches the rank, or the highest
-// edge when the finite buckets hold fewer; a sampled histogram's cumulative
-// counts give the same number.
+// edge when the finite buckets hold fewer.
 func FuzzQuantile_invertsTheCDF(f *testing.F) {
 	for seed := range uint64(200) {
 		f.Add(seed)
@@ -53,22 +53,12 @@ func FuzzQuantile_invertsTheCDF(f *testing.F) {
 		scale := 1 << rng.IntN(7)
 		q := float64(1+rng.IntN(scale)) / float64(scale)
 
-		got, ok := Quantile(edges, counts, q)
+		got, ok := chartdata.Quantile(edges, counts, q)
 		total, finite := 0.0, cdf(edges, counts, edges[len(edges)-1])
 		for _, c := range counts {
 			total += c
 		}
 		rank := q * total
-		cum := make([]float64, len(counts))
-		for i, c := range counts {
-			cum[i] = c
-			if i > 0 {
-				cum[i] += cum[i-1]
-			}
-		}
-		if sampled := quantileOf(q, edges, cum); ok != !math.IsNaN(sampled) || (ok && sampled != got) {
-			t.Fatalf("quantileOf(%v, %v, %v) = %v, Quantile = %v, %v", q, edges, cum, sampled, got, ok)
-		}
 		switch {
 		case total == 0:
 			if ok {

@@ -151,7 +151,7 @@ type tracked struct {
 	// most MaxLabelSets.
 	places map[string]place
 	// bases holds a counter's or histogram's label sets read last step, at
-	// most MaxBaselines, each with its last usable cumulative reading.
+	// most MaxBaselines, each with its last usable reading.
 	bases    map[string]base
 	kind     measure.Kind
 	byAt     int
@@ -176,20 +176,20 @@ type place struct {
 	last int
 }
 
-// base is a label set's last usable cumulative reading, a counter's value or
-// a histogram's buckets, and the column at which it last changed.
+// base is a label set's last usable reading, a counter's value or a
+// histogram's own bucket counts, and the column at which it last changed.
 type base struct {
-	cum     []float64
+	reading []float64
 	changed int
 }
 
-// next is the base a usable reading of cum at column leaves: b, when cum
-// equals it, or cum, changed at column.
-func (b base) next(cum []float64, column int) base {
-	if b.cum != nil && slices.Equal(b.cum, cum) {
+// next is the base a usable reading at column leaves: b, when the reading
+// equals it, or the reading, changed at column.
+func (b base) next(reading []float64, column int) base {
+	if b.reading != nil && slices.Equal(b.reading, reading) {
 		return b
 	}
-	return base{cum: cum, changed: column}
+	return base{reading: reading, changed: column}
 }
 
 // NewSampler builds a Sampler of tracks. It refuses an Every below MinEvery,
@@ -476,7 +476,12 @@ var binsShape = shape[[]float64, []float64]{
 func quantileShape(q float64, bounds []float64) shape[[]float64, float64] {
 	return shape[[]float64, float64]{
 		gap: math.NaN(), isGap: math.IsNaN, add: addBuckets,
-		value: func(sum []float64) float64 { return carried(quantileOf(q, bounds, sum)) },
+		value: func(sum []float64) float64 {
+			if v, ok := Quantile(bounds, sum, q); ok {
+				return carried(v)
+			}
+			return math.NaN()
+		},
 	}
 }
 
@@ -797,7 +802,7 @@ func (ts *tracked) valueOf(r reading, next map[string]base, column int) (float64
 	if !ok || ts.rebase {
 		return 0, false
 	}
-	return increase(v, b.cum[0]), true
+	return increase(v, b.reading[0]), true
 }
 
 // increase is a counter's increase from prev to cur, reset-aware as PromQL's
@@ -815,26 +820,26 @@ func increase(cur, prev float64) float64 {
 func (ts *tracked) bucketPoints(fam *measure.Family, next map[string]base, column int) []point[[]float64] {
 	var pts []point[[]float64]
 	for _, r := range ts.read(fam) {
-		cur := cumulative(r.smp.Histogram)
+		cur := ownCounts(r.smp.Histogram)
 		b, ok := ts.bases[r.set]
 		next[r.set] = b.next(cur, column)
 		if !ok || ts.rebase {
 			continue
 		}
-		if delta := bucketIncrease(cur, b.cum); delta[len(delta)-1] > 0 {
+		if delta := bucketIncrease(cur, b.reading); slices.ContainsFunc(delta, isObserved) {
 			pts = append(pts, point[[]float64]{v: delta, set: r.set, key: ts.keyOf(r.smp.Labels)})
 		}
 	}
 	return pts
 }
 
-// bucketIncrease is each cumulative bucket's increase from prev to cur, all
-// of cur when any bucket's own count fell, a reset: a live histogram's own
+// bucketIncrease is each bucket's increase from the own counts prev to cur,
+// all of cur when any bucket's count fell, a reset: a live histogram's own
 // counts never fall, as Prometheus detects a native histogram's reset.
 func bucketIncrease(cur, prev []float64) []float64 {
 	delta := slices.Clone(cur)
 	for k := range cur {
-		if cur[k]-below(cur, k) < prev[k]-below(prev, k) {
+		if cur[k] < prev[k] {
 			return delta
 		}
 	}
@@ -843,6 +848,8 @@ func bucketIncrease(cur, prev []float64) []float64 {
 	}
 	return delta
 }
+
+func isObserved(d float64) bool { return d > 0 }
 
 // addBuckets is sum plus v, bucket by bucket, in a new slice: a key's sum
 // starts as its first point's slice, and settle sums the same points again.
@@ -854,14 +861,17 @@ func addBuckets(sum, v []float64) []float64 {
 	return out
 }
 
-// cumulative is a histogram reading's cumulative bucket counts, the +Inf
-// bucket's, its Count, last.
-func cumulative(h *measure.HistogramValue) []float64 {
+// ownCounts is each bucket's own count in h, the count above every bound
+// last, differenced in uint64 so each is exact: measure's cumulative counts
+// never fall and end at or below Count.
+func ownCounts(h *measure.HistogramValue) []float64 {
 	out := make([]float64, len(h.Buckets)+1)
+	var below uint64
 	for i, b := range h.Buckets {
-		out[i] = float64(b.Count)
+		out[i] = float64(b.Count - below)
+		below = b.Count
 	}
-	out[len(h.Buckets)] = float64(h.Count)
+	out[len(h.Buckets)] = float64(h.Count - below)
 	return out
 }
 
@@ -888,20 +898,6 @@ func (ts *tracked) keys() []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// quantileOf is Quantile of the cumulative bucket counts cum, +Inf last, NaN
-// where it answers none.
-func quantileOf(q float64, bounds, cum []float64) float64 {
-	counts := make([]float64, len(cum))
-	for i, c := range cum {
-		counts[i] = c - below(cum, i)
-	}
-	v, ok := Quantile(bounds, counts, q)
-	if !ok {
-		return math.NaN()
-	}
-	return v
 }
 
 // window returns the index of the first column after from.
@@ -1016,7 +1012,7 @@ func (ts *tracked) binsFrame() (BinsFrame, error) {
 		sum := sumColumns(ts.hists[key])
 		values := make([]float64, 0, len(bins))
 		for i := lowest; i < len(bounds); i++ {
-			values = append(values, sum[i]-below(sum, i))
+			values = append(values, sum[i])
 		}
 		series = append(series, Series{Key: key, Values: values})
 	}
@@ -1036,15 +1032,15 @@ func below(vs []float64, i int) float64 {
 func sumColumns(r *ring[[]float64]) []float64 {
 	var sum []float64
 	for i := range r.n {
-		cum := r.at(i)
-		if cum == nil {
+		v := r.at(i)
+		if v == nil {
 			continue
 		}
 		if sum == nil {
-			sum = make([]float64, len(cum))
+			sum = make([]float64, len(v))
 		}
-		for k := range cum {
-			sum[k] += cum[k]
+		for k := range v {
+			sum[k] += v[k]
 		}
 	}
 	return sum

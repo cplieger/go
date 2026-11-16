@@ -209,10 +209,10 @@ func (m *refSampler) point(smp *measure.Sample, set string, next map[string]base
 			next[set] = b
 		}
 		return nil
-	case had && slices.Equal(b.cum, cur):
+	case had && slices.Equal(b.reading, cur):
 		next[set] = b
 	default:
-		next[set] = base{cum: cur, changed: m.column}
+		next[set] = base{reading: cur, changed: m.column}
 	}
 	if !had || m.rebase {
 		return nil
@@ -220,17 +220,27 @@ func (m *refSampler) point(smp *measure.Sample, set string, next map[string]base
 	delta := slices.Clone(cur)
 	reset := false // a fall in any entry's own count: the increase is cur
 	for k := range cur {
-		reset = reset || cur[k]-below(cur, k) < b.cum[k]-below(b.cum, k)
+		reset = reset || cur[k]-below(cur, k) < b.reading[k]-below(b.reading, k)
 	}
 	for k := range delta {
 		if !reset {
-			delta[k] -= b.cum[k]
+			delta[k] -= b.reading[k]
 		}
 	}
 	if m.kind == measure.KindHistogram && delta[last] == 0 {
 		return nil
 	}
 	return delta
+}
+
+// own is each entry's own count in the cumulative counts cum: a counter's
+// value is its own.
+func own(cum []float64) []float64 {
+	out := make([]float64, len(cum))
+	for k := range cum {
+		out[k] = cum[k] - below(cum, k)
+	}
+	return out
 }
 
 // plus is sum + v, entry by entry, v when sum is nil.
@@ -249,7 +259,10 @@ func (m *refSampler) value(sum []float64) []float64 {
 	}
 	v := sum[0]
 	if m.form == formQuantile {
-		v = quantileOf(m.q, m.bounds, sum)
+		v = math.NaN()
+		if q, ok := Quantile(m.bounds, own(sum), m.q); ok {
+			v = q
+		}
 	}
 	if !isWithin(v) {
 		return nil
@@ -496,7 +509,7 @@ func differ(s *Sampler, ts *tracked, m *refSampler) string {
 	if !maps.Equal(ts.places, m.places) {
 		return fmt.Sprintf("places %v, want %v", ts.places, m.places)
 	}
-	sameBase := func(a, b base) bool { return a.changed == b.changed && slices.Equal(a.cum, b.cum) }
+	sameBase := func(a, b base) bool { return a.changed == b.changed && slices.Equal(a.reading, own(b.reading)) }
 	if !maps.EqualFunc(ts.bases, m.bases, sameBase) {
 		return fmt.Sprintf("baselines %v, want %v", ts.bases, m.bases)
 	}
