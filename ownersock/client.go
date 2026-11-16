@@ -138,6 +138,9 @@ func (c *clientConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// closedByPeer includes ENOTCONN, which darwin's write(2) returns on a unix
+// socket whose peer has closed.
 func closedByPeer(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ENOTCONN)
 }

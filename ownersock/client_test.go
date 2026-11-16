@@ -5,6 +5,7 @@ package ownersock
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -97,6 +98,41 @@ func TestClient_reportsARefusedPeerSendingABody(t *testing.T) {
 	}
 	if n := s.hits.Load(); n != 0 {
 		t.Errorf("%d requests reached the handler, want 0", n)
+	}
+}
+
+// closedConn is a connection the server closed before any answer: reads end
+// at once with zero bytes, and writes fail with the OS's error for it.
+type closedConn struct {
+	net.Conn
+	readErr, writeErr error
+}
+
+func (c closedConn) Read([]byte) (int, error)  { return 0, c.readErr }
+func (c closedConn) Write([]byte) (int, error) { return 0, c.writeErr }
+
+// net/http may return the write loop's error rather than the read loop's,
+// and each OS names a write to a closed peer its own way.
+func TestClientConn_aWriteAfterTheRefusalCarriesTheCode(t *testing.T) {
+	for name, writeErr := range map[string]error{
+		"EPIPE":      syscall.EPIPE,
+		"ECONNRESET": syscall.ECONNRESET,
+		"ENOTCONN":   syscall.ENOTCONN,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &clientConn{
+				Conn:    closedConn{readErr: io.EOF, writeErr: os.NewSyscallError("write", writeErr)},
+				path:    "/run/app/admin.sock",
+				decided: make(chan struct{}),
+			}
+			if _, err := c.Read(make([]byte, 1)); err == nil {
+				t.Fatal("Read of a closed connection succeeded")
+			}
+			_, err := c.Write([]byte("POST /peer HTTP/1.1\r\n"))
+			if oerr, ok := errors.AsType[*Error](err); !ok || oerr.Code != CodePeerRefused {
+				t.Errorf("Write: %v, want %s", err, CodePeerRefused)
+			}
+		})
 	}
 }
 
