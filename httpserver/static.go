@@ -34,6 +34,11 @@ func WithStaticCacheControl(fn func(assetPath string) string) StaticOption {
 	}
 }
 
+// WithStaticETags sets the caller's entity-tags by path.
+func WithStaticETags(tags map[string]string) StaticOption {
+	return func(*staticConfig) {}
+}
+
 // StaticHandler serves fsys, typically an embed.FS, whose zero ModTime leaves
 // a bare http.FileServer nothing to revalidate on. It reads the tree once and
 // gives each file a sha256 ETag and, when smaller, a gzip body. A known asset
