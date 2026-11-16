@@ -167,7 +167,7 @@ func spellingOf(t types.Type) (typeSpelling, bool) {
 // eachType calls fn on every Type the registry names outside Enums, union
 // payloads last in case order, so fn can rewrite it.
 func (g *generator) eachType(fn func(*Type)) {
-	slots := make([]*Type, 0, 1+len(g.Types)+4*len(g.Endpoints)+len(g.Events)+len(g.Unions))
+	slots := make([]*Type, 0, 1+len(g.Types)+5*len(g.Endpoints)+len(g.Events)+len(g.Unions))
 	slots = append(slots, &g.ErrorEnvelope)
 	for i := range g.Types {
 		slots = append(slots, &g.Types[i])
@@ -175,6 +175,9 @@ func (g *generator) eachType(fn func(*Type)) {
 	for i := range g.Endpoints {
 		e := &g.Endpoints[i]
 		slots = append(slots, &e.Params, &e.Query, &e.Request, &e.Response)
+		for j := range e.ExtraSuccesses {
+			slots = append(slots, &e.ExtraSuccesses[j].Response)
+		}
 	}
 	for i := range g.Events {
 		slots = append(slots, &g.Events[i].Data)

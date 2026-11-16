@@ -353,6 +353,219 @@ func TestKindsEmit(t *testing.T) {
 	}
 }
 
+// TestExtraSuccessesValidated: each extra success is a status its endpoint's
+// kind can answer, distinct from the primary and from the other extras, and
+// each refusal names the endpoint, the status and the fix.
+func TestExtraSuccessesValidated(t *testing.T) {
+	item := wiregen.TypeRef[client.Item]()
+	jsonEP := func(primary int, response wiregen.Type, extras ...wiregen.Success) wiregen.Endpoint {
+		return wiregen.Endpoint{Name: "x", Method: "POST", Path: "/api/x", Kind: wiregen.KindJSON, Status: primary, Response: response, ExtraSuccesses: extras}
+	}
+	raw := func(extras ...wiregen.Success) wiregen.Endpoint {
+		return wiregen.Endpoint{Name: "x", Method: "GET", Path: "/api/x", Kind: wiregen.KindRaw, ContentType: "text/vtt", ExtraSuccesses: extras}
+	}
+	stream := func(extras ...wiregen.Success) wiregen.Endpoint {
+		return wiregen.Endpoint{Name: "x", Method: "GET", Path: "/api/x", Kind: wiregen.KindEventStream, ExtraSuccesses: extras}
+	}
+	redirect := func(primary int, extras ...wiregen.Success) wiregen.Endpoint {
+		return wiregen.Endpoint{Name: "x", Method: "GET", Path: "/api/x", Kind: wiregen.KindRedirect, Status: primary, ExtraSuccesses: extras}
+	}
+	cases := []struct {
+		name    string
+		e       wiregen.Endpoint
+		wantErr string
+	}{
+		{
+			"raw extra with a body", raw(wiregen.Success{Status: 204, Response: item}),
+			"wiregen: endpoint x is kind raw, so its extra success 204 cannot set Response or Array; drop them, since only kind json answers a JSON body",
+		},
+		{
+			"raw extra with Array alone", raw(wiregen.Success{Status: 204, Array: true}),
+			"wiregen: endpoint x is kind raw, so its extra success 204 cannot set Response or Array",
+		},
+		{
+			"event-stream extra with a body", stream(wiregen.Success{Status: 204, Response: item}),
+			"wiregen: endpoint x is kind event-stream, so its extra success 204 cannot set Response or Array",
+		},
+		{
+			"redirect extra with a body", redirect(303, wiregen.Success{Status: 307, Response: item}),
+			"wiregen: endpoint x is kind redirect, so its extra success 307 cannot set Response or Array",
+		},
+		{
+			"array without a response", jsonEP(0, item, wiregen.Success{Status: 201, Array: true}),
+			"wiregen: endpoint x extra success 201 sets Array without a Response; set Response to the element type or drop Array",
+		},
+		{
+			"2xx on a redirect", redirect(303, wiregen.Success{Status: 200}),
+			"wiregen: endpoint x is kind redirect and has extra success status 200, which is not a redirect; use 301, 302, 303, 307 or 308",
+		},
+		{
+			"304 on a redirect", redirect(303, wiregen.Success{Status: 304}),
+			"wiregen: endpoint x is kind redirect and has extra success status 304, which is not a redirect; use 301, 302, 303, 307 or 308",
+		},
+		{
+			"zero status", jsonEP(0, item, wiregen.Success{Response: item}),
+			"wiregen: endpoint x has extra success status 0, which is not a 2xx other than 205; set Status to one, and list a failure in Errors instead",
+		},
+		{
+			"zero status without a body", jsonEP(0, item, wiregen.Success{}),
+			"wiregen: endpoint x has extra success status 0, which is not a 2xx other than 205",
+		},
+		{
+			"3xx on json", jsonEP(0, item, wiregen.Success{Status: 302, Response: item}),
+			"wiregen: endpoint x has extra success status 302, which is not a 2xx other than 205",
+		},
+		{
+			"4xx on json", jsonEP(0, item, wiregen.Success{Status: 404, Response: item}),
+			"wiregen: endpoint x has extra success status 404, which is not a 2xx other than 205",
+		},
+		{
+			"205 on json", jsonEP(0, item, wiregen.Success{Status: 205}),
+			"wiregen: endpoint x has extra success status 205, which is not a 2xx other than 205",
+		},
+		{
+			"3xx on raw", raw(wiregen.Success{Status: 302}),
+			"wiregen: endpoint x has extra success status 302, which is not a 2xx other than 205",
+		},
+		{
+			"204 with a body", jsonEP(0, item, wiregen.Success{Status: 204, Response: item}),
+			"wiregen: endpoint x extra success 204 sets a Response, but a 204 has no body; drop Response or use another 2xx",
+		},
+		{
+			"2xx without a body", jsonEP(0, item, wiregen.Success{Status: 201}),
+			"wiregen: endpoint x extra success 201 has no Response, but only a 204 has no body; set Response or use 204",
+		},
+		{
+			"raw extra other than 204", raw(wiregen.Success{Status: 206}),
+			"wiregen: endpoint x is kind raw, whose only extra success is a 204 with no body, and has extra success status 206; use 204",
+		},
+		{
+			"event-stream extra other than 204", stream(wiregen.Success{Status: 201}),
+			"wiregen: endpoint x is kind event-stream, whose only extra success is a 204 with no body, and has extra success status 201; use 204",
+		},
+		{
+			"the explicit primary", jsonEP(201, item, wiregen.Success{Status: 201, Response: item}),
+			"wiregen: endpoint x extra success 201 is its primary success status; drop it from ExtraSuccesses, or give the primary another Status",
+		},
+		{
+			"the defaulted 200 primary", jsonEP(0, item, wiregen.Success{Status: 200, Response: item}),
+			"wiregen: endpoint x extra success 200 is its primary success status",
+		},
+		{
+			"the defaulted 204 primary", jsonEP(0, wiregen.Type{}, wiregen.Success{Status: 204}),
+			"wiregen: endpoint x extra success 204 is its primary success status",
+		},
+		{
+			"the defaulted 302 primary", redirect(0, wiregen.Success{Status: 302}),
+			"wiregen: endpoint x extra success 302 is its primary success status",
+		},
+		{
+			"listed twice", jsonEP(0, item, wiregen.Success{Status: 201, Response: item}, wiregen.Success{Status: 201, Response: item}),
+			"wiregen: endpoint x lists extra success 201 twice; drop one",
+		},
+		{
+			"unregistered type", jsonEP(0, item, wiregen.Success{Status: 201, Response: wiregen.Type{PkgPath: "github.com/cplieger/go/wiregen/v2/testdata/client", Name: "Nope"}}),
+			"wiregen: endpoint x extra success 201 Response type github.com/cplieger/go/wiregen/v2/testdata/client.Nope is not found in its package",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireGenerateError(t, newEndpointRegistry(tc.e), tc.wantErr)
+		})
+	}
+}
+
+// TestExtraSuccessesEmit: a function endpoint with extra successes decodes
+// the body its answer's status declares, returns the union of the declared
+// bodies and throws on any other status; a descriptor-only kind stays one.
+func TestExtraSuccessesEmit(t *testing.T) {
+	item := wiregen.TypeRef[client.Item]()
+	job := wiregen.TypeRef[client.Job]()
+	r := newEndpointRegistry(
+		wiregen.Endpoint{
+			Name: "register", Method: "POST", Path: "/api/register", Kind: wiregen.KindJSON, Status: 201, Response: job,
+			ExtraSuccesses: []wiregen.Success{{Status: 200, Response: job}},
+		},
+		wiregen.Endpoint{
+			Name: "waitEvents", Method: "POST", Path: "/api/events/wait", Kind: wiregen.KindJSON,
+			Response: wiregen.TypeRef[client.Position](), ExtraSuccesses: []wiregen.Success{{Status: 204}},
+		},
+		wiregen.Endpoint{
+			Name: "batch", Method: "POST", Path: "/api/batch", Kind: wiregen.KindJSON, Response: item,
+			ExtraSuccesses: []wiregen.Success{{Status: 202, Response: job}, {Status: 206, Response: item, Array: true}},
+		},
+		wiregen.Endpoint{
+			Name: "touch", Method: "POST", Path: "/api/touch", Kind: wiregen.KindJSON,
+			ExtraSuccesses: []wiregen.Success{{Status: 200, Response: item}},
+		},
+		wiregen.Endpoint{
+			Name: "thumb", Method: "GET", Path: "/api/thumb", Kind: wiregen.KindRaw, ContentType: "image/png",
+			ExtraSuccesses: []wiregen.Success{{Status: 204}},
+		},
+		wiregen.Endpoint{
+			Name: "feed", Method: "GET", Path: "/api/feed", Kind: wiregen.KindEventStream,
+			ExtraSuccesses: []wiregen.Success{{Status: 204}},
+		},
+		wiregen.Endpoint{
+			Name: "signOut", Method: "GET", Path: "/api/sign-out", Kind: wiregen.KindRedirect, Status: 303,
+			ExtraSuccesses: []wiregen.Success{{Status: 307}},
+		},
+	)
+	out := mustGen(t, r.clientFile)
+	for _, want := range []string{
+		"  decode: (v: unknown, status: number): Job => {\n" +
+			"    switch (status) {\n" +
+			"      case 201:\n        return decodeJob(v);\n" +
+			"      case 200:\n        return decodeJob(v);\n" +
+			"      default:\n        throw new globalThis.TypeError(`$: expected status 201 or 200, got ${status}`);\n" +
+			"    }\n  },\n",
+		"export function register(opts?: ClientOpts): globalThis.Promise<ApiResult<Job, RegisterError>> {\n" +
+			"  return clientRequest<Job, RegisterError>(registerEndpoint.request(), registerEndpoint.decode, opts);\n}",
+		"  decode: (v: unknown, status: number): Position | undefined => {\n" +
+			"    switch (status) {\n" +
+			"      case 200:\n        return decodePosition(v);\n" +
+			"      case 204:\n        return undefined;\n" +
+			"      default:\n        throw new globalThis.TypeError(`$: expected status 200 or 204, got ${status}`);\n" +
+			"    }\n  },\n",
+		"globalThis.Promise<ApiResult<Position | undefined, WaitEventsError>>",
+		"  decode: (v: unknown, status: number): Item | Job | Item[] => {\n" +
+			"    switch (status) {\n" +
+			"      case 200:\n        return decodeItem(v);\n" +
+			"      case 202:\n        return decodeJob(v);\n" +
+			"      case 206:\n        return v === null ? [] : decodeArray(v, decodeItem, \"$\");\n" +
+			"      default:\n        throw new globalThis.TypeError(`$: expected status 200, 202 or 206, got ${status}`);\n" +
+			"    }\n  },\n",
+		"globalThis.Promise<ApiResult<Item | Job | Item[], BatchError>>",
+		"import { decodeArray } from \"./validators.gen.js\";",
+		"  decode: (v: unknown, status: number): undefined | Item => {\n" +
+			"    switch (status) {\n" +
+			"      case 204:\n        return undefined;\n" +
+			"      case 200:\n        return decodeItem(v);\n" +
+			"      default:\n        throw new globalThis.TypeError(`$: expected status 204 or 200, got ${status}`);\n" +
+			"    }\n  },\n",
+		"globalThis.Promise<ApiResult<undefined | Item, TouchError>>",
+		"  decode: (v: unknown, status: number): globalThis.Blob | undefined => {\n" +
+			"    switch (status) {\n" +
+			"      case 200:\n        return decodeBlob(v);\n" +
+			"      case 204:\n        return undefined;\n" +
+			"      default:\n        throw new globalThis.TypeError(`$: expected status 200 or 204, got ${status}`);\n" +
+			"    }\n  },\n",
+		"function decodeBlob(v: unknown): globalThis.Blob {",
+		"globalThis.Promise<ApiResult<globalThis.Blob | undefined, ThumbError>>",
+		"export const feedEndpoint = {",
+		"export const signOutEndpoint = {",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("client missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"function feed(", "function signOut(", "ApiResult<Job | Job,"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("client emits %q:\n%s", unwanted, out)
+		}
+	}
+}
+
 func TestEndpointDocs(t *testing.T) {
 	e := get("getItem", "/api/item")
 	e.Summary = "Read one item."
@@ -387,6 +600,21 @@ func TestEndpointTypesJoinRegistry(t *testing.T) {
 		types := mustGen(t, r.typesFile)
 		if n := strings.Count(types, "export interface Job {"); n != 1 {
 			t.Errorf("Job emitted %d times, want 1", n)
+		}
+	})
+	t.Run("named only by an extra success", func(t *testing.T) {
+		r := newEndpointRegistry(wiregen.Endpoint{
+			Name: "startJob", Method: "POST", Path: "/api/jobs", Kind: wiregen.KindJSON, Response: wiregen.TypeRef[client.Item](),
+			ExtraSuccesses: []wiregen.Success{{Status: 202, Response: wiregen.TypeRef[client.Job]()}},
+		})
+		if types := mustGen(t, r.typesFile); !strings.Contains(types, "export interface Job {") {
+			t.Errorf("types missing Job:\n%s", types)
+		}
+		if decoders := mustGen(t, r.decodersFile); !strings.Contains(decoders, "export const decodeJob: Decoder<Job>") {
+			t.Errorf("decoders missing decodeJob:\n%s", decoders)
+		}
+		if arbs := mustGen(t, r.arbitrariesFile); !strings.Contains(arbs, "export const arbJob: fc.Arbitrary<Job>") {
+			t.Errorf("arbitraries missing arbJob:\n%s", arbs)
 		}
 	})
 	t.Run("unnamed reference refused", func(t *testing.T) {

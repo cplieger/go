@@ -404,6 +404,9 @@ func (b *docBuilder) usedDirections() map[string]map[direction]bool {
 		e := &b.g.Endpoints[i]
 		b.engine.reach(used, e.Request, dirRequest)
 		b.engine.reach(used, e.Response, dirResponse)
+		for _, s := range e.ExtraSuccesses {
+			b.engine.reach(used, s.Response, dirResponse)
+		}
 		params[e.Params.Name], params[e.Query.Name] = true, true
 	}
 	for _, ev := range b.g.Events {
@@ -664,6 +667,9 @@ func (b *docBuilder) operation(e *Endpoint) map[string]any {
 		}
 	}
 	responses := map[string]any{strconv.Itoa(e.successStatus()): b.successResponse(e)}
+	for _, s := range e.ExtraSuccesses {
+		responses[strconv.Itoa(s.Status)] = b.extraResponse(e, s)
+	}
 	maps.Copy(responses, b.errorResponses(e))
 	op["responses"] = responses
 	op["security"] = securityValue(e.Security)
@@ -743,15 +749,7 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 	resp := map[string]any{kwDescription: http.StatusText(e.successStatus())}
 	switch e.Kind {
 	case KindJSON:
-		if e.Response == (Type{}) {
-			return resp
-		}
-		schema := b.bodyRef(e.Response.Name, dirResponse)
-		if e.Array {
-			// encoding/json writes a nil slice as null.
-			schema = nullable(map[string]any{kwType: schemaArray, "items": schema})
-		}
-		resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: schema}}
+		b.addJSONBody(resp, e.Response, e.Array)
 	case KindRaw:
 		resp[kwContent] = map[string]any{e.ContentType: map[string]any{}}
 	case KindEventStream:
@@ -765,9 +763,41 @@ func (b *docBuilder) successResponse(e *Endpoint) map[string]any {
 		}
 		resp[kwContent] = map[string]any{"text/event-stream": media}
 	case KindRedirect:
-		resp["headers"] = map[string]any{"Location": map[string]any{kwRequired: true, kwSchema: map[string]any{kwType: schemaString, "format": "uri-reference"}}}
+		resp["headers"] = locationHeader()
 	}
 	return resp
+}
+
+// extraResponse renders one of e's extra success responses: a JSON body, a
+// redirect's Location, or a description alone for a bodiless status.
+func (b *docBuilder) extraResponse(e *Endpoint, s Success) map[string]any {
+	resp := map[string]any{kwDescription: http.StatusText(s.Status)}
+	switch e.Kind {
+	case KindJSON:
+		b.addJSONBody(resp, s.Response, s.Array)
+	case KindRedirect:
+		resp["headers"] = locationHeader()
+	}
+	return resp
+}
+
+// addJSONBody sets resp's JSON content to body, or to an array of body when
+// array is set; a zero body leaves resp without content.
+func (b *docBuilder) addJSONBody(resp map[string]any, body Type, array bool) {
+	if body == (Type{}) {
+		return
+	}
+	schema := b.bodyRef(body.Name, dirResponse)
+	if array {
+		// encoding/json writes a nil slice as null.
+		schema = nullable(map[string]any{kwType: schemaArray, "items": schema})
+	}
+	resp[kwContent] = map[string]any{mediaJSON: map[string]any{kwSchema: schema}}
+}
+
+// locationHeader renders a redirect response's required Location header.
+func locationHeader() map[string]any {
+	return map[string]any{"Location": map[string]any{kwRequired: true, kwSchema: map[string]any{kwType: schemaString, "format": "uri-reference"}}}
 }
 
 // errorResponses renders e's errors grouped by status, each code's

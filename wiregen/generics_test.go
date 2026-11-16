@@ -121,6 +121,25 @@ func TestGenerics_OpenAPIComponentPerInstance(t *testing.T) {
 	}
 }
 
+// An extra success's instantiation decodes and is documented under its
+// derived name, leaving the caller's registry as written.
+func TestGenerics_ExtraSuccessInstance(t *testing.T) {
+	listPeer := wiregen.TypeRef[generics.List[generics.Peer]]()
+	r := genericsReg()
+	r.Endpoints[0].ExtraSuccesses = []wiregen.Success{{Status: 206, Response: listPeer}}
+	if out := mustGen(t, r.clientFile); !strings.Contains(out, "      case 206:\n        return decodeList_Peer(v);\n") {
+		t.Errorf("client missing the 206 case decoding List_Peer:\n%s", out)
+	}
+	op := operation(t, mustGen(t, r.openapiFile), "get", "/api/peers")
+	want := `{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/List_Peer"}}},"description":"Partial Content"}`
+	if got := mustJSON(t, op["responses"].(map[string]any)["206"]); got != want {
+		t.Errorf("206 = %s\nwant %s", got, want)
+	}
+	if got := r.Endpoints[0].ExtraSuccesses[0].Response; got != listPeer {
+		t.Errorf("Generate rewrote the caller's extra success to %+v, want %+v", got, listPeer)
+	}
+}
+
 func TestGenerics_TSNameOverrideKeysTheDerivedName(t *testing.T) {
 	r := genericsReg()
 	r.TSNameOverride = map[string]string{"List_Peer": "PeerPage"}

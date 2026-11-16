@@ -40,7 +40,7 @@ export function respondWith(fn: (spec: EndpointSpec) => Answer): void {
 
 export function clientRequest<T, E extends string>(
   spec: EndpointSpec,
-  decode: (v: unknown) => T,
+  decode: (v: unknown, status: number) => T,
   _opts?: { readonly signal?: AbortSignal; readonly headers?: Readonly<Record<string, string>> },
 ): Promise<ApiResult<T, E>> {
   recorded.push(spec);
@@ -48,7 +48,7 @@ export function clientRequest<T, E extends string>(
   if (answer.status >= 200 && answer.status < 300) {
     const body = spec.raw ? new Blob([String(answer.body)], { type: "image/jpeg" }) : answer.body;
     try {
-      return Promise.resolve({ ok: true, data: decode(body) });
+      return Promise.resolve({ ok: true, data: decode(body, answer.status) });
     } catch {
       return Promise.resolve({ ok: false, status: answer.status, code: "decode" });
     }

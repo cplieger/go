@@ -83,7 +83,7 @@ The decoders follow what `encoding/json` writes:
 - A required field is refused when its key is absent, and the error names the field's path. A field mapped with a `Decoder` leaves that check to the `Decoder`.
 - A required pointer field reads `null` as `null`, its key still refused absent.
 - A required slice or map with no pointer above it reads `null` as `[]` or `{}`, and a required `[]byte` reads it as `""`, unless a `Count` lower bound refuses it.
-- An array response, an endpoint with `Array` set, reads a `null` body as `[]`, as `encoding/json` writes a handler's nil slice.
+- An array response, an endpoint or extra success with `Array` set, reads a `null` body as `[]`, as `encoding/json` writes a handler's nil slice.
 - A pointer element of a slice or map reads `null` as `null`. Any other nil element reads as empty, as a required field does.
 - A `json.RawMessage` field, required or optional, passes `null` through as data. A required field mapped with no `Decoder` passes it through too.
 - A decoder reads only the object's own properties: a key such as `constructor` that every JavaScript object inherits is absent unless the JSON sends it, and a `__proto__` key, in a map or as a field, is kept as an own property.
@@ -172,7 +172,7 @@ In a case that lists it, the field is present and not `null`, in both directions
 
 ## Named maps
 
-A registered named map type, `type Settings map[string]json.RawMessage`, is a body of its own: an open JSON object whose keys are not known in advance. It can be listed in `Types`, or named as an endpoint's `Request` or `Response`, an event's data, a union case's payload or the `ErrorEnvelope`. Its key and value follow the rules of a map field, so the value is any type wiregen reads, `json.RawMessage` included, and the key is a string, an integer or an `encoding.TextMarshaler`.
+A registered named map type, `type Settings map[string]json.RawMessage`, is a body of its own: an open JSON object whose keys are not known in advance. It can be listed in `Types`, or named as an endpoint's `Request` or `Response`, an extra success's `Response`, an event's data, a union case's payload or the `ErrorEnvelope`. Its key and value follow the rules of a map field, so the value is any type wiregen reads, `json.RawMessage` included, and the key is a string, an integer or an `encoding.TextMarshaler`.
 
 - The types file carries `export type Settings = { [key: string]: unknown };`, with the type's doc comment.
 - The decoder refuses a body that is not an object and decodes each value with the value's decoder. `null` reads as `{}`, as for a map field, because encoding/json writes a nil map as `null`.

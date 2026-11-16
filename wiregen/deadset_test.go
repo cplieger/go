@@ -593,6 +593,36 @@ func TestDeadsetEdges_RemovedTypeDropsItsEdges(t *testing.T) {
 	}
 }
 
+// A type an endpoint names only as an extra success's body gets its edges,
+// as one named as the endpoint's Response does.
+func TestDeadsetEdges_PairsATypeNamedOnlyByAnExtraSuccess(t *testing.T) {
+	root, pkg := edgesProject(t, `{"name": "app"}`)
+	r := wireRegistry(pkg, "User")
+	r.Endpoints = []wiregen.Endpoint{{
+		Name: "getUser", Method: "GET", Path: "/api/user", Kind: wiregen.KindJSON,
+		Response:       wiregen.Type{PkgPath: pkg, Name: "User"},
+		ExtraSuccesses: []wiregen.Success{{Status: 203, Response: wiregen.Type{PkgPath: pkg, Name: "Other"}}},
+	}}
+	err := r.Generate(t.Context(), wiregen.WithTSDir(filepath.Join(root, "web", "src", "wire")),
+		wiregen.WithDeadsetEdges(root), wiregen.WithTransportImport("./api-client.js"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	doc, err := os.ReadFile(filepath.Join(root, "deadset-edges.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edges := readEdges(t, string(doc))
+	for id, want := range map[string][2]string{
+		"wiregen/Other":      {"go://" + pkg + "#Other", "ts://app/src/wire/types.gen.ts#Other"},
+		"wiregen/Other/Note": {"go://" + pkg + "#Other.Note", "ts://app/src/wire/types.gen.ts#Other.note"},
+	} {
+		if got := [2]string{edges[id].Provides, edges[id].UsedBy}; got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
+
 // Regenerating over its own output, with hand edges beside it and the
 // registry in another order, writes the same bytes.
 func TestDeadsetEdges_RegenerationIsIdempotent(t *testing.T) {

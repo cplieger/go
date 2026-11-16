@@ -103,7 +103,7 @@ export const decodeUser: Decoder<User> = (v) => {
 
 ## The endpoint table is authoritative
 
-Bind your server's routes, generate the client and write the OpenAPI document from one `[]wiregen.Endpoint`, so no second route list can drift from it. Each endpoint gets an arguments interface, an error union from its declared codes, a descriptor, and a function over one transport you supply, `clientRequest(spec, decode, opts)`, returning `ApiResult<T, E>`. Declared request headers, such as `Idempotency-Key`, become typed arguments. [Typed HTTP client](docs/http-client.md) has the table, the client and the transport contract.
+Bind your server's routes, generate the client and write the OpenAPI document from one `[]wiregen.Endpoint`, so no second route list can drift from it. Each endpoint gets an arguments interface, an error union from its declared codes, a descriptor, and a function over one transport you supply, `clientRequest(spec, decode, opts)`, returning `ApiResult<T, E>`. Declared request headers, such as `Idempotency-Key`, become typed arguments. An endpoint can answer several success statuses, each with its own body, and its function decodes the body the answer's status declares. [Typed HTTP client](docs/http-client.md) has the table, the client and the transport contract.
 
 ## Decoders follow encoding/json
 
