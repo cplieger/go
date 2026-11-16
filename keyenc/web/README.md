@@ -54,7 +54,7 @@ The grammar, the nesting rule and the size bound are in [How keyenc encodes a ke
 
 This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using [Claude](https://claude.com), [GPT](https://openai.com), and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+This project was built with AI assistance. The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 
