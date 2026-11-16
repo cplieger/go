@@ -64,16 +64,16 @@ func (e *astEngine) resolveUnions() error {
 	for _, u := range e.gen.Unions {
 		ti := e.byName[u.Type.Name]
 		if ti.Map != nil {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: a union type is a struct, not a map", u.Type.PkgPath, u.Type.Name))
+			errs = append(errs, fmt.Errorf("wiregen: union %s: a union type is a struct, not a map", e.gen.goName(u.Type)))
 			continue
 		}
 		if ti.Union != nil {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s is declared twice", u.Type.PkgPath, u.Type.Name))
+			errs = append(errs, fmt.Errorf("wiregen: union %s is declared twice", e.gen.goName(u.Type)))
 			continue
 		}
 		ui, err := e.resolveUnion(&u, ti)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: %w", u.Type.PkgPath, u.Type.Name, err))
+			errs = append(errs, fmt.Errorf("wiregen: union %s: %w", e.gen.goName(u.Type), err))
 			continue
 		}
 		ti.Union = ui
@@ -214,7 +214,7 @@ func (e *astEngine) rankEnds() error {
 	var errs []error
 	for _, u := range e.gen.Unions {
 		if !ended[u.Type.Name] {
-			errs = append(errs, fmt.Errorf("wiregen: union %s.%s: every case requires a field no finite value fills", u.Type.PkgPath, u.Type.Name))
+			errs = append(errs, fmt.Errorf("wiregen: union %s: every case requires a field no finite value fills", e.gen.goName(u.Type)))
 		}
 	}
 	return errors.Join(errs...)

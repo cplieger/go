@@ -353,7 +353,8 @@ func (g *generator) generatedEdges(engine *astEngine, sc *edgeScope) map[string]
 func (g *generator) typeEdges(engine *astEngine, s edgeSet, typesMod string) {
 	for _, ti := range engine.types {
 		tn := typesMod + g.tsName(ti.Name)
-		s.add(edgeSegment(ti.Name), g.typeNames[ti.Name], ti.Name, tn)
+		decl := g.declaration(Type{PkgPath: g.typeNames[ti.Name], Name: ti.Name})
+		s.add(edgeSegment(ti.Name), decl.PkgPath, decl.Name, tn)
 		for _, em := range ti.Embeds {
 			s.member(ti, em.Owner, em.GoName, tn)
 		}

@@ -17,7 +17,7 @@ It suits a Go server that sends JSON or Server-Sent Events to a TypeScript clien
 - Client calls return per-endpoint error unions, and it can also write a decoder per Server-Sent Event and a fast-check arbitrary per type.
 - A configuration error stops it before any file is written, and its output is byte-identical between runs.
 
-Consider [tygo](https://github.com/gzuidhof/tygo) if you want TypeScript types alone from a `tygo.yaml` config. It keeps comments and supports Go generic types.
+Consider [tygo](https://github.com/gzuidhof/tygo) if you want TypeScript types alone from a `tygo.yaml` config. It keeps comments and writes a Go generic type as one generic TypeScript type, where wiregen writes one type per instantiation.
 
 ## Install
 
@@ -95,7 +95,7 @@ export const decodeUser: Decoder<User> = (v) => {
 
 ## API
 
-- A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. A `Union` tags a struct by one field, lists each case's fields in `Cases`, types a `json.RawMessage` per case with `Payload` and `PayloadTypes`, and names the fields each case always sends in `Required` ([Unions](docs/type-mapping.md#unions)). A type that an endpoint, event or union names is generated without being listed.
+- A `Registry` is plain data: `Types`, `Enums`, `Unions`, `Mappings`, `Endpoints`, `Events`, `ErrorEnvelope`, `OpenAPI`, `Constants`, and name overrides. Register each struct, or a named map type for an open JSON object, with `TypeRef[T]()`. An instantiation of a generic type, `TypeRef[wire.List[wire.Peer]]()`, generates under the name `List_Peer`, and each type argument must be registered or a builtin ([Generic types](docs/type-mapping.md#generic-types)). Register the instantiation itself when it is the whole body, and embed it in a struct of your own only to add fields beside it. A `Union` tags a struct by one field, lists each case's fields in `Cases`, types a `json.RawMessage` per case with `Payload` and `PayloadTypes`, and names the fields each case always sends in `Required` ([Unions](docs/type-mapping.md#unions)). A type that an endpoint, event or union names is generated without being listed.
 - Register an enum by its type: `StringEnum[T]()` for a string type, `TextEnum[T]()` for a `uint8` type whose `MarshalText` names its members.
 - `Registry.Generate(ctx, opts ...Option)` writes every file under `WithTSDir(dir)`, which is required. `WithOpenAPIFiles(paths...)` adds the OpenAPI document, `WithDeadsetEdges(targetRoot)` writes a deadset [edges document](https://github.com/cplieger/deadset-spec/blob/dev/docs/edges.md), and `WithDeadsetEdgesFile(path)` writes it elsewhere. A CI check can use that to regenerate into a temporary tree and compare it with the committed files ([Writing into another tree](docs/generated-files.md#writing-into-another-tree)). `WithRequireJSONTags(true)` refuses an untagged field, and the other `With*` options set import paths, file names and the optional modules.
 
@@ -122,7 +122,7 @@ wiregen reads your types from source with `go/packages` and applies the field ru
 
 ## Unsupported by design
 
-- Go generic types. Register each concrete instantiation instead.
+- A Go generic type itself. Register each instantiation, which generates one TypeScript type of its own.
 - `tstype` struct tags. `Mappings` does the same job for the whole registry.
 
 ## Documentation

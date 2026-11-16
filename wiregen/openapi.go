@@ -421,32 +421,44 @@ func (b *docBuilder) usedDirections() map[string]map[direction]bool {
 // componentSchemas renders every component schema, refusing two that share a
 // name.
 func (b *docBuilder) componentSchemas() (map[string]any, error) {
-	out := map[string]any{}
-	owner := map[string]string{}
-	add := func(name, who string, schema any) error {
-		if prev, dup := owner[name]; dup {
-			return fmt.Errorf("wiregen: OpenAPI component %s is named by both %s and %s; rename one through TSNameOverride or EnumTSNameOverride", name, prev, who)
-		}
-		owner[name] = who
-		out[name] = schema
-		return nil
-	}
+	c := components{schemas: map[string]any{}, owner: map[string]string{}}
 	for _, name := range enumNamesSlice(b.g.enums) {
 		values := b.g.enums[name].values
-		if err := add(b.g.tsEnumName(name), "enum "+name, map[string]any{kwType: schemaString, "enum": slices.Clone(values)}); err != nil {
+		if err := c.add(b.g.tsEnumName(name), b.g.enumLabel(name), map[string]any{kwType: schemaString, "enum": slices.Clone(values)}); err != nil {
 			return nil, err
 		}
 	}
 	for _, ti := range b.engine.types {
 		for _, d := range b.componentDirections(ti.Name) {
 			for name, s := range b.typeSchemas(ti, d) {
-				if err := add(name, "type "+ti.Name, s); err != nil {
+				if err := c.add(name, b.g.typeLabel(ti.Name), s); err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
-	return out, nil
+	return c.schemas, nil
+}
+
+// components collects component schemas by name, with the registered type or
+// enum each name came from.
+type components struct {
+	schemas map[string]any
+	owner   map[string]string
+}
+
+// add files schema under name for who, refusing a name OpenAPI does not allow
+// or one another type or enum already took.
+func (c *components) add(name, who string, schema any) error {
+	if !isComponentNamePart(name) {
+		return fmt.Errorf("wiregen: OpenAPI component name %q, of %s, holds a character outside ASCII letters, digits, '.', '-' and '_' (https://spec.openapis.org/oas/v3.1.0#components-object); rename it through TSNameOverride or EnumTSNameOverride", name, who)
+	}
+	if prev, dup := c.owner[name]; dup {
+		return fmt.Errorf("wiregen: OpenAPI component %s is named by both %s and %s; rename one through TSNameOverride or EnumTSNameOverride", name, prev, who)
+	}
+	c.owner[name] = who
+	c.schemas[name] = schema
+	return nil
 }
 
 // componentDirections returns the forms of type name the document carries:

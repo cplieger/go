@@ -776,15 +776,19 @@ func paramsFields(e *Endpoint, engine *astEngine) ([]argField, error) {
 // string, number, boolean or enum.
 func scalarFields(e *Endpoint, role string, wt Type, engine *astEngine) ([]argField, error) {
 	ti := engine.byName[wt.Name] // a plain struct: checkURLArguments refused the rest
+	label := wt.Name
+	if sp, ok := engine.gen.instances[wt.Name]; ok {
+		label = sp.text()
+	}
 	fields := make([]argField, 0, len(ti.Fields))
 	for i := range ti.Fields {
 		f := &ti.Fields[i]
 		ts := f.TSType
 		if !urlScalar(f) {
-			return nil, fmt.Errorf("wiregen: endpoint %s %s field %s.%s is %s; a URL argument is a string, number, boolean or enum", e.Name, role, wt.Name, f.GoName, ts)
+			return nil, fmt.Errorf("wiregen: endpoint %s %s field %s.%s is %s; a URL argument is a string, number, boolean or enum", e.Name, role, label, f.GoName, ts)
 		}
 		if !isValidTSIdent(f.WireName) {
-			return nil, fmt.Errorf("wiregen: endpoint %s %s field %s.%s has wire name %q, which is not a valid TS identifier", e.Name, role, wt.Name, f.GoName, f.WireName)
+			return nil, fmt.Errorf("wiregen: endpoint %s %s field %s.%s has wire name %q, which is not a valid TS identifier", e.Name, role, label, f.GoName, f.WireName)
 		}
 		fields = append(fields, argField{name: f.WireName, tsType: ts, doc: f.Doc, optional: f.optionalIn()})
 	}

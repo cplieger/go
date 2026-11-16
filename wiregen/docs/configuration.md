@@ -32,7 +32,7 @@ The generated files import each other by their paths relative to one another, so
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `Types` | `[]Type` | Structs, and named maps (see [Type mapping](type-mapping.md#named-maps)), to generate types, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
+| `Types` | `[]Type` | Structs, and named maps (see [Type mapping](type-mapping.md#named-maps)), or instantiations of generic ones (see [Generic types](type-mapping.md#generic-types)), to generate types, decoders and schemas for. A type an endpoint, event, union or `ErrorEnvelope` names joins them without being listed. |
 | `Enums` | `[]EnumRef` | Enums, each registered with `StringEnum[T]()` or `TextEnum[T]()`. See [Type mapping](type-mapping.md#enums). |
 | `Unions` | `[]Union` | Registered structs tagged by one field. See [Type mapping](type-mapping.md#unions). |
 | `Mappings` | `map[string]Mapping` | The consumer's own TypeScript type, decoder and schema for a Go type, keyed by full `importpath.Type`. See [Type mapping](type-mapping.md#mappings). |
@@ -41,16 +41,19 @@ The generated files import each other by their paths relative to one another, so
 | `ErrorEnvelope` | `Type` | The JSON body of every error response. Zero when none is declared. |
 | `OpenAPI` | `OpenAPIInfo` | The document's title, version, description and security schemes. |
 | `Constants` | `[]Const` | Integer constants to write into the constants file. |
-| `TSNameOverride` | `map[string]string` | TypeScript name for a struct, keyed by Go name. |
+| `TSNameOverride` | `map[string]string` | TypeScript name for a struct, keyed by Go name, or by an instantiation's derived name such as `List_Peer`. |
 | `EnumTSNameOverride` | `map[string]string` | TypeScript name for an enum, keyed by Go name. |
-| `PathNameOverride` | `map[string]string` | Path segment a decoder reports in its errors for a type, keyed by Go name. |
+| `PathNameOverride` | `map[string]string` | Path segment a decoder reports in its errors for a type, keyed by Go name, or by an instantiation's derived name. |
 
-Types and enums are keyed by bare Go name, so one name registered from two packages is refused. Rename one, or override its TypeScript name. A key in one of the three override maps that names no registered type or enum, and a `Mappings` key that no registered type's field reaches, is a generation error that lists every such key, so a misspelt key cannot leave a rename or a mapping silently off. `Generate` reads the registry and never modifies it, so one `Registry` can be generated more than once.
+Types and enums are keyed by bare Go name, so one name registered from two packages is refused: rename one, or register only one. An instantiation whose derived name another registered type, enum or instantiation takes is refused too: rename the declared type, or register a named type in place of the instantiation. A key in one of the three override maps that names no registered type or enum, and a `Mappings` key that no registered type's field reaches, is a generation error that lists every such key, so a misspelt key cannot leave a rename or a mapping silently off. `Generate` reads the registry and never modifies it, so one `Registry` can be generated more than once.
 
 ## Helper types
 
 ```go
-// Type names a registered Go type by package path and name.
+// Type names a registered Go type by package path and name. An
+// instantiation of a generic type is named as reflect names it
+// (List[example.com/wire.Peer]) and generates under its derived name
+// (docs/type-mapping.md "Generic types").
 type Type struct {
     PkgPath string
     Name    string

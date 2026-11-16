@@ -20,7 +20,10 @@ import (
 	"unicode/utf8"
 )
 
-// Type names a registered Go type by package path and name.
+// Type names a registered Go type by package path and name. An
+// instantiation of a generic type is named as reflect names it
+// (List[example.com/wire.Peer]) and generates under its derived name
+// (docs/type-mapping.md "Generic types").
 type Type struct {
 	PkgPath string
 	Name    string
@@ -65,16 +68,18 @@ type Registry struct {
 	// [WithOpenAPIFiles] names an output.
 	OpenAPI OpenAPIInfo
 	// TSNameOverride renames a registered type's TS identifier, keyed by its
-	// bare Go name.
+	// bare Go name, an instantiation's derived name.
 	TSNameOverride map[string]string
 	// EnumTSNameOverride renames a registered enum's TS identifier, keyed by
 	// its bare Go name.
 	EnumTSNameOverride map[string]string
 	// PathNameOverride replaces the snake_case name a decoder's error paths
-	// use for a registered type, keyed by its bare Go name.
+	// use for a registered type, keyed by its bare Go name, an
+	// instantiation's derived name.
 	PathNameOverride map[string]string
 	// Mappings replaces wiregen's reading of a Go type, keyed by its
-	// importpath.Name, with the consumer's own TS type, decoder and schema.
+	// importpath.Name, with the consumer's own TS type, decoder and schema. An
+	// instantiation's key is importpath.Name[args], or its generic's key.
 	//
 	// A key in any of the three override maps that names no registered type
 	// or enum, and a Mappings key no registered type's field reaches, is a
@@ -329,6 +334,9 @@ type generator struct {
 	// ErrorEnvelope gives each type, listed in Types or not, for the errors
 	// that refuse it.
 	typeRoles map[string]string
+	// instances spells each registered instantiation, keyed by the wire
+	// name nameInstances renamed it to.
+	instances map[string]typeSpelling
 	files     []genFile // every output, content unrendered
 	Registry
 	o options
@@ -356,6 +364,9 @@ func newGenerator(r *Registry, opts []Option) (*generator, error) {
 	g.PathNameOverride = maps.Clone(r.PathNameOverride)
 	g.Mappings = maps.Clone(r.Mappings)
 	g.Unions = slices.Clone(r.Unions)
+	for i := range g.Unions {
+		g.Unions[i].PayloadTypes = maps.Clone(g.Unions[i].PayloadTypes)
+	}
 	g.Enums = slices.Clone(r.Enums)
 	g.Types = slices.Clone(r.Types)
 	g.Endpoints = slices.Clone(r.Endpoints)
@@ -456,6 +467,9 @@ func (g *generator) validateMappingsUsed(e *astEngine) error {
 // typeNames and enums share one bare-name space, which the override maps'
 // keys must name.
 func (g *generator) registerNames() error {
+	if err := g.nameInstances(); err != nil {
+		return err
+	}
 	seen, err := g.registerTypes()
 	if err != nil {
 		return err
@@ -465,10 +479,13 @@ func (g *generator) registerNames() error {
 		if role, ok := g.typeRoles[ref.Type.Name]; ok && g.typeNames[ref.Type.Name] == ref.Type.PkgPath {
 			return fmt.Errorf("wiregen: %s %s.%s is an enum; it must be %s", role, ref.Type.PkgPath, ref.Type.Name, roleShape(role))
 		}
-		if err := registerName(seen, "enum", ref.Type); err != nil {
+		if err := g.registerName(seen, "enum", ref.Type); err != nil {
 			return err
 		}
 		g.enums[ref.Type.Name] = enumDef{pkgPath: ref.Type.PkgPath}
+	}
+	if err := g.checkTypeArguments(); err != nil {
+		return err
 	}
 	return g.validateOverrideKeys()
 }
@@ -482,7 +499,7 @@ func (g *generator) registerTypes() (map[string]string, error) {
 	g.typeRoles = map[string]string{}
 	seen := make(map[string]string, len(g.Types)+len(g.Enums))
 	for _, wt := range g.Types {
-		if err := registerName(seen, "type", wt); err != nil {
+		if err := g.registerName(seen, "type", wt); err != nil {
 			return nil, err
 		}
 		g.typeNames[wt.Name] = wt.PkgPath
@@ -498,7 +515,7 @@ func (g *generator) registerTypes() (map[string]string, error) {
 			}
 			continue
 		}
-		if err := registerName(seen, ref.role, ref.wt); err != nil {
+		if err := g.registerName(seen, ref.role, ref.wt); err != nil {
 			return nil, err
 		}
 		g.typeNames[ref.wt.Name] = ref.wt.PkgPath
@@ -568,13 +585,13 @@ func (g *generator) validateEvents() error {
 // registerName records wt's bare name in seen, keyed to its package, and
 // rejects a type with no package or name, or a bare name registered twice:
 // wiregen keys types and enums by bare name.
-func registerName(seen map[string]string, role string, wt Type) error {
+func (g *generator) registerName(seen map[string]string, role string, wt Type) error {
 	if wt.PkgPath == "" || wt.Name == "" {
 		return fmt.Errorf("wiregen: a registered %s %+v names no package-level type; register a named type", role, wt)
 	}
 	if prev, dup := seen[wt.Name]; dup {
 		if prev == wt.PkgPath {
-			return fmt.Errorf("wiregen: %s.%s is registered twice", wt.PkgPath, wt.Name)
+			return fmt.Errorf("wiregen: %s is registered twice", g.goName(wt))
 		}
 		return fmt.Errorf("wiregen: name %q is registered from two packages, %s and %s. wiregen keys types and enums by bare name, so rename one or register only one", wt.Name, prev, wt.PkgPath)
 	}

@@ -206,7 +206,7 @@ func (e *astEngine) refuseUndecodable() {
 	}
 	for _, ti := range e.types {
 		if used[ti.Name][dirRequest] {
-			e.refusals = append(e.refusals, ti.inRefusals(e.gen.typeNames[ti.Name]+"."+ti.Name)...)
+			e.refusals = append(e.refusals, ti.inRefusals(e.gen.goName(Type{PkgPath: e.gen.typeNames[ti.Name], Name: ti.Name}))...)
 		}
 	}
 }
@@ -456,43 +456,64 @@ func wireName(ref EnumRef, c *types.Const) (name string, member bool, err error)
 	return name, werr == nil, nil
 }
 
-// lookupType finds wt's struct or named map in pkg, setting exactly one of
-// st and mp. A type an endpoint, event, union or ErrorEnvelope names is refused
-// under that role, with no hint a role cannot use.
-func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (tn *types.TypeName, st *types.Struct, mp *types.Named, err error) {
+// lookupType finds wt's struct or named map, setting exactly one of st and
+// mp; an instantiation is built from its origin in pkg. A type an endpoint,
+// event, union or ErrorEnvelope names is refused under that role, with no
+// hint a role cannot use.
+func (e *astEngine) lookupType(pkg *packages.Package, wt Type) (t types.Type, st *types.Struct, mp *types.Named, err error) {
 	role, named := e.gen.typeRoles[wt.Name]
+	full := e.gen.goName(wt)
+	if sp, generic := e.gen.instances[wt.Name]; generic {
+		if t, err = e.instantiate(&sp); err != nil {
+			if named {
+				return nil, nil, nil, fmt.Errorf("wiregen: %s %s: %w", role, full, err)
+			}
+			return nil, nil, nil, fmt.Errorf("wiregen: registered type %s: %w", full, err)
+		}
+	} else if t, err = lookupDeclared(pkg, wt, role, named); err != nil {
+		return nil, nil, nil, err
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		return t, u, nil, nil
+	case *types.Map:
+		return t, nil, t.(*types.Named), nil //nolint:errcheck // lookupDeclared refuses an alias, so a defined type or an instantiation is left, which go/types gives as a *types.Named
+	}
+	if named {
+		return nil, nil, nil, fmt.Errorf("wiregen: %s %s is not %s", role, full, roleShape(role))
+	}
+	return nil, nil, nil, fmt.Errorf("wiregen: registered type %s is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type", full)
+}
+
+// lookupDeclared finds the type wt declares in pkg, refusing it under role
+// when the registry names it in one.
+func lookupDeclared(pkg *packages.Package, wt Type, role string, named bool) (types.Type, error) {
 	obj := pkg.Types.Scope().Lookup(wt.Name)
 	switch {
 	case obj == nil && named:
-		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
+		return nil, fmt.Errorf("wiregen: %s %s.%s is not found in its package", role, wt.PkgPath, wt.Name)
 	case obj == nil:
-		return nil, nil, nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
+		return nil, fmt.Errorf("wiregen: type %s not found in package %s", wt.Name, wt.PkgPath)
 	}
 	tn, ok := obj.(*types.TypeName)
 	switch {
 	case !ok && named:
-		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
+		return nil, fmt.Errorf("wiregen: %s %s.%s is not a type", role, wt.PkgPath, wt.Name)
 	case !ok:
-		return nil, nil, nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
+		return nil, fmt.Errorf("wiregen: %s in %s is not a type", wt.Name, wt.PkgPath)
 	}
 	// TypeRef resolves an alias to the type it names, so only a hand-written
 	// Type names one; registering it would emit the named type twice.
 	if tn.IsAlias() {
 		if named {
-			return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is an alias; name the type it stands for", role, wt.PkgPath, wt.Name)
+			return nil, fmt.Errorf("wiregen: %s %s.%s is an alias; name the type it stands for", role, wt.PkgPath, wt.Name)
 		}
-		return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is an alias; register the type it stands for", wt.PkgPath, wt.Name)
+		return nil, fmt.Errorf("wiregen: registered type %s.%s is an alias; register the type it stands for", wt.PkgPath, wt.Name)
 	}
-	switch u := tn.Type().Underlying().(type) {
-	case *types.Struct:
-		return tn, u, nil, nil
-	case *types.Map:
-		return tn, nil, tn.Type().(*types.Named), nil //nolint:errcheck // the alias refusal above leaves a defined type, which go/types gives as a *types.Named
+	if n, ok := tn.Type().(*types.Named); ok && n.TypeParams().Len() > 0 {
+		return nil, fmt.Errorf("wiregen: %s.%s is generic; register an instantiation of it, such as TypeRef[%s[T]]() for a T registered or builtin", wt.PkgPath, wt.Name, wt.Name)
 	}
-	if named {
-		return nil, nil, nil, fmt.Errorf("wiregen: %s %s.%s is not %s", role, wt.PkgPath, wt.Name, roleShape(role))
-	}
-	return nil, nil, nil, fmt.Errorf("wiregen: registered type %s.%s is not a struct or a map; register an enum with StringEnum or TextEnum, or map the type", wt.PkgPath, wt.Name)
+	return tn.Type(), nil
 }
 
 func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (*typeInfo, error) {
@@ -501,36 +522,37 @@ func (e *astEngine) resolveType(wt Type, allPkgs map[string]*packages.Package) (
 		return nil, fmt.Errorf("wiregen: package %q not loaded, and type %s needs it", wt.PkgPath, wt.Name)
 	}
 
-	tn, st, mp, err := e.lookupType(pkg, wt)
+	t, st, mp, err := e.lookupType(pkg, wt)
 	if err != nil {
 		return nil, err
 	}
 
 	ti := &typeInfo{Name: wt.Name}
+	decl, full := e.gen.declaration(wt), e.gen.goName(wt)
 
-	ti.Doc = commentToJSDoc(typeDoc(pkg, wt.Name))
+	ti.Doc = commentToJSDoc(typeDoc(pkg, decl.Name))
 	// A type with a marshaler is refused for it below, and is written as
 	// its marshaler's output, so only a plain one is checked here.
-	if why := textOnlyDecoder(tn.Type()); why != "" && marshalCodec(tn.Type()) == codecPlain {
+	if why := textOnlyDecoder(t); why != "" && marshalCodec(t) == codecPlain {
 		ti.InRefusals = append(ti.InRefusals, why)
 	}
 
-	switch c, role := marshalCodec(tn.Type()), e.gen.typeRoles[wt.Name]; {
+	switch c, role := marshalCodec(t), e.gen.typeRoles[wt.Name]; {
 	case c != codecPlain && role != "":
-		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is the "+role+", but "+c.why()+"; drop the method")
+		e.refusals = append(e.refusals, full+": is the "+role+", but "+c.why()+"; drop the method")
 	case c != codecPlain:
-		e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
+		e.refusals = append(e.refusals, full+": is registered, but "+c.why()+"; map it with Mappings or drop the method")
 	}
 	if mp != nil {
-		e.resolveMapTypeInfo(ti, mp, wt)
+		e.resolveMapTypeInfo(ti, mp, full)
 		return ti, nil
 	}
 	ti.Fields, ti.Embeds = e.resolveStructFields(st, pkg, allPkgs, 0, nil)
-	ownFields(ti.Fields, wt)
-	ownEmbeds(ti.Embeds, wt)
+	ownFields(ti.Fields, decl)
+	ownEmbeds(ti.Embeds, decl)
 	for i := range ti.Fields {
 		for _, why := range ti.Fields[i].Refusals {
-			e.refusals = append(e.refusals, wt.PkgPath+"."+wt.Name+"."+ti.Fields[i].GoName+": "+why)
+			e.refusals = append(e.refusals, full+"."+ti.Fields[i].GoName+": "+why)
 		}
 	}
 
@@ -579,8 +601,7 @@ func (e *astEngine) checkURLArguments() error {
 // resolveMapTypeInfo plans a named map type as an inline field of its
 // underlying map would be planned, its Elem the plan of the value, and lists
 // its refusals; a bound it declares is refused, as none applies to a map.
-func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, wt Type) {
-	full := wt.PkgPath + "." + wt.Name
+func (e *astEngine) resolveMapTypeInfo(ti *typeInfo, named *types.Named, full string) {
 	fi := fieldInfo{}
 	e.resolveInto(named.Underlying(), &fi)
 	e.applyBounds(named, full, &fi)
@@ -982,7 +1003,7 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 	if ut.Obj().Pkg() != nil {
 		pkgPath = ut.Obj().Pkg().Path()
 	}
-	fullName := pkgPath + "." + name
+	key, fullName, registered := e.gen.namedRef(ut)
 
 	if stdlibWireType(pkgPath, name, fi) {
 		return
@@ -998,8 +1019,8 @@ func (e *astEngine) resolveNamedType(ut *types.Named, fi *fieldInfo) {
 		return
 	}
 	codec := marshalCodec(ut)
-	if pkg, ok := e.gen.typeNames[name]; ok && pkg == pkgPath {
-		e.referenceRegistered(ut, name, fullName, codec, fi)
+	if registered {
+		e.referenceRegistered(ut, key, fullName, codec, fi)
 		return
 	}
 	switch codec {
@@ -1453,14 +1474,21 @@ func typeKey(t types.Type) string {
 // resolves an alias past its name, and the stdlib re-homes types behind
 // aliases (json.RawMessage became an alias of jsontext.Value in Go 1.27), so
 // a mapping keyed by the spelling the consumer's source shows must still match.
+// An instantiation matches importpath.Name[args] before its generic's key,
+// which typeKey names it by and which maps every instantiation.
 func (g *generator) mappingKey(t types.Type) string {
-	a, ok := t.(*types.Alias)
-	if !ok {
-		return typeKey(t)
+	if a, ok := t.(*types.Alias); ok {
+		if alias := aliasKey(a); alias != "" {
+			if _, ok := g.Mappings[alias]; ok {
+				return alias
+			}
+		}
 	}
-	if alias := aliasKey(a); alias != "" {
-		if _, ok := g.Mappings[alias]; ok {
-			return alias
+	if n, ok := types.Unalias(t).(*types.Named); ok && n.TypeArgs().Len() > 0 {
+		if sp, ok := spellingOf(n); ok {
+			if _, ok := g.Mappings[sp.text()]; ok {
+				return sp.text()
+			}
 		}
 	}
 	return typeKey(t)
