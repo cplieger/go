@@ -474,8 +474,9 @@ func TestUnion_PayloadRecursionCapped(t *testing.T) {
 
 // Each way encoding/json writes a typed payload as null (a nil RawMessage with
 // no omit option, the bytes null under omitempty or omitzero, and a pointer to
-// a nil RawMessage) validates against the response component, and the TS
-// member stays optional.
+// a nil RawMessage) validates against the response component; the TS member
+// is required and nullable where no omit option can drop the key, and
+// optional otherwise.
 func TestUnion_PayloadNilWritesNull(t *testing.T) {
 	null := json.RawMessage("null")
 	nilRaw := json.RawMessage(nil)
@@ -484,11 +485,12 @@ func TestUnion_PayloadNilWritesNull(t *testing.T) {
 		typ    wiregen.Type
 		fields []string
 		value  any
+		member string
 	}{
-		{"a nil payload with no omit option", wiregen.TypeRef[unions.RequiredPayload](), nil, unions.RequiredPayload{Type: "create"}},
-		{"omitempty over the bytes null", wiregen.TypeRef[unions.Command](), []string{"chat_id"}, unions.Command{Type: "create", Payload: null}},
-		{"omitzero over the bytes null", wiregen.TypeRef[unions.OmitZeroPayload](), nil, unions.OmitZeroPayload{Type: "create", Payload: null}},
-		{"a pointer to a nil payload", wiregen.TypeRef[unions.PtrPayload](), nil, unions.PtrPayload{Type: "create", Payload: &nilRaw}},
+		{"a nil payload with no omit option", wiregen.TypeRef[unions.RequiredPayload](), nil, unions.RequiredPayload{Type: "create"}, "payload: CreateChat | null;"},
+		{"omitempty over the bytes null", wiregen.TypeRef[unions.Command](), []string{"chat_id"}, unions.Command{Type: "create", Payload: null}, "payload?: CreateChat;"},
+		{"omitzero over the bytes null", wiregen.TypeRef[unions.OmitZeroPayload](), nil, unions.OmitZeroPayload{Type: "create", Payload: null}, "payload?: CreateChat;"},
+		{"a pointer to a nil payload", wiregen.TypeRef[unions.PtrPayload](), nil, unions.PtrPayload{Type: "create", Payload: &nilRaw}, "payload?: CreateChat;"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newTestRegistry()
@@ -510,8 +512,8 @@ func TestUnion_PayloadNilWritesNull(t *testing.T) {
 			if err := validates(t, compiled(t, doc, "#/components/schemas/"+tc.typ.Name), string(body)); err != nil {
 				t.Errorf("the encoding fails its response schema: %v", err)
 			}
-			if types := mustGen(t, r.typesFile); !strings.Contains(types, "      payload?: CreateChat;\n") {
-				t.Errorf("a payload that can be null is not optional:\n%s", types)
+			if types := mustGen(t, r.typesFile); !strings.Contains(types, "      "+tc.member+"\n") {
+				t.Errorf("the payload member is not %q:\n%s", tc.member, types)
 			}
 		})
 	}

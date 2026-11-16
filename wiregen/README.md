@@ -109,10 +109,10 @@ Bind your server's routes, generate the client and write the OpenAPI document fr
 
 wiregen reads your types from source with `go/packages` and applies the field rules of `encoding/json`, so the TypeScript matches what your server puts on the wire.
 
-- Unexported fields are skipped. A field `encoding/json` can leave out, or a pointer field, such as an `omitempty` or `omitzero` field or one promoted through an embedded pointer, becomes optional, `key?: T`. An untagged field takes its Go name.
+- Unexported fields are skipped. A field `encoding/json` can leave out, such as an `omitempty` or `omitzero` field or one promoted through an embedded pointer, becomes optional, `key?: T`. A pointer field with no omit option is always written, as `null` when nil, so it is required and nullable, `key: T | null`. An untagged field takes its Go name.
 - `time.Time` becomes `string`, `json.Number` becomes `number`, `[]byte` becomes a base64 `string`, and a type implementing `encoding.TextMarshaler` becomes `string`.
 - `json.RawMessage` becomes `unknown`, and is the one opaque type allowed.
-- A JSON `null` decodes to the field's empty value instead of an error: `undefined` for an optional field, `[]` or `{}` for a required slice or map, and `""` for a required `[]byte`.
+- A JSON `null` decodes to `null` for a required pointer field, and otherwise to the field's empty value instead of an error: `undefined` for an optional field, `[]` or `{}` for a required slice or map, and `""` for a required `[]byte`.
 - A field the Go type does not declare is ignored, as `encoding/json` ignores it, and only the object's own properties are read, so a key such as `__proto__` or `constructor` is plain data.
 
 ## Strict mode
@@ -122,7 +122,6 @@ wiregen reads your types from source with `go/packages` and applies the field ru
 ## Unsupported by design
 
 - Go generic types. Register each concrete instantiation instead.
-- `T | null` on a field. A field that can be absent or `null` is optional, `key?: T`, and the OpenAPI document carries the exact nullability.
 - `tstype` struct tags. `Mappings` does the same job for the whole registry.
 
 ## Documentation

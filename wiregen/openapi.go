@@ -528,10 +528,8 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 }
 
 // objectSchema is the object schema of fields in direction d, override
-// replacing a property's schema by wire name. A response field is required
-// unless omitempty or omitzero, since the encoder always writes it; a
-// request field also unless a pointer, as the decoder leaves it nil. A
-// union case's Required copy is required in both directions.
+// replacing a property's schema by wire name. Required follows optional in
+// a response and optionalIn in a request (presence.go).
 func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map[string]any) map[string]any {
 	props := map[string]any{}
 	required := []any{}
@@ -540,7 +538,7 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 		if s, ok := override[f.WireName]; ok {
 			props[f.WireName] = s
 		}
-		if (d == dirResponse && !f.absentOut()) || (d == dirRequest && !f.optional()) {
+		if (d == dirResponse && !f.optional()) || (d == dirRequest && !f.optionalIn()) {
 			required = append(required, f.WireName)
 		}
 	}
@@ -708,7 +706,7 @@ func (b *docBuilder) parameters(e *Endpoint) []any {
 		ti := b.engine.byName[e.Query.Name]
 		for i := range ti.Fields {
 			f := &ti.Fields[i]
-			out = append(out, map[string]any{kwName: f.WireName, "in": "query", kwRequired: !f.optional(), kwSchema: b.valueSchema(f, dirRequest)})
+			out = append(out, map[string]any{kwName: f.WireName, "in": "query", kwRequired: !f.optionalIn(), kwSchema: b.valueSchema(f, dirRequest)})
 		}
 	}
 	for _, h := range e.Headers {

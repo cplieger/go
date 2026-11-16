@@ -8,8 +8,8 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 - Doc comments on registered structs and their fields become `/** ... */` JSDoc on the generated interfaces and union cases. The text is go/ast's (`CommentGroup.Text`), so tool directive lines are left out by Go's own rule (`//go:generate`, `//nolint:...`, `//deadset:ignore ...`, `//line`, `//export`), and so are the space forms `// nolint` and `// #nosec` that linters also read. A `//` paragraph break becomes a blank JSDoc line, and a field's JSDoc is indented with the field.
 - Unexported fields are skipped, as `encoding/json` skips them. An embedded struct, exported or not, is flattened with the promotion rules of `encoding/json`: the shallowest field wins, a tagged field beats an untagged one at the same depth, and a field reached through two sibling embeds at the same depth is dropped as ambiguous.
 - A field with no `json` tag takes the name `encoding/json` gives it, its Go name. With `WithRequireJSONTags(true)` such a field is a generation error naming its path. A tag name may hold letters, digits, spaces and the punctuation `!#$%&()*+-./:;<=>?@[]^_{|}~`.
-- A field `encoding/json` may leave out, or send as `null` for a nil pointer, is optional in TypeScript, `key?: T`: a pointer, a field tagged `omitzero`, a field tagged `omitempty` whose type `omitempty` can find empty (never a struct), and a field promoted through an embedded pointer, which is skipped when nil. Every other field is required.
-- A pointer element of a slice or map is `T | null`, as `encoding/json` writes a nil one as `null`.
+- A field `encoding/json` may leave out is optional in TypeScript, `key?: T`: a field tagged `omitzero`, a field tagged `omitempty` whose type `omitempty` can find empty (never a struct), and a field promoted through an embedded pointer, which is skipped when nil. Every other field is required.
+- A required pointer field and a pointer element of a slice or map are `T | null`, as `encoding/json` writes a nil one as `null`. An optional pointer field stays `key?: T`, its `null` read as absent. A nil slice, map or `[]byte` with no pointer above it reads as empty, so its type admits no `null`.
 - A map key is typed `string`. An integer key, one that is not an `encoding.TextMarshaler`, is decimal text on the wire, so the schema gives it `propertyNames` with a decimal pattern, which does not carry the key kind's range.
 - `time.Time` maps to `string`, and `json.Number` to `number`. A slice of `byte`, or of any other `uint8` type without a marshaler, maps to `string`, because JSON encodes it as base64.
 - `json.RawMessage` (and `jsontext.Value`, which it aliases from Go 1.27) maps to `unknown`. It is the one opaque type wiregen lets cross the wire.
@@ -79,7 +79,8 @@ The decoders follow what `encoding/json` writes:
 
 - An optional field reads an absent key or `null` as absent. A mapped decoder is never called on either.
 - A required field is refused when its key is absent, and the error names the field's path. A field mapped with a `Decoder` leaves that check to the `Decoder`.
-- A required slice or map reads `null` as `[]` or `{}`, and a required `[]byte` reads it as `""`, unless a `Count` lower bound refuses it.
+- A required pointer field reads `null` as `null`, its key still refused absent.
+- A required slice or map with no pointer above it reads `null` as `[]` or `{}`, and a required `[]byte` reads it as `""`, unless a `Count` lower bound refuses it.
 - An array response, an endpoint with `Array` set, reads a `null` body as `[]`, as `encoding/json` writes a handler's nil slice.
 - A pointer element of a slice or map reads `null` as `null`. Any other nil element reads as empty, as a required field does.
 - A `json.RawMessage` field, required or optional, passes `null` through as data. A required field mapped with no `Decoder` passes it through too.
@@ -87,7 +88,7 @@ The decoders follow what `encoding/json` writes:
 
 The OpenAPI schemas say the same thing in each direction:
 
-- A response field is required unless `encoding/json` can leave it out: `omitzero`, `omitempty` on a type it can find empty, or a field promoted through an embedded pointer. A request field is also optional when it is a pointer, as the decoder leaves it nil.
+- A response field is required unless `encoding/json` can leave it out: `omitzero`, `omitempty` on a type it can find empty, or a field promoted through an embedded pointer. A request field is also optional when it is a pointer, as the decoder leaves it nil. The TypeScript type follows the response rule, since it is what the client reads.
 - A response field is nullable, `{"type": [T, "null"]}` or an `anyOf` with `null` around a `$ref`, when `encoding/json` can write `null` for it: a nil pointer or collection no omit option drops, or anything nil under a non-nil pointer, such as a `*[]string` holding a nil slice or a `**T` holding a nil `*T`. A request field is nullable when it is a pointer, slice, map or `[]byte`, since `null` decodes to nil. A `Count` lower bound of 1 or more makes a collection with no pointer above it never nullable.
 - An array response's schema admits `null` beside the array, for the same nil slice.
 - A type whose two schemas differ gets two components, the request one suffixed `Input`, and the document references each in its own direction. A registered type no endpoint reaches is documented in its response form, and so is every type its fields name.
@@ -145,10 +146,10 @@ wiregen.Union{
 }
 ```
 
-The payload field is listed in no case. It belongs to each case with a payload type, with its own omit options, and is refused in the others. A `json.RawMessage` can be `null` on the wire in two ways: encoding/json writes a nil one as `null` unless an omit option drops it, and writes one holding the bytes `null`, such as a request `null` decoded into it, whatever the options. So the payload is optional, and `null` reads as absent. Each payload type is a struct or a named map, as every registered type is, and joins the registry's types. `Generate` refuses a `Payload` that names no field, a payload field that is not a `json.RawMessage`, `PayloadTypes` set without `Payload`, `PayloadTypes` keys that are not exactly the case values, a case that lists the payload field, and a union where no case has a payload type.
+The payload field is listed in no case. It belongs to each case with a payload type, with its own omit options, and is refused in the others. A `json.RawMessage` can be `null` on the wire in two ways: encoding/json writes a nil one as `null` unless an omit option drops it, and writes one holding the bytes `null`, such as a request `null` decoded into it, whatever the options. So the payload is a pointer field: optional with an omit option, `null` read as absent, and required and nullable with none. Each payload type is a struct or a named map, as every registered type is, and joins the registry's types. `Generate` refuses a `Payload` that names no field, a payload field that is not a `json.RawMessage`, `PayloadTypes` set without `Payload`, `PayloadTypes` keys that are not exactly the case values, a case that lists the payload field, and a union where no case has a payload type.
 
-- The types file types `payload` per case, `payload?: CreateChat` in the create case.
-- The decoder decodes `payload` with that case's decoder, reads `null` as absent, and refuses a present payload in a case that has none.
+- The types file types `payload` per case, `payload?: CreateChat` in the create case, or `payload: CreateChat | null` with no omit option.
+- The decoder decodes `payload` with that case's decoder, reads `null` as absent, or as `null` with no omit option, and refuses a present payload in a case that has none.
 - In each case's component, `payload` is that type's `$ref` or `null`, or absent.
 
 A field several cases share has one presence rule, so when one case always sends it and another may not, the field is tagged `omitempty` or `omitzero` and `Required` names the cases that always send it, keyed by case value:
@@ -211,6 +212,5 @@ A JSON key that is not a valid identifier, such as `content-type`, is emitted as
 | Feature | Reason |
 | --- | --- |
 | Go generics (type parameters) | wiregen cannot represent an uninstantiated generic type. Register concrete instantiations instead. |
-| `T \| null` on a field | A field that can be absent or `null` is optional, `?:`, and a present `null` decodes as `undefined`. The OpenAPI document carries the exact nullability per direction. |
 | `tstype` struct tag hints | `Mappings` does the same job at the registry level. |
 | Interface-typed unions | Strict mode refuses an interface field. Declare a tagged struct and register it in `Unions`. |

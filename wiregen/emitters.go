@@ -99,7 +99,7 @@ func emitInterfaceField(w *strings.Builder, f *fieldInfo, indent string) {
 	if f.optional() {
 		q = "?"
 	}
-	w.WriteString(indent + tsPropName(f.WireName) + q + ": " + f.TSType + ";\n")
+	w.WriteString(indent + tsPropName(f.WireName) + q + ": " + f.memberTS() + ";\n")
 }
 
 // writeDoc writes doc, a JSDoc block or "", each line at indent.
@@ -328,8 +328,15 @@ func (g *generator) emitFieldDecodes(w *strings.Builder, outType, lead string, f
 	w.WriteString("  return out;\n")
 }
 
+// reqExpr decodes f's present value; a required nullable f keeps null, which
+// no bound check sees.
 func (g *generator) reqExpr(f *fieldInfo, path string, used *usedIdents) string {
-	return f.Bounds.validatorCheck(g.reqDecode(f, path, used), "\""+path+"."+tsStringLiteral(f.WireName)+"\"", used)
+	wn := tsStringLiteral(f.WireName)
+	decode := f.Bounds.validatorCheck(g.reqDecode(f, path, used), "\""+path+"."+wn+"\"", used)
+	if f.nullable() && !f.optional() {
+		return ownRead(wn, used) + " === null ? null : " + decode
+	}
+	return decode
 }
 
 // ownRead is the expression reading o's own property wn; an inherited one
@@ -339,11 +346,11 @@ func ownRead(wn string, used *usedIdents) string {
 	return "own(o, \"" + wn + "\")"
 }
 
-// reqDecode is reqExpr before the bound checks. refusesNull decides whether
-// null is refused (presence.go); otherwise null reaches a required field
-// only as raw JSON, kept as data, or as encoding/json's nil collection or
-// []byte, which reads as empty. A mapped field is judged by its Decoder, or
-// with none only checked present.
+// reqDecode is reqExpr before the bound checks and the nullable guard.
+// refusesNull decides whether null is refused (presence.go); otherwise null
+// reaches it only as raw JSON, kept as data, or as encoding/json's nil
+// collection or []byte, which reads as empty. A mapped field is judged by
+// its Decoder, or with none only checked present.
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
 	at := ", \"" + path + "\")"
@@ -352,7 +359,7 @@ func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) strin
 		return wholeRead(f, wn, path, used)
 	case kindBytes:
 		used.helper(helperReqStr)
-		if f.refusesNull() {
+		if f.refusesNull() || f.nullable() {
 			return "reqStr(o, \"" + wn + "\"" + at
 		}
 		return ownRead(wn, used) + " === null ? \"\" : reqStr(o, \"" + wn + "\"" + at
@@ -393,10 +400,10 @@ func presentRead(wn, path string, used *usedIdents) string {
 }
 
 // collectionDecode is reqDecode for a slice or map field; null reads as
-// empty unless f refusesNull.
+// empty unless f refusesNull or is nullable.
 func (g *generator) collectionDecode(f *fieldInfo, wn, path string, used *usedIdents) string {
 	if f.mapRef() {
-		if f.refusesNull() {
+		if f.refusesNull() || f.nullable() {
 			used.helper("asObject")
 			return g.decoderName(f.GoTypeName) + "(asObject(" + ownRead(wn, used) + ", \"" + path + "." + wn + "\"))"
 		}
@@ -410,7 +417,7 @@ func (g *generator) collectionDecode(f *fieldInfo, wn, path string, used *usedId
 	}
 	used.helper(helper)
 	decode := helper + "(" + read + ", " + g.elemDecoderExpr(f.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
-	if f.refusesNull() {
+	if f.refusesNull() || f.nullable() {
 		return decode
 	}
 	return read + " === null ? " + empty + " : " + decode
@@ -444,15 +451,15 @@ func (g *generator) elemDecoderExpr(elem *fieldInfo, wn, path string, used *used
 	if elem.Bounds != nil {
 		dec = "(v) => " + elem.Bounds.validatorCheck("("+dec+")(v)", "\""+path+"."+wn+"\"", used)
 	}
-	if elem.nullElem() {
+	if elem.nullable() {
 		dec = "(v) => v === null ? null : (" + dec + ")(v)"
 	}
 	return dec
 }
 
-// elemDecode is elemDecoderExpr before the element's bound checks. Each
-// collection level accepts null as empty, as encoding/json writes a nil one,
-// unless a Count lower bound refuses it.
+// elemDecode is elemDecoderExpr before the element's bound checks and its
+// null guard. Each collection level with no pointer accepts null as empty,
+// as encoding/json writes a nil one, unless a Count lower bound refuses it.
 func (g *generator) elemDecode(elem *fieldInfo, wn, path string, used *usedIdents) string {
 	switch elem.Kind {
 	case kindSlice, kindMap:
@@ -465,7 +472,7 @@ func (g *generator) elemDecode(elem *fieldInfo, wn, path string, used *usedIdent
 		}
 		used.helper(helper)
 		decode := helper + "(v, " + g.elemDecoderExpr(elem.Elem, wn, path, used) + ", \"" + path + "." + wn + "\")"
-		if elem.refusesNull() {
+		if elem.refusesNull() || elem.nullable() {
 			return "(v) => " + decode
 		}
 		return "(v) => v === null ? " + empty + " : " + decode
@@ -484,8 +491,12 @@ func (g *generator) elemDecode(elem *fieldInfo, wn, path string, used *usedIdent
 		used.typeRef(g.tsEnumName(elem.GoTypeName))
 		return "(v) => { const s = v as string; if (!" + constName + ".includes(s as never)) throw new globalThis.TypeError(\"invalid enum value: \" + s); return s as " + g.tsEnumName(elem.GoTypeName) + "; }"
 	case kindBytes:
+		check := "if (typeof v !== \"string\") throw new globalThis.TypeError(\"expected string\"); return v; }"
+		if elem.nullable() {
+			return "(v) => { " + check
+		}
 		// A nil []byte element marshals to null, which reads as empty.
-		return "(v) => { if (v === null) return \"\"; if (typeof v !== \"string\") throw new globalThis.TypeError(\"expected string\"); return v; }"
+		return "(v) => { if (v === null) return \"\"; " + check
 	case kindRaw:
 		return tsIdentityCast
 	}
@@ -659,9 +670,9 @@ func (g *generator) arbForType(ti *typeInfo, reaches map[string]map[string]bool)
 // arbRecord renders an fc.record over fields at the given closing indent,
 // fixed giving a field's arbitrary by wire name. With a non-nil recursive
 // predicate it renders the LEAF record a depth cap forces: a recursive
-// optional field is absent and a recursive collection is empty, while a
-// recursive required struct field keeps its tie, because that type is capped
-// too and rankEnds proves its capped draw ends.
+// optional field is absent, a recursive nullable one null and a recursive
+// collection empty, while a recursive required struct field keeps its tie,
+// because that type is capped too and rankEnds proves its capped draw ends.
 func (g *generator) arbRecord(fields []*fieldInfo, indent string, recursive func(*fieldInfo) bool, fixed map[string]string) string {
 	var b strings.Builder
 	var required []string
@@ -678,11 +689,8 @@ func (g *generator) arbRecord(fields []*fieldInfo, indent string, recursive func
 		if fx, ok := fixed[f.WireName]; ok {
 			expr, note = fx, ""
 		}
-		switch {
-		case leaf && f.Kind == kindSlice:
-			expr, note = "fc.constant<"+f.TSType+">([])", ""
-		case leaf && f.Kind == kindMap:
-			expr, note = "fc.constant<"+f.TSType+">({})", ""
+		if end := arbLeafEnd(f); leaf && end != "" {
+			expr, note = end, ""
 		}
 		if note != "" {
 			b.WriteString(indent + "    // " + note + "\n")
@@ -695,6 +703,20 @@ func (g *generator) arbRecord(fields []*fieldInfo, indent string, recursive func
 	// assignable to the emitted `key?: T` under exactOptionalPropertyTypes.
 	b.WriteString(indent + "  { requiredKeys: [" + strings.Join(required, ", ") + "] },\n" + indent + ")")
 	return b.String()
+}
+
+// arbLeafEnd is the value that ends a recursive required field in a leaf
+// record, or "" for a struct tie, which ends through its own cap.
+func arbLeafEnd(f *fieldInfo) string {
+	switch {
+	case f.nullable():
+		return "fc.constant(null)"
+	case f.Kind == kindSlice:
+		return "fc.constant<" + f.TSType + ">([])"
+	case f.Kind == kindMap:
+		return "fc.constant<" + f.TSType + ">({})"
+	}
+	return ""
 }
 
 // arbRefs lists the registered types a field's arbitrary ties to.
@@ -761,16 +783,20 @@ func reachableFrom(start []string, edges map[string][]string) map[string]bool {
 // note to emit above it when the expression is opaque. Each draw satisfies
 // the validator the field's decoder emits.
 func (g *generator) arbFieldExpr(f *fieldInfo) (expr, note string) {
+	expr = g.arbElemValue(f)
 	if f.Kind == kindMapped {
-		return arbMappedExpr(f.GoTypeName, f.TSType)
+		expr, note = arbMappedExpr(f.GoTypeName, f.TSType)
 	}
-	return g.arbElemValue(f), ""
+	if f.nullable() && !f.optional() {
+		expr = "fc.option(" + expr + ", { nil: null })"
+	}
+	return expr, note
 }
 
 // arbElemExpr returns the arbitrary for a slice element or map value,
 // recursing through nested collections the way elemDecoderExpr does.
 func (g *generator) arbElemExpr(elem *fieldInfo) string {
-	if elem.nullElem() {
+	if elem.nullable() {
 		return "fc.option(" + g.arbElemValue(elem) + ", { nil: null })"
 	}
 	return g.arbElemValue(elem)

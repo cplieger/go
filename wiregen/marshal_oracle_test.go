@@ -105,7 +105,7 @@ func TestMarshalOracle(t *testing.T) {
 				}
 			}
 			for wn, fi := range fields {
-				if !fi.absentOut() {
+				if !fi.optional() {
 					if _, ok := zeroJSON[wn]; !ok {
 						t.Errorf("I2: required field %q absent from zero-value marshal (the engine should find it omittable)", wn)
 					}

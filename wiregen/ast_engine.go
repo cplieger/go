@@ -1166,8 +1166,8 @@ func (e *astEngine) resolveSliceType(ut *types.Slice, fi *fieldInfo) {
 		return
 	}
 	elemFI := e.resolveFieldType(elem, 0)
-	ts := elemFI.elemTS()
-	if elemFI.nullElem() {
+	ts := elemFI.memberTS()
+	if elemFI.nullable() {
 		ts = "(" + ts + ")"
 	}
 	fi.Kind, fi.TSType, fi.Elem = kindSlice, ts+"[]", &elemFI
@@ -1176,7 +1176,7 @@ func (e *astEngine) resolveSliceType(ut *types.Slice, fi *fieldInfo) {
 
 func (e *astEngine) resolveMapType(ut *types.Map, fi *fieldInfo) {
 	valFI := e.resolveFieldType(ut.Elem(), 0)
-	fi.Kind, fi.TSType, fi.Elem = kindMap, "{ [key: string]: "+valFI.elemTS()+" }", &valFI
+	fi.Kind, fi.TSType, fi.Elem = kindMap, "{ [key: string]: "+valFI.memberTS()+" }", &valFI
 	fi.inheritRefusals("map value", &valFI)
 	planMapKey(ut.Key(), fi)
 }
