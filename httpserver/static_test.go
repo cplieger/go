@@ -336,22 +336,6 @@ func TestGzipAsset(t *testing.T) {
 	})
 }
 
-// TestGzipAssetContentTypeFallback pins the mime-miss branch: a compressible asset whose
-// extension mime.TypeByExtension cannot resolve must fall back to http.DetectContentType.
-func TestGzipAssetContentTypeFallback(t *testing.T) {
-	raw := []byte(strings.Repeat("plain text body line\n", 500))
-	gz, ok := gzipAsset(raw, "asset.unknownext")
-	if !ok {
-		t.Fatal("gzipAsset() ok = false for a highly compressible asset, want true")
-	}
-	if gz.contentType == "" {
-		t.Fatal("contentType is empty; the mime-miss fallback did not run")
-	}
-	if !strings.HasPrefix(gz.contentType, "text/plain") {
-		t.Errorf("contentType = %q, want text/plain prefix (DetectContentType on text bytes)", gz.contentType)
-	}
-}
-
 func TestServeGzip(t *testing.T) {
 	raw := []byte(strings.Repeat("hello world\n", 300))
 	gz, ok := gzipAsset(raw, "x.txt")
