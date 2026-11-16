@@ -111,4 +111,3 @@ On an `evicted` or `shutdown` departure whose reset frame could not be written, 
 - `ReadFrames(r, n)` parses dispatched frames off the wire in one call. A `retry:` field comes back as a frame whose `Event` is `RetryEvent` (`sse:retry`), a name no hub can publish.
 - `NewFrameReader(r)` returns a `FrameReader` whose `Read(n)` reads successive batches off one live stream through a single buffered reader. Use it when you read one stream more than once, because each `ReadFrames` call discards the bytes it read past frame `n`.
 - `NewRecorder()` returns a `Recorder`, a `ResponseRecorder` that flushes but answers `http.ErrNotSupported` to the deadline setters.
-- The `ssetest/cmd` binary is a controllable server that publishes, stalls, restarts, delays and mutates on request, for the TypeScript integration tests. Its control routes are internal to this module and carry no stability promise.

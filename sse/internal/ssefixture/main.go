@@ -1,5 +1,5 @@
-// Command ssetest serves an internal fixture.Fixture for the TypeScript integration
-// suites. It binds -addr (default 127.0.0.1:0), prints "LISTEN <url>" on
+// Command ssefixture serves an internal fixture.Fixture for the TypeScript
+// integration suites. It binds -addr (default 127.0.0.1:0), prints "LISTEN <url>" on
 // stdout once bound, and serves until SIGINT or SIGTERM.
 package main
 
@@ -23,7 +23,7 @@ const shutdownGrace = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "ssetest:", err)
+		fmt.Fprintln(os.Stderr, "ssefixture:", err)
 		os.Exit(1)
 	}
 }
@@ -48,7 +48,7 @@ func run() error {
 		httpserver.WithShutdownGrace(shutdownGrace),
 		httpserver.WithPreDrain(func(ctx context.Context) {
 			if err := fx.Shutdown(ctx); err != nil {
-				logger.Warn("ssetest: fixture shutdown did not finish", "error", err)
+				logger.Warn("ssefixture: fixture shutdown did not finish", "error", err)
 			}
 		}),
 	)

@@ -19,9 +19,7 @@ function waitForListen(child: ChildProcess): Promise<string> {
         settled = true;
         child.kill("SIGTERM");
         reject(
-          new Error(
-            `ssetest fixture printed no LISTEN line within ${String(LISTEN_TIMEOUT_MS)} ms`,
-          ),
+          new Error(`sse fixture printed no LISTEN line within ${String(LISTEN_TIMEOUT_MS)} ms`),
         );
       }
     }, LISTEN_TIMEOUT_MS);
@@ -38,7 +36,7 @@ function waitForListen(child: ChildProcess): Promise<string> {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        reject(new Error(`ssetest fixture exited with ${String(code)} before printing LISTEN`));
+        reject(new Error(`sse fixture exited with ${String(code)} before printing LISTEN`));
       }
     });
     child.on("error", (error) => {
@@ -67,7 +65,7 @@ export default async function setup(project: TestProject): Promise<(() => void) 
   const url = await waitForListen(child);
   if (url !== fixtureOrigin()) {
     child.kill("SIGTERM");
-    throw new Error(`ssetest fixture listens on ${url}, expected ${fixtureOrigin()}`);
+    throw new Error(`sse fixture listens on ${url}, expected ${fixtureOrigin()}`);
   }
   project.provide("sseFixtureUrl", url);
   return () => {

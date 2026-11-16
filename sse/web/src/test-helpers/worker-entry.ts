@@ -1,12 +1,15 @@
 import { createDigestClient } from "../digest.js";
+import { retainListening } from "../feed/index.js";
 import type { RevalidateContext } from "../stream.js";
 import { createVersionMap } from "../versions.js";
 import { type TabSet, createWorkerHost } from "../worker.js";
 
 /**
- * The SharedWorker script of the browser suite. The fixture URL and timing overrides ride the
- * worker URL's query (`fixture`, `heartbeat`, `hidden`); test-only messages on a port
- * (`test:close`, `test:block`, `test:pause`, `test:suppress-alive`) drive the failure cases.
+ * The SharedWorker script of the browser suites. The fixture URL and timing overrides ride the
+ * worker URL's query (`fixture`, `heartbeat`, `hidden`); `feed=<id>` streams a change-feed
+ * session with no revalidation, `retain=1` passes `retainListening`, and `silent=1` posts nothing
+ * to any port. Test-only messages on a port (`test:close`, `test:block`, `test:pause`,
+ * `test:suppress-alive`, `test:silence`) drive the failure cases.
  */
 
 interface SharedScope {
@@ -16,7 +19,8 @@ interface SharedScope {
 }
 
 interface TestMessage {
-  readonly type: "test:close" | "test:block" | "test:pause" | "test:suppress-alive";
+  readonly type:
+    "test:close" | "test:block" | "test:pause" | "test:suppress-alive" | "test:silence";
   readonly ms?: number;
   readonly on?: boolean;
 }
@@ -26,9 +30,13 @@ const params = new URL(scope.location.href).searchParams;
 const fixture = params.get("fixture") ?? "";
 const heartbeatMs = Number(params.get("heartbeat") ?? "5000");
 const hiddenCloseAfterMs = Number(params.get("hidden") ?? "60000");
+const feed = params.get("feed");
 
 let paused = false;
 let suppressAlive = false;
+// A silenced worker is alive but posts nothing, with no error event: the lost worker the
+// tab's watchdog must notice.
+let silenced = params.get("silent") === "1";
 
 // The heartbeat interval is the one timer the suite stalls; wrapping setInterval is how a
 // page can hold it without touching the host.
@@ -71,13 +79,14 @@ async function revalidate(ctx: RevalidateContext, tabs: TabSet): Promise<void> {
 }
 
 const host = createWorkerHost({
-  url: `${fixture}/events`,
+  url: feed === null ? `${fixture}/events` : `${fixture}/feed/${feed}/events`,
   fetch: gatedFetch,
   versions,
   heartbeatMs,
   timing: { hiddenCloseAfterMs },
   alive: { url: `${fixture}/alive` },
-  revalidate,
+  revalidate: feed === null ? revalidate : () => Promise.resolve(),
+  ...(params.get("retain") === "1" ? { retain: retainListening } : {}),
 });
 
 function isTestMessage(value: unknown): value is TestMessage {
@@ -101,6 +110,12 @@ scope.onconnect = (event: MessageEvent) => {
   if (port === undefined) {
     return;
   }
+  const post = port.postMessage.bind(port);
+  port.postMessage = ((...args: Parameters<typeof post>) => {
+    if (!silenced) {
+      post(...args);
+    }
+  }) as typeof port.postMessage;
   port.addEventListener("message", (message: MessageEvent) => {
     const data: unknown = message.data;
     if (!isTestMessage(data)) {
@@ -121,6 +136,9 @@ scope.onconnect = (event: MessageEvent) => {
         return;
       case "test:suppress-alive":
         suppressAlive = data.on ?? false;
+        return;
+      case "test:silence":
+        silenced = true;
         return;
     }
   });

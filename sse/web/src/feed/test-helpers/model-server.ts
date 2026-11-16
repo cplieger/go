@@ -104,9 +104,16 @@ export class ModelSink implements FeedSink<ModelRow> {
     return this.world.reread(this);
   }
 
-  /** A full read's answer, taken at `at`. */
-  replace(rows: readonly ModelRow[], at: Position): void {
-    this.move(at);
+  /**
+   * A full read's answer, taken at `at`. A screen's own read is latest-wins and may answer older
+   * rows than the sink holds; only the feed's writes must never move it back.
+   */
+  replace(rows: readonly ModelRow[], at: Position, own = false): void {
+    if (own) {
+      this.at = at;
+    } else {
+      this.move(at);
+    }
     this.rows.clear();
     for (const r of rows) {
       this.rows.set(r.id, r);
@@ -311,7 +318,7 @@ export class ModelWorld {
       sink: null,
       screen: sink,
       deliver: () => {
-        sink.replace(snap.rows, snap.at);
+        sink.replace(snap.rows, snap.at, true);
         sink.sub?.seed(snap.headers);
         return null;
       },

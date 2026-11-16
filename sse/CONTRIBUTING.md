@@ -10,12 +10,14 @@ The [shared rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md
 
 ## Checks
 
-CI skips the three `*.integration*` suites in `web/src/`, because it does not build the Go fixture they drive. After any change to what the hub sends or how the client handles it, run them:
+The `*.integration*` suites in `web/src/` drive a Go test server, the nested module `internal/ssefixture`. CI builds it (`sseFixture` in `web/package.json`) and runs every suite: the existing ones in Chromium, and the change feed's (`web/src/feed/`) in Chromium, Firefox and WebKit (`cplieger.browsers`). Locally, a suite whose server is not built is skipped. To run them all:
 
 ```sh
-go build -o /tmp/ssetest ./ssetest/cmd
-cd web && SSE_FIXTURE=/tmp/ssetest npm test
+(cd internal/ssefixture && go build -o "${TMPDIR:-/tmp}/ssefixture" .)
+cd web && SSE_FIXTURE="${TMPDIR:-/tmp}/ssefixture" CPLIEGER_BROWSERS=chromium,firefox,webkit npm test
 ```
+
+`SSE_FIXTURE_PORT` moves the server off its default port, 45781, when another run holds it. Without `CPLIEGER_BROWSERS`, the feed's suites run in Chromium only.
 
 `npx stryker run` from `web/` mutates the working tree in place, because two suites read files outside `web/`. Start it on a clean tree and edit nothing until it ends.
 

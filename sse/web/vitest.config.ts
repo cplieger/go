@@ -12,6 +12,31 @@ if (!browserAvailable) {
   );
 }
 
+// The engines the change feed's browser suites run in, which CI sets from package.json's
+// cplieger.browsers; Chromium alone when it is unset.
+const ENGINES = (process.env["CPLIEGER_BROWSERS"] ?? "chromium").split(",") as (
+  "chromium" | "firefox" | "webkit"
+)[];
+
+// Chromium delivers animation frames at ~60Hz, so each frame a test awaits costs it ~16.7ms;
+// the flag removes the cap.
+const chromiumProvider = playwright({
+  launchOptions: { channel: "chromium", args: ["--disable-frame-rate-limit"] },
+});
+
+function browserMode(
+  instances: { browser: (typeof ENGINES)[number]; provider?: typeof chromiumProvider }[],
+) {
+  return {
+    enabled: true,
+    headless: true,
+    provider: chromiumProvider,
+    instances,
+    viewport: { width: 1280, height: 720 },
+    screenshotFailures: false,
+  };
+}
+
 // `extends: true` is what makes a project inherit the root `test` block; without it
 // every strictness option below is silently dropped for that project.
 const projects = [
@@ -31,20 +56,25 @@ const projects = [
           test: {
             name: "browser",
             include: ["src/**/*.test.ts"],
-            exclude: ["src/**/*.node.test.ts", "node_modules/**"],
+            exclude: ["src/**/*.node.test.ts", "src/feed/**", "node_modules/**"],
             sequence: { groupOrder: 1 },
-            browser: {
-              enabled: true,
-              headless: true,
-              // Chromium delivers animation frames at ~60Hz, so each frame a test awaits
-              // costs it ~16.7ms; this removes the cap.
-              provider: playwright({
-                launchOptions: { channel: "chromium", args: ["--disable-frame-rate-limit"] },
-              }),
-              instances: [{ browser: "chromium" }],
-              viewport: { width: 1280, height: 720 },
-              screenshotFailures: false,
-            },
+            browser: browserMode([{ browser: "chromium" }]),
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: "engines",
+            include: ["src/feed/**/*.test.ts"],
+            exclude: ["src/**/*.node.test.ts", "node_modules/**"],
+            sequence: { groupOrder: 2 },
+            browser: browserMode(
+              ENGINES.map((browser) =>
+                browser === "chromium"
+                  ? { browser }
+                  : { browser, provider: playwright({ launchOptions: {} }) },
+              ),
+            ),
           },
         },
       ]
