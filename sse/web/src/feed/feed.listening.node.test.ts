@@ -58,7 +58,7 @@ describe("onListening", () => {
     const heard: string[] = [];
     h.feed.onListening("store", () => heard.push("store"));
     h.feed.onListening("jobs", () => heard.push("jobs"));
-    h.feed.onFrame({ type: "listening", data: "{", id: null });
+    expect(() => h.feed.onFrame({ type: "listening", data: "{", id: null })).toThrow();
     h.feed.onFrame(listening([{ source: "jobs", epoch: E1, floors: {} }]));
     expect(heard).toEqual([]);
   });

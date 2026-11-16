@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Frame } from "../stream.js";
+import { advance, harness, listening, position, sink } from "./test-helpers/feed-harness.js";
+import type { Harness, RecordingSink } from "./test-helpers/feed-harness.js";
 import { encodeChanged, encodeListening, formatPosition } from "./test-helpers/wire-encode.js";
 import { FEED_VERSION } from "./version.js";
 import {
@@ -131,5 +134,118 @@ describe("feed fixtures parse as the Go half encodes", () => {
     if (c.canonical !== false) {
       expect(formatPosition(want)).toBe(c.value);
     }
+  });
+});
+
+describe("feed fixtures through createFeed, with the set's declared kinds", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const { kinds, logged } = cases.declared;
+  const declaredSources = [...new Set(Object.values(kinds))];
+  const sourceOf = (kind: string): string | undefined =>
+    Object.hasOwn(kinds, kind) ? kinds[kind] : undefined;
+  const UNNAMED = "a".repeat(32);
+
+  const frameOf = (type: string, c: FrameCase): Frame => ({ type, data: frameData(c), id: null });
+  const every = (epochOf: (source: string) => string): Frame =>
+    listening(declaredSources.map((source) => ({ source, epoch: epochOf(source), floors: {} })));
+
+  // One subscription per declared kind, seeded at `rev` on its source's `epochOf`.
+  function watchAll(
+    h: Harness,
+    epochOf: (source: string) => string,
+    rev: number,
+  ): Map<string, RecordingSink> {
+    const sinks = new Map<string, RecordingSink>();
+    for (const [kind, source] of Object.entries(kinds)) {
+      const s = sink();
+      h.feed.watch(kind, s, position([source, epochOf(source), rev]));
+      sinks.set(kind, s);
+    }
+    return sinks;
+  }
+
+  // The kinds a frame moved: those a catch-up asked for and those whose sink was staled.
+  function acted(h: Harness, sinks: ReadonlyMap<string, RecordingSink>): string[] {
+    const asked = h.calls.flatMap((c) => c.q.kinds);
+    const staled = [...sinks].filter(([, s]) => s.log.includes("stale")).map(([k]) => k);
+    return [...new Set([...asked, ...staled])].sort();
+  }
+
+  it.each(cases.changed.filter((c) => c.valid))(
+    "changed $name moves only its declared kinds",
+    async (c) => {
+      const d = c.decoded as ChangedFrame;
+      const h = harness({ kinds, logged });
+      const epochOf = (source: string): string => (source === d.source ? d.epoch : UNNAMED);
+      h.feed.onFrame(every(epochOf));
+      const sinks = watchAll(h, epochOf, d.rev - 1);
+      expect(() => h.feed.onFrame(frameOf("changed", c))).not.toThrow();
+      await advance(1_000);
+      expect(acted(h, sinks)).toEqual(d.kinds.filter((k) => sourceOf(k) === d.source).sort());
+      expect(h.reconnect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(cases.listening.filter((c) => c.valid))(
+    "listening $name moves only its declared sources' declared kinds",
+    async (c) => {
+      const d = listeningOf(c.decoded as DecodedListening);
+      const h = harness({ kinds, logged });
+      const epochOf = (source: string): string =>
+        d.sources.find((s) => s.source === source)?.epoch ?? UNNAMED;
+      const sinks = watchAll(h, epochOf, 0);
+      expect(() => h.feed.onFrame(frameOf("listening", c))).not.toThrow();
+      await advance(1_000);
+      const want = d.sources.flatMap((s) =>
+        [...s.floors.keys()].filter((k) => sourceOf(k) === s.source),
+      );
+      expect(acted(h, sinks)).toEqual(want.sort());
+      expect(h.wires).toEqual(d.wire === null ? [] : [d.wire]);
+      expect(h.reconnect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(cases.listening.filter((c) => c.error === "other_format"))(
+    "listening $name is another format: its wire is noted and no later frame applies",
+    async (c) => {
+      const h = harness({ kinds, logged });
+      h.feed.onFrame(every(() => UNNAMED));
+      const sinks = watchAll(h, () => UNNAMED, 0);
+      expect(() => h.feed.onFrame(frameOf("listening", c))).not.toThrow();
+      for (const source of declaredSources) {
+        const named = Object.keys(kinds)
+          .filter((k) => sourceOf(k) === source)
+          .sort();
+        const data = encodeChanged({ source, epoch: UNNAMED, rev: 5, kinds: named });
+        h.feed.onFrame({ type: "changed", data, id: null });
+      }
+      await advance(1_000);
+      expect(acted(h, sinks)).toEqual([]);
+      const wire = c.frozen?.wire ?? "";
+      expect(h.wires).toEqual(wire === "" ? [] : [wire]);
+      expect(h.reconnect).not.toHaveBeenCalled();
+    },
+  );
+
+  const refused = [
+    ...cases.changed.filter((c) => !c.valid).map((c) => ({ ...c, type: "changed" })),
+    ...cases.listening
+      .filter((c) => !c.valid && c.error === undefined)
+      .map((c) => ({ ...c, type: "listening" })),
+  ];
+
+  it.each(refused)("$type $name is lost track", (c) => {
+    const h = harness({ kinds, logged });
+    h.feed.onFrame(every(() => UNNAMED));
+    expect(() => h.feed.onFrame(frameOf(c.type, c))).toThrow();
+    expect(h.reconnect).toHaveBeenCalledTimes(1);
+    const wire = c.frozen?.wire ?? "";
+    expect(h.wires).toEqual(wire === "" ? [] : [wire]);
   });
 });

@@ -55,7 +55,7 @@ export interface FeedOptions<R extends Record<string, unknown>> {
   readonly catchUp: CatchUp<R>;
   /** How long frames gather before one catch-up or re-read: default 50, 0 to 1,000. */
   readonly coalesceMs?: number;
-  /** Receives each listening frame's `wire`. */
+  /** Receives each listening frame's `wire`, in any feed format, before anything else is read. A throw is reported with `reportError`. */
   readonly onWire?: (serverVersion: string) => void;
   /** Reconnects the stream; called once per lost-track episode. */
   readonly reconnect: () => void;
@@ -79,7 +79,11 @@ export interface Feed<R extends Record<string, unknown>> {
     sink: FeedSink<K extends keyof R ? R[K] : never>,
     seed: Headers,
   ): Subscription;
-  /** `true` when the frame was the feed's (`changed` or `listening`). */
+  /**
+   * `true` when the frame was the feed's (`changed` or `listening`). Throws for a feed frame that
+   * loses track (it fails the parse, or is a `changed` frame on another epoch than its source's),
+   * so the stream runtime reports it; a frame written in another feed format never throws.
+   */
   onFrame(frame: Frame): boolean;
   /** Called after each applied listening frame of `source`; returns the unsubscribe. */
   onListening(source: string, listener: () => void): () => void;

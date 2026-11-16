@@ -106,6 +106,11 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     kindSource.set(kind, src);
   }
   const listeners = new Map<string, Set<() => void>>();
+  // Rule 8. `otherFormat`: the newest listening frame was written in another feed format.
+  // `lostTrack`: the sources whose next valid listening frame ends the lost-track episode, or
+  // `null` outside one.
+  let otherFormat = false;
+  let lostTrack: Set<Src> | null = null;
   const timing = {
     baseMs: o.timing?.baseMs ?? DEFAULT_TIMING.baseMs,
     capMs: o.timing?.capMs ?? DEFAULT_TIMING.capMs,
@@ -287,6 +292,11 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     if (flight.controller.signal.aborted) {
       return;
     }
+    // The source's epoch moved or was forgotten since the request: its listening frame decides.
+    if (src.epoch !== flight.epoch) {
+      endFlight(src);
+      return;
+    }
     // A subscription staled or re-seeded on another epoch since the request is no longer its.
     const subs = flight.subs.filter(
       (s) => !s.stopped && !s.rereading && s.watermark?.epoch === flight.epoch,
@@ -350,6 +360,81 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     }
   }
 
+  // An app callback's throw is reported, never left to stop the frame that called it.
+  function callApp(fn: () => void): void {
+    try {
+      fn();
+    } catch (e: unknown) {
+      reportError(e);
+    }
+  }
+
+  // Every subscription waits as before the source's first listening frame (rule 1), so nothing
+  // scheduled under the old floors is sent. A running retry wait ends with nothing marked to send.
+  function forget(): void {
+    for (const src of sources.values()) {
+      src.epoch = null;
+      src.floors = new Map();
+      src.again = false;
+      if (src.timer !== null) {
+        clearTimeout(src.timer);
+        src.timer = null;
+      }
+      for (const sub of src.subs) {
+        sub.marked = false;
+      }
+    }
+  }
+
+  // Throws so the stream runtime reports the frame as rejected.
+  function loseTrack(reason: string): never {
+    const known = [...sources.values()].filter((s) => s.epoch !== null);
+    const first = lostTrack === null;
+    lostTrack = new Set([...(lostTrack ?? []), ...known]);
+    forget();
+    if (first) {
+      callApp(o.reconnect);
+    }
+    throw new Error(`feed: ${reason}`);
+  }
+
+  function onListeningData(data: string): void {
+    const r = parseListening(data);
+    const wire = r.frozen?.wire ?? null;
+    if (wire !== null && o.onWire !== undefined) {
+      const onWire = o.onWire;
+      callApp(() => {
+        onWire(wire);
+      });
+    }
+    if (r.kind === "other_format") {
+      if (!otherFormat) {
+        otherFormat = true;
+        forget();
+      }
+      return;
+    }
+    if (otherFormat && r.frozen === null) {
+      return;
+    }
+    otherFormat = false;
+    if (r.kind === "invalid") {
+      loseTrack(r.reason);
+    }
+    onListeningFrame(r.listening);
+  }
+
+  function onChangedData(data: string): void {
+    if (otherFormat) {
+      return;
+    }
+    const r = parseChanged(data);
+    if (!r.ok) {
+      loseTrack(r.reason);
+    }
+    onChangedFrame(r.changed);
+  }
+
   function onListeningFrame(l: ListeningFrame): void {
     const applied: string[] = [];
     for (const ls of l.sources) {
@@ -383,18 +468,25 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         }
       }
       applied.push(src.name);
+      lostTrack?.delete(src);
+    }
+    if (lostTrack?.size === 0) {
+      lostTrack = null;
     }
     for (const name of applied) {
       for (const listener of [...(listeners.get(name) ?? [])]) {
-        listener();
+        callApp(listener);
       }
     }
   }
 
   function onChangedFrame(c: ChangedFrame): void {
     const src = sources.get(c.source);
-    if (src?.epoch !== c.epoch) {
+    if (src === undefined || src.epoch === null) {
       return;
+    }
+    if (src.epoch !== c.epoch) {
+      loseTrack("changed frame on another epoch than its source's current one");
     }
     const kinds = new Set(c.kinds.filter((k) => kindSource.get(k) === src));
     for (const k of kinds) {
@@ -463,17 +555,11 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     },
     onFrame(frame: Frame): boolean {
       if (frame.type === "changed") {
-        const r = parseChanged(frame.data);
-        if (r.ok) {
-          onChangedFrame(r.changed);
-        }
+        onChangedData(frame.data);
         return true;
       }
       if (frame.type === "listening") {
-        const r = parseListening(frame.data);
-        if (r.kind === "ok") {
-          onListeningFrame(r.listening);
-        }
+        onListeningData(frame.data);
         return true;
       }
       return false;
