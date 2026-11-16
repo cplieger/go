@@ -350,7 +350,7 @@ func TestOutagePageHasNoInlineScriptOrStyle(t *testing.T) {
 				t.Errorf("body %q holds a script element", body)
 			}
 			for _, m := range classAttr.FindAllStringSubmatch(body, -1) {
-				for _, class := range strings.Fields(m[1]) {
+				for class := range strings.FieldsSeq(m[1]) {
 					if !slices.Contains(outageClasses, class) {
 						t.Errorf("class %q is not a system class the page may write", class)
 					}
