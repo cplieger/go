@@ -90,6 +90,8 @@ func TestConst_refusals(t *testing.T) {
 		{wiregen.TypeRef[literal.Unknown](), `literal.Unknown.Tag: wiregen tag "x" is not const=<value>`},
 		{wiregen.TypeRef[literal.Empty](), "literal.Empty.Tag: the wiregen const tag names no value"},
 		{wiregen.TypeRef[literal.Flat](), "literal.Flat.Inline.V: the wiregen tag on embedded Inline pins no field; tag the field itself"},
+		{wiregen.TypeRef[literal.Bounded](), "literal.Bounded.Tag: the wiregen const tag pins one value, which leaves its bounds nothing to check; drop one"},
+		{wiregen.TypeRef[literal.ViaPtr](), "literal.ViaPtr.Pinned.Tag: the wiregen const tag pins a field encoding/json always writes, but this one can be left out"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.typ.Name, func(t *testing.T) {

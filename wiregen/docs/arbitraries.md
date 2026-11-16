@@ -21,6 +21,7 @@ A property test iterates the table instead of keeping one arbitrary per type by 
 For fields wiregen can model, each arbitrary comes from the same metadata as its decoder, so the drawn values pass the generated checks:
 
 - An enum draws from its registered values, which is what `reqOneOf` accepts.
+- A field a `wiregen:"const=<value>"` tag pins draws that value alone.
 - A number is finite, because `reqNum` rejects `NaN` and `Infinity` and JSON cannot spell them.
 - A `[]byte` is a base64 string.
 - A `json.RawMessage` is any JSON value.

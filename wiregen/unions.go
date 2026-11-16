@@ -354,6 +354,9 @@ func (e *astEngine) caseValues(u *Union, ti *typeInfo) ([]string, error) {
 	if tag.optional() || tag.nullable() || (tag.Kind != kindString && tag.Kind != kindEnum) {
 		return nil, fmt.Errorf("tag %q must be a required string or enum field that is never null", u.Tag)
 	}
+	if tag.Const != "" {
+		return nil, fmt.Errorf("tag %q is pinned by a wiregen const, but a union's tag varies by case", u.Tag)
+	}
 	if len(u.Cases) == 0 {
 		return nil, errors.New("declares no case")
 	}

@@ -354,6 +354,10 @@ func ownRead(wn string, used *usedIdents) string {
 func (g *generator) reqDecode(f *fieldInfo, path string, used *usedIdents) string {
 	wn := tsStringLiteral(f.WireName)
 	at := ", \"" + path + "\")"
+	if f.Const != "" {
+		used.helper("reqOneOf")
+		return "reqOneOf(o, \"" + wn + "\", [" + f.TSType + "] as const" + at
+	}
 	switch f.Kind {
 	case kindRaw:
 		return wholeRead(f, wn, path, used)
@@ -804,6 +808,9 @@ func (g *generator) arbElemExpr(elem *fieldInfo) string {
 
 // arbElemValue is the arbitrary of f's non-null values.
 func (g *generator) arbElemValue(f *fieldInfo) string {
+	if f.Const != "" {
+		return "fc.constant(" + f.TSType + " as const)"
+	}
 	switch f.Kind {
 	case kindSlice:
 		return "fc.array(" + g.arbElemExpr(f.Elem) + ", " + arbArrayConstraintsFor(f.Bounds) + ")"

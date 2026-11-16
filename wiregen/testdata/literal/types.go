@@ -69,3 +69,24 @@ type B struct {
 	Kind Kind   `json:"kind" wiregen:"const=b"`
 	M    string `json:"m"`
 }
+
+// Short is a string bounded to 8 bytes.
+type Short string
+
+// MaxBytes bounds Short.
+func (Short) MaxBytes() int { return 8 }
+
+// Bounded pins a bounded field.
+type Bounded struct {
+	Tag Short `json:"tag" wiregen:"const=x"`
+}
+
+// Pinned holds a pinned field another type promotes.
+type Pinned struct {
+	Tag string `json:"tag" wiregen:"const=x"`
+}
+
+// ViaPtr promotes Pinned's field through a pointer, which a nil one drops.
+type ViaPtr struct {
+	*Pinned
+}

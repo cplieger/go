@@ -63,6 +63,7 @@ type fieldInfo struct {
 	GoName   string // the Go selector a refusal's path names, through embeds
 	TSType   string
 	Doc      string // JSDoc for the field
+	Const    string // the one value a wiregen const tag pins; "" for none
 	// GoTypeName keys the registered struct, enum or Mappings entry a value
 	// names.
 	GoTypeName string
@@ -623,23 +624,26 @@ func (e *astEngine) resolveStructFields(st *types.Struct, pkg *packages.Package,
 }
 
 // jsonTag is a struct field's json tag as encoding/json's typeFields reads
-// it.
+// it, and its wiregen tag.
 type jsonTag struct {
-	name      string // "" when absent or not a valid key name
-	badName   string // a name isValidJSONName refuses
-	skip      bool   // json:"-"
-	omitEmpty bool
-	omitZero  bool
-	quoted    bool // the ,string option is present
+	name       string // "" when absent or not a valid key name
+	badName    string // a name isValidJSONName refuses
+	wiregen    string
+	skip       bool // json:"-"
+	omitEmpty  bool
+	omitZero   bool
+	quoted     bool // the ,string option is present
+	hasWiregen bool // tells an empty wiregen tag from none
 }
 
 func parseJSONTag(tag string) jsonTag {
 	v := reflect.StructTag(tag).Get("json")
+	wg, hasWG := reflect.StructTag(tag).Lookup("wiregen")
 	if v == "-" {
 		return jsonTag{skip: true}
 	}
 	name, opts, _ := strings.Cut(v, ",")
-	t := jsonTag{name: name}
+	t := jsonTag{name: name, wiregen: wg, hasWiregen: hasWG}
 	if name != "" && !isValidJSONName(name) {
 		t.name, t.badName = "", name
 	}
@@ -698,18 +702,31 @@ func (e *astEngine) resolveEmbeddedField(f *types.Var, tag jsonTag, depth int, p
 	ownFields(promoted, owner)
 	ownEmbeds(inner, owner)
 	for i := range promoted {
-		p := &promoted[i]
-		p.GoName = f.Name() + "." + p.GoName
-		p.ViaEmbedPtr = p.ViaEmbedPtr || viaPtr
-		if viaPtr && !f.Exported() {
-			p.InRefusals = append(p.InRefusals, "is promoted through the embedded pointer to unexported "+embType.String()+", which encoding/json cannot allocate to decode into")
-		}
+		promote(&promoted[i], f, embType, viaPtr, tag.hasWiregen)
 	}
 	embeds := []embedInfo{{GoName: f.Name()}}
 	for _, in := range inner {
 		embeds = append(embeds, embedInfo{Owner: in.Owner, GoName: f.Name() + "." + in.GoName})
 	}
 	return promoted, embeds
+}
+
+// promote applies to p, promoted through embedded field f of type embType,
+// what the embed changes: its selector, its absence through a pointer, and
+// the refusals of a wiregen tag on the embed and of a pointer encoding/json
+// cannot allocate.
+func promote(p *fieldInfo, f *types.Var, embType types.Type, viaPtr, tagged bool) {
+	p.GoName = f.Name() + "." + p.GoName
+	p.ViaEmbedPtr = p.ViaEmbedPtr || viaPtr
+	if tagged {
+		p.refuse("the wiregen tag on embedded " + f.Name() + " pins no field; tag the field itself")
+	}
+	if viaPtr && p.Const != "" {
+		p.refuse(constAbsent)
+	}
+	if viaPtr && !f.Exported() {
+		p.InRefusals = append(p.InRefusals, "is promoted through the embedded pointer to unexported "+embType.String()+", which encoding/json cannot allocate to decode into")
+	}
 }
 
 // structDeclaration is the type declaration an embedded struct type name t
@@ -766,7 +783,39 @@ func (e *astEngine) resolveNamedField(f *types.Var, tag jsonTag, depth int, pkg 
 	if !fi.Tagged && e.gen.o.requireJSONTags {
 		fi.Refusals = append(fi.Refusals, "no json tag names it")
 	}
+	if tag.hasWiregen {
+		e.applyConst(tag.wiregen, &fi)
+	}
 	return fi
+}
+
+// constAbsent refuses a const on a field encoding/json can leave out.
+const constAbsent = "the wiregen const tag pins a field encoding/json always writes, but this one can be left out"
+
+// applyConst pins fi to the value a wiregen tag of the form const=<value>
+// names, so its TS type is that literal, or refuses a tag wiregen cannot
+// hold the field to: the value must be what encoding/json writes for it
+// every time.
+func (e *astEngine) applyConst(tag string, fi *fieldInfo) {
+	v, ok := strings.CutPrefix(tag, "const=")
+	switch {
+	case !ok:
+		fi.refuse(fmt.Sprintf("wiregen tag %q is not const=<value>", tag))
+	case v == "":
+		fi.refuse("the wiregen const tag names no value")
+	case fi.Kind != kindString && fi.Kind != kindEnum:
+		fi.refuse("the wiregen const tag pins a string or string enum field")
+	case fi.Ptrs > 0:
+		fi.refuse("the wiregen const tag pins a field encoding/json always writes as its value, but a pointer can be null")
+	case fi.Omittable:
+		fi.refuse(constAbsent)
+	case fi.Bounds != nil:
+		fi.refuse("the wiregen const tag pins one value, which leaves its bounds nothing to check; drop one")
+	case fi.Kind == kindEnum && !slices.Contains(e.gen.enums[fi.GoTypeName].values, v):
+		fi.refuse(fmt.Sprintf("the wiregen const %q is no member of enum %s", v, fi.GoTypeName))
+	default:
+		fi.Const, fi.TSType = v, "\""+tsStringLiteral(v)+"\""
+	}
 }
 
 // quote plans fi under the ,string option, which encoding/json applies to

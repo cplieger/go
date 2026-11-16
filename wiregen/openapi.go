@@ -39,6 +39,7 @@ type SecurityScheme struct {
 const (
 	kwType        = "type"
 	kwRef         = "$ref"
+	kwConst       = "const"
 	kwRequired    = "required"
 	kwDescription = "description"
 	kwName        = "name"
@@ -514,7 +515,7 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 	for i := range ti.Union.cases {
 		uc := &ti.Union.cases[i]
 		caseName := name + "." + uc.value
-		s := b.objectSchema(ti.caseFields(uc), d, map[string]any{ti.Union.tag: map[string]any{"const": uc.value}})
+		s := b.objectSchema(ti.caseFields(uc), d, map[string]any{ti.Union.tag: map[string]any{kwConst: uc.value}})
 		s["additionalProperties"] = false
 		out[caseName] = s
 		refs = append(refs, map[string]any{kwRef: componentsRef + caseName})
@@ -579,6 +580,9 @@ func (b *docBuilder) elemSchema(f *fieldInfo, d direction) any {
 
 // valueSchema is the schema of f's non-null values.
 func (b *docBuilder) valueSchema(f *fieldInfo, d direction) map[string]any {
+	if f.Const != "" {
+		return map[string]any{kwType: schemaString, kwConst: f.Const}
+	}
 	var s map[string]any
 	switch f.Kind {
 	case kindRaw:
@@ -627,7 +631,7 @@ var scalarTypes = map[wireKind]string{
 // nullable widens s to admit null: a plain type keyword becomes a type list,
 // anything else is wrapped in anyOf.
 func nullable(s map[string]any) map[string]any {
-	if t, ok := s[kwType].(string); ok && s["enum"] == nil && s["const"] == nil {
+	if t, ok := s[kwType].(string); ok && s["enum"] == nil && s[kwConst] == nil {
 		out := maps.Clone(s)
 		out[kwType] = []any{t, schemaNull}
 		return out

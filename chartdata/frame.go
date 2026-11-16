@@ -57,7 +57,7 @@ type FrameSeries struct {
 // sparkline. X holds instants in Unix milliseconds or plain numbers, strictly
 // increasing, and every series holds a value per x.
 type SeriesFrame struct {
-	Type   FrameType     `json:"type"`
+	Type   FrameType     `json:"type" wiregen:"const=series"`
 	Name   string        `json:"name"`
 	Unit   string        `json:"unit"`
 	X      []float64     `json:"x"`
@@ -78,7 +78,7 @@ type SeriesFrame struct {
 // a histogram. X1 strictly increases, X2 never decreases, and each bin's X1
 // is below its X2.
 type BinsFrame struct {
-	Type   FrameType     `json:"type"`
+	Type   FrameType     `json:"type" wiregen:"const=bins"`
 	Name   string        `json:"name"`
 	Unit   string        `json:"unit"`
 	Axis   FrameAxis     `json:"axis"`
@@ -98,7 +98,7 @@ type BinsFrame struct {
 // points, a slope (two names), a pie or symbols (one series), a share bar or
 // ranked bars. Names are unique and never empty.
 type CategoriesFrame struct {
-	Type   FrameType     `json:"type"`
+	Type   FrameType     `json:"type" wiregen:"const=categories"`
 	Name   string        `json:"name"`
 	Unit   string        `json:"unit"`
 	Names  []string      `json:"names"`
@@ -124,7 +124,7 @@ type FrameBoxes struct {
 // BoxesFrame is a distribution per category in each series, drawn as box
 // plots. The server computes the five numbers; the chart computes none.
 type BoxesFrame struct {
-	Type   FrameType    `json:"type"`
+	Type   FrameType    `json:"type" wiregen:"const=boxes"`
 	Name   string       `json:"name"`
 	Unit   string       `json:"unit"`
 	Names  []string     `json:"names"`
@@ -154,7 +154,7 @@ type FramePoints struct {
 // PointsFrame is items measured on two or three declarations, drawn as a
 // scatter or bubble chart.
 type PointsFrame struct {
-	Type   FrameType     `json:"type"`
+	Type   FrameType     `json:"type" wiregen:"const=points"`
 	Name   string        `json:"name"`
 	Units  FrameUnits    `json:"units"`
 	Series []FramePoints `json:"series"`
@@ -172,7 +172,7 @@ type FrameGridAxis struct {
 // GridFrame is a grid of cells, drawn as a cell grid or a 2D histogram:
 // a row of values per y entry, each as long as x's names or bins.
 type GridFrame struct {
-	Type   FrameType     `json:"type"`
+	Type   FrameType     `json:"type" wiregen:"const=grid"`
 	Name   string        `json:"name"`
 	Unit   string        `json:"unit"`
 	X      FrameGridAxis `json:"x"`
@@ -187,7 +187,7 @@ type GridFrame struct {
 // and each value is the next calendar day, 23 or 25 hours long across a DST
 // change.
 type CalendarFrame struct {
-	Type FrameType `json:"type"`
+	Type FrameType `json:"type" wiregen:"const=calendar"`
 	Name string    `json:"name"`
 	Unit string    `json:"unit"`
 	// Zone is the IANA time zone the days are in.
@@ -217,7 +217,7 @@ type FrameTreeGroup struct {
 // two of groups and their parts, never both, in the order to lay them out.
 // Siblings' keys are unique.
 type TreeFrame struct {
-	Type   FrameType        `json:"type"`
+	Type   FrameType        `json:"type" wiregen:"const=tree"`
 	Name   string           `json:"name"`
 	Unit   string           `json:"unit"`
 	Parts  []FrameTreePart  `json:"parts,omitempty"`
@@ -245,7 +245,7 @@ type FrameFlowLink struct {
 // with Stages as an alluvial diagram. Nodes, when set, give the nodes' order;
 // a node's value is the sum of its links.
 type FlowFrame struct {
-	Type   FrameType       `json:"type"`
+	Type   FrameType       `json:"type" wiregen:"const=flow"`
 	Name   string          `json:"name"`
 	Unit   string          `json:"unit"`
 	Nodes  []FrameFlowNode `json:"nodes,omitempty"`
@@ -264,7 +264,7 @@ type FrameTimes struct {
 
 // EventsFrame is rows of instants, drawn as a dot timeline strip.
 type EventsFrame struct {
-	Type  FrameType    `json:"type"`
+	Type  FrameType    `json:"type" wiregen:"const=events"`
 	Name  string       `json:"name"`
 	Rows  []FrameTimes `json:"rows"`
 	Refs  []FrameRef   `json:"refs,omitempty"`
@@ -274,7 +274,7 @@ type EventsFrame struct {
 // StatesFrame is a state per observation, oldest first, drawn as a state
 // history: Keys and At are equally long, and a null key is a gap.
 type StatesFrame struct {
-	Type  FrameType   `json:"type"`
+	Type  FrameType   `json:"type" wiregen:"const=states"`
 	Name  string      `json:"name"`
 	Keys  []*string   `json:"keys"`
 	At    []int64     `json:"at"`
@@ -297,7 +297,7 @@ type FrameMeter struct {
 // ValueFrame is one meter, or several sharing one bar, such as one per
 // language.
 type ValueFrame struct {
-	Type   FrameType    `json:"type"`
+	Type   FrameType    `json:"type" wiregen:"const=value"`
 	Name   string       `json:"name"`
 	Unit   string       `json:"unit"`
 	Meters []FrameMeter `json:"meters"`

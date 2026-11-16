@@ -2,6 +2,8 @@
 // HTTP client and an OpenAPI 3.1 document from Go types and an endpoint table,
 // reading the registered packages with go/packages and go/types. A consumer
 // fills a [Registry] and calls [Registry.Generate] from a build-time command.
+// A field's json tag shapes its TypeScript as encoding/json shapes its wire
+// form; a wiregen:"const=<value>" tag pins a string field to one value.
 package wiregen
 
 import (

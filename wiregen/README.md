@@ -110,6 +110,7 @@ Bind your server's routes, generate the client and write the OpenAPI document fr
 wiregen reads your types from source with `go/packages` and applies the field rules of `encoding/json`, so the TypeScript matches what your server puts on the wire.
 
 - Unexported fields are skipped. A field `encoding/json` can leave out, such as an `omitempty` or `omitzero` field or one promoted through an embedded pointer, becomes optional, `key?: T`. A pointer field with no omit option is always written, as `null` when nil, so it is required and nullable, `key: T | null`. An untagged field takes its Go name.
+- A string or string enum field tagged `wiregen:"const=<value>"` becomes that literal, such as `type: "bins"`, and its decoder accepts that value alone, so a union of such types narrows on the field.
 - `time.Time` becomes `string`, `json.Number` becomes `number`, `[]byte` becomes a base64 `string`, and a type implementing `encoding.TextMarshaler` becomes `string`.
 - `json.RawMessage` becomes `unknown`, and is the one opaque type allowed.
 - A JSON `null` decodes to `null` for a required pointer field, and otherwise to the field's empty value instead of an error: `undefined` for an optional field, `[]` or `{}` for a required slice or map, and `""` for a required `[]byte`.

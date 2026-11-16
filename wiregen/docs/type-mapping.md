@@ -10,6 +10,7 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 - A field with no `json` tag takes the name `encoding/json` gives it, its Go name. With `WithRequireJSONTags(true)` such a field is a generation error naming its path. A tag name may hold letters, digits, spaces and the punctuation `!#$%&()*+-./:;<=>?@[]^_{|}~`.
 - A field `encoding/json` may leave out is optional in TypeScript, `key?: T`: a field tagged `omitzero`, a field tagged `omitempty` whose type `omitempty` can find empty (never a struct), and a field promoted through an embedded pointer, which is skipped when nil. Every other field is required.
 - A required pointer field and a pointer element of a slice or map are `T | null`, as `encoding/json` writes a nil one as `null`. An optional pointer field stays `key?: T`, its `null` read as absent. A nil slice, map or `[]byte` with no pointer above it reads as empty, so its type admits no `null`.
+- A string or string enum field tagged `wiregen:"const=<value>"` is typed as that one value, so a TypeScript union of types that each pin their own value on one field narrows on that field. A field `Type FrameType` tagged `json:"type" wiregen:"const=bins"` becomes `type: "bins"`; its decoder accepts `"bins"` alone, its schema is `{"type": "string", "const": "bins"}` and its arbitrary draws `"bins"`. The tag states what the field holds, and the Go code that builds the value must set it, so test that it does.
 - A map key is typed `string`. An integer key, one that is not an `encoding.TextMarshaler`, is decimal text on the wire, so the schema gives it `propertyNames` with a decimal pattern, which does not carry the key kind's range.
 - `time.Time` maps to `string`, and `json.Number` to `number`. A slice of `byte`, or of any other `uint8` type without a marshaler, maps to `string`, because JSON encodes it as base64.
 - `json.RawMessage` (and `jsontext.Value`, which it aliases from Go 1.27) maps to `unknown`. It is the one opaque type wiregen lets cross the wire.
@@ -34,6 +35,7 @@ This page states how wiregen turns each Go type into TypeScript, a decoder and a
 - a fixed-size array, a channel, a function, a complex number or an `unsafe.Pointer`.
 - a map whose key is not a string, an integer or an `encoding.TextMarshaler`.
 - a bound method wiregen cannot read, or one that does not fit the field (see below).
+- a `wiregen` tag that is not `const=<value>` or names no value; a const on a field that is not a string or string enum, on a pointer, on a field `encoding/json` can leave out or on a bounded type; a const its enum has no member for; a `wiregen` tag on a flattened embed, which pins no field; and a const on a union's tag, whose value varies by case.
 
 In a type an endpoint's `Request`, `Params` or `Query` carries, or one those reach, it also refuses a field `encoding/json` cannot decode into:
 
@@ -109,7 +111,7 @@ wiregen.Union{
 }
 ```
 
-`Tag` and the field lists are wire names. The tag is a required string or enum field, and an enum tag's cases are exactly its members. Each case lists the other fields it allows, every field belongs to some case, and a listed field keeps its own presence rule unless `Required` lists it for that case (below). A field some case leaves out must be tagged `omitempty` or `omitzero`, since otherwise `encoding/json` writes it in every case and the decoder and the case schema would refuse that output. Cases are emitted in the enum's order, or by value for a string tag.
+`Tag` and the field lists are wire names. The tag is a required string or enum field that is never null and carries no `wiregen` const, and an enum tag's cases are exactly its members. Each case lists the other fields it allows, every field belongs to some case, and a listed field keeps its own presence rule unless `Required` lists it for that case (below). A field some case leaves out must be tagged `omitempty` or `omitzero`, since otherwise `encoding/json` writes it in every case and the decoder and the case schema would refuse that output. Cases are emitted in the enum's order, or by value for a string tag.
 
 - The types file carries one object type per case, one member per line under its field's JSDoc, the tag's included:
 
