@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"net"
 	"net/http"
 	"net/netip"
 	"time"
@@ -57,3 +58,14 @@ func SetKeyedRateClock(l *KeyedRateLimiter, now func() time.Time) { l.now = now 
 
 // KeyedRateBuckets answers how many buckets l holds.
 func KeyedRateBuckets(l *KeyedRateLimiter) int { return l.len() }
+
+// OpsServer and OpsListener answer the server and listener ListenOps built.
+func OpsServer(o *Ops) *http.Server   { return o.srv }
+func OpsListener(o *Ops) net.Listener { return o.ln }
+
+// SetOpsBindRetry shortens ListenOps's bind retry for the test.
+func SetOpsBindRetry(t interface{ Cleanup(func()) }, interval, window time.Duration) {
+	prev := opsBindRetry
+	opsBindRetry.interval, opsBindRetry.window = interval, window
+	t.Cleanup(func() { opsBindRetry = prev })
+}
