@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -81,9 +82,7 @@ func opsDo(t *testing.T, method, addr, path, host string) *httptest.ResponseReco
 	}
 	defer resp.Body.Close()
 	rec := httptest.NewRecorder()
-	for k, v := range resp.Header {
-		rec.Header()[k] = v
-	}
+	maps.Copy(rec.Header(), resp.Header)
 	rec.Code = resp.StatusCode
 	_, _ = io.Copy(rec.Body, resp.Body)
 	return rec
@@ -498,9 +497,17 @@ func TestRunWithOpsPassesRunOptions(t *testing.T) {
 	s, _ := product(t, opsText("product"))
 	var exited atomic.Bool
 	s.Options = []httpserver.RunOption{httpserver.WithServeExit(func(context.Context) { exited.Store(true) })}
-	stop := runOps(t, o, s)
+	done := make(chan error, 1)
+	go func() { done <- httpserver.RunWithOps(context.WithoutCancel(t.Context()), o, s) }()
+	if rec := opsDo(t, http.MethodGet, o.Addr().String(), "/healthz", ""); rec.Code != http.StatusOK {
+		t.Fatalf("/healthz = %d before the failure", rec.Code)
+	}
 	_ = s.Listener.Close()
-	_ = stop()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithOps did not return after the product listener failed")
+	}
 	if !exited.Load() {
 		t.Error("the product's WithServeExit did not run when its listener failed")
 	}
@@ -649,7 +656,8 @@ func TestCheckListenAddrs(t *testing.T) {
 	}
 	t.Run("one check over three settings names the clashing pair", func(t *testing.T) {
 		err := httpserver.CheckListenAddrs(
-			s{"LISTEN_ADDR", ":9737"}, s{"OPS_LISTEN_ADDR", ":9738"}, s{"HOSTS_LISTEN_ADDR", "127.0.0.1:9737"})
+			s{"LISTEN_ADDR", ":9737"}, s{"OPS_LISTEN_ADDR", ":9738"}, s{"HOSTS_LISTEN_ADDR", "127.0.0.1:9737"},
+		)
 		if err == nil {
 			t.Fatal("CheckListenAddrs = nil, want HOSTS_LISTEN_ADDR refused beside LISTEN_ADDR")
 		}

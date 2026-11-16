@@ -4,7 +4,7 @@
 
 httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown.
 
-It replaces the middleware, proxy-header parsing and shutdown sequence you would otherwise write around `http.ServeMux`, and every piece stays a plain `http.Handler`. It ships no router, and your app keeps its own routes and error codes. It uses only the standard library and is licensed under Apache-2.0.
+It replaces the middleware, proxy-header parsing and shutdown sequence you would otherwise write around `http.ServeMux`, and every piece stays a plain `http.Handler`. It ships no router, and your app keeps its own routes and error codes. It depends only on the standard library and `go/textsafe`, and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -102,7 +102,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 - Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `LogRefusal`), `CanonicalHost`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
 - Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorCode` and `ErrorResponder`, `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler`, `InlineScriptHashes`, `InlineStyleHashes`.
-- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and `ListenMetrics` (`MetricsHandlers`, `MetricsServer`) for an app's opt-in metrics and health listener.
+- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `OpsAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`) and `CheckListenAddrs` (`ListenSetting`).
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2).
 
@@ -137,7 +137,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - [Client IP, hosts and credentials](docs/trust-checks.md) covers proxy trust, the Host allowlist, loopback checks, configured credentials, header-value checks, `WWW-Authenticate` challenges and failed-authentication limits.
 - [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope, body decoding and path checks.
 - [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, caching and hash-pinned inline scripts.
-- [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the metrics listener.
+- [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the ops listener.
 
 ## Credits
 

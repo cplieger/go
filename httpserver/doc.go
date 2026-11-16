@@ -6,12 +6,12 @@
 // Host allowlist against DNS rebinding (HostPolicy, CanonicalHost), an
 // embedded StaticHandler, JSON envelope helpers (WriteJSON, WriteError),
 // request preludes (LimitBody, RequireMethod, DecodeBody), a constant-time
-// NewStaticTokenVerifier, ClassifyBind, a graceful server (New, Run) and an
-// opt-in metrics listener (ListenMetrics).
+// NewStaticTokenVerifier, ClassifyBind, a graceful server (New, Run) and the
+// ops listener (ListenOps, RunWithOps, CheckListenAddrs).
 //
 // Middleware is func(http.Handler) http.Handler and Chain lists the outermost
 // first, so Chain(mux, Logging(), Recoverer(), SecurityHeaders()) logs a
 // recovered panic as its 500, and a stdlib middleware such as
 // http.CrossOriginProtection's Handler composes with no adapter. The package
-// depends on nothing beyond the standard library.
+// depends on nothing beyond the standard library and go/textsafe.
 package httpserver
