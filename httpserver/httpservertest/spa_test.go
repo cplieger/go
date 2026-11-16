@@ -150,6 +150,40 @@ func TestCheckSPAPassesOnItsBundle(t *testing.T) {
 			}
 		})
 	}
+	for name, pages := range wildcardTables {
+		t.Run(name, func(t *testing.T) {
+			c := fixtureConfig(t)
+			c.Pages = pages
+			if r := runCheckSPA(t, fixtureSPA(t, c), c); len(r.errors) != 0 || r.fatal != "" {
+				t.Errorf("CheckSPA failed a correct SPA:\n%s", r.failures())
+			}
+		})
+	}
+}
+
+// wildcardTables are page tables whose patterns also match the bundle's
+// own paths.
+var wildcardTables = map[string][]httpserver.Page{
+	"root subtree":  {{Name: "any", Pattern: "/"}, {Name: "login", Pattern: "/login", Shell: "login.html"}},
+	"two wildcards": {{Name: "home", Pattern: "/{$}"}, {Name: "any", Pattern: "/{a}/{b}"}, {Name: "login", Pattern: "/login", Shell: "login.html"}},
+}
+
+func TestCheckSPAFailsAssetAnsweringAShell(t *testing.T) {
+	for name, pages := range wildcardTables {
+		t.Run(name, func(t *testing.T) {
+			c := fixtureConfig(t)
+			c.Pages = pages
+			h := tamper(fixtureSPA(t, c), atPath("/"+moduleAsset), func(rec *httptest.ResponseRecorder) {
+				rec.Header().Set("Content-Type", "text/html; charset=utf-8")
+				rec.Header().Set("Cache-Control", "no-cache")
+				rec.Header().Del("Content-Encoding")
+				rec.Code = http.StatusOK
+				rec.Body.Reset()
+				rec.Body.WriteString(indexShell)
+			})
+			wantFailure(t, runCheckSPA(t, h, c), "/"+moduleAsset)
+		})
+	}
 }
 
 func TestCheckSPAFailsWorkerEntryWithoutCSP(t *testing.T) {

@@ -391,6 +391,60 @@ func TestSPADotSegmentIsNotFound(t *testing.T) {
 	})
 }
 
+func TestSPAPageCaptureOfDotSegmentAnswersTheShell(t *testing.T) {
+	h := newSPA(t, spaConfig(t, nil))
+	wantShell(t, spaServe(h, http.MethodGet, "/library/.env"), http.StatusOK, indexHTML)
+	for _, target := range []string{"/assets/.env", "/.env"} {
+		t.Run(pathName(target), func(t *testing.T) {
+			wantRefusal(t, spaServe(h, http.MethodGet, target), http.StatusNotFound, "not_found")
+		})
+	}
+}
+
+func TestSPATreeAnswersBeforeWildcardPages(t *testing.T) {
+	files := spaFiles()
+	tables := map[string][]httpserver.Page{
+		"root subtree":  {{Name: "any", Pattern: "/"}},
+		"two wildcards": {{Name: "any", Pattern: "/{a}/{b}"}},
+	}
+	for name, pages := range tables {
+		t.Run(name, func(t *testing.T) {
+			c := spaConfig(t, nil)
+			c.Pages = pages
+			h := newSPA(t, c)
+			t.Run("listed asset", func(t *testing.T) {
+				rec := spaServe(h, http.MethodGet, "/"+moduleAsset)
+				if rec.Code != http.StatusOK || rec.Body.String() != files[moduleAsset] {
+					t.Errorf("status %d body %q, want 200 and the asset", rec.Code, rec.Body.String())
+				}
+				if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+					t.Errorf("Cache-Control = %q, want immutable", cc)
+				}
+				wantPolicy(t, rec, defaultPolicy)
+			})
+			t.Run("notice", func(t *testing.T) {
+				rec := spaServe(h, http.MethodGet, "/"+noticeIndex)
+				if rec.Code != http.StatusOK || rec.Body.String() != files[noticeIndex] {
+					t.Errorf("status %d body %q, want 200 and the notice", rec.Code, rec.Body.String())
+				}
+				if ct := rec.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+					t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+				}
+			})
+			t.Run("favicon", func(t *testing.T) {
+				if rec := spaServe(h, http.MethodGet, "/favicon.ico"); rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+					t.Errorf("status %d body %q, want 204 and none", rec.Code, rec.Body.String())
+				}
+			})
+			for _, target := range []string{"/assets/missing-1.js", "/licenses/nope.txt", "/bundle.json", "/index.html", "/login.html"} {
+				t.Run(pathName(target), func(t *testing.T) {
+					wantRefusal(t, spaServe(h, http.MethodGet, target), http.StatusNotFound, "not_found")
+				})
+			}
+		})
+	}
+}
+
 func TestSPALicenceNoticeIsPlainTextNoCache(t *testing.T) {
 	h := newSPA(t, spaConfig(t, nil))
 	files := spaFiles()

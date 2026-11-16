@@ -139,6 +139,23 @@ func TestKeyedRateLimiterHoldsAtMostMaxKeys(t *testing.T) {
 	drain(t, l, "churn-0", 2)
 }
 
+func TestKeyedRateLimiterKeepsLimitedKeyWhenFull(t *testing.T) {
+	l, clock := newKeyed(t, httpserver.KeyedRate{Burst: 2, Interval: time.Second, MaxKeys: 16})
+	drain(t, l, "limited", 2)
+	for i := range 15 {
+		drain(t, l, fmt.Sprintf("other-%d", i), 1)
+	}
+	clock.advance(time.Second)
+	drain(t, l, "new", 1)
+	if n := httpserver.KeyedRateBuckets(l); n != 2 {
+		t.Errorf("buckets = %d, want 2 (limited and new) once the others refilled", n)
+	}
+	drain(t, l, "limited", 1)
+	if _, ok := l.Take("limited"); ok {
+		t.Error("the limited key came back with a full burst after a new key filled the table")
+	}
+}
+
 func TestKeyedRateLimiterConcurrentTakes(t *testing.T) {
 	l, _ := newKeyed(t, httpserver.KeyedRate{Burst: 100, Interval: time.Hour, MaxKeys: 16})
 	var wg sync.WaitGroup
