@@ -46,7 +46,8 @@ func TestQuantileIsHistogramQuantile(t *testing.T) {
 		{"nanCount", edges, []float64{2, math.NaN(), 2, 0}, 0.5, 0, false},
 		{"infiniteCount", edges, []float64{2, math.Inf(1), 2, 0}, 0.5, 0, false},
 		{"totalPastFloat64", edges, []float64{math.MaxFloat64, math.MaxFloat64, 0, 0}, 0.5, 0, false},
-		{"edgesSpanPastFloat64", []float64{-math.MaxFloat64, math.MaxFloat64}, []float64{0, 2, 0}, 0.5, 0, false},
+		{"edgesSpanPastFloat64", []float64{-math.MaxFloat64, math.MaxFloat64}, []float64{0, 2, 0}, 0.5, 0, true},
+		{"rankRoundedPastItsBucket", []float64{1, math.MaxFloat64}, []float64{1e16, 1.5, 0}, 1, math.MaxFloat64, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

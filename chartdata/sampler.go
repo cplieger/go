@@ -862,8 +862,8 @@ func addBuckets(sum, v []float64) []float64 {
 }
 
 // ownCounts is each bucket's own count in h, the count above every bound
-// last, differenced in uint64 so each is exact: measure's cumulative counts
-// never fall and end at or below Count.
+// last, differenced in uint64 so no own count falls where measure's did not:
+// measure's cumulative counts never fall and end at or below Count.
 func ownCounts(h *measure.HistogramValue) []float64 {
 	out := make([]float64, len(h.Buckets)+1)
 	var below uint64

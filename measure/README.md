@@ -146,7 +146,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) ha
 ## API
 
 - Metrics: `NewCounter`, `NewGauge`, `NewHistogram`, their labeled variants `NewLabeledCounter`, `NewLabeledGauge` and `NewLabeledHistogram`, `NewStateSet` and `NewInfo`.
-- Run-time seeding: `(*LabeledHistogram).Seed`; a labeled counter seeds with `Add(0, labels...)`.
+- Run-time seeding: `(*LabeledHistogram).Seed`, and a labeled counter seeds with `Add(0, labels...)`.
 - Declarations: `Unit`, `Kind`, `Export` and `Source` with their constants, the `Option` functions `WithExport`, `WithUnbounded`, `WithSeed` and `WithBuckets`, and `Declaration`, which every instrument and `Desc` returns through the sealed `Declared` interface.
 - Buckets: `DefaultBuckets` and `APIBuckets`.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.

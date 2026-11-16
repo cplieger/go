@@ -13,7 +13,7 @@ chartdata is built for a service that declares its series once with `measure` an
 - Each constructor takes the `measure` declaration it draws, so a frame's name and unit match what the registry holds for the same series once the declaration is registered.
 - Twelve frame types cover every chart element: series, bins, categories, boxes, points, grids, calendars, trees, flows, event strips, state histories and meters.
 - A constructor refuses a malformed frame, such as unequal lengths, an unsorted x or an infinite value, and one past the limits the chart draws within, with an error naming the rule and the field.
-- A `Sampler` holds the recent history of the series you keep nowhere else, in bounded rings, and estimates a histogram's quantiles as Prometheus's `histogram_quantile` does. `Quantile` gives the same estimate from the bucket counts your store holds, so a built frame and a sampled one agree.
+- A `Sampler` holds the recent history of the series you keep nowhere else, in bounded rings, and estimates a histogram's quantiles as Prometheus's `histogram_quantile` does.
 - Events append a column, replace the last one, mark a restart or replace a whole frame, so a page stays current without reloading.
 - The TypeScript types and a golden fixture of every frame, event and refusal are generated from the Go types and committed, so a chart library tests against the exact wire.
 

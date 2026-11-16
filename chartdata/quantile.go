@@ -9,8 +9,7 @@ import (
 // histogram_quantile does. edges are the finite bucket bounds, strictly
 // increasing, and counts each bucket's observations, the last above every
 // edge. It answers 0, false for no observations, fewer than two buckets, a
-// negative or non-finite count, a total past float64, a rank inside a bucket
-// whose edges are further apart than float64 reaches, or q of 0 over an
+// negative or non-finite count, a total past float64, or q of 0 over an
 // empty lowest bucket above 0, and panics for q outside [0, 1], a non-finite
 // or out-of-order edge, or a counts length other than len(edges)+1.
 func Quantile(edges, counts []float64, q float64) (float64, bool) {
@@ -42,8 +41,13 @@ func Quantile(edges, counts []float64, q float64) (float64, bool) {
 		lo = edges[b-1]
 	}
 	// 0/0 when q is 0 and the lowest bucket is empty, a NaN in PromQL too.
-	v := lo + (edges[b]-lo)*((rank-before)/counts[b])
-	if math.IsNaN(v) || math.IsInf(v, 0) {
+	// Rounding in the running count can put the rank past its bucket's own
+	// count, so frac stops at 1 to keep the estimate inside the bucket.
+	frac := min((rank-before)/counts[b], 1)
+	// Weighting the two edges, not adding frac of their span, cannot
+	// overflow: edges[b]-lo passes float64 for edges near ±MaxFloat64.
+	v := lo*(1-frac) + edges[b]*frac
+	if math.IsNaN(v) {
 		return 0, false
 	}
 	return v, true
