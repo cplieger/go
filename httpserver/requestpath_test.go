@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // TestCanonicalRequestPath pins the cleaned value and the verdict per spelling:

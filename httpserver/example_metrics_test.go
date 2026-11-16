@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // An app with no port of its own serves an opt-in metrics and health listener.

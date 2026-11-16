@@ -1,6 +1,6 @@
 # httpserver
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/httpserver.svg)](https://pkg.go.dev/github.com/cplieger/go/httpserver) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=httpserver%2Fgo.mod)](https://github.com/cplieger/go/blob/main/httpserver/go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/httpserver/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=httpserver%2Fgo.mod)](https://github.com/cplieger/go/blob/main/httpserver/go.mod)
 
 httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown.
 
@@ -22,7 +22,7 @@ Consider [chi](https://github.com/go-chi/chi) if you want a router with route gr
 ## Install
 
 ```sh
-go get github.com/cplieger/go/httpserver@latest
+go get github.com/cplieger/go/httpserver/v2@latest
 ```
 
 ## Usage
@@ -38,7 +38,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 func main() {
@@ -104,7 +104,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 - Static files: `StaticHandler`, `InlineScriptHashes`, `InlineStyleHashes`.
 - Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and `ListenMetrics` (`MetricsHandlers`, `MetricsServer`) for an app's opt-in metrics and health listener.
 
-The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver).
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2).
 
 ## Middleware order and safety rules
 
