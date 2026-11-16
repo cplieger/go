@@ -230,7 +230,7 @@ func TestBoundedDecoders_typeCheck(t *testing.T) {
 		"api-client.ts": transportTS(t),
 		"main.ts": `import { decodeCreate } from "./decoders.gen.js";
 try {
-  decodeCreate({ labels: {}, files: [], shared: {}, limit: 1, level: "low" });
+  decodeCreate({ item: null, labels: {}, files: [], shared: { hint: null }, limit: 1, level: "low" });
 } catch (e) {
   console.log((e as Error).message);
 }

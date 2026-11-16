@@ -39,6 +39,7 @@ type SecurityScheme struct {
 const (
 	kwType        = "type"
 	kwRef         = "$ref"
+	kwConst       = "const"
 	kwRequired    = "required"
 	kwDescription = "description"
 	kwName        = "name"
@@ -526,7 +527,7 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 	for i := range ti.Union.cases {
 		uc := &ti.Union.cases[i]
 		caseName := name + "." + uc.value
-		s := b.objectSchema(ti.caseFields(uc), d, map[string]any{ti.Union.tag: map[string]any{"const": uc.value}})
+		s := b.objectSchema(ti.caseFields(uc), d, map[string]any{ti.Union.tag: map[string]any{kwConst: uc.value}})
 		s["additionalProperties"] = false
 		out[caseName] = s
 		refs = append(refs, map[string]any{kwRef: componentsRef + caseName})
@@ -540,10 +541,8 @@ func (b *docBuilder) typeSchemas(ti *typeInfo, d direction) map[string]any {
 }
 
 // objectSchema is the object schema of fields in direction d, override
-// replacing a property's schema by wire name. A response field is required
-// unless omitempty or omitzero, since the encoder always writes it; a
-// request field also unless a pointer, as the decoder leaves it nil. A
-// union case's Required copy is required in both directions.
+// replacing a property's schema by wire name. Required follows optional in
+// a response and optionalIn in a request (presence.go).
 func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map[string]any) map[string]any {
 	props := map[string]any{}
 	required := []any{}
@@ -552,7 +551,7 @@ func (b *docBuilder) objectSchema(fields []*fieldInfo, d direction, override map
 		if s, ok := override[f.WireName]; ok {
 			props[f.WireName] = s
 		}
-		if (d == dirResponse && !f.absentOut()) || (d == dirRequest && !f.optional()) {
+		if (d == dirResponse && !f.optional()) || (d == dirRequest && !f.optionalIn()) {
 			required = append(required, f.WireName)
 		}
 	}
@@ -593,6 +592,9 @@ func (b *docBuilder) elemSchema(f *fieldInfo, d direction) any {
 
 // valueSchema is the schema of f's non-null values.
 func (b *docBuilder) valueSchema(f *fieldInfo, d direction) map[string]any {
+	if f.Const != "" {
+		return map[string]any{kwType: schemaString, kwConst: f.Const}
+	}
 	var s map[string]any
 	switch f.Kind {
 	case kindRaw:
@@ -641,7 +643,7 @@ var scalarTypes = map[wireKind]string{
 // nullable widens s to admit null: a plain type keyword becomes a type list,
 // anything else is wrapped in anyOf.
 func nullable(s map[string]any) map[string]any {
-	if t, ok := s[kwType].(string); ok && s["enum"] == nil && s["const"] == nil {
+	if t, ok := s[kwType].(string); ok && s["enum"] == nil && s[kwConst] == nil {
 		out := maps.Clone(s)
 		out[kwType] = []any{t, schemaNull}
 		return out
@@ -720,7 +722,7 @@ func (b *docBuilder) parameters(e *Endpoint) []any {
 		ti := b.engine.byName[e.Query.Name]
 		for i := range ti.Fields {
 			f := &ti.Fields[i]
-			out = append(out, map[string]any{kwName: f.WireName, "in": "query", kwRequired: !f.optional(), kwSchema: b.valueSchema(f, dirRequest)})
+			out = append(out, map[string]any{kwName: f.WireName, "in": "query", kwRequired: !f.optionalIn(), kwSchema: b.valueSchema(f, dirRequest)})
 		}
 	}
 	for _, h := range e.Headers {

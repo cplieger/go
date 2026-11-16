@@ -257,7 +257,9 @@ func TestNullabilityByDirection(t *testing.T) {
 		if err := validates(t, create, with("files", nil)); err == nil {
 			t.Error(`{"files": null} validates`)
 		}
-		if got := decodeVerdicts(t, boundsReg(), "decodeCreate", []string{with("files", nil)}); !strings.Contains(got[0], "expected array, got null") {
+		sent := maps.Clone(validCreate)
+		sent["item"], sent["files"], sent["shared"] = nil, nil, map[string]any{"hint": nil}
+		if got := decodeVerdicts(t, boundsReg(), "decodeCreate", []string{mustJSON(t, sent)}); !strings.Contains(got[0], "expected array, got null") {
 			t.Errorf("the generated validator answered %q to null files", got[0])
 		}
 	})

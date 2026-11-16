@@ -67,7 +67,7 @@ export type FrameEvent =
  * is below its X2.
  */
 export interface BinsFrame {
-  type: FrameType;
+  type: "bins";
   name: string;
   unit: string;
   axis: FrameAxis;
@@ -88,7 +88,7 @@ export interface BinsFrame {
  * plots. The server computes the five numbers; the chart computes none.
  */
 export interface BoxesFrame {
-  type: FrameType;
+  type: "boxes";
   name: string;
   unit: string;
   names: string[];
@@ -104,7 +104,7 @@ export interface BoxesFrame {
  * change.
  */
 export interface CalendarFrame {
-  type: FrameType;
+  type: "calendar";
   name: string;
   unit: string;
   /** Zone is the IANA time zone the days are in. */
@@ -123,7 +123,7 @@ export interface CalendarFrame {
  * ranked bars. Names are unique and never empty.
  */
 export interface CategoriesFrame {
-  type: FrameType;
+  type: "categories";
   name: string;
   unit: string;
   names: string[];
@@ -134,7 +134,7 @@ export interface CategoriesFrame {
 
 /** EventsFrame is rows of instants, drawn as a dot timeline strip. */
 export interface EventsFrame {
-  type: FrameType;
+  type: "events";
   name: string;
   rows: FrameTimes[];
   refs?: FrameRef[];
@@ -147,7 +147,7 @@ export interface EventsFrame {
  * a node's value is the sum of its links.
  */
 export interface FlowFrame {
-  type: FrameType;
+  type: "flow";
   name: string;
   unit: string;
   nodes?: FrameFlowNode[];
@@ -178,7 +178,7 @@ export interface FrameBoxes {
  * data. In an alluvial diagram Stage names the stage the link leaves.
  */
 export interface FrameFlowLink {
-  value?: number;
+  value: number | null;
   from: string;
   to: string;
   stage?: string;
@@ -275,7 +275,7 @@ export interface FrameTreeGroup {
  * data.
  */
 export interface FrameTreePart {
-  value?: number;
+  value: number | null;
   key: string;
 }
 
@@ -292,7 +292,7 @@ export interface FrameUnits {
  * a row of values per y entry, each as long as x's names or bins.
  */
 export interface GridFrame {
-  type: FrameType;
+  type: "grid";
   name: string;
   unit: string;
   x: FrameGridAxis;
@@ -307,7 +307,7 @@ export interface GridFrame {
  * scatter or bubble chart.
  */
 export interface PointsFrame {
-  type: FrameType;
+  type: "points";
   name: string;
   units: FrameUnits;
   series: FramePoints[];
@@ -321,7 +321,7 @@ export interface PointsFrame {
  * increasing, and every series holds a value per x.
  */
 export interface SeriesFrame {
-  type: FrameType;
+  type: "series";
   name: string;
   unit: string;
   x: number[];
@@ -347,7 +347,7 @@ export interface SeriesFrame {
  * history: Keys and At are equally long, and a null key is a gap.
  */
 export interface StatesFrame {
-  type: FrameType;
+  type: "states";
   name: string;
   keys: (string | null)[];
   at: number[];
@@ -361,7 +361,7 @@ export interface StatesFrame {
  * Siblings' keys are unique.
  */
 export interface TreeFrame {
-  type: FrameType;
+  type: "tree";
   name: string;
   unit: string;
   parts?: FrameTreePart[];
@@ -375,7 +375,7 @@ export interface TreeFrame {
  * language.
  */
 export interface ValueFrame {
-  type: FrameType;
+  type: "value";
   name: string;
   unit: string;
   meters: FrameMeter[];

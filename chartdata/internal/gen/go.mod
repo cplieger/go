@@ -16,3 +16,5 @@ require (
 )
 
 replace github.com/cplieger/go/chartdata => ../..
+
+replace github.com/cplieger/go/wiregen/v2 => ../../../wiregen

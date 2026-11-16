@@ -21,6 +21,7 @@ A property test iterates the table instead of keeping one arbitrary per type by 
 For fields wiregen can model, each arbitrary comes from the same metadata as its decoder, so the drawn values pass the generated checks:
 
 - An enum draws from its registered values, which is what `reqOneOf` accepts.
+- A field a `wiregen:"const=<value>"` tag pins draws that value alone.
 - A number is finite, because `reqNum` rejects `NaN` and `Infinity` and JSON cannot spell them.
 - A `[]byte` is a base64 string.
 - A `json.RawMessage` is any JSON value.
@@ -30,8 +31,8 @@ For fields wiregen can model, each arbitrary comes from the same metadata as its
 
 ## Properties of the module
 
-- Every type is tied through one `fc.letrec`, so a self reference resolves, and so does a mutual cycle such as `A` holding a `B` that holds an `A`. A type that can reach itself draws from `fc.oneof` with `maxDepth: 5`. Its first branches are leaves, with recursive optional fields absent and recursive collections empty. Every emitted collection and every such `oneof` share one `depthIdentifier`, so depth counts across the whole model. At depth 5 a recursive type is forced to its leaf.
+- Every type is tied through one `fc.letrec`, so a self reference resolves, and so does a mutual cycle such as `A` holding a `B` that holds an `A`. A type that can reach itself draws from `fc.oneof` with `maxDepth: 5`. Its first branches are leaves, with recursive optional fields absent, recursive required pointer fields `null` and recursive collections empty. Every emitted collection and every such `oneof` share one `depthIdentifier`, so depth counts across the whole model. At depth 5 a recursive type is forced to its leaf.
 - An optional field is absent, never set to `undefined`. `fc.record`'s `requiredKeys` lists the required fields. The two are the same to JSON, and absence is the only one assignable to the emitted `key?: T` under `exactOptionalPropertyTypes`.
 - A map key is any string, `"__proto__"` included, which the decoders keep as an own property. An integer key, one that is not an `encoding.TextMarshaler`, is the decimal text of an integer within its kind, clipped to JavaScript's safe integers, as encoding/json writes it.
-- A pointer element of a slice or map is drawn as `null` some of the time, as `encoding/json` writes a nil one.
+- A required pointer field and a pointer element of a slice or map are drawn as `null` some of the time, as `encoding/json` writes a nil one.
 - A type with a `Mappings` entry is an exception to the drawn values passing the generated checks, unless it maps to a primitive TypeScript type. A mapping is a TypeScript expression, so its shape is not in wiregen's model. The field gets an arbitrary JSON value and a cast, the same trust the emitted decoder's cast to `T` already gives. If your mapped decoder checks its input, write that type's arbitrary by hand.

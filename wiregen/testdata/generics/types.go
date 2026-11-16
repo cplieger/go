@@ -128,3 +128,11 @@ type Pair_int_int string
 
 // PairIntIntX is Pair_int_int's one value.
 const PairIntIntX Pair_int_int = "x"
+
+// Slot holds a T encoding/json always writes, as null when nil, beside
+// one omitempty drops, under a kind its const tag pins.
+type Slot[T any] struct {
+	Val  *T     `json:"val"`
+	Opt  *T     `json:"opt,omitempty"`
+	Kind string `json:"kind" wiregen:"const=slot"`
+}

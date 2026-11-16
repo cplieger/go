@@ -178,9 +178,7 @@ func (o *oracleRun) checkDecode(tb testing.TB, t reflect.Type, at schemaAt, body
 // schema at, allowing only the readings of null docs/type-mapping.md "Null
 // and presence" documents, each where the schema says it happens: [] for an
 // array, {} for a map, "" for base64 text, and an absent key where the
-// property is not required or only a pointer can write its null. A pointer
-// to a collection with no omit option has its collection's schema, so the
-// fixtures hold none: the oracle would require its null to read as empty.
+// property is not required. A required key's null stays present.
 func decodedDiff(path string, at schemaAt, want, got any) string {
 	switch w := want.(type) {
 	case map[string]any:
@@ -192,7 +190,7 @@ func decodedDiff(path string, at schemaAt, want, got any) string {
 			sub, optional := at.property(k)
 			gv, present := g[k]
 			if !present {
-				if wv == nil && (optional || sub.pointerNull()) {
+				if wv == nil && optional {
 					continue
 				}
 				return path + "." + k + ": lost"
@@ -324,12 +322,6 @@ func (a schemaAt) readsNull(got any) bool {
 		return g == "" && a.has(isBase64)
 	}
 	return false
-}
-
-// pointerNull reports whether only a nil pointer writes null here: the
-// schema admits null and has no empty reading of it.
-func (a schemaAt) pointerNull() bool {
-	return a.hasType("null") && !a.hasType("array") && !a.has(isMap) && !a.has(isBase64)
 }
 
 func (a schemaAt) has(is func(map[string]any) bool) bool { return slices.ContainsFunc(a.schemas, is) }

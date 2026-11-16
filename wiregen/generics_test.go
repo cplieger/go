@@ -175,6 +175,32 @@ func TestGenerics_EmbedUnchangedBesideTheInstance(t *testing.T) {
 	}
 }
 
+// An instantiation's fields follow the field rules: a pointer to a type
+// parameter with no omit option is required and nullable, omitempty keeps it
+// optional, and a const tag pins its literal.
+func TestGenerics_InstanceFieldsFollowTheFieldRules(t *testing.T) {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{wiregen.TypeRef[generics.Peer](), wiregen.TypeRef[generics.Slot[generics.Peer]]()}
+	body := ifaceBody(mustGen(t, r.typesFile), "Slot_Peer")
+	for _, want := range []string{"val: Peer | null;", "opt?: Peer;", `kind: "slot";`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Slot_Peer missing %q, got:\n%s", want, body)
+		}
+	}
+	sent := mustJSON(t, generics.Slot[generics.Peer]{Kind: "slot"})
+	got := decodeResults(t, r, "decodeSlot_Peer", []string{sent, `{"kind":"slot"}`, `{"val":null,"kind":"other"}`})
+	want := []string{
+		`{"val":null,"kind":"slot"}`,
+		`$.slot_peer.val: expected a JSON value, got undefined`,
+		`$.slot_peer.kind: expected one of slot, got "other"`,
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("body %d decoded to %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
 // A registered enum is a type argument as a registered struct is.
 func TestGenerics_EnumArgument(t *testing.T) {
 	r := newTestRegistry()

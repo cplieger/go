@@ -83,12 +83,12 @@ func TestDecoders_OptionalEnumUsesReqOneOf(t *testing.T) {
 
 // TestDecoders_OptionalByteSliceIsGuardedString pins the optional []byte branch
 // of emitOptionalField: a *[]byte field keeps the []byte-as-string mapping
-// into the optional path, decoding via reqStr under the presence guard and
-// never decodeArray.
+// into the optional path, decoding via reqStr under the presence guard, which
+// already read null as absent, and never decodeArray.
 func TestDecoders_OptionalByteSliceIsGuardedString(t *testing.T) {
 	r := edgesReg(wiregen.TypeRef[edges.OptionalByteSlice]())
 	dec := mustGen(t, r.decodersFile)
-	if !strings.Contains(dec, `if ($v !== undefined && $v !== null) out.data = own(o, "data") === null ? "" : reqStr(o, "data",`) {
+	if !strings.Contains(dec, `if ($v !== undefined && $v !== null) out.data = reqStr(o, "data",`) {
 		t.Errorf("optional *[]byte should decode as a string, got:\n%s", dec)
 	}
 	if strings.Contains(dec, `decodeArray(own(o, "data")`) {

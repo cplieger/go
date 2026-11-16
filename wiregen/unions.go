@@ -31,7 +31,8 @@ type Union struct {
 	// Payload, when set, names a json.RawMessage field of Type, listed in no
 	// case, that each case with a payload type decodes as that type, keeping
 	// its omit options, and the other cases refuse. Its bytes can be null, so
-	// it is optional and nullable unless Required lists it for the case.
+	// it is a pointer field: optional with an omit option, null read as
+	// absent; required and nullable with none; not null if Required lists it.
 	Payload string
 }
 
@@ -239,11 +240,11 @@ func (*astEngine) endsWith(ti *typeInfo, ended map[string]bool) bool {
 	return false
 }
 
-// tiesEnded reports whether every required struct field of fields names a
-// type in ended.
+// tiesEnded reports whether every required struct field of fields that
+// cannot be null names a type in ended.
 func tiesEnded(fields []*fieldInfo, ended map[string]bool) bool {
 	for _, f := range fields {
-		if f.Kind == kindStruct && !f.optional() && !ended[f.GoTypeName] {
+		if f.Kind == kindStruct && !f.optional() && !f.nullable() && !ended[f.GoTypeName] {
 			return false
 		}
 	}
@@ -351,8 +352,11 @@ func (e *astEngine) caseValues(u *Union, ti *typeInfo) ([]string, error) {
 	if tag == nil {
 		return nil, fmt.Errorf("has no field %q to tag it", u.Tag)
 	}
-	if tag.optional() || (tag.Kind != kindString && tag.Kind != kindEnum) {
-		return nil, fmt.Errorf("tag %q must be a required string or enum field", u.Tag)
+	if tag.optional() || tag.nullable() || (tag.Kind != kindString && tag.Kind != kindEnum) {
+		return nil, fmt.Errorf("tag %q must be a required string or enum field that is never null", u.Tag)
+	}
+	if tag.Const != "" {
+		return nil, fmt.Errorf("tag %q is pinned by a wiregen const, but a union's tag varies by case", u.Tag)
 	}
 	if len(u.Cases) == 0 {
 		return nil, errors.New("declares no case")

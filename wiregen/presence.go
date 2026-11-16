@@ -4,13 +4,13 @@ package wiregen
 // reads for a field, or from a union case's Required, which overrides both;
 // the TS types, decoders, arbitraries and OpenAPI schemas all read them.
 
-// optional reports whether the key may be absent: encoding/json can omit it,
-// or a request may leave a pointer nil. The TS member is `key?:`, and the
-// decoder reads an absent key or null as absent.
-func (f *fieldInfo) optional() bool { return !f.CaseRequired && (f.Ptrs > 0 || f.absentOut()) }
+// optional reports whether encoding/json can leave the key out. The TS
+// member is `key?:`, and the decoder reads an absent key or null as absent.
+func (f *fieldInfo) optional() bool { return !f.CaseRequired && (f.Omittable || f.ViaEmbedPtr) }
 
-// absentOut reports whether encoding/json can leave the key out.
-func (f *fieldInfo) absentOut() bool { return !f.CaseRequired && (f.Omittable || f.ViaEmbedPtr) }
+// optionalIn reports whether a request may leave the key out: encoding/json
+// also leaves an absent pointer nil.
+func (f *fieldInfo) optionalIn() bool { return !f.CaseRequired && (f.Ptrs > 0 || f.optional()) }
 
 // nullOut reports whether encoding/json can write null for the key: a nil
 // pointer or collection no omit option drops, anything nil under a non-nil
@@ -43,13 +43,14 @@ func (f *fieldInfo) nilValue() bool {
 	return f.Kind == kindSlice || f.Kind == kindMap || f.Kind == kindBytes
 }
 
-// nullElem reports whether a collection element decodes null as null: it has
-// a pointer level. A nil collection element instead reads as empty.
-func (f *fieldInfo) nullElem() bool { return f.Ptrs > 0 && f.Kind != kindRaw }
+// nullable reports whether f has a pointer level that can hold null. A
+// required one keeps null and an optional one reads it as absent; a nil
+// collection with no pointer is not nullable and reads as empty.
+func (f *fieldInfo) nullable() bool { return f.Ptrs > 0 && f.Kind != kindRaw && !f.CaseRequired }
 
-// elemTS is f's TS type as a collection element.
-func (f *fieldInfo) elemTS() string {
-	if f.nullElem() {
+// memberTS is f's TS type as a required member or a collection element.
+func (f *fieldInfo) memberTS() string {
+	if f.nullable() && !f.optional() {
 		return f.TSType + " | null"
 	}
 	return f.TSType

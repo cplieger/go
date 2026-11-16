@@ -790,7 +790,7 @@ func scalarFields(e *Endpoint, role string, wt Type, engine *astEngine) ([]argFi
 		if !isValidTSIdent(f.WireName) {
 			return nil, fmt.Errorf("wiregen: endpoint %s %s field %s.%s has wire name %q, which is not a valid TS identifier", e.Name, role, label, f.GoName, f.WireName)
 		}
-		fields = append(fields, argField{name: f.WireName, tsType: ts, doc: f.Doc, optional: f.optional()})
+		fields = append(fields, argField{name: f.WireName, tsType: ts, doc: f.Doc, optional: f.optionalIn()})
 	}
 	return fields, nil
 }

@@ -2,8 +2,6 @@ github.com/cplieger/go/filesafe v1.1.0 h1:zCInOHIkszZQKNxIQvPgaFg592E5J27+/2hfbP
 github.com/cplieger/go/filesafe v1.1.0/go.mod h1:ji4TnJD8S8kgKelJlCQxlHyX0UXQGTW1ylSBqH5xqhI=
 github.com/cplieger/go/measure/v2 v2.0.0-dev.3 h1:Ljcmau7CtlZ171k14XLWX+ZEYQf9yX+I5xa2GT9VUOc=
 github.com/cplieger/go/measure/v2 v2.0.0-dev.3/go.mod h1:gG4hr0jum0sVWiAppZwHPdvHNIVPBbryOCxzCoPSo84=
-github.com/cplieger/go/wiregen/v2 v2.3.0-dev.7 h1:wvSEcw4jdMCFuUaG+r1JLtitZT/N5Xj41Na1iNL3+9g=
-github.com/cplieger/go/wiregen/v2 v2.3.0-dev.7/go.mod h1:nQ6ftWl/tPZj9tZf3kErrZgPFNBsP2vJrs6O6E8ta2I=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=
