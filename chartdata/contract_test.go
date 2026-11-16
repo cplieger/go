@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -384,15 +388,11 @@ func TestEventsSendTheFieldsTheirKindsUnionAllows(t *testing.T) {
 
 // TestEveryFrameSendsTheTypeItsTagPins checks the Go side of each frame's
 // literal type: every frame struct's Type field carries a wiregen const tag,
-// no two frames pin the same type, every FrameType is pinned, and each
-// frame's constructor sends exactly the pinned value.
+// no two frames pin the same type, every FrameType constant is pinned, and
+// each frame's constructor sends exactly the pinned value.
 func TestEveryFrameSendsTheTypeItsTagPins(t *testing.T) {
 	t.Parallel()
-	all := []chartdata.FrameType{
-		chartdata.TypeSeries, chartdata.TypeBins, chartdata.TypeCategories, chartdata.TypeBoxes,
-		chartdata.TypePoints, chartdata.TypeGrid, chartdata.TypeCalendar, chartdata.TypeTree,
-		chartdata.TypeFlow, chartdata.TypeEvents, chartdata.TypeStates, chartdata.TypeValue,
-	}
+	all := frameTypeConstants(t)
 	pinned := map[reflect.Type]string{}
 	owner := map[string]reflect.Type{}
 	for _, typ := range chartdata.WireTypes() {
@@ -411,7 +411,7 @@ func TestEveryFrameSendsTheTypeItsTagPins(t *testing.T) {
 		pinned[typ], owner[lit] = lit, typ
 	}
 	for _, ft := range all {
-		if owner[string(ft)] == nil {
+		if owner[ft] == nil {
 			t.Errorf("no frame pins type %q", ft)
 		}
 	}
@@ -436,4 +436,52 @@ func TestEveryFrameSendsTheTypeItsTagPins(t *testing.T) {
 			t.Errorf("no fixture builds a %s", typ.Name())
 		}
 	}
+}
+
+// frameTypeConstants is every FrameType value the package declares, read
+// from its source because reflect cannot list a type's constants.
+func frameTypeConstants(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values []string
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs := spec.(*ast.ValueSpec)
+				if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "FrameType" {
+					continue
+				}
+				for i, v := range vs.Values {
+					lit, ok := v.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						t.Fatalf("%s: FrameType %s is not a string literal", fset.Position(v.Pos()), vs.Names[i].Name)
+					}
+					s, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					values = append(values, s)
+				}
+			}
+		}
+	}
+	if len(values) == 0 {
+		t.Fatal("found no FrameType constants")
+	}
+	return values
 }
