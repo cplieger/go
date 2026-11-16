@@ -110,7 +110,7 @@ func TestKeyedRateLimiterForgetsRefilledBucket(t *testing.T) {
 	l, clock := newKeyed(t, httpserver.KeyedRate{Burst: 4, Interval: time.Second})
 	drain(t, l, "a", 4)
 	clock.advance(3 * time.Second)
-	drain(t, l, "b", 1)
+	drain(t, l, "b", 4)
 	if n := httpserver.KeyedRateBuckets(l); n != 2 {
 		t.Fatalf("buckets = %d, want 2 while a is still refilling", n)
 	}

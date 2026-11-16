@@ -97,6 +97,7 @@ var codeSpecs = map[ErrorCode]CodeSpec{
 	"timeout":                {Status: http.StatusServiceUnavailable, Remediation: "Retry the request; it may have run."},
 	"not_found":              {Status: http.StatusNotFound, Remediation: "Check the path; nothing is served at it."},
 	"ui_unbuilt":             {Status: http.StatusServiceUnavailable, Remediation: "Build the web UI with go generate ./..., then restart the server."},
+	"cross_origin_refused":   {Status: http.StatusForbidden, Remediation: "Send the request from a page served by this server's own origin.", NoEffect: true},
 }
 
 // CodeSpecs returns every code a writer in this package answers, with its
