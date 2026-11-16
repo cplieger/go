@@ -15,7 +15,7 @@ Declare each series once, at startup, in the package that records it, and regist
 | Source | An instrument is recorded by your code. A collector's `Desc` is read by the collector's function at each scrape and each `GatherOf`. |
 | Export | `WithExport`, which defaults to `ExportMetric`. |
 | Unbounded labels | `WithUnbounded`, for a series only charts read. |
-| Seeds | `WithSeed`, for a labeled instrument. |
+| Seeds | `WithSeed`, for a labeled instrument. A labeled histogram also takes `Seed` at run time. |
 
 `Declaration()` returns all of it as a `Declaration` value, whose slices are copies. Its `Name` is the registered name, prefix included, once the declaration is registered.
 
@@ -81,7 +81,8 @@ failures := measure.NewLabeledCounter("sync_failures_total", "Sync failures by s
 ```
 
 - Seed values from the configuration or from an enum, when the instrument is built.
-- A value that appears while the program runs, such as a source the operator adds, is recorded by the code that adds it, with `Add(0, ...)` or `Set`, or with its first real value. The code that removes it calls `Delete`.
+- A value that appears while the program runs, such as a source the operator adds, is recorded by the code that adds it, or with its first real value. A counter takes `Add(0, ...)`, a gauge or a state set `Set`, and a labeled histogram `Seed(...)`, which serves every bucket, `_sum` and `_count` at 0. `Seed` on a label set that already has a series changes nothing. The code that removes the value calls `Delete`.
+- A seeded label set is a series like any other: it counts toward the 1,000-series warning. A histogram with a construction error, such as more than 8 labels, seeds nothing, and registration refuses it.
 - Leave the HTTP request counter unseeded: its route and status pairs are not known in advance. A rule that must see a single request also counts the series new in its window.
 - A state set's seeds leave out the state label and start every state at 0.
 - A collector's families are never seeded. They serve what the function reads at each scrape, so a series absent by design stays absent for `absent()` and `unless`.

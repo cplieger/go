@@ -185,8 +185,7 @@ func NewLabeledHistogram(name, help string, unit Unit, labels []string, opts ...
 		checkDeclaration(name, KindHistogram, unit, owned, &o))
 	if lh.err == nil {
 		for _, set := range o.seeds {
-			key := labelKeyFor(lh.labels, set)
-			lh.loadOrStore(lh.vals, &key, lh.newSeries)
+			lh.Seed(set...)
 		}
 	}
 	return lh
@@ -217,6 +216,21 @@ func (lh *LabeledHistogram) Observe(v float64, labelVals ...string) {
 	key := labelKeyFor(lh.labels, labelVals)
 	h, _ := lh.loadOrStore(lh.vals, &key, lh.newSeries)
 	h.Observe(v)
+}
+
+// Seed creates the series for the given label values with no observations,
+// so every bucket, _sum and _count serve 0 before the first Observe; [WithSeed]
+// covers the sets known at construction. An existing label set is unchanged.
+// A seeded set counts toward the series warning and Delete removes it. It
+// panics on a label-arity mismatch; a histogram carrying a construction error
+// records nothing (one warning on the first drop).
+func (lh *LabeledHistogram) Seed(labelVals ...string) {
+	if lh.err != nil {
+		warnInertOnce(lh.err, &lh.warned, &lh.name)
+		return
+	}
+	key := labelKeyFor(lh.labels, labelVals)
+	lh.loadOrStore(lh.vals, &key, lh.newSeries)
 }
 
 // Reset removes all label combinations from the histogram.

@@ -58,6 +58,30 @@ func ExampleWithSeed() {
 	// sync_failures_total{source="sonarr"} 0
 }
 
+// A label set added while the program runs, such as a profile created in the
+// UI, is seeded by the code that adds it, so its histogram shows before the
+// first observation.
+func ExampleLabeledHistogram_Seed() {
+	wait := measure.NewLabeledHistogram("render_seconds", "Render time by profile.", measure.UnitSeconds,
+		[]string{"profile"}, measure.WithBuckets([]float64{0.1, 1}))
+
+	r := measure.NewRegistry("")
+	r.MustRegister(wait)
+	wait.Seed("films") // a profile the operator created
+	rec := httptest.NewRecorder()
+	r.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	page, _, _ := strings.Cut(rec.Body.String(), "# HELP go_") // the runtime and process families follow
+	fmt.Print(page)
+	// Output:
+	// # HELP render_seconds Render time by profile.
+	// # TYPE render_seconds histogram
+	// render_seconds_bucket{profile="films",le="0.1"} 0
+	// render_seconds_bucket{profile="films",le="1"} 0
+	// render_seconds_bucket{profile="films",le="+Inf"} 0
+	// render_seconds_sum{profile="films"} 0
+	// render_seconds_count{profile="films"} 0
+}
+
 // A state set's Set makes one state current, so a scrape never sees two
 // states at 1 or none. The page shows a gauge per state.
 func ExampleStateSet() {

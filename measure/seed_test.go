@@ -2,6 +2,7 @@ package measure
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -106,5 +107,104 @@ func TestDeleteOfTheEmptyLabelSetTakesTheGaugeOffThePage(t *testing.T) {
 	resident.Set(2048)
 	if page := body(t, r); !strings.Contains(page, "app_engine_resident_memory_bytes 2048\n") {
 		t.Errorf("Set after Delete() did not bring the gauge back:\n%s", page)
+	}
+}
+
+func TestLabeledHistogramSeedPutsARunTimeLabelSetOnThePageAt0(t *testing.T) {
+	r := NewRegistry("app")
+	wait := NewLabeledHistogram("profile_wait_seconds", "h", UnitSeconds, []string{"profile"}, WithBuckets([]float64{0.5, 2}))
+	r.MustRegister(wait)
+	if page := body(t, r); strings.Contains(page, "app_profile_wait_seconds_") {
+		t.Fatalf("an unseeded histogram has series before its first record:\n%s", page)
+	}
+	wait.Seed("created-in-ui")
+	page := body(t, r)
+	for _, line := range []string{
+		`app_profile_wait_seconds_bucket{profile="created-in-ui",le="0.5"} 0`,
+		`app_profile_wait_seconds_bucket{profile="created-in-ui",le="2"} 0`,
+		`app_profile_wait_seconds_bucket{profile="created-in-ui",le="+Inf"} 0`,
+		`app_profile_wait_seconds_sum{profile="created-in-ui"} 0`,
+		`app_profile_wait_seconds_count{profile="created-in-ui"} 0`,
+	} {
+		if !strings.Contains(page, line+"\n") {
+			t.Errorf("page has no seeded line %q:\n%s", line, page)
+		}
+	}
+}
+
+func TestLabeledHistogramSeedOfAnExistingLabelSetChangesNothing(t *testing.T) {
+	r := NewRegistry("")
+	wait := NewLabeledHistogram("wait_seconds", "h", UnitSeconds, []string{"queue"},
+		WithBuckets([]float64{1}), WithSeed([]string{"ingest"}))
+	r.MustRegister(wait)
+	wait.Observe(0.25, "ingest")
+	before := linesOf(body(t, r), "wait_seconds")
+	wait.Seed("ingest")
+	wait.Seed("ingest")
+	if after := linesOf(body(t, r), "wait_seconds"); after != before {
+		t.Errorf("Seed of an observed label set changed the page:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if !strings.Contains(before, `wait_seconds_count{queue="ingest"} 1`+"\n") {
+		t.Errorf("the observation is not on the page:\n%s", before)
+	}
+}
+
+// linesOf returns page's lines that start with metric, so a comparison of two
+// scrapes skips the process series that move between them.
+func linesOf(page, metric string) string {
+	var b strings.Builder
+	for line := range strings.Lines(page) {
+		if strings.HasPrefix(line, metric) {
+			b.WriteString(line)
+		}
+	}
+	return b.String()
+}
+
+func TestLabeledHistogramDeleteRemovesASeededLabelSet(t *testing.T) {
+	r := NewRegistry("")
+	wait := NewLabeledHistogram("wait_seconds", "h", UnitSeconds, []string{"queue"}, WithBuckets([]float64{1}))
+	r.MustRegister(wait)
+	wait.Seed("ingest")
+	wait.Seed("export")
+	wait.Delete("ingest")
+	page := body(t, r)
+	if strings.Contains(page, `queue="ingest"`) {
+		t.Errorf("Delete left the seeded label set on the page:\n%s", page)
+	}
+	if !strings.Contains(page, `wait_seconds_count{queue="export"} 0`+"\n") {
+		t.Errorf("Delete of one label set removed another:\n%s", page)
+	}
+}
+
+func TestLabeledHistogramSeedPanicsOnALabelArityMismatch(t *testing.T) {
+	wait := NewLabeledHistogram("wait_seconds", "h", UnitSeconds, []string{"queue", "tier"})
+	mustPanicContaining(t, "label arity mismatch", func() { wait.Seed("ingest") })
+}
+
+func TestLabeledHistogramSeedOnAHistogramOverTheLabelCapRecordsNothing(t *testing.T) {
+	_ = captureDebugLogs(t) // absorbs the one-time inert-record warning
+	names := labelNames(maxLabels + 1)
+	wait := NewLabeledHistogram("wait_seconds", "h", UnitSeconds, names)
+	wait.Seed(names...)
+	if got := len(wait.vals); got != 0 {
+		t.Errorf("a histogram over the label cap holds %d series after Seed, want 0", got)
+	}
+	mustRegisterError(t, NewRegistry(""), wait, "supports at most 8 labels")
+}
+
+// Serial: it captures slog.Default().
+func TestLabeledHistogramSeedCountsTowardTheSeriesWarning(t *testing.T) {
+	buf := captureDebugLogs(t)
+	wait := NewLabeledHistogram("profile_wait_seconds", "h", UnitSeconds, []string{"profile"})
+	for i := range cardinalityWarnThreshold - 1 {
+		wait.Observe(1, strconv.Itoa(i))
+	}
+	if strings.Contains(buf.String(), "possible label-cardinality explosion") {
+		t.Fatalf("the series warning fired below the threshold:\n%s", buf.String())
+	}
+	wait.Seed("one-more")
+	if got := strings.Count(buf.String(), "possible label-cardinality explosion"); got != 1 {
+		t.Errorf("series warnings after Seed reached the threshold = %d, want 1\nlogs: %s", got, buf.String())
 	}
 }

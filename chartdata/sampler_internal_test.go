@@ -14,38 +14,20 @@ import (
 	"github.com/cplieger/go/measure/v2"
 )
 
-// The cases follow Prometheus's histogram_quantile (promql/quantile.go):
-// linear interpolation inside the bucket the rank falls in, the lowest
-// bucket from 0 when its bound is above 0, the highest finite bound for a
-// rank in the +Inf bucket, NaN for no observations or fewer than two buckets.
-func TestQuantileIsHistogramQuantile(t *testing.T) {
+// Past 2^53 a cumulative count rounds in float64, so own counts differenced
+// from it can fall where measure's never did; ownCounts differences in uint64.
+func TestBucketIncreaseOfOwnCountsTakesNoFalseResetPastFloat64Integers(t *testing.T) {
 	t.Parallel()
-	bounds := []float64{1, 2, 4}
-	for _, tc := range []struct {
-		name   string
-		bounds []float64
-		cum    []float64
-		q      float64
-		want   float64
-	}{
-		{"median", bounds, []float64{1, 3, 4, 4}, 0.5, 1.5},
-		{"top", bounds, []float64{1, 3, 4, 4}, 1, 4},
-		{"p99", bounds, []float64{1, 3, 4, 4}, 0.99, 3.92},
-		{"lowestFromZero", bounds, []float64{4, 4, 4, 4}, 0.25, 0.25},
-		{"inTheInfBucket", bounds, []float64{1, 1, 1, 4}, 0.9, 4},
-		{"lowestBoundAtZero", []float64{0, 1}, []float64{2, 4, 4}, 0.25, 0},
-		{"lowestBoundBelowZero", []float64{-1, 1}, []float64{2, 4, 4}, 0.25, -1},
-		{"unsortedCountsMadeMonotonic", bounds, []float64{2, 1, 4, 4}, 0.5, 1},
-		{"noObservations", bounds, []float64{0, 0, 0, 0}, 0.5, math.NaN()},
-		{"onlyTheInfBucket", nil, []float64{5}, 0.5, math.NaN()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := quantile(tc.q, tc.bounds, tc.cum)
-			if math.IsNaN(got) != math.IsNaN(tc.want) || math.Abs(got-tc.want) > 1e-12 {
-				t.Errorf("quantile(%v, %v, %v) = %v, want %v", tc.q, tc.bounds, tc.cum, got, tc.want)
-			}
-		})
+	const big = 1 << 53
+	reading := func(bucket, count uint64) *measure.HistogramValue {
+		return &measure.HistogramValue{Buckets: []measure.Bucket{{UpperBound: 1, Count: bucket}}, Count: count}
+	}
+	prev, cur := ownCounts(reading(big+2, big+3)), ownCounts(reading(big+4, big+5))
+	if want := []float64{big + 2, 1}; !slices.Equal(prev, want) {
+		t.Errorf("ownCounts(%d, %d) = %v, want %v", uint64(big+2), uint64(big+3), prev, want)
+	}
+	if got, want := bucketIncrease(cur, prev), []float64{2, 0}; !slices.Equal(got, want) {
+		t.Errorf("bucketIncrease(%v, %v) = %v, want %v", cur, prev, got, want)
 	}
 }
 

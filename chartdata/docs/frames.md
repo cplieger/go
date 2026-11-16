@@ -1,6 +1,6 @@
 # Frames
 
-This page is for a Go developer serving chart data from a service. It covers the twelve frame types, their constructors and options, the wire format, every refusal and the limits table. [Sampling](sampling.md) covers frames read from a `Sampler`, and [Events](events.md) covers changing a frame already drawn.
+This page is for a Go developer serving chart data from a service. It covers the twelve frame types, their constructors and options, the wire format, every refusal, the limits table, the duration ladder and the quantile of a stored histogram. [Sampling](sampling.md) covers frames read from a `Sampler`, and [Events](events.md) covers changing a frame already drawn.
 
 ## What a frame is
 
@@ -107,3 +107,28 @@ edges := chartdata.DurationEdges()
 wait := measure.NewHistogram("job_wait_seconds", "Time a job waits to start", measure.UnitSeconds,
 	measure.WithBuckets(edges[1:12])) // 1 s to 1 h; measure's buckets are the upper bounds
 ```
+
+## Quantiles of a stored histogram
+
+`Quantile(edges, counts, q)` estimates the q-quantile of a histogram your store holds, such as the bucket counts of each day's rollup. It gives the same estimate an `AsQuantile` track takes, so a built frame and a sampled one agree to the number. Both obey ±`MaxMagnitude`: an estimate beyond it is a gap on the track, and a frame constructor refuses it.
+
+`edges` are the finite bucket bounds, strictly increasing. `counts` hold each bucket's observations, not cumulative ones, with one more count than edges: the last counts the observations above every edge.
+
+```go
+edges := []float64{0.5, 1, 2, 5}
+counts := []float64{40, 30, 20, 8, 2} // the last, 2, above 5 s
+
+p95, ok := chartdata.Quantile(edges, counts, 0.95) // 3.875, true
+```
+
+The estimate follows Prometheus's [`histogram_quantile`](https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile): the rank falls in the first bucket whose running count reaches `q` times the total, and the value is linear inside it. The lowest bucket runs from 0 when its edge is above 0, and answers its edge otherwise. A rank above every edge answers the highest edge.
+
+`Quantile` answers 0 and `false` in these cases, where you write a gap (`NaN`):
+
+- No observations.
+- Fewer than two buckets, meaning no edges.
+- A negative or non-finite count.
+- A total past `float64`.
+- `q` of 0 over an empty lowest bucket whose edge is above 0, where the estimate is 0 divided by 0.
+
+It panics for `q` outside 0 to 1, an edge that is not finite or does not strictly increase, and a `counts` length other than one more than `edges`. Each is a bug in the caller.

@@ -94,6 +94,7 @@ The package examples on pkg.go.dev show more cases, and `go test` keeps them tru
 - Options: `WithRefs`, `WithNotes`, `WithDomain` with `Range`, `WithOpen` and `WithResets`.
 - Refusals: `RefusalError` and `Rule` with its constants.
 - Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints`, `MaxLabelSets` and `MaxBaselines`, and the duration ladder `DurationEdges`.
+- Quantiles: `Quantile`, the estimate an `AsQuantile` track takes, from a histogram's edges and per-bucket counts.
 - Sampling: `NewSampler` with `Sampling`, `(*Sampler).Run`, `Series` and `Bins`, and `Sampled` with its options `Where`, `By`, `Key`, `AsQuantile` and `AsBins`.
 - Events: `FrameEvent` and `FrameEventKind` with its constants, `AppendColumn`, `AppendBin`, `ReplaceColumn`, `ReplaceBin`, `ResetAt` and `SetFrame`.
 - Code generation: `WireTypes`, every wire type, `WireEnums`, every string enum on the wire, and `WireUnions` with `WireUnion`, the tagged wire structs, for an app's own wiregen run.
@@ -112,7 +113,7 @@ chartdata leaves these out on purpose. The [non-goals](docs/non-goals.md) page g
 
 ## Documentation
 
-- [Frames](docs/frames.md) covers the twelve frame types, their constructors and options, the wire format, every refusal, the limits table and the duration ladder.
+- [Frames](docs/frames.md) covers the twelve frame types, their constructors and options, the wire format, every refusal, the limits table, the duration ladder and `Quantile`.
 - [Sampling](docs/sampling.md) covers the `Sampler`: what it reads from each kind of series, its bounds, its reads and the events it sends.
 - [Events](docs/events.md) covers the four event kinds and how a page applies them.
 - [The generated contract](docs/contract.md) covers the TypeScript types, the golden fixtures and their paths, the drift check and generating an app's own decoders.

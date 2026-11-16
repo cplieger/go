@@ -12,7 +12,7 @@ measure is built for Go services whose set of metrics is fixed when the program 
 
 - Every declaration states its unit, kind and labels, and whether `/metrics`, your charts or both serve it. Registration refuses a declaration that contradicts itself, such as `_total` on a gauge or a `_seconds` name in bytes.
 - Counters, gauges and histograms each have a labeled variant, plus a timer and a `RecordHTTP` hook for middleware. A state set moves its one current state atomically, and an info series holds one label set at 1.
-- Seeds put the label sets known at start on the page at 0, so an `increase()` rule sees the first failure.
+- Seeds put the label sets known at start on the page at 0, so an `increase()` rule sees the first failure, and a labeled histogram seeds a label set added at run time.
 - A bad declaration never panics at construction. `Register` returns the error, and `MustRegister` panics at startup naming the metric.
 - The handler writes valid Prometheus text format 0.0.4, with invalid UTF-8 replaced by U+FFFD.
 - Every registry adds the Go and process metrics that client_golang's default collectors serve, under the same names, so stock Go dashboards work. On Linux and macOS, the process ones the OS gives a program without cgo appear when their reads succeed.
@@ -135,7 +135,7 @@ var turns = measure.NewLabeledCounter("turns_total", "Turns taken, by agent", me
 
 The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) has a runnable example of each pattern except serving `Handler` alone and taking a series with no labels off the page, which tests check, so `go test` keeps them true.
 
-- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Pass the label sets known at startup, from your configuration or an enum, with `WithSeed`, and record a value added later with `Add(0, labels...)` where your code adds it. The HTTP request counter is the exception. Its status codes are not known at startup, so it stays unseeded. `increase()` misses the request that creates each of its series, so a rule that must see a single request adds the series that appeared within the window, as in `increase(c[15m]) > 0 or (c unless c offset 15m) > 0`. A rule on sustained volume can ignore the miss.
+- Seed a labeled counter at 0. A labeled counter has no series until its first record, so an alert on `increase()` cannot tell no failures from no series. Pass the label sets known at startup, from your configuration or an enum, with `WithSeed`, and record a value added later with `Add(0, labels...)` where your code adds it. A labeled histogram's label set added later, such as a profile created in the UI, takes `Seed(labels...)`, which serves every bucket, `_sum` and `_count` at 0 until its first observation. The HTTP request counter is the exception. Its status codes are not known at startup, so it stays unseeded. `increase()` misses the request that creates each of its series, so a rule that must see a single request adds the series that appeared within the window, as in `increase(c[15m]) > 0 or (c unless c offset 15m) > 0`. A rule on sustained volume can ignore the miss.
 - Remove a series with `Delete`. Never `Reset` and then set the survivors again: a scrape between the two sees an empty family, and every alert on it resolves.
 - Serve `Handler` alone. Its page already includes the Go and process metrics.
 - Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.
@@ -146,6 +146,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) ha
 ## API
 
 - Metrics: `NewCounter`, `NewGauge`, `NewHistogram`, their labeled variants `NewLabeledCounter`, `NewLabeledGauge` and `NewLabeledHistogram`, `NewStateSet` and `NewInfo`.
+- Run-time seeding: `(*LabeledHistogram).Seed`, and a labeled counter seeds with `Add(0, labels...)`.
 - Declarations: `Unit`, `Kind`, `Export` and `Source` with their constants, the `Option` functions `WithExport`, `WithUnbounded`, `WithSeed` and `WithBuckets`, and `Declaration`, which every instrument and `Desc` returns through the sealed `Declared` interface.
 - Buckets: `DefaultBuckets` and `APIBuckets`.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.

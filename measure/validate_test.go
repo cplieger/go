@@ -113,6 +113,7 @@ func TestErroredMetric_RecordPathsAreInert(t *testing.T) {
 
 	lh := NewLabeledHistogram("inert_seconds", "x", UnitSeconds, []string{"le"})
 	lh.Observe(0.5, "too", "many")
+	lh.Seed("too", "many")
 	tm := lh.NewTimer("wrong", "arity") // eager arity check is skipped when errored
 	tm.ObserveDuration()                // observes into the inert histogram: no-op
 	lh.Delete("v")
@@ -167,6 +168,11 @@ func TestErroredMetric_FirstDropWarnsOnce(t *testing.T) {
 			h := NewHistogram("inert_hist", "x", UnitNone, WithBuckets([]float64{2, 1}))
 			h.Observe(0.5)
 			h.Observe(0.7)
+		}},
+		{"LabeledHistogram Seed then Observe", "inert_seconds", func() {
+			lh := NewLabeledHistogram("inert_seconds", "x", UnitSeconds, []string{"le"})
+			lh.Seed("v")
+			lh.Observe(0.5, "v")
 		}},
 		{"LabeledHistogram via Timer", "inert_seconds", func() {
 			lh := NewLabeledHistogram("inert_seconds", "x", UnitSeconds, []string{"le"})

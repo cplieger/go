@@ -80,6 +80,18 @@ func ExampleSetFrame() {
 	// {"value":{"type":"value","name":"coverage_ratio","unit":"ratio","meters":[{"key":"en","value":0.92,"min":0,"max":1}]},"key":"coverage","kind":"set"}
 }
 
+// A built frame's p95 from the counts the app stores for each bucket, the
+// last above every edge, agrees with an AsQuantile track's.
+func ExampleQuantile() {
+	edges := []float64{0.5, 1, 2, 5}
+	counts := []float64{40, 30, 20, 8, 2}
+
+	p95, ok := chartdata.Quantile(edges, counts, 0.95)
+	fmt.Println(p95, ok)
+	// Output:
+	// 3.875 true
+}
+
 // A Sampler holds the last 6 hours of a latency's p95, one column a
 // minute, and sends each step's event to the page.
 func ExampleNewSampler() {
