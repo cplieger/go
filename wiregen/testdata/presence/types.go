@@ -70,3 +70,18 @@ type Mapped struct{ V string }
 
 // Named is a registered map type.
 type Named map[string]int
+
+// Nullable holds pointers encoding/json always writes, as null when nil,
+// beside one omitempty drops.
+type Nullable struct {
+	Num   *float64  `json:"num"`
+	Opt   *float64  `json:"opt,omitempty"`
+	Inner *Inner    `json:"inner"`
+	Items *[]string `json:"items"`
+}
+
+// Node reaches itself through a pointer encoding/json always writes.
+type Node struct {
+	Next *Node `json:"next"`
+	V    int   `json:"v"`
+}

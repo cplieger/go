@@ -2,6 +2,7 @@ package wiregen_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/wiregen/v2"
@@ -153,5 +154,73 @@ func TestPresence_ownPropertiesOnly(t *testing.T) {
 	}
 	if got := decodeResults(t, r, "decodeProtoReq", []string{`{"__proto__":"p"}`, `{}`}); got[0] != `{"__proto__":"p"}` || got[1] == `{}` {
 		t.Errorf("decodeProtoReq = %v, want the own __proto__ kept and an absent one refused", got)
+	}
+}
+
+func nullableReg() *testRegistry {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{
+		wiregen.TypeRef[presence.Nullable](), wiregen.TypeRef[presence.Inner](), wiregen.TypeRef[presence.Node](),
+	}
+	r.OpenAPI = wiregen.OpenAPIInfo{Title: "nullable", Version: "0"}
+	return r
+}
+
+// A pointer field with no omit option is always written, as null when nil,
+// so its key is required and its type admits null; omitempty keeps it
+// optional.
+func TestPresence_pointerWithoutOmitIsRequiredAndNullable(t *testing.T) {
+	out := mustGen(t, nullableReg().typesFile)
+	for _, want := range []string{
+		"  num: number | null;\n",
+		"  opt?: number;\n",
+		"  inner: Inner | null;\n",
+		"  items: string[] | null;\n",
+		"  next: Node | null;\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("types lack %q:\n%s", want, out)
+		}
+	}
+}
+
+// The decoder keeps a required pointer's null as null, refuses its key
+// absent, and reads an omitempty pointer's null as absent.
+func TestPresence_pointerWithoutOmitDecodesNullAndRefusesAbsence(t *testing.T) {
+	zero, err := json.Marshal(presence.Nullable{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeResults(t, nullableReg(), "decodeNullable", []string{
+		string(zero),
+		`{"num":1,"opt":null,"inner":{"a":1},"items":["x"]}`,
+		`{"inner":null,"items":null}`,
+		`{"num":null,"items":null}`,
+		`{"num":null,"inner":null}`,
+	})
+	want := []string{
+		`{"num":null,"inner":null,"items":null}`,
+		`{"num":1,"inner":{"a":1},"items":["x"]}`,
+		`$.nullable.num: expected number, got undefined`,
+		`$.nullable.inner: expected a JSON value, got undefined`,
+		`$.nullable.items: expected array, got undefined`,
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("body %d decoded to %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// A type reaching itself through a required nullable pointer draws null
+// there, and its depth-capped draw ends at null.
+func TestPresence_nullableSelfReferenceArbitraryEnds(t *testing.T) {
+	out := mustGen(t, nullableReg().arbitrariesFile)
+	node := letrecEntry(t, out, "Node")
+	if !strings.Contains(node, "next: fc.constant(null)") {
+		t.Errorf("the capped Node draw does not end at null:\n%s", node)
+	}
+	if !strings.Contains(node, `next: fc.option(tie("Node"), { nil: null })`) {
+		t.Errorf("the Node draw never sends next as null:\n%s", node)
 	}
 }

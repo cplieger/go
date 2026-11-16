@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,5 +379,61 @@ func TestEventsSendTheFieldsTheirKindsUnionAllows(t *testing.T) {
 	unions[0].Cases["set"] = nil
 	if chartdata.WireUnions()[0].Cases["set"] == nil {
 		t.Error("WireUnions shares its cases between calls")
+	}
+}
+
+// TestEveryFrameSendsTheTypeItsTagPins checks the Go side of each frame's
+// literal type: every frame struct's Type field carries a wiregen const tag,
+// no two frames pin the same type, every FrameType is pinned, and each
+// frame's constructor sends exactly the pinned value.
+func TestEveryFrameSendsTheTypeItsTagPins(t *testing.T) {
+	t.Parallel()
+	all := []chartdata.FrameType{
+		chartdata.TypeSeries, chartdata.TypeBins, chartdata.TypeCategories, chartdata.TypeBoxes,
+		chartdata.TypePoints, chartdata.TypeGrid, chartdata.TypeCalendar, chartdata.TypeTree,
+		chartdata.TypeFlow, chartdata.TypeEvents, chartdata.TypeStates, chartdata.TypeValue,
+	}
+	pinned := map[reflect.Type]string{}
+	owner := map[string]reflect.Type{}
+	for _, typ := range chartdata.WireTypes() {
+		if !strings.HasSuffix(typ.Name(), "Frame") {
+			continue
+		}
+		f, ok := typ.FieldByName("Type")
+		lit, tagged := strings.CutPrefix(f.Tag.Get("wiregen"), "const=")
+		if !ok || !tagged {
+			t.Errorf("%s.Type carries no wiregen const tag", typ.Name())
+			continue
+		}
+		if prev, dup := owner[lit]; dup {
+			t.Errorf("%s and %s both pin type %q", prev.Name(), typ.Name(), lit)
+		}
+		pinned[typ], owner[lit] = lit, typ
+	}
+	for _, ft := range all {
+		if owner[string(ft)] == nil {
+			t.Errorf("no frame pins type %q", ft)
+		}
+	}
+	built := map[reflect.Type]bool{}
+	for _, f := range frameFixtures(t) {
+		if f.err != nil {
+			t.Fatalf("%s: %v", f.name, f.err)
+		}
+		built[reflect.TypeOf(f.value)] = true
+		var sent struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(encode(t, f.value)), &sent); err != nil {
+			t.Fatalf("%s: %v", f.name, err)
+		}
+		if want := pinned[reflect.TypeOf(f.value)]; sent.Type != want {
+			t.Errorf("%s sends type %q, but %T pins %q", f.name, sent.Type, f.value, want)
+		}
+	}
+	for typ := range pinned {
+		if !built[typ] {
+			t.Errorf("no fixture builds a %s", typ.Name())
+		}
 	}
 }
