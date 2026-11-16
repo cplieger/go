@@ -9,13 +9,14 @@ import (
 
 	"github.com/cplieger/go/wiregen/v2"
 	"github.com/cplieger/go/wiregen/v2/testdata/generics"
+	dotted "github.com/cplieger/go/wiregen/v2/testdata/generics/dotted.v2"
 	"github.com/cplieger/go/wiregen/v2/testdata/generics/other"
 )
 
 const genericsPkg = "github.com/cplieger/go/wiregen/v2/testdata/generics"
 
 // genericsReg registers instantiations whose type arguments are a registered
-// struct, a builtin, two builtins and a struct, another instantiation and the
+// struct, a builtin, a builtin and a struct, another instantiation and the
 // instance itself, used again as a field and as an endpoint's answer.
 func genericsReg(opts ...wiregen.Option) *testRegistry {
 	r := newTestRegistry(append([]wiregen.Option{wiregen.WithTransportImport("./api-client.js")}, opts...)...)
@@ -357,6 +358,11 @@ func TestGenerics_Refusals(t *testing.T) {
 			[]wiregen.Type{{PkgPath: genericsPkg, Name: "Unregistered[int]"}},
 			[]string{inst("Unregistered") + " has 0 type parameters, not 1"},
 		},
+		{
+			"an argument its constraint refuses",
+			[]wiregen.Type{{PkgPath: genericsPkg, Name: "Num[string]"}},
+			[]string{"instantiate " + inst("Num[string]"), "string does not satisfy"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -370,6 +376,12 @@ func TestGenerics_Refusals(t *testing.T) {
 		r.Enums = []wiregen.EnumRef{wiregen.StringEnum[other.Status]()}
 		r.Types = []wiregen.Type{wiregen.TypeRef[generics.List[generics.Status]]()}
 		requireGenerateError(t, r, "type argument "+inst("Status"), inst("List["+genericsPkg+".Status]"))
+	})
+	t.Run("a derived name taken by an enum", func(t *testing.T) {
+		r := newTestRegistry()
+		r.Enums = []wiregen.EnumRef{wiregen.StringEnum[generics.Pair_int_int]()}
+		r.Types = []wiregen.Type{wiregen.TypeRef[generics.Pair[int, int]]()}
+		requireGenerateError(t, r, inst("Pair_int_int")+" and "+inst("Pair[int,int]")+" both take the name Pair_int_int")
 	})
 }
 
@@ -402,6 +414,57 @@ func TestGenerics_LateCollisionsNameTheGoType(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A union or URL-argument refusal names an instantiation by its Go spelling.
+func TestGenerics_RoleRefusalsNameTheGoType(t *testing.T) {
+	t.Run("a union", func(t *testing.T) {
+		r := newTestRegistry()
+		r.Types = []wiregen.Type{wiregen.TypeRef[generics.Peer]()}
+		r.Unions = []wiregen.Union{{
+			Type: wiregen.TypeRef[generics.Pair[string, generics.Peer]](), Tag: "nosuch",
+			Cases: map[string][]string{"peer": {"val"}},
+		}}
+		requireGenerateError(t, r, "union "+genericsPkg+".Pair[string,"+genericsPkg+`.Peer]: has no field "nosuch"`)
+	})
+	t.Run("an endpoint's query", func(t *testing.T) {
+		listInt := wiregen.TypeRef[generics.List[int]]()
+		r := newTestRegistry(wiregen.WithTransportImport("./api-client.js"))
+		r.Endpoints = []wiregen.Endpoint{{
+			Name: "listInts", Method: "GET", Path: "/api/ints", Kind: wiregen.KindJSON, Query: listInt, Response: listInt,
+		}}
+		requireGenerateError(t, r, "Query field "+genericsPkg+".List[int].Items is number[]")
+	})
+}
+
+// reflect escapes the '.' in a package path's last element as %2e, and the
+// argument still names the registered type.
+func TestGenerics_DottedPackageArgument(t *testing.T) {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{wiregen.TypeRef[dotted.Peer](), wiregen.TypeRef[generics.List[dotted.Peer]]()}
+	out := mustGen(t, r.typesFile)
+	for _, want := range []string{"export interface List_Peer {", "items: Peer[];"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("types missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// A Mappings key spelled with type arguments maps that instantiation, and
+// the generic's key maps every other one.
+func TestGenerics_MappingsKeys(t *testing.T) {
+	r := newTestRegistry()
+	r.Types = []wiregen.Type{wiregen.TypeRef[generics.Holder]()}
+	r.Mappings = map[string]wiregen.Mapping{
+		genericsPkg + ".List[" + genericsPkg + ".Peer]": {TS: "ByInstance"},
+		genericsPkg + ".List":                           {TS: "ByGeneric"},
+	}
+	out := mustGen(t, r.typesFile)
+	for _, want := range []string{"peers: ByInstance;", "counts: ByGeneric;"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("types missing %q, got:\n%s", want, out)
+		}
+	}
 }
 
 // A component name outside OpenAPI's set is refused for the document, a

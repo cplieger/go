@@ -84,7 +84,6 @@ func parseInstance(wt Type) (sp typeSpelling, generic bool, err error) {
 	return sp, true, nil
 }
 
-// splitTypeArgs splits a type argument list at its top-level commas.
 func splitTypeArgs(s string) []string {
 	var out []string
 	depth, start := 0, 0
@@ -251,7 +250,7 @@ func (g *generator) checkTypeArguments() error {
 		for i := range sp.args {
 			arg := &sp.args[i]
 			def, enum := g.enums[arg.name]
-			if arg.pkg == "" || g.isRegisteredType(arg) || enum && len(arg.args) == 0 && def.pkgPath == arg.pkg {
+			if arg.pkg == "" || g.isRegisteredType(arg) || enum && def.pkgPath == arg.pkg {
 				continue
 			}
 			return fmt.Errorf("wiregen: type argument %s of %s is neither a builtin nor a registered type or enum; register it", arg.text(), sp.text())
@@ -291,12 +290,10 @@ func (g *generator) goName(wt Type) string {
 	return wt.PkgPath + "." + wt.Name
 }
 
-// typeLabel names registered type name for an error, by its Go spelling.
 func (g *generator) typeLabel(name string) string {
 	return "type " + g.goName(Type{PkgPath: g.typeNames[name], Name: name})
 }
 
-// enumLabel names registered enum name for an error, by its Go spelling.
 func (g *generator) enumLabel(name string) string {
 	return "enum " + g.enums[name].pkgPath + "." + name
 }

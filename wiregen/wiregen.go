@@ -76,7 +76,8 @@ type Registry struct {
 	// instantiation's derived name.
 	PathNameOverride map[string]string
 	// Mappings replaces wiregen's reading of a Go type, keyed by its
-	// importpath.Name, with the consumer's own TS type, decoder and schema.
+	// importpath.Name, with the consumer's own TS type, decoder and schema. An
+	// instantiation's key is importpath.Name[args], or its generic's key.
 	//
 	// A key in any of the three override maps that names no registered type
 	// or enum, and a Mappings key no registered type's field reaches, is a

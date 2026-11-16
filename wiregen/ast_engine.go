@@ -1425,14 +1425,21 @@ func typeKey(t types.Type) string {
 // resolves an alias past its name, and the stdlib re-homes types behind
 // aliases (json.RawMessage became an alias of jsontext.Value in Go 1.27), so
 // a mapping keyed by the spelling the consumer's source shows must still match.
+// An instantiation matches importpath.Name[args] before its generic's key,
+// which typeKey names it by and which maps every instantiation.
 func (g *generator) mappingKey(t types.Type) string {
-	a, ok := t.(*types.Alias)
-	if !ok {
-		return typeKey(t)
+	if a, ok := t.(*types.Alias); ok {
+		if alias := aliasKey(a); alias != "" {
+			if _, ok := g.Mappings[alias]; ok {
+				return alias
+			}
+		}
 	}
-	if alias := aliasKey(a); alias != "" {
-		if _, ok := g.Mappings[alias]; ok {
-			return alias
+	if n, ok := types.Unalias(t).(*types.Named); ok && n.TypeArgs().Len() > 0 {
+		if sp, ok := spellingOf(n); ok {
+			if _, ok := g.Mappings[sp.text()]; ok {
+				return sp.text()
+			}
 		}
 	}
 	return typeKey(t)

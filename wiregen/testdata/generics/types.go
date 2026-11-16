@@ -38,12 +38,6 @@ type Page struct {
 	Total int `json:"total"`
 }
 
-// PeerList declares by hand the fields List[Peer] has.
-type PeerList struct {
-	Next  string `json:"next,omitempty"`
-	Items []Peer `json:"items"`
-}
-
 // Holder carries instantiations as fields.
 type Holder struct {
 	Peers  List[Peer] `json:"peers"`
@@ -123,3 +117,14 @@ const (
 	StatusUp   Status = "up"
 	StatusDown Status = "down"
 )
+
+// Num constrains its type parameter to a number.
+type Num[T int | float64] struct {
+	V T `json:"v"`
+}
+
+// Pair_int_int is an enum spelled as Pair[int, int]'s derived name.
+type Pair_int_int string
+
+// PairIntIntX is Pair_int_int's one value.
+const PairIntIntX Pair_int_int = "x"

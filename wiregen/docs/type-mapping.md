@@ -196,7 +196,8 @@ A registered type argument contributes its bare Go name, a builtin its predeclar
 The name joins Go names with `_`, so it is a valid TypeScript identifier and edge identifier. An OpenAPI component name must also hold only ASCII letters, digits, `.`, `-` and `_`, so a non-ASCII Go name in it, as in `List[Maß]`, is refused when OpenAPI files are written ([Identifiers](#identifiers)). The name depends only on Go names, so every run derives the same one. The `_` separator keeps it apart from an ordinary Go name such as `ListPeer`, and since Go names rarely hold `_`, two types rarely derive one name. When they do, `Generate` refuses both, naming each Go type: two instantiations such as `Pair[A_B, C]` and `Pair[A, B_C]`, or an instantiation and a registered type or enum whose name it takes, such as a struct named `List_Peer` in any package.
 
 - Each type argument is a builtin (`string`, `bool`, an integer or a float type) or a registered type: a struct, a named map, an enum or a registered instantiation. Any other argument, such as `*Peer`, `[]Peer`, `any`, `time.Time`, an unregistered struct or an unregistered instantiation, is refused with an error naming it; declare and register a named type in its place.
-- A field whose type is an instantiation references it by name, as a field of a registered struct does, and is refused as an unregistered struct unless the instantiation is registered.
+- A field whose type is a registered instantiation references it by name, as a field of a registered struct does. A field whose type is an unregistered instantiation of a generic struct is refused, and one of a generic named map or slice is planned inline, as [Named maps](#named-maps) describes.
+- A `Mappings` key names one instantiation or every instantiation of a generic type ([Mappings](#mappings)).
 - An instantiation that reaches itself, such as `Tree[int]` with a `Kids []Tree[T]` field, references its own type, `kids: Tree_int[]`, as a registered struct that reaches itself does.
 - The type's and fields' doc comments come from the generic declaration, and its deadset edges pair each instantiation with that declaration: `wiregen/List_Peer` provides `List` and `wiregen/List_Peer/Items` provides `List.Items`, as deadset records a generic type's fields on its declaration.
 
@@ -223,6 +224,8 @@ r.Mappings = map[string]wiregen.Mapping{
 - `Schema` is the value's JSON Schema, required when an OpenAPI document is written. A `$ref` in it must be a string whose JSON pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) names something in the document, such as `#/components/schemas/Item`. `Generate` refuses one that does not, or that points into another document.
 
 A key may name a type alias or the type it resolves to, and both work. `go/types` resolves an alias past its own name, and the standard library re-homes types behind aliases: `json.RawMessage` is an alias for `encoding/json/jsontext.Value` from Go 1.27, so either key keeps a mapping in force across a toolchain upgrade. Set one of the two: when both are set, the alias's key applies and the other, reached by no other field, is refused.
+
+A key may name one instantiation of a generic type, spelled as `Generate`'s errors spell it, `"example.com/wire.List[example.com/wire.Peer]"`, or the generic type, `"example.com/wire.List"`, which maps every instantiation no key of the first form names.
 
 ## Identifiers
 
