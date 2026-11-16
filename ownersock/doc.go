@@ -1,9 +1,13 @@
 // Package ownersock is the listener and client of an admin socket: HTTP over
 // a unix socket that only processes of the server's own user can reach.
 //
-// [Listen] makes the socket's directory private with
-// filesafe.EnsurePrivateDir (0700, owned by the effective uid, no symlink)
-// and binds the socket at mode 0600. A live socket at the path refuses start,
+// [Listen] binds the socket at mode 0600 in a private directory, checked
+// with filesafe.EnsurePrivateDir: a missing directory is created at 0700,
+// and an existing one with group or other access is refused with
+// filesafe.ErrModeTooOpen and left unchanged, never chmodded. Give the
+// socket a directory of its own (/data/admin/admin.sock,
+// /run/myapp-admin/admin.sock), never the app's data directory or a shared
+// one such as /tmp. A live socket at the path refuses start,
 // a socket nothing answers is replaced, and any other file at the path is
 // refused and left alone. A path longer than the 107 bytes Linux's sun_path
 // holds (unix(7)) is refused before the directory is touched.
@@ -22,4 +26,6 @@
 // [Client] returns an *http.Client that dials the socket. Its dial and
 // refusal errors are [*Error] values carrying one of [CodePeerRefused],
 // [CodeUnavailable] or [CodeDenied] and a hint a command-line tool can print.
+// The codes are stable strings a command-line tool may map to its own
+// sentences.
 package ownersock

@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// The codes an [*Error] from [Client] carries.
+// The codes an [*Error] from [Client] carries: stable strings a
+// command-line tool may match and map to its own sentences.
 const (
 	// CodePeerRefused: the server closed the connection before any answer,
 	// because the caller's uid is not the server's.

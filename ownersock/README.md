@@ -12,7 +12,7 @@ ownersock is built for Go servers that take admin commands from a command-line t
 
 - Every accepted connection's peer uid, read with `SO_PEERCRED`, must equal the server's effective uid. A connection from another user is closed inside `Accept` before any byte is read or written, so no request from it reaches your HTTP handlers.
 - A second start beside a live server at the same path is refused, a socket left behind by a crashed process is replaced, and a file at the path that is not a socket is refused and left alone.
-- The socket's directory is made private (mode 0700, owned by the server's user, not a symlink) and the socket is bound at mode 0600.
+- The socket's directory must be private: `Listen` creates a missing one at mode 0700, refuses an existing one that grants group or other access, is owned by another user or is a symlink, and never changes its mode. The socket is bound at mode 0600.
 - A path longer than the 107 bytes Linux's `sun_path` holds is refused before the directory is touched, with an error naming the path and the limit, instead of failing at bind with a bare `invalid argument`.
 - `Client` reports a refused connection, a missing server and a permission error as three stable codes, each with a hint your command-line tool can print as it is.
 - `Peer` marks a request that arrived on a peer-checked connection. No header or cookie can set the mark, so a handler can tell a socket request from a TCP one.
@@ -32,13 +32,15 @@ go get github.com/cplieger/go/ownersock@latest
 The server binds the socket and serves an HTTP handler on it:
 
 ```go
-ln, err := ownersock.Listen(ownersock.Config{Path: "/run/myapp/admin.sock", Logger: logger})
+ln, err := ownersock.Listen(ownersock.Config{Path: "/run/myapp-admin/admin.sock", Logger: logger})
 if err != nil {
     return err
 }
 srv := &http.Server{Handler: adminMux, ConnContext: ownersock.ConnContext}
 go srv.Serve(ln)
 ```
+
+Give the socket a directory of its own, such as `/data/admin/admin.sock` or `/run/myapp-admin/admin.sock`, never the app's data directory or a shared folder such as `/tmp` itself. `Listen` creates a missing directory at mode 0700; its parent must already exist. An existing directory that grants group or other access is refused with `filesafe.ErrModeTooOpen` and left unchanged: `Listen` never runs chmod on it.
 
 A handler checks the mark before it acts:
 
@@ -52,7 +54,7 @@ if _, ok := ownersock.Peer(r.Context()); !ok {
 The command-line tool calls the server through `Client` and prints the hint on failure. The host part of the URL is ignored:
 
 ```go
-resp, err := ownersock.Client("/run/myapp/admin.sock").Get("http://admin/status")
+resp, err := ownersock.Client("/run/myapp-admin/admin.sock").Get("http://admin/status")
 var oerr *ownersock.Error
 if errors.As(err, &oerr) {
     fmt.Fprintln(os.Stderr, oerr.Code+": "+oerr.Hint)
@@ -66,7 +68,7 @@ Closing the listener removes the socket file.
 
 - `Listen` binds the socket described by a `Config`: the socket path and the `*slog.Logger` that receives the refusal warnings (`slog.Default()` when nil).
 - `ConnContext` is the `http.Server.ConnContext` that marks a peer-checked connection, and `Peer` reads the mark and the peer's uid.
-- `Client` returns an `*http.Client` that dials the socket. Its errors match `*Error`, whose `Code` is `CodePeerRefused` (`admin_peer_refused`), `CodeUnavailable` (`admin_unavailable`) or `CodeDenied` (`admin_denied`), and whose `Hint` says what to do.
+- `Client` returns an `*http.Client` that dials the socket. Its errors match `*Error`, whose `Code` is `CodePeerRefused` (`admin_peer_refused`), `CodeUnavailable` (`admin_unavailable`) or `CodeDenied` (`admin_denied`), and whose `Hint` says what to do. The three codes are stable strings, so a command-line tool may map them to its own sentences instead of printing the hint.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/ownersock).
 

@@ -111,6 +111,14 @@ func TestListen_custody(t *testing.T) {
 		}
 		dials(t, path)
 	})
+	t.Run("a missing parent is refused and not created", func(t *testing.T) {
+		dir, _ := sockPaths(t)
+		path := filepath.Join(dir, "sub", "s.sock")
+		if _, err := Listen(Config{Path: path}); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Listen: %v, want fs.ErrNotExist", err)
+		}
+		absent(t, dir)
+	})
 	for _, mode := range []os.FileMode{0o750, 0o770} {
 		t.Run("a "+mode.String()+" directory is refused unchanged", func(t *testing.T) {
 			dir, path := sockPaths(t)

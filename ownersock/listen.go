@@ -32,8 +32,8 @@ const warnEvery = time.Minute
 type Config struct {
 	// Logger receives the refusal warnings; nil is slog.Default().
 	Logger *slog.Logger
-	// Path is the socket's absolute, clean path, at most 107 bytes. Its
-	// directory is made private with filesafe.EnsurePrivateDir.
+	// Path is the socket's absolute, clean path, at most 107 bytes, in a
+	// directory of its own that filesafe.EnsurePrivateDir accepts.
 	Path string
 }
 
@@ -43,8 +43,9 @@ var (
 	now     = time.Now
 )
 
-// Listen makes c.Path's directory private, binds the socket there at mode
-// 0600 and returns a listener whose Accept peer-checks every connection.
+// Listen creates c.Path's directory at 0700 if missing or proves an existing
+// one private, binds the socket there at mode 0600 and returns a listener
+// whose Accept peer-checks every connection.
 // A path over 107 bytes, or one that is not absolute and clean, is refused
 // before the directory is touched. A socket a server answers on refuses
 // start, a socket nothing answers is replaced, and any other file at the
