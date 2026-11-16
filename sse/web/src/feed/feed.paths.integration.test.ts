@@ -1,96 +1,28 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { LifecycleEvent } from "../lifecycle.js";
-import {
-  type FeedSession,
-  type FeedSourceSpec,
-  createFeedSession,
-} from "../test-helpers/feed-client.js";
-import { FIXTURE_PROXY_PREFIX } from "../test-helpers/fixture-client.js";
+import { createFeedSession } from "../test-helpers/feed-client.js";
 import workerUrl from "../test-helpers/worker-entry.ts?sharedworker&url";
 import {
-  type FeedPage,
-  type FeedPageOptions,
-  feedPage,
-  readKind,
-} from "./test-helpers/feed-page.js";
+  ACCOUNTS,
+  CASE_MS,
+  QUIET_MS,
+  STORE,
+  fixtureUrl,
+  hellos,
+  listenings,
+  pageOpener,
+  queries,
+  readOrThrow,
+  sleep,
+  waitFor,
+} from "./test-helpers/feed-cases.js";
 
 const fixture = import.meta.env["SSE_FIXTURE"];
 const sharedWorker = typeof SharedWorker !== "undefined";
-
-// Long enough for coalesceMs (50) and a catch-up's round trip: a request the feed was going to
-// send has been sent by then, so an empty query log after it means none follows.
-const QUIET_MS = 400;
 const HB = 300;
 const WATCHDOG_MS = 3 * HB;
-const CASE_MS = 20_000;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitFor(what: string, pred: () => boolean | Promise<boolean>): Promise<void> {
-  const deadline = performance.now() + 10_000;
-  while (!(await pred())) {
-    if (performance.now() > deadline) {
-      throw new Error(`timed out waiting for ${what}`);
-    }
-    await sleep(20);
-  }
-}
-
-const fixtureUrl = (): string => `${location.origin}${FIXTURE_PROXY_PREFIX}`;
-
-const STORE: FeedSourceSpec = { name: "store", kinds: ["runs", "budgets"], log: true, rev: 100 };
-const ACCOUNTS: FeedSourceSpec = { name: "accounts", kinds: ["users"], log: true, rev: 10 };
-const KINDS = { runs: "store", budgets: "store", users: "accounts" } as const;
-const LOGGED = ["store", "accounts"];
-
-const pages: FeedPage[] = [];
-
-afterEach(() => {
-  for (const p of pages.splice(0)) {
-    p.detach();
-  }
-});
-
-function open(
-  session: FeedSession,
-  extra: Partial<
-    Pick<FeedPageOptions, "supported" | "heartbeatMs" | "freshRespawn" | "worker">
-  > = {},
-): FeedPage {
-  const page = feedPage({
-    session,
-    fixtureUrl: fixtureUrl(),
-    kinds: KINDS,
-    logged: LOGGED,
-    workerUrl,
-    worker: `feed-${session.id}`,
-    ...extra,
-  });
-  pages.push(page);
-  return page;
-}
-
-const listenings = (page: FeedPage): number =>
-  page.frames.filter((f) => f.type === "listening").length;
-
-const hellos = (page: FeedPage): Extract<LifecycleEvent, { kind: "hello" }>[] =>
-  page.events.filter((e): e is Extract<LifecycleEvent, { kind: "hello" }> => e.kind === "hello");
-
-/** The session's catch-ups as `[source, since, kinds, answer]`. */
-async function queries(session: FeedSession): Promise<[string, number, string[], string][]> {
-  const state = await session.state();
-  return state.queries.map((q) => [q.source, q.since, q.kinds, q.answer]);
-}
-
-async function readOrThrow(session: FeedSession, kind: string) {
-  const r = await readKind(session, kind);
-  if (r === null) {
-    throw new Error(`read of ${kind} failed`);
-  }
-  return r;
-}
+const { open, detachAll } = pageOpener(workerUrl);
+afterEach(detachAll);
 
 /** The rows that reach both the worker setup and the per-tab fallback. */
 function sharedRows(supported: boolean): void {

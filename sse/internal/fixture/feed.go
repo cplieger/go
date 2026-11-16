@@ -34,6 +34,9 @@ const (
 	feedAnswerFull   = "full"
 	feedAnswerMaint  = "maintenance"
 	feedAnswerRefuse = "bad_query"
+	maxChurn         = time.Minute
+	// newerKind is the kind a newer build's frames name on the first source.
+	newerKind = "zz_newer_kind"
 )
 
 // feedRegistry holds the change-feed sessions: each one a hub, its sources and
@@ -87,6 +90,7 @@ type feedSession struct {
 	reads          map[string]int
 	wire           string
 	readFailMode   string
+	readFailKind   string
 	hubOpts        []sse.Option
 	sources        []*feedSource
 	queries        []changesQuery
@@ -125,6 +129,8 @@ func (fr *feedRegistry) mount(mux *http.ServeMux) {
 		"changes-fail": (*feedSession).handleChangesFail,
 		"changes-hold": (*feedSession).handleChangesHold,
 		"read-fail":    (*feedSession).handleReadFail,
+		"trim":         (*feedSession).handleTrim,
+		"churn":        (*feedSession).handleChurn,
 	}
 	for verb, h := range controls {
 		mux.HandleFunc("POST /control/feed/{id}/"+verb, fr.with(h))
@@ -378,7 +384,7 @@ func (s *feedSession) serveRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reads[kind]++
-	if s.readFail > 0 {
+	if s.readFail > 0 && (s.readFailKind == "" || s.readFailKind == kind) {
 		s.readFail--
 		mode := s.readFailMode
 		s.mu.Unlock()
@@ -581,18 +587,34 @@ func (s *feedSession) commit(w http.ResponseWriter, r *http.Request, source stri
 		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", "commit to a started source, naming its own kinds")
 		return
 	}
-	kinds = slices.Compact(slices.Sorted(slices.Values(kinds)))
+	if err := s.publishCommitsLocked(src, rows, sortedKinds(kinds), count); err != nil {
+		httpserver.WriteError(w, r, http.StatusUnprocessableEntity, "publish_refused", err.Error())
+		return
+	}
+	httpserver.WriteJSON(w, commitResponse{Epoch: src.epoch, Rev: src.rev})
+}
+
+func sortedKinds(kinds []string) []string {
+	return slices.Compact(slices.Sorted(slices.Values(kinds)))
+}
+
+// publishCommitsLocked applies count commits and publishes each one's changed
+// frame; under newer-build the first source's frames also name newerKind.
+func (s *feedSession) publishCommitsLocked(src *feedSource, rows []commitRow, kinds []string, count int) error {
 	for range count {
-		data, err := feedwire.EncodeChanged(src.apply(rows, kinds))
+		c := src.apply(rows, kinds)
+		if s.newer && src == s.sources[0] {
+			c.Kinds = sortedKinds(append(slices.Clone(c.Kinds), newerKind))
+		}
+		data, err := feedwire.EncodeChanged(c)
 		if err == nil {
 			_, err = s.hub.Publish(sse.Event{Name: "changed", Data: data})
 		}
 		if err != nil {
-			httpserver.WriteError(w, r, http.StatusUnprocessableEntity, "publish_refused", err.Error())
-			return
+			return err
 		}
 	}
-	httpserver.WriteJSON(w, commitResponse{Epoch: src.epoch, Rev: src.rev})
+	return nil
 }
 
 // apply writes one commit at the next revision and returns its changed frame.
@@ -774,12 +796,16 @@ func (s *feedSession) handleRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 type badFrameRequest struct {
-	Kind   string `json:"kind"`
-	Source string `json:"source"`
+	Kind   string      `json:"kind"`
+	Source string      `json:"source"`
+	Rows   []commitRow `json:"rows"`
+	Commit bool        `json:"commit"`
 }
 
 // handleBadFrame publishes a changed frame the tab cannot apply: malformed, or
-// on an epoch the source never had. The source's state is unchanged.
+// on an epoch the source never had. With commit it stands for a real commit
+// of the rows (or a bump of the first kind), applied before the frame names
+// its revision; otherwise the source's state is unchanged.
 func (s *feedSession) handleBadFrame(w http.ResponseWriter, r *http.Request) {
 	var req badFrameRequest
 	if !decodeControl(w, r, &req) {
@@ -788,17 +814,27 @@ func (s *feedSession) handleBadFrame(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	src := s.sourceLocked(req.Source)
-	var data []byte
-	switch {
-	case src == nil:
-	case req.Kind == "malformed":
-		data = fmt.Appendf(nil, `{"source":%q,"epoch":"not-an-epoch","rev":1,"kinds":[%q]}`, src.name, src.kinds[0])
-	case req.Kind == "other-epoch":
-		data, _ = feedwire.EncodeChanged(feedwire.Changed{Source: src.name, Epoch: randomHex(16), Rev: src.rev + 1, Kinds: src.kinds[:1]})
-	}
-	if data == nil {
-		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", `bad-frame takes a session source and kind "malformed" or "other-epoch"`)
+	if src == nil || !src.started || (req.Kind != "malformed" && req.Kind != "other-epoch") ||
+		len(req.Rows) > maxFeedRows || slices.ContainsFunc(req.Rows, func(c commitRow) bool { return !src.holds(c.Kind) }) {
+		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid",
+			`bad-frame takes a started source, kind "malformed" or "other-epoch", and rows of its kinds`)
 		return
+	}
+	kinds := src.kinds[:1]
+	if len(req.Rows) > 0 {
+		kinds = make([]string, 0, len(req.Rows))
+		for _, row := range req.Rows {
+			kinds = append(kinds, row.Kind)
+		}
+		kinds = sortedKinds(kinds)
+	}
+	rev := src.rev + 1
+	if req.Commit {
+		rev = src.apply(req.Rows, kinds).Rev
+	}
+	data := fmt.Appendf(nil, `{"source":%q,"epoch":"not-an-epoch","rev":%d,"kinds":[%q]}`, src.name, rev, kinds[0])
+	if req.Kind == "other-epoch" {
+		data, _ = feedwire.EncodeChanged(feedwire.Changed{Source: src.name, Epoch: randomHex(16), Rev: rev, Kinds: kinds})
 	}
 	if _, err := s.hub.Publish(sse.Event{Name: "changed", Data: data}); err != nil {
 		httpserver.WriteError(w, r, http.StatusUnprocessableEntity, "publish_refused", err.Error())
@@ -828,11 +864,11 @@ func (s *feedSession) handleFormat(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// newerBuild adds what a server running a newer build names: a kind no tab
-// declared on the first source, and a source no tab declared.
+// newerBuild adds what a server running a newer build names: newerKind on the
+// first source, and a source no tab declared.
 func newerBuild(sources []feedwire.ListeningSource) []feedwire.ListeningSource {
 	if len(sources) > 0 {
-		sources[0].Floors["zz_newer_kind"] = 1
+		sources[0].Floors[newerKind] = 1
 	}
 	return append(sources, feedwire.ListeningSource{
 		Source: "zz_newer_source", Epoch: randomHex(16), Floors: map[string]uint64{"zz_newer_only": 1},
@@ -840,7 +876,8 @@ func newerBuild(sources []feedwire.ListeningSource) []feedwire.ListeningSource {
 }
 
 // handleNewerBuild makes the connect hook write newerBuild's extra kind and
-// source from the next connection.
+// source from the next connection, and every later changed frame of the
+// first source name newerKind.
 func (s *feedSession) handleNewerBuild(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	s.newer = true
@@ -850,6 +887,7 @@ func (s *feedSession) handleNewerBuild(w http.ResponseWriter, _ *http.Request) {
 
 type failRequest struct {
 	Mode  string `json:"mode"`
+	Kind  string `json:"kind"`
 	Count int    `json:"count"`
 	On    bool   `json:"on"`
 }
@@ -884,21 +922,89 @@ func (s *feedSession) handleChangesHold(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleReadFail fails the next count reads, by closing the connection
-// (mode "reject") or with 503 (mode "unavailable").
+// handleReadFail fails the next count reads, of one kind when kind is set, by
+// closing the connection (mode "reject") or with 503 (mode "unavailable").
 func (s *feedSession) handleReadFail(w http.ResponseWriter, r *http.Request) {
 	var req failRequest
 	if !decodeControl(w, r, &req) {
 		return
 	}
-	if req.Mode != feedFailReject && req.Mode != feedFailUnavail {
-		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", `mode is "reject" or "unavailable"`)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if (req.Mode != feedFailReject && req.Mode != feedFailUnavail) || (req.Kind != "" && s.kindSourceLocked(req.Kind) == nil) {
+		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", `mode is "reject" or "unavailable", and kind empty or one of the session's`)
+		return
+	}
+	s.readFail, s.readFailMode, s.readFailKind = max(req.Count, 0), req.Mode, req.Kind
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleTrim drops a logged source's log up to its revision, so a catch-up
+// from below it is answered full on the same epoch.
+func (s *feedSession) handleTrim(w http.ResponseWriter, r *http.Request) {
+	var req sourceControl
+	if !decodeControl(w, r, &req) {
 		return
 	}
 	s.mu.Lock()
-	s.readFail, s.readFailMode = max(req.Count, 0), req.Mode
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	src := s.sourceLocked(req.Source)
+	if src == nil || !src.logged {
+		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", "trim takes a logged source of the session")
+		return
+	}
+	src.start, src.changes = src.rev, nil
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type churnRequest struct {
+	Source  string   `json:"source"`
+	Kinds   []string `json:"kinds"`
+	EveryMs int      `json:"everyMs"`
+	ForMs   int      `json:"forMs"`
+}
+
+// handleChurn answers at once and then bumps the kinds every everyMs for
+// forMs, as a busy unlogged source does, without one control call per bump.
+func (s *feedSession) handleChurn(w http.ResponseWriter, r *http.Request) {
+	var req churnRequest
+	if !decodeControl(w, r, &req) {
+		return
+	}
+	every, span := time.Duration(req.EveryMs)*time.Millisecond, time.Duration(req.ForMs)*time.Millisecond
+	s.mu.Lock()
+	src := s.sourceLocked(req.Source)
+	ok := src != nil && src.started && len(req.Kinds) > 0 && every > 0 && span >= every && span <= maxChurn &&
+		!slices.ContainsFunc(req.Kinds, func(k string) bool { return !src.holds(k) })
+	s.mu.Unlock()
+	if !ok {
+		httpserver.WriteError(w, r, http.StatusBadRequest, "control_invalid", "churn takes a started source, its kinds, and 0 < everyMs <= forMs <= 60000")
+		return
+	}
+	go s.churn(src, sortedKinds(req.Kinds), every, span)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// churn stops at the end of its span, or at the first publish the hub
+// refuses, which a shutdown causes.
+func (s *feedSession) churn(src *feedSource, kinds []string, every, span time.Duration) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	end := time.NewTimer(span)
+	defer end.Stop()
+	for {
+		select {
+		case <-end.C:
+			return
+		case <-tick.C:
+			s.mu.Lock()
+			err := s.publishCommitsLocked(src, nil, kinds, 1)
+			s.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}
 }
 
 type feedSourceState struct {

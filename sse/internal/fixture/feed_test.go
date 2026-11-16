@@ -382,4 +382,121 @@ func TestFeedNewerBuildAndFormat(t *testing.T) {
 	if _, err := feedwire.DecodeListening(data); !errors.Is(err, feedwire.ErrOtherFormat) {
 		t.Errorf("decode = %v, want ErrOtherFormat", err)
 	}
+	feedControl(t, base, id, "commit", `{"source":"store","rows":[{"kind":"runs","key":"r1","value":"a"}]}`, nil)
+	c, err := feedwire.DecodeChanged([]byte(nextFrame(t, ff2, "changed").Data))
+	if err != nil || !slices.Equal(c.Kinds, []string{"runs", "zz_newer_kind"}) {
+		t.Errorf("changed = %+v (%v), want runs and the newer kind", c, err)
+	}
+}
+
+func TestFeedBadFrameStandsForACommit(t *testing.T) {
+	_, base := fixtureServer(t)
+	id := newFeedSession(t, base)
+	ff, _ := openFeed(t, base, id, nil)
+	nextFrame(t, ff, "listening")
+	t.Run("malformed with rows", func(t *testing.T) {
+		feedControl(t, base, id, "bad-frame", `{"kind":"malformed","source":"store","commit":true,"rows":[{"kind":"runs","key":"r1","value":"a"}]}`, nil)
+		fr := nextFrame(t, ff, "changed")
+		if _, err := feedwire.DecodeChanged([]byte(fr.Data)); err == nil || !strings.Contains(fr.Data, `"rev":101`) {
+			t.Errorf("frame = %s, want an undecodable frame naming rev 101", fr.Data)
+		}
+		var rows readResponse
+		if _, h := getJSON(t, base+"/feed/"+id+"/read?kind=runs", &rows); len(rows.Rows) != 1 || !strings.Contains(h.Get("Feed-Position"), "store=101") {
+			t.Errorf("read = %+v at %q, want r1 at 101", rows, h.Get("Feed-Position"))
+		}
+		if st := feedState(t, base, id); st.Sources[0].Floors["runs"] != 101 {
+			t.Errorf("floors = %v, want runs at 101", st.Sources[0].Floors)
+		}
+	})
+	t.Run("other epoch bumping an unlogged source", func(t *testing.T) {
+		feedControl(t, base, id, "bad-frame", `{"kind":"other-epoch","source":"live","commit":true}`, nil)
+		c, err := feedwire.DecodeChanged([]byte(nextFrame(t, ff, "changed").Data))
+		st := feedState(t, base, id)
+		if err != nil || c.Rev != 8 || c.Epoch == st.Sources[1].Epoch || !slices.Equal(c.Kinds, []string{"queue"}) || st.Sources[1].Rev != 8 {
+			t.Errorf("changed = %+v (%v), state %+v, want queue at 8 on another epoch with live at 8", c, err, st.Sources[1])
+		}
+	})
+	t.Run("without commit the state stays", func(t *testing.T) {
+		feedControl(t, base, id, "bad-frame", `{"kind":"other-epoch","source":"store"}`, nil)
+		c, err := feedwire.DecodeChanged([]byte(nextFrame(t, ff, "changed").Data))
+		if err != nil || c.Rev != 102 || feedState(t, base, id).Sources[0].Rev != 101 {
+			t.Errorf("changed = %+v (%v), want rev 102 named with store left at 101", c, err)
+		}
+	})
+	t.Run("a foreign kind is refused", func(t *testing.T) {
+		if status := post(t, base+"/control/feed/"+id+"/bad-frame", `{"kind":"malformed","source":"store","commit":true,"rows":[{"kind":"queue","key":"q"}]}`, nil, nil); status != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", status)
+		}
+	})
+}
+
+func TestFeedTrimAnswersFull(t *testing.T) {
+	_, base := fixtureServer(t)
+	id := newFeedSession(t, base)
+	var resp commitResponse
+	feedControl(t, base, id, "commit", `{"source":"store","rows":[{"kind":"runs","key":"r1","value":"a"}]}`, &resp)
+	feedControl(t, base, id, "trim", `{"source":"store"}`, nil)
+	feedControl(t, base, id, "commit", `{"source":"store","rows":[{"kind":"runs","key":"r2","value":"b"}]}`, nil)
+	q := base + "/feed/" + id + "/changes?source=store&epoch=" + resp.Epoch + "&kinds=runs&since="
+	var below, at changesAnswer
+	getJSON(t, q+"100", &below)
+	getJSON(t, q+"101", &at)
+	if !below.Full || at.Full || len(at.Upserts["runs"]) != 1 || at.Upserts["runs"][0].Key != "r2" {
+		t.Errorf("since 100 = %+v, since 101 = %+v, want full then r2 alone", below, at)
+	}
+	if status := post(t, base+"/control/feed/"+id+"/trim", `{"source":"live"}`, nil, nil); status != http.StatusBadRequest {
+		t.Errorf("trim of an unlogged source = %d, want 400", status)
+	}
+}
+
+func TestFeedChurnBumps(t *testing.T) {
+	_, base := fixtureServer(t)
+	id := newFeedSession(t, base)
+	ff, _ := openFeed(t, base, id, nil)
+	nextFrame(t, ff, "listening")
+	feedControl(t, base, id, "churn", `{"source":"live","kinds":["queue"],"everyMs":5,"forMs":100}`, nil)
+	for want := uint64(8); want <= 10; want++ {
+		c, err := feedwire.DecodeChanged([]byte(nextFrame(t, ff, "changed").Data))
+		if err != nil || c.Source != "live" || c.Rev != want {
+			t.Errorf("churn frame = %+v (%v), want live at %d", c, err, want)
+		}
+	}
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		first := feedState(t, base, id).Sources[1].Rev
+		time.Sleep(50 * time.Millisecond)
+		if feedState(t, base, id).Sources[1].Rev == first {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("churn never stopped")
+		}
+	}
+	for _, body := range []string{
+		`{"source":"live","kinds":["queue"],"everyMs":0,"forMs":100}`,
+		`{"source":"live","kinds":["queue"],"everyMs":5,"forMs":60001}`,
+		`{"source":"live","kinds":["runs"],"everyMs":5,"forMs":100}`,
+	} {
+		if status := post(t, base+"/control/feed/"+id+"/churn", body, nil, nil); status != http.StatusBadRequest {
+			t.Errorf("churn %s = %d, want 400", body, status)
+		}
+	}
+}
+
+func TestFeedReadFailOneKind(t *testing.T) {
+	_, base := fixtureServer(t)
+	id := newFeedSession(t, base)
+	feedControl(t, base, id, "read-fail", `{"count":1,"mode":"unavailable","kind":"runs"}`, nil)
+	if status, _ := getJSON(t, base+"/feed/"+id+"/read?kind=budgets", nil); status != http.StatusOK {
+		t.Errorf("budgets = %d, want 200", status)
+	}
+	if status, _ := getJSON(t, base+"/feed/"+id+"/read?kind=runs", nil); status != http.StatusServiceUnavailable {
+		t.Errorf("runs = %d, want 503", status)
+	}
+	if status, _ := getJSON(t, base+"/feed/"+id+"/read?kind=runs", nil); status != http.StatusOK {
+		t.Errorf("runs again = %d, want 200", status)
+	}
+	if status := post(t, base+"/control/feed/"+id+"/read-fail", `{"count":1,"mode":"reject","kind":"nope"}`, nil, nil); status != http.StatusBadRequest {
+		t.Errorf("unknown kind = %d, want 400", status)
+	}
 }

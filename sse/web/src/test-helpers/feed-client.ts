@@ -71,7 +71,19 @@ export interface FeedSession {
   drop(resume: boolean): Promise<void>;
   /** A new hub and a new epoch for every source: each reconnect answers epoch_changed. */
   restart(): Promise<void>;
-  badFrame(kind: "malformed" | "other-epoch", source: string): Promise<void>;
+  /**
+   * A changed frame the tab cannot apply. With `commit` it stands for a real commit of `rows`
+   * (or a bump of the source's first kind), applied before the frame names its revision.
+   */
+  badFrame(
+    kind: "malformed" | "other-epoch",
+    source: string,
+    commit?: { readonly rows?: readonly CommitRow[] },
+  ): Promise<void>;
+  /** Drops a logged source's log up to its revision: a catch-up from below it answers full. */
+  trim(source: string): Promise<void>;
+  /** Bumps the kinds every `everyMs` for `forMs`, answering at once. */
+  churn(source: string, kinds: readonly string[], everyMs: number, forMs: number): Promise<void>;
   /** The feed format the connect hook writes from the next connection. */
   format(feed: number): Promise<void>;
   /** From the next connection, the listening frame names a kind and a source no tab declared. */
@@ -79,7 +91,8 @@ export interface FeedSession {
   /** The next `count` catch-ups answer 503 maintenance. */
   changesFail(count: number): Promise<void>;
   changesHold(on: boolean): Promise<void>;
-  readFail(count: number, mode: "reject" | "unavailable"): Promise<void>;
+  /** Fails the next `count` reads, of `kind` alone when it is given. */
+  readFail(count: number, mode: "reject" | "unavailable", kind?: string): Promise<void>;
   state(): Promise<FeedSessionState>;
 }
 
@@ -120,12 +133,20 @@ export async function createFeedSession(
     release: () => control("release"),
     drop: (resume) => control("drop", { resume }),
     restart: () => control("restart"),
-    badFrame: (kind, source) => control("bad-frame", { kind, source }),
+    badFrame: (kind, source, commit) =>
+      control("bad-frame", {
+        kind,
+        source,
+        ...(commit === undefined ? {} : { commit: true, rows: commit.rows ?? [] }),
+      }),
+    trim: (source) => control("trim", { source }),
+    churn: (source, kinds, everyMs, forMs) => control("churn", { source, kinds, everyMs, forMs }),
     format: (feed) => control("format", { feed }),
     newerBuild: () => control("newer-build"),
     changesFail: (count) => control("changes-fail", { count }),
     changesHold: (on) => control("changes-hold", { on }),
-    readFail: (count, mode) => control("read-fail", { count, mode }),
+    readFail: (count, mode, kind) =>
+      control("read-fail", { count, mode, ...(kind === undefined ? {} : { kind }) }),
     state: () => call(doFetch, `${fixtureUrl}/control/feed/${created.id}/state`),
   };
 }
