@@ -111,7 +111,7 @@ func (s *spaServer) load(fsys fs.FS, b Bundle, pages []Page) error {
 		if err != nil {
 			return nil, err
 		}
-		if err := checkShell(sh.body); err != nil {
+		if err := CheckShell(sh.body); err != nil {
 			return nil, fmt.Errorf("httpserver: shell %q %w", name, err)
 		}
 		byPath[name] = sh
@@ -178,11 +178,10 @@ func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
 	return err
 }
 
-// CheckShell is not written yet.
-func CheckShell(html []byte) error { return nil }
-
-// checkShell refuses what the policy would block or what needs a hash.
-func checkShell(body []byte) error {
+// CheckShell refuses a shell SPA's policy would block: one holding an inline
+// script or style element or a style attribute. SPA calls it on every shell at
+// start; a bundler calls it before writing one.
+func CheckShell(body []byte) error {
 	switch {
 	case len(InlineScriptHashes(body)) > 0:
 		return errors.New("holds an inline script element")
