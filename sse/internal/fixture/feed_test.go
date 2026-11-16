@@ -2,6 +2,7 @@ package fixture
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -330,4 +331,28 @@ func TestFeedDropAndRestart(t *testing.T) {
 			t.Errorf("connects = %d after the release, want the held stream counted", got)
 		}
 	})
+}
+
+func TestFeedNewerBuildAndFormat(t *testing.T) {
+	_, base := fixtureServer(t)
+	id := newFeedSession(t, base)
+	feedControl(t, base, id, "newer-build", ``, nil)
+	ff, _ := openFeed(t, base, id, nil)
+	l, err := feedwire.DecodeListening([]byte(nextFrame(t, ff, "listening").Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Sources) != 3 || l.Sources[0].Floors["zz_newer_kind"] != 1 || l.Sources[2].Source != "zz_newer_source" {
+		t.Errorf("listening = %+v, want an extra kind on store and an extra source", l)
+	}
+	feedControl(t, base, id, "format", `{"feed":2}`, nil)
+	ff2, _ := openFeed(t, base, id, nil)
+	data := []byte(nextFrame(t, ff2, "listening").Data)
+	frozen, err := feedwire.PeekListening(data)
+	if err != nil || frozen != (feedwire.Frozen{Feed: 2, Wire: feedWire}) {
+		t.Errorf("frozen = %+v (%v), want feed 2 and the wire", frozen, err)
+	}
+	if _, err := feedwire.DecodeListening(data); !errors.Is(err, feedwire.ErrOtherFormat) {
+		t.Errorf("decode = %v, want ErrOtherFormat", err)
+	}
 }

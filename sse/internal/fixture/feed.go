@@ -96,6 +96,7 @@ type feedSession struct {
 	format         int
 	changesFail    int
 	readFail       int
+	newer          bool
 }
 
 func newFeedRegistry(opts []sse.Option) *feedRegistry {
@@ -119,6 +120,7 @@ func (fr *feedRegistry) mount(mux *http.ServeMux) {
 		"restart":      (*feedSession).handleRestart,
 		"bad-frame":    (*feedSession).handleBadFrame,
 		"format":       (*feedSession).handleFormat,
+		"newer-build":  (*feedSession).handleNewerBuild,
 		"changes-fail": (*feedSession).handleChangesFail,
 		"changes-hold": (*feedSession).handleChangesHold,
 		"read-fail":    (*feedSession).handleReadFail,
@@ -339,6 +341,9 @@ func (s *feedSession) writeListening(sw *sse.Writer) error {
 		}
 	}
 	format := s.format
+	if s.newer {
+		l.Sources = newerBuild(l.Sources)
+	}
 	s.mu.Unlock()
 	if format != feedwire.Version {
 		return sw.Event("listening", fmt.Appendf(nil, `{"feed":%d,"wire":%q,"sources":{"format":%d}}`, format, l.Wire, format))
@@ -803,6 +808,26 @@ func (s *feedSession) handleFormat(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.format = req.Feed
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// newerBuild adds what a server running a newer build names: a kind no tab
+// declared on the first source, and a source no tab declared.
+func newerBuild(sources []feedwire.ListeningSource) []feedwire.ListeningSource {
+	if len(sources) > 0 {
+		sources[0].Floors["zz_newer_kind"] = 1
+	}
+	return append(sources, feedwire.ListeningSource{
+		Source: "zz_newer_source", Epoch: randomHex(16), Floors: map[string]uint64{"zz_newer_only": 1},
+	})
+}
+
+// handleNewerBuild makes the connect hook write newerBuild's extra kind and
+// source from the next connection.
+func (s *feedSession) handleNewerBuild(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	s.newer = true
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }

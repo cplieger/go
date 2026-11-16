@@ -72,6 +72,8 @@ export interface FeedSession {
   badFrame(kind: "malformed" | "other-epoch", source: string): Promise<void>;
   /** The feed format the connect hook writes from the next connection. */
   format(feed: number): Promise<void>;
+  /** From the next connection, the listening frame names a kind and a source no tab declared. */
+  newerBuild(): Promise<void>;
   /** The next `count` catch-ups answer 503 maintenance. */
   changesFail(count: number): Promise<void>;
   changesHold(on: boolean): Promise<void>;
@@ -118,6 +120,7 @@ export async function createFeedSession(
     restart: () => control("restart"),
     badFrame: (kind, source) => control("bad-frame", { kind, source }),
     format: (feed) => control("format", { feed }),
+    newerBuild: () => control("newer-build"),
     changesFail: (count) => control("changes-fail", { count }),
     changesHold: (on) => control("changes-hold", { on }),
     readFail: (count, mode) => control("read-fail", { count, mode }),
