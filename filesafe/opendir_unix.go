@@ -3,6 +3,8 @@
 package filesafe
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +16,23 @@ import (
 // FIFO would block a plain O_RDONLY open(2) forever. O_NONBLOCK covers the
 // same hazard again.
 func openDirInRoot(root *os.Root, dir string) (*os.File, error) {
-	return root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, notDirectoryErr(err)
+	}
+	return f, nil
+}
+
+// notDirectoryErr returns the error of a failed O_DIRECTORY open, with
+// EOPNOTSUPP reported as ENOTDIR. OpenBSD, NetBSD and DragonFly test for a
+// socket before O_DIRECTORY and answer EOPNOTSUPP (vn_open in vfs_vnops.c).
+// os.Root translates that errno only for intermediate components
+// (os/root_unix.go rootOpenDir).
+func notDirectoryErr(err error) error {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok && errors.Is(pe.Err, syscall.EOPNOTSUPP) {
+		return &fs.PathError{Op: pe.Op, Path: pe.Path, Err: syscall.ENOTDIR}
+	}
+	return err
 }
 
 // dirOpenName is an ambient path with a trailing separator, which the kernel

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -304,7 +303,7 @@ func TestWriteFile_WithoutWithMode_KeepsEveryOtherRefusal(t *testing.T) {
 			wantErr: ErrNotRegular,
 			setup: func(t *testing.T, dir string) (string, func() error) {
 				fifo := filepath.Join(dir, "pipe")
-				if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+				if err := MkfifoForTest(fifo); err != nil {
 					t.Fatalf("Setup: mkfifo: %v", err)
 				}
 				return fifo, func() error {
