@@ -90,3 +90,27 @@ func TestBuildRefusesForbiddenClosure(t *testing.T) {
 		mustBuild(t, c)
 	})
 }
+
+// A prepaint script blocks first paint, so an app keeps every other file of
+// its own tree out of it by forbidding the directory the entry sits in.
+func TestBuildForbidNamingTheEntrysOwnDirectory(t *testing.T) {
+	t.Parallel()
+	prepaint := func(c *webbundle.Config) {
+		c.Entries[2].Forbid = []string{"src"}
+	}
+	t.Run("EntryAlone", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, nil)
+		prepaint(&c)
+		mustBuild(t, c)
+	})
+	t.Run("LocalImport", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/prepaint.js":    "import { stored } from \"./theme-store.js\";\ndocument.documentElement.dataset.theme = stored();\n",
+			"src/theme-store.js": "export function stored() { return localStorage.getItem(\"theme\") ?? \"light\"; }\n",
+		})
+		prepaint(&c)
+		buildRefused(t, c, "prepaint", "src/theme-store.js")
+	})
+}

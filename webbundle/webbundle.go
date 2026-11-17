@@ -51,7 +51,7 @@ type Entry struct {
 	Name   string // the logical name: "/<Name>.js" or "/<Name>.css" in a shell
 	Path   string // the source file under Src
 	Kind   EntryKind
-	Forbid []string // packages or Src paths its import closure may not reach
+	Forbid []string // packages or Src paths its imports may not reach; the entry file itself is exempt
 }
 
 // Result is what a build wrote.

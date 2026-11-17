@@ -122,11 +122,23 @@ func (b *build) checkClosure(m *metafile, e Entry) (packageRoots, error) {
 			}
 			pkgs.add(pkg, root)
 		}
-		for _, f := range e.Forbid {
-			if pkg == f || pkg == "" && (in == f || strings.HasPrefix(in, strings.TrimSuffix(f, "/")+"/")) {
-				return nil, fmt.Errorf("webbundle: entry %q reaches %s, which its Forbid names: %s", e.Name, f, chain(from, in))
-			}
+		if in == e.Path {
+			continue
+		}
+		if f, ok := forbidden(e.Forbid, in, pkg); ok {
+			return nil, fmt.Errorf("webbundle: entry %q reaches %s, which its Forbid names: %s", e.Name, f, chain(from, in))
 		}
 	}
 	return pkgs, nil
+}
+
+// forbidden returns the Forbid item naming input in, of package pkg ("" for
+// the app's own file): a package by name, an Src path by whole segments.
+func forbidden(forbid []string, in, pkg string) (string, bool) {
+	for _, f := range forbid {
+		if pkg == f || pkg == "" && (in == f || strings.HasPrefix(in, strings.TrimSuffix(f, "/")+"/")) {
+			return f, true
+		}
+	}
+	return "", false
 }
