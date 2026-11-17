@@ -1,6 +1,6 @@
 # scheduler
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/scheduler.svg)](https://pkg.go.dev/github.com/cplieger/go/scheduler) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=scheduler%2Fgo.mod)](https://github.com/cplieger/go/blob/main/scheduler/go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/scheduler/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=scheduler%2Fgo.mod)](https://github.com/cplieger/go/blob/main/scheduler/go.mod)
 
 scheduler lets your Go container run its job on an interval or an outside trigger, with no overlapping runs and a clean shutdown.
 
@@ -15,14 +15,14 @@ scheduler is built for a long-running container with one job, such as a backup, 
 - `Stamp` records the last run on a volume, so a recreated container keeps its schedule and runs at start only when due.
 - `TryLock` lets a `docker exec` trigger skip its run during a timer run, and `Exclusive` queues it instead.
 - `NewCommandRunner` stops a child process with SIGTERM, then SIGKILL after a default 5-second grace.
-- With the `trigger` package, one daemon runs every job and each trigger waits for its own run's result.
+- With the `trigger` package, one daemon runs every job and each trigger waits for its own run's result. The daemon binds its socket with [ownersock](https://github.com/cplieger/go/tree/main/ownersock) in a private directory of its own and passes the listener to `Server.Serve`.
 
 Consider [robfig/cron](https://github.com/robfig/cron) if you need cron expressions. It parses the standard cron format, with an optional seconds field and per-schedule time zones.
 
 ## Install
 
 ```sh
-go get github.com/cplieger/go/scheduler@latest
+go get github.com/cplieger/go/scheduler/v2@latest
 ```
 
 ## Usage
@@ -39,7 +39,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cplieger/go/scheduler"
+	"github.com/cplieger/go/scheduler/v2"
 )
 
 const lockPath = "/tmp/.myjob.lock"
@@ -88,7 +88,7 @@ func runPass(ctx context.Context) {
 }
 ```
 
-In `ModeExternal`, an external scheduler such as [Ofelia](https://github.com/mcuadros/ofelia) starts each run with `docker exec`. The package examples on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/scheduler#pkg-examples) show `ParseInterval`, `TryLock`, `Exclusive` and `Stamp` on their own, and `go test` keeps them true. Pass `WithRedactedValue(true)` when the interval setting can hold an expanded secret, so `ParseInterval` warnings never echo its value. The trigger server never logs request payloads, because a forwarded environment can carry secrets.
+In `ModeExternal`, an external scheduler such as [Ofelia](https://github.com/mcuadros/ofelia) starts each run with `docker exec`. The package examples on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2#pkg-examples) show `ParseInterval`, `TryLock`, `Exclusive` and `Stamp` on their own, and `go test` keeps them true. Pass `WithRedactedValue(true)` when the interval setting can hold an expanded secret, so `ParseInterval` warnings never echo its value. The trigger server never logs request payloads, because a forwarded environment can carry secrets.
 
 - [Scheduling a job](docs/scheduling.md) covers every interval value, restart-aware startup runs and subprocess shutdown.
 - [Overlap guard and run coalescing](docs/coordination.md) covers `TryLock`, `Exclusive` and `SlotFile`, for a run that starts from more than one process.
@@ -102,9 +102,9 @@ In `ModeExternal`, an external scheduler such as [Ofelia](https://github.com/mcu
 - Overlap guard: `TryLock`, `Lock` and `ReadHolder`.
 - Run coalescing: `Exclusive` with `WithLogger`, `WithQueueCapacity` and `WithGate`, `Outcome`, and `SlotFile`.
 - Subprocesses: `CommandRunner`, `NewCommandRunner` and `DefaultGrace`.
-- Package `trigger`: `Queue`, `Job` with its `Result`, `Execute`, `Listen`, `Server` and its blocking `Serve`, `Submit`, `Event` with its `EventKind`, and their error values.
+- Package `trigger`: `Queue`, `Job` with its `Result`, `Execute`, `Server` and its blocking `Serve`, `Submit`, `Event` with its `EventKind`, and their error values.
 
-The full reference is on pkg.go.dev for [scheduler](https://pkg.go.dev/github.com/cplieger/go/scheduler) and [trigger](https://pkg.go.dev/github.com/cplieger/go/scheduler/trigger).
+The full reference is on pkg.go.dev for [scheduler](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2) and [trigger](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2/trigger).
 
 ## Unsupported by design
 

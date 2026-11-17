@@ -3,11 +3,12 @@ package trigger_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/cplieger/go/scheduler/trigger"
+	"github.com/cplieger/go/scheduler/v2/trigger"
 )
 
 // payload is an app's request type: the arguments one triggered run carries.
@@ -41,7 +42,10 @@ func Example() {
 		}
 	}()
 
-	ln, err := trigger.Listen(socketPath)
+	// An app binds with ownersock.Listen from github.com/cplieger/go/ownersock,
+	// which admits only the server's own user; net.Listen in the private
+	// directory keeps this example on the standard library.
+	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		fmt.Println("listen:", err)
 		return

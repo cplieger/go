@@ -8,9 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"os"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -37,86 +35,6 @@ const (
 	// undecodable.
 	maxRequestBytes = 8 << 20
 )
-
-// errAddrInUse classifies a path bound by a live listener inside Listen's
-// one-retry flow. Callers need only the returned error and path: every current
-// consumer treats any bind failure as fatal, so exporting this would add an API
-// nobody uses and force a minor release for an implementation detail.
-var errAddrInUse = errors.New("socket already has a live listener")
-
-// Listen binds the unix socket at path with owner-only permissions. It binds
-// FIRST and treats EADDRINUSE as a question, because the kernel already supplies
-// the single-instance guard: binding a path a live listener owns fails, and
-// closing a listener unlinks its own path. Never unlink before binding — that
-// steals a LIVE socket from a running daemon, which then keeps serving an
-// unreferenced listener in silence. On EADDRINUSE the path is dialled: an answer
-// means a live owner (errAddrInUse), silence means a SIGKILLed predecessor, so
-// the file is unlinked and the bind retried once, never in a loop.
-func Listen(path string) (net.Listener, error) {
-	ln, err := bindOwnerOnly(path)
-	if err == nil || !errors.Is(err, syscall.EADDRINUSE) {
-		return ln, err
-	}
-	if c, derr := dialProbe(path); derr == nil {
-		_ = c.Close()
-		return nil, fmt.Errorf("%w: %s", errAddrInUse, path)
-	}
-	if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-		return nil, rerr
-	}
-	ln, err = bindOwnerOnly(path)
-	if err != nil && errors.Is(err, syscall.EADDRINUSE) {
-		return nil, fmt.Errorf("%w: %s", errAddrInUse, path)
-	}
-	return ln, err
-}
-
-// probeTimeout bounds the liveness dial in Listen. A connect to a unix socket
-// with a listening peer completes in the kernel, so this is not a latency budget
-// — it is the guard against a dial that never returns taking boot with it.
-const probeTimeout = 2 * time.Second
-
-// dialProbe asks whether anything is listening on path. It exists as a named
-// function because the answer decides between reclaiming a dead socket and
-// refusing a live one, and because a bare net.Dial would carry no timeout.
-//
-// context.Background is correct here rather than a caller's context: Listen runs
-// at single-threaded boot and takes no context (see its umask note), and the
-// bound that matters is this probe's own, not the caller's lifetime.
-func dialProbe(path string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	defer cancel()
-	var d net.Dialer
-	return d.DialContext(ctx, "unix", path)
-}
-
-// bindOwnerOnly binds path and leaves it readable and writable by its owner only.
-func bindOwnerOnly(path string) (net.Listener, error) {
-	// Narrow the umask so the socket is born owner-only; the Chmod below is then
-	// belt-and-braces rather than closing a world-connectable window.
-	//
-	// The swap is PROCESS-WIDE, so it is safe only while nothing else in the
-	// process creates files: a directory born inside this window is drw-------,
-	// and its owner can then neither create entries in it nor unlink from it.
-	// Callers satisfy that by calling Listen during single-threaded boot; a
-	// parallel test suite does not, and root bypasses the check so it hides.
-	oldMask := syscall.Umask(0o177)
-	var lc net.ListenConfig
-	ln, err := lc.Listen(context.Background(), "unix", path)
-	syscall.Umask(oldMask)
-	if err != nil {
-		return nil, err
-	}
-	// Owner-only: connecting requires write permission on the socket file,
-	// which scopes triggering to the container's own user — the same
-	// authority boundary `docker exec` already enforces, failing loudly at
-	// connect for a mismatched exec user.
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = ln.Close()
-		return nil, err
-	}
-	return ln, nil
-}
 
 // Server accepts run requests and bridges them onto the queue.
 //
@@ -146,20 +64,14 @@ type Server[P any] struct {
 	handlers sync.WaitGroup
 }
 
-// Serve accepts run requests on ln until ctx is done, then closes ln and
-// waits for every connection it accepted. It blocks, so start it in its own
-// goroutine and receive its result at shutdown.
-//
-// A connection ends once its job is finished and the final event written, or,
-// for a request not yet submitted, at the request read timeout. The final
-// event is best-effort: a write that fails or passes the event write timeout
-// is logged and the connection closed. Closing the queue finishes no job.
-// The executor does: Execute finishes every job it drains, as cancelled once
-// its context is done, so close the queue and let Execute return before
-// waiting on Serve. A run already in flight holds Serve until it returns.
-//
-// Serve returns nil when ctx ended, and an error matching net.ErrClosed when
-// ln was closed before ctx ended. Call Serve once per Server.
+// Serve accepts run requests on ln until ctx is done, then closes ln and waits
+// for every connection it accepted; it blocks, so start it in its own goroutine.
+// It trusts every connection ln accepts: bind ln with ownersock.Listen, which
+// admits only the server's own user. A connection ends after its job's final
+// event, written best-effort, or at the request read timeout. Only the executor
+// finishes jobs, so close the queue and let Execute return before waiting on
+// Serve. Serve returns nil when ctx ended, and an error matching net.ErrClosed
+// when ln was closed before ctx ended. Call Serve once per Server.
 func (s *Server[P]) Serve(ctx context.Context, ln net.Listener) error {
 	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
 	defer stop()
@@ -210,11 +122,11 @@ func (s *Server[P]) handle(conn net.Conn) {
 	var payload P
 	_ = conn.SetReadDeadline(time.Now().Add(requestReadTimeout))
 	if err := json.NewDecoder(io.LimitReader(conn, maxRequestBytes)).Decode(&payload); err != nil {
-		// A bare io.EOF means nothing was sent: Listen's own live-owner probe
-		// connects and closes without writing, and so does a client killed
-		// before its write. Nothing was requested and nothing was lost, so it
-		// is not a rejection. A request whose bytes arrived and were cut short
-		// reports io.ErrUnexpectedEOF, so it keeps the warning and the answer.
+		// A bare io.EOF means nothing was sent: a second start's liveness probe
+		// (ownersock.Listen dials a contested path) and a client killed before
+		// its write both connect and close without writing. Nothing was lost, so
+		// it is not a rejection. A request cut short reports
+		// io.ErrUnexpectedEOF, so it keeps the warning and the answer.
 		if errors.Is(err, io.EOF) {
 			s.log().Debug("trigger connection closed without sending a request")
 			return
