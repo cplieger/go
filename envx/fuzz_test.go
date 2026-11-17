@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,21 +21,23 @@ func silenceWarns(f *testing.F) {
 }
 
 // assertParseErrorValue pins the *ParseError contract across the whole input
-// space: whenever a strict numeric variant rejects a value, the error must be a
-// *ParseError whose Value is exactly the TRIMMED input. That is the property
-// consumers rely on to quote the rejected value without a second environment
-// read, and trimming is the half a regression would silently drop.
-func assertParseErrorValue(t *testing.T, err error, raw string) {
+// space: whenever a strict numeric variant rejects key's value, the error must be
+// a *ParseError whose Value is exactly the TRIMMED value the environment holds.
+// That is the property consumers rely on to quote the rejected value without a
+// second environment read, and trimming is the half a regression would silently
+// drop.
+func assertParseErrorValue(t *testing.T, err error, key string) {
 	t.Helper()
 	if err == nil {
 		return
 	}
 	perr, ok := errors.AsType[*ParseError](err)
 	if !ok {
-		t.Fatalf("strict variant returned a non-*ParseError for %q: %v", raw, err)
+		t.Fatalf("strict variant returned a non-*ParseError for %s: %v", key, err)
 	}
-	if want := strings.TrimSpace(raw); perr.Value != want {
-		t.Fatalf("ParseError.Value = %q, want the trimmed input %q", perr.Value, want)
+	// Windows stores the environment as UTF-16, so Setenv replaces invalid UTF-8 with U+FFFD (syscall/wtf8_windows.go).
+	if want := strings.TrimSpace(os.Getenv(key)); perr.Value != want {
+		t.Fatalf("ParseError.Value = %q, want the trimmed value %q of %s", perr.Value, want, key)
 	}
 }
 
@@ -267,7 +270,7 @@ func FuzzIntStrict(f *testing.F) {
 		if !ok && n != 0 {
 			t.Fatalf("!ok with non-zero value %d for %q", n, v)
 		}
-		assertParseErrorValue(t, err, v)
+		assertParseErrorValue(t, err, "ENVX_FUZZ_INTSTRICT")
 		const sentinel = -987654321
 		tolerant := Int("ENVX_FUZZ_INTSTRICT", sentinel)
 		switch {
@@ -305,7 +308,7 @@ func FuzzDurationStrict(f *testing.F) {
 		if !ok && d != 0 {
 			t.Fatalf("!ok with non-zero value %v for %q", d, v)
 		}
-		assertParseErrorValue(t, err, v)
+		assertParseErrorValue(t, err, "ENVX_FUZZ_DURSTRICT")
 		const sentinel = -987654321 * time.Second
 		tolerant := Duration("ENVX_FUZZ_DURSTRICT", sentinel)
 		if ok && tolerant != d {
