@@ -14,9 +14,15 @@ import (
 )
 
 type (
-	jobQuery  struct{ State string }
-	jobParams struct{ ID string }
-	job       struct {
+	jobID    string
+	jobState string
+	jobQuery struct {
+		State jobState `json:"state,omitempty"`
+	}
+	jobParams struct {
+		ID jobID `json:"id"`
+	}
+	job struct {
 		ID string `json:"id"`
 	}
 	startRequest struct {
@@ -32,6 +38,9 @@ type (
 		Kinds []string `json:"kinds"`
 	}
 )
+
+func (jobID) MaxBytes() int    { return 64 }
+func (jobState) MaxBytes() int { return 16 }
 
 var (
 	errJobMissing = errors.New("job missing")

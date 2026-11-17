@@ -1,13 +1,20 @@
 package httpwire
 
 import (
+	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // API serves one checked table under its Prefix. It is safe for concurrent
@@ -17,6 +24,7 @@ type API struct {
 	mux    *http.ServeMux
 	logger *slog.Logger
 	schema *Schema
+	o      options
 }
 
 // New checks t against its bindings and options and builds its API. Its
@@ -44,7 +52,7 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	if len(c.errs) > 0 {
 		return nil, errors.Join(c.errs...)
 	}
-	a := &API{table: d, logger: o.logger, schema: schema, mux: http.NewServeMux()}
+	a := &API{table: d, logger: o.logger, schema: schema, o: o, mux: http.NewServeMux()}
 	for i := range d.Endpoints {
 		ep := &d.Endpoints[i]
 		a.mux.Handle(ep.Method+" "+ep.Path, &route{a.rowHandler(ep, bound[ep.Name])})
@@ -76,7 +84,7 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.table.Catalog.WriteError(w, r, &Error{Code: "method_not_allowed", Message: "the path does not take this method"})
 		return
 	}
-	a.table.Catalog.WriteError(w, r, &Error{Code: "not_found", Message: "no route matches the path"})
+	a.table.Catalog.WriteError(w, r, &Error{Code: codeNotFound, Message: "no route matches the path"})
 }
 
 func isRoute(h http.Handler) bool {
@@ -101,17 +109,134 @@ func (a *API) allowed(r *http.Request) string {
 	return strings.Join(allow, ", ")
 }
 
+// rowHandler is ep's handler under the binder's order: the cross-origin
+// check on a write, the client floor, the guard, the principal's credential,
+// the key rate, the held-request cap, then decoding and the handler. So a
+// refused principal is never decoded and a key over its rate costs no decode.
 func (a *API) rowHandler(ep *Endpoint, b *Binding) http.Handler {
-	if b.kind != bindJSON {
-		return b.handler
+	h := a.decoded(ep, b)
+	if ep.Held {
+		h = a.o.hold(h)
 	}
+	if admitsKey(ep.Access.Class) {
+		h = a.keyRate(h)
+	}
+	if ep.Access.Class != Public {
+		h = a.principal(ep, h)
+	}
+	if a.o.guard != nil {
+		h = a.o.guard.Wrap(ep, h)
+	}
+	if a.o.floor != nil {
+		h = a.clientFloor(h)
+	}
+	if isWrite(ep.Method) {
+		h = httpserver.CrossOrigin(h, a.table.Catalog.Responder())
+	}
+	return h
+}
+
+// decoded decodes ep's parts and runs its binding. A Raw or Stream handler
+// reads the request itself, so its parts are checked and its JSON body, if
+// any, handed back unread.
+func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		code, body, err := b.run(r.Context(), &decoded{})
+		d, body, e := a.decode(r, ep)
+		if e != nil {
+			a.table.Catalog.WriteError(w, r, e)
+			return
+		}
+		if b.kind != bindJSON {
+			if body != nil {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+			b.handler.ServeHTTP(w, r)
+			return
+		}
+		code, answer, err := b.run(r.Context(), d)
 		if err != nil {
 			a.writeError(w, r, ep, err)
 			return
 		}
-		a.writeAnswer(w, r, ep, code, body)
+		a.writeAnswer(w, r, ep, code, answer)
+	})
+}
+
+// decode answers r's Params, Query and Request as ep declares them, and the
+// body bytes it read.
+func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
+	d := &decoded{}
+	if ep.Params != nil {
+		v, ok := a.decodePath(r, ep)
+		if !ok {
+			return nil, nil, &Error{Code: codeNotFound, Message: "no resource matches the path"}
+		}
+		d.params = v
+	}
+	if ep.Query != nil {
+		v, fields := a.decodeQuery(r, ep)
+		if len(fields) > 0 {
+			return nil, nil, &Error{Code: "bad_query", Message: "the query does not match this request", Fields: fields}
+		}
+		d.query = v
+	}
+	if ep.Request == nil {
+		return d, nil, nil
+	}
+	b, e := readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody))
+	if e != nil {
+		return nil, nil, e
+	}
+	if d.body, e = a.decodeBody(b, ep); e != nil {
+		return nil, nil, e
+	}
+	return d, b, nil
+}
+
+// clientFloor refuses a request whose client header names a version below
+// the floor; a request without the header passes.
+func (a *API) clientFloor(next http.Handler) http.Handler {
+	f := a.o.floor
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, v := range r.Header.Values(a.table.ClientHeader) {
+			if f.Below(v) {
+				a.table.Catalog.WriteError(w, r, &Error{Code: "upgrade_required", Message: f.Message(v)})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// principal refuses, as the wiring bug it is, an admitted request whose
+// credential or cursor owner answers "", so nothing is ever bound to "".
+func (a *API) principal(ep *Endpoint, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, fn := range []struct {
+			get  func(*http.Request) string
+			name string
+		}{{a.o.credential, "WithCredential"}, {a.o.cursorOwner, "WithCursorOwner"}} {
+			if fn.get(r) == "" {
+				a.log().ErrorContext(r.Context(), "httpwire: "+fn.name+" answered \"\" for an admitted request on a row whose class is not Public", "row", ep.Name)
+				a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// keyRate spends one token of the admitted key's bucket; a session or an
+// anonymous request is never counted.
+func (a *API) keyRate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, isKey := a.o.keyOf(r); isKey {
+			if wait, ok := a.o.keyRate.Take(id); !ok {
+				a.table.Catalog.WriteError(w, r, &Error{Code: "rate_limited", Message: "this API key is over its request rate", RetryAfter: max(wait, time.Second)})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -266,6 +391,8 @@ func (c *newChecker) document() *Schema {
 			c.fail("row %q has no operation of that operationId in the document", ep.Name)
 		case op.method != ep.Method || op.path != ep.Path:
 			c.fail("row %q is %s %s, but the document's operation is %s %s", ep.Name, ep.Method, ep.Path, op.method, op.path)
+		case !r.mount:
+			c.decodedParts(ep, op)
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(s.ops)) {
@@ -274,4 +401,54 @@ func (c *newChecker) document() *Schema {
 		}
 	}
 	return s
+}
+
+// decodedParts matches what the binder decodes on ep with what op declares:
+// each Params and Query field a parameter, required as the field is, no
+// other path or query parameter, and a JSON request body exactly when ep
+// has a Request. A mismatch would refuse every request at run time.
+func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
+	at := fmt.Sprintf("row %q", ep.Name)
+	declared := map[paramKey]bool{}
+	c.fieldParams(at, ep.Params, inPath, op, declared)
+	c.fieldParams(at, ep.Query, inQuery, op, declared)
+	for _, key := range slices.SortedFunc(maps.Keys(op.params), func(x, y paramKey) int {
+		return cmp.Or(cmp.Compare(x.in, y.in), cmp.Compare(x.name, y.name))
+	}) {
+		if (key.in == inPath || key.in == inQuery) && !declared[key] {
+			c.fail("%s: the document's %s parameter %q is no %s field", at, key.in, key.name, partOf[key.in])
+		}
+	}
+	hasBody := op.request != nil && op.request.schema != nil
+	switch {
+	case ep.Request != nil && !hasBody:
+		c.fail("%s: the row decodes a Request, but the document's operation has no JSON request body", at)
+	case ep.Request != nil && !op.request.required:
+		c.fail("%s: the document's request body is not required, but the row always decodes one", at)
+	case ep.Request == nil && hasBody:
+		c.fail("%s: the document's operation has a JSON request body, but the row has no Request", at)
+	}
+}
+
+var partOf = map[string]string{inPath: partParams, inQuery: partQuery}
+
+// fieldParams matches each field of t, decoded from the in parameters, with
+// op's parameter of its name, marking it in declared.
+func (c *newChecker) fieldParams(at string, t reflect.Type, in string, op *operation, declared map[paramKey]bool) {
+	if t == nil {
+		return
+	}
+	fields, _ := textFields(t)
+	for _, f := range fields {
+		key := paramKey{in, f.name}
+		declared[key] = true
+		switch p := op.params[key]; {
+		case p == nil:
+			c.fail("%s: %s field %q has no %s parameter in the document", at, partOf[in], f.name, in)
+		case f.optional && p.required:
+			c.fail("%s: %s field %q is optional, but the document's parameter is required", at, partOf[in], f.name)
+		case !f.optional && !p.required:
+			c.fail("%s: %s field %q is required, but the document's parameter is optional", at, partOf[in], f.name)
+		}
+	}
 }

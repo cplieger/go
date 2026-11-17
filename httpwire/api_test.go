@@ -327,6 +327,59 @@ func TestNewRefusesTheDocument(t *testing.T) {
 	})
 }
 
+// opOf answers the fixture document's operation at path and method.
+func opOf(paths map[string]any, path, method string) map[string]any {
+	return paths[path].(map[string]any)[method].(map[string]any)
+}
+
+func setParams(path, method string, params ...map[string]any) func(map[string]any) {
+	return func(paths map[string]any) {
+		list := make([]any, len(params))
+		for i, p := range params {
+			list[i] = p
+		}
+		opOf(paths, path, method)["parameters"] = list
+	}
+}
+
+func param(in, name string, required bool) map[string]any {
+	return map[string]any{"in": in, "name": name, "required": required, "schema": map[string]any{"type": "string"}}
+}
+
+func TestNewRefusesADocumentOffTheRowTypes(t *testing.T) {
+	doc := func(f func(map[string]any)) func(*testing.T, *apiCase) {
+		return func(t *testing.T, c *apiCase) { c.opts["schema"] = httpwire.WithSchema(editDoc(t, f)) }
+	}
+	runNewRefusals(t, map[string]newRefusal{
+		"a query field the document lacks": {doc(setParams("/api/jobs", "get")), []string{
+			`row "jobs.list": Query field "state" has no query parameter in the document`,
+		}},
+		"a query parameter no field reads": {doc(setParams("/api/jobs", "get", param("query", "state", false), param("query", "page", false))), []string{
+			`row "jobs.list": the document's query parameter "page" is no Query field`,
+		}},
+		"a query parameter required for an optional field": {doc(setParams("/api/jobs", "get", param("query", "state", true))), []string{
+			`row "jobs.list": Query field "state" is optional, but the document's parameter is required`,
+		}},
+		"a path parameter the document lacks": {doc(setParams("/api/jobs/{id}", "get")), []string{
+			`row "jobs.get": Params field "id" has no path parameter in the document`,
+		}},
+		"a path parameter the document leaves optional": {doc(setParams("/api/jobs/{id}", "get", param("path", "id", false))), []string{
+			`row "jobs.get": Params field "id" is required, but the document's parameter is optional`,
+		}},
+		"a request body the document lacks": {doc(func(paths map[string]any) { delete(opOf(paths, "/api/jobs", "post"), "requestBody") }), []string{
+			`row "jobs.start": the row decodes a Request, but the document's operation has no JSON request body`,
+		}},
+		"a request body the document leaves optional": {doc(func(paths map[string]any) {
+			opOf(paths, "/api/jobs", "post")["requestBody"].(map[string]any)["required"] = false
+		}), []string{`row "jobs.start": the document's request body is not required, but the row always decodes one`}},
+		"a request body the row lacks": {doc(func(paths map[string]any) {
+			opOf(paths, "/api/sso", "get")["requestBody"] = map[string]any{
+				"required": true, "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "object"}}},
+			}
+		}), []string{`row "auth.sso": the document's operation has a JSON request body, but the row has no Request`}},
+	})
+}
+
 func TestNewIncludesDeriveRefusals(t *testing.T) {
 	runNewRefusals(t, map[string]newRefusal{
 		"an empty Summary":                {func(_ *testing.T, c *apiCase) { row(c.tb, "jobs.list").Summary = "" }, []string{`row "jobs.list": Summary is empty`}},

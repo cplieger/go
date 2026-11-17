@@ -178,8 +178,8 @@ func bindingProblems(ep *Endpoint, b *Binding) []string {
 		got, want     reflect.Type
 		letter, field string
 	}{
-		{b.params, ep.Params, "P", "Params"},
-		{b.query, ep.Query, "Q", "Query"},
+		{b.params, ep.Params, "P", partParams},
+		{b.query, ep.Query, "Q", partQuery},
 		{b.body, ep.Request, "B", "Request"},
 	} {
 		if !declares(part.got, part.want) {

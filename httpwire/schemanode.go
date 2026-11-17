@@ -676,8 +676,8 @@ func (s *Schema) bodySchema(opID string, status int, body []byte) (n *node, requ
 // number or boolean a query value parsed to). The entry's Path is name.
 func (s *Schema) CheckParam(operation, in, name string, value any) *FieldError {
 	var n *node
-	if s != nil && s.ops[operation] != nil {
-		n = s.ops[operation].params[paramKey{in, name}]
+	if s != nil && s.ops[operation] != nil && s.ops[operation].params[paramKey{in, name}] != nil {
+		n = s.ops[operation].params[paramKey{in, name}].schema
 	}
 	if n == nil {
 		return &FieldError{Path: name, Code: codeUnknown, Message: "not a declared " + in + " parameter"}

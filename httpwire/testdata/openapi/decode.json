@@ -1,0 +1,321 @@
+{
+  "components": {
+    "schemas": {
+      "Circle": {
+        "properties": {
+          "radius": {
+            "type": "integer"
+          },
+          "type": {
+            "const": "circle"
+          }
+        },
+        "required": ["type", "radius"],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["name"],
+        "type": "object"
+      },
+      "ItemBody": {
+        "properties": {
+          "copies": {
+            "pattern": "^-?(?:0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "even": {
+            "type": "integer"
+          },
+          "keys": {
+            "type": "string",
+            "x-max-bytes": 32
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ItemKind"
+          },
+          "n": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string",
+            "x-max-bytes": 8
+          },
+          "shape": {
+            "$ref": "#/components/schemas/Shape"
+          },
+          "size": {
+            "maximum": 9007199254740992,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slots": {
+            "additionalProperties": {
+              "type": "string",
+              "x-max-bytes": 8
+            },
+            "propertyNames": {
+              "pattern": "^-?(?:0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "small": {
+            "maximum": 127,
+            "minimum": -128,
+            "type": "integer"
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "x-max-bytes": 8
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": ["name", "kind", "n", "copies", "size", "tags", "shape"],
+        "type": "object"
+      },
+      "ItemKind": {
+        "enum": ["book", "disc"],
+        "type": "string",
+        "x-max-bytes": 16
+      },
+      "Shape": {
+        "discriminator": {
+          "mapping": {
+            "circle": "#/components/schemas/Circle",
+            "square": "#/components/schemas/Square"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Circle"
+          },
+          {
+            "$ref": "#/components/schemas/Square"
+          }
+        ]
+      },
+      "Square": {
+        "properties": {
+          "side": {
+            "type": "integer"
+          },
+          "type": {
+            "const": "square"
+          }
+        },
+        "required": ["type", "side"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "decode fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/items": {
+      "get": {
+        "description": "Lists the items.",
+        "operationId": "items.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ItemKind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "big",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "flag",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "keys",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 32
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Item"
+                  },
+                  "type": ["array", "null"]
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List items"
+      },
+      "post": {
+        "description": "Stores one item.",
+        "operationId": "items.put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Store an item"
+      }
+    },
+    "/api/items/import": {
+      "post": {
+        "description": "Imports one item, answering its receipt.",
+        "operationId": "items.import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Import an item"
+      }
+    },
+    "/api/items/{kind}/{n}": {
+      "get": {
+        "description": "Reads one item.",
+        "operationId": "items.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ItemKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read an item"
+      }
+    },
+    "/api/items/{kind}/{n}/file": {
+      "get": {
+        "description": "Downloads one item's file.",
+        "operationId": "items.file",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ItemKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Download an item"
+      }
+    }
+  }
+}

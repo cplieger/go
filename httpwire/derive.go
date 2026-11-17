@@ -27,7 +27,7 @@ var (
 	}
 	ifMatchUnion  = []string{"if_match_required", "if_match_invalid", "stale_version"}
 	writeUnion    = []string{"wire_mismatch", "cross_origin_refused"}
-	everyRowUnion = []string{"accounts_unavailable", "maintenance", "host_not_allowed", codeInternal, "not_found", "method_not_allowed"}
+	everyRowUnion = []string{"accounts_unavailable", "maintenance", "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
 )
 
 var (
@@ -132,7 +132,7 @@ func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount boo
 			}
 		}
 	}
-	u.addIf(ep.Request != nil, "bad_body", "body_too_large")
+	u.addIf(ep.Request != nil, codeBadBody, "body_too_large")
 	u.addIf(ep.Kind == Raw && write, "body_too_large")
 	u.addIf(ep.Query != nil, "bad_query")
 	u.addIf(ep.IfMatch, ifMatchUnion...)
@@ -290,6 +290,7 @@ func (c *tableChecker) row(r rowRef, names map[string]*Endpoint) {
 	ep := r.ep
 	at := fmt.Sprintf("row %q", ep.Name)
 	c.shape(ep, at)
+	c.textParts(ep, at, r.mount)
 	c.kindAndStatus(ep, at)
 	for _, p := range accessProblems(ep.Access) {
 		c.fail("%s: %s", at, p)
@@ -316,13 +317,13 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	wildcards, err := pathWildcards(c.t.Prefix, ep.Path)
 	if err != nil {
 		c.fail("%s: %v", at, err)
-	} else if (wildcards > 0) != (ep.Params != nil) {
+	} else if (len(wildcards) > 0) != (ep.Params != nil) {
 		c.fail("%s: Params is set exactly when the path has wildcards", at)
 	}
 	for _, f := range []struct {
 		t    reflect.Type
 		name string
-	}{{ep.Params, "Params"}, {ep.Query, "Query"}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
+	}{{ep.Params, partParams}, {ep.Query, partQuery}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
 		if f.t == noneType {
 			c.fail("%s: %s is httpwire.None; leave it nil to declare none", at, f.name)
 		}
@@ -338,6 +339,56 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	}
 	if ep.MaxBody < 0 {
 		c.fail("%s: MaxBody is negative: %d", at, ep.MaxBody)
+	}
+}
+
+// textParts holds Params to the path's wildcards and, on a table row, every
+// Params and Query field to the types the binder parses from text. A mount
+// row's fields are its handler's to parse.
+func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
+	if ep.Params != nil && ep.Params != noneType {
+		c.pathParams(ep, at, mount)
+	}
+	if mount {
+		return
+	}
+	if ep.Query != nil && ep.Query != noneType {
+		_, problems := textFields(ep.Query)
+		c.failEach(at+": Query ", problems)
+	}
+	seen := map[reflect.Type]bool{}
+	for _, t := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
+		if t != nil {
+			c.failEach(at+": ", refusalProblems(t, seen))
+		}
+	}
+}
+
+// pathParams holds ep's Params fields to its path's wildcards, one each.
+func (c *tableChecker) pathParams(ep *Endpoint, at string, mount bool) {
+	wildcards, _ := pathWildcards(c.t.Prefix, ep.Path)
+	fields, problems := textFields(ep.Params)
+	for _, name := range wildcards {
+		if !slices.ContainsFunc(fields, func(f textField) bool { return f.name == name }) {
+			c.fail("%s: path wildcard {%s} has no Params field", at, name)
+		}
+	}
+	for _, f := range fields {
+		switch {
+		case !slices.Contains(wildcards, f.name):
+			c.fail("%s: Params field %q names no path wildcard", at, f.name)
+		case f.optional && !mount:
+			c.fail("%s: Params field %q is optional; a path value is always present", at, f.name)
+		}
+	}
+	if !mount {
+		c.failEach(at+": Params ", problems)
+	}
+}
+
+func (c *tableChecker) failEach(prefix string, problems []string) {
+	for _, p := range problems {
+		c.fail("%s%s", prefix, p)
 	}
 }
 
@@ -843,28 +894,28 @@ func isHex(b byte) bool { return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' ||
 
 // pathWildcards checks that path is the prefix then one or more segments,
 // each a literal or a whole {name}, names unique, and answers the wildcard
-// count.
-func pathWildcards(prefix, path string) (int, error) {
+// names in path order.
+func pathWildcards(prefix, path string) ([]string, error) {
 	rest, ok := strings.CutPrefix(path, prefix+"/")
 	if !ok || prefix == "" {
-		return 0, fmt.Errorf("path %q is not under Prefix %q", path, prefix)
+		return nil, fmt.Errorf("path %q is not under Prefix %q", path, prefix)
 	}
-	seen := map[string]bool{}
+	var names []string
 	for seg := range strings.SplitSeq(rest, "/") {
 		name, wild := strings.CutPrefix(seg, "{")
 		if !wild {
 			if !isLiteralSegment(seg) {
-				return 0, fmt.Errorf("path %q has segment %q, which is empty or not a literal of URL path characters", path, seg)
+				return nil, fmt.Errorf("path %q has segment %q, which is empty or not a literal of URL path characters", path, seg)
 			}
 			continue
 		}
 		name, closed := strings.CutSuffix(name, "}")
-		if !closed || !isIdent(name) || seen[name] {
-			return 0, fmt.Errorf("path %q has segment %q, which is not a whole {name} wildcard used once", path, seg)
+		if !closed || !isIdent(name) || slices.Contains(names, name) {
+			return nil, fmt.Errorf("path %q has segment %q, which is not a whole {name} wildcard used once", path, seg)
 		}
-		seen[name] = true
+		names = append(names, name)
 	}
-	return len(seen), nil
+	return names, nil
 }
 
 func isIdent(s string) bool {

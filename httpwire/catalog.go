@@ -21,13 +21,15 @@ import (
 
 const (
 	codeInternal    = "internal_error"
+	codeNotFound    = "not_found"
+	codeBadBody     = "bad_body"
 	internalMessage = "internal error"
 )
 
 // libraryCodes are the codes httpwire's own layers answer, each with its
 // default remediation.
 var libraryCodes = map[string]httpserver.CodeSpec{
-	"bad_body":                     {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
+	codeBadBody:                    {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
 	"bad_query":                    {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
 	"body_too_large":               {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
 	"cursor_invalid":               {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},

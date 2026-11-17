@@ -22,12 +22,17 @@ type Schema struct {
 type operation struct {
 	request   *requestBody
 	responses map[int]*response
-	params    map[paramKey]*node
+	params    map[paramKey]*param
 	method    string
 	path      string
 }
 
 type paramKey struct{ in, name string }
+
+type param struct {
+	schema   *node
+	required bool
+}
 
 // requestBody's schema is nil when the body has no application/json media.
 type requestBody struct {
@@ -187,7 +192,7 @@ func (p *parser) operation(path, method string, v any, at string) {
 	if !ok {
 		return
 	}
-	op := &operation{method: strings.ToUpper(method), path: path, responses: map[int]*response{}, params: map[paramKey]*node{}}
+	op := &operation{method: strings.ToUpper(method), path: path, responses: map[int]*response{}, params: map[paramKey]*param{}}
 	id, _ := m["operationId"].(string)
 	switch {
 	case id == "":
@@ -206,7 +211,7 @@ func (p *parser) operation(path, method string, v any, at string) {
 	p.responses(op, m["responses"], pointer(at, "responses"))
 }
 
-var paramPlaces = []string{"path", "query", "header", "cookie"}
+var paramPlaces = []string{inPath, inQuery, "header", "cookie"}
 
 func (p *parser) parameters(op *operation, v any, at string) {
 	list, ok := v.([]any)
@@ -232,7 +237,8 @@ func (p *parser) parameters(op *operation, v any, at string) {
 		case op.params[paramKey{in, name}] != nil:
 			p.fail(pat, "parameter %s %q declared twice", in, name)
 		default:
-			op.params[paramKey{in, name}] = p.schema(m["schema"], pointer(pat, "schema"))
+			required, _ := m["required"].(bool)
+			op.params[paramKey{in, name}] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required}
 		}
 	}
 }
