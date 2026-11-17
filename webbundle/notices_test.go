@@ -18,15 +18,18 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 		t.Parallel()
 		const pkg = "node_modules/@cplieger/fixture-a/"
 		c := newFixture(t, files{
-			pkg + "NOTICE":         "fixture-a notice\n",
-			pkg + "license.js":     "export const license = \"MIT\";\n",
-			pkg + "README.md":      "# fixture-a\n",
-			pkg + "copying":        "fixture-a copying\n",
-			pkg + "Licence.txt":    "fixture-a licence text\n",
-			pkg + "LICENSE.ts":     "export {};\n",
-			pkg + "NOTICE.map":     "{}\n",
-			pkg + "LICENSES/extra": "nested\n",
-			pkg + "lib/LICENSE":    "nested\n",
+			pkg + "NOTICE":                               "fixture-a notice\n",
+			pkg + "license.js":                           "export const license = \"MIT\";\n",
+			pkg + "README.md":                            "# fixture-a\n",
+			pkg + "copying":                              "fixture-a copying\n",
+			pkg + "Licence.txt":                          "fixture-a licence text\n",
+			pkg + "LICENSE.ts":                           "export {};\n",
+			pkg + "licenses.d.ts":                        "export {};\n",
+			pkg + "LICENSE-OFL-1.1":                      "fixture-a font licence\n",
+			pkg + "COPYING.LESSER":                       "fixture-a lesser copying\n",
+			pkg + "NOTICE.map":                           "{}\n",
+			pkg + "LICENSES/extra":                       "nested\n",
+			pkg + "lib/LICENSE":                          "nested\n",
 			"node_modules/@cplieger/unused/package.json": `{"name": "@cplieger/unused", "version": "9.9.9"}`,
 			"node_modules/@cplieger/unused/LICENSE":      "unused licence\n",
 		})
@@ -40,7 +43,7 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 			}
 		}
 		slices.Sort(copied)
-		notices := []string{"LICENSE.md", "Licence.txt", "NOTICE", "copying"}
+		notices := []string{"COPYING.LESSER", "LICENSE-OFL-1.1", "LICENSE.md", "Licence.txt", "NOTICE", "copying"}
 		var want []string
 		for _, n := range notices {
 			want = append(want, "@cplieger/fixture-a@1.2.3/"+n)
@@ -64,6 +67,24 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 			if _, ok := b.Files["licenses/"+name]; !ok {
 				t.Errorf("%s does not list licenses/%s; it lists %q", httpserver.BundlePath, name, slices.Sorted(maps.Keys(b.Files)))
 			}
+		}
+	})
+	t.Run("PackageOfAStylesheet", func(t *testing.T) {
+		t.Parallel()
+		const font = "node_modules/@cplieger/fixture-font/"
+		c := newFixture(t, files{
+			"src/app.css":          "@import \"@cplieger/fixture-font/css/font.css\";\n",
+			font + "package.json":  `{"name": "@cplieger/fixture-font", "version": "4.0.0"}`,
+			font + "css/font.css":  "@font-face { font-family: F; src: url(\"../fonts/f.woff2\"); }\n",
+			font + "fonts/f.woff2": "wOF2 fixture font bytes",
+			font + "LICENSE":       "fixture-font licence\n",
+		})
+		r := mustBuild(t, c)
+		if got := string(readFile(t, c.Out, "licenses/@cplieger/fixture-font@4.0.0/LICENSE")); got != "fixture-font licence\n" {
+			t.Errorf("licenses/@cplieger/fixture-font@4.0.0/LICENSE = %q, want the package's licence", got)
+		}
+		if !slices.Contains(r.Notices, "@cplieger/fixture-font") {
+			t.Errorf("Result.Notices = %q, want @cplieger/fixture-font among them", r.Notices)
 		}
 	})
 	t.Run("PackageWithNone", func(t *testing.T) {

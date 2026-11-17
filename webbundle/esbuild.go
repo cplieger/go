@@ -67,14 +67,17 @@ func fileLoaders() map[string]api.Loader {
 // do not depend on it.
 func options(src, outdir string, write bool) api.BuildOptions {
 	return api.BuildOptions{
-		AbsWorkingDir:     src,
-		Outdir:            outdir,
-		Write:             write,
-		Bundle:            true,
-		Metafile:          true,
-		EntryNames:        "[dir]/[name]-[hash]",
-		ChunkNames:        "assets/chunks/[name]-[hash]",
-		AssetNames:        "assets/[name]-[hash]",
+		AbsWorkingDir: src,
+		Outdir:        outdir,
+		Write:         write,
+		Bundle:        true,
+		Metafile:      true,
+		EntryNames:    "[dir]/[name]-[hash]",
+		ChunkNames:    "assets/chunks/[name]-[hash]",
+		AssetNames:    "assets/[name]-[hash]",
+		// Without a public path a script's import of an asset is a URL
+		// relative to the tree root, which a page at /a/b resolves under /a/.
+		PublicPath:        "/",
 		Loader:            fileLoaders(),
 		Engines:           engines(),
 		MinifyWhitespace:  true,

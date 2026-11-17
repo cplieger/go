@@ -151,24 +151,139 @@ shared(new SharedWorker(BUNDLE_URLS.worker));
 	}
 }
 
+// A script's import of an asset gives the URL the asset is served at, which
+// the page resolves from any path: an icon factory fed such URLs draws on a
+// nested page as on the root.
+func TestBuildScriptAssetImportIsItsServedURL(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{
+		"src/app.ts":         "import pin from \"./icons/pin.svg\";\nconsole.log(\"pin-url\", pin);\n",
+		"src/prepaint.js":    "import mark from \"./icons/mark.svg\";\ndocument.documentElement.dataset.mark = mark;\n",
+		"src/icons/pin.svg":  fixtureMark,
+		"src/icons/mark.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><path d="M1 4h6"/></svg>`,
+	})
+	mustBuild(t, c)
+	b := readBundle(t, c.Out)
+	for _, tc := range []struct {
+		entry, asset string
+		kind         webbundle.EntryKind
+	}{
+		{entry: "app", asset: "pin.svg", kind: webbundle.Module},
+		{entry: "prepaint", asset: "mark.svg", kind: webbundle.Classic},
+	} {
+		got := listed(b, hashedName(tc.asset))
+		if len(got) != 1 {
+			t.Errorf("listed %q for %s, want one hashed file", got, tc.asset)
+			continue
+		}
+		js := loadedJS(t, c.Out, entryPath(t, b, tc.entry, tc.kind))
+		if want := strconv.Quote("/" + got[0]); !bytes.Contains(js, []byte(want)) {
+			t.Errorf("the %s entry does not read %s as %s:\n%s", tc.entry, tc.asset, want, js)
+		}
+	}
+}
+
+// A module imported only by import() lands in a chunk of its own, fetched when
+// the page asks for it, never inlined into the entry.
+func TestBuildSplitsADynamicImport(t *testing.T) {
+	t.Parallel()
+	const marker = "lazy-chunk-marker"
+	c := newFixture(t, files{
+		"src/app.ts":  "export async function open() { const m = await import(\"./lazy\"); m.run(); }\nvoid open();\n",
+		"src/lazy.ts": "export function run() { console.log(" + strconv.Quote(marker) + "); }\n",
+	})
+	mustBuild(t, c)
+	b := readBundle(t, c.Out)
+	app := readFile(t, c.Out, entryPath(t, b, "app", webbundle.Module))
+	if bytes.Contains(app, []byte(marker)) {
+		t.Errorf("the module entry inlines the dynamically imported module:\n%s", app)
+	}
+	var holders []string
+	for _, ch := range listed(b, regexp.MustCompile(`^assets/chunks/[^/]+\.js$`)) {
+		if bytes.Contains(readFile(t, c.Out, ch), []byte(marker)) {
+			holders = append(holders, ch)
+		}
+	}
+	if len(holders) != 1 {
+		t.Fatalf("chunks holding the lazy module: %q, want one", holders)
+	}
+	if !bytes.Contains(app, []byte(`import("`)) || !slices.Contains(importedJS(entryPath(t, b, "app", webbundle.Module), app), holders[0]) {
+		t.Errorf("the module entry does not import() %s:\n%s", holders[0], app)
+	}
+}
+
+// A changed source gives its output another hashed name, and the rebuilt Out
+// holds no file of the tree it replaced.
+func TestBuildRebuildLeavesNoStaleFile(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, nil)
+	mustBuild(t, c)
+	before := entryPath(t, readBundle(t, c.Out), "prepaint", webbundle.Classic)
+
+	writeFiles(t, c.Src, files{"src/prepaint.js": "document.documentElement.dataset.theme = \"dark\";\n"})
+	mustBuild(t, c)
+	b := readBundle(t, c.Out)
+	if after := entryPath(t, b, "prepaint", webbundle.Classic); after == before {
+		t.Errorf("the prepaint entry kept %s after its source changed", after)
+	}
+	for name := range readTree(t, c.Out) {
+		if _, ok := b.Files[name]; !ok && name != httpserver.BundlePath {
+			t.Errorf("Out holds %s, which the rebuilt tree does not list", name)
+		}
+	}
+}
+
+// An app's cmd/bundle passes paths relative to the repo root; the tree must
+// be the one an absolute Src and Out give.
+func TestBuildFromRelativePaths(t *testing.T) {
+	c := newFixture(t, nil)
+	mustBuild(t, c)
+	want := readTree(t, c.Out)
+
+	root := filepath.Dir(c.Src)
+	t.Chdir(root)
+	rel := c
+	rel.Src, rel.Out = "static-src", filepath.Join("build", "static")
+	mustBuild(t, rel)
+	if got := readTree(t, filepath.Join(root, rel.Out)); !maps.EqualFunc(want, got, bytes.Equal) {
+		t.Errorf("a build from relative paths wrote %q, the absolute build %q", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
 // loadedJS is a module entry's bytes followed by those of every chunk it
 // imports, directly or through another chunk.
 func loadedJS(t testing.TB, out, entry string) []byte {
 	t.Helper()
-	importRe := regexp.MustCompile(`"(\./[^"]+\.js)"`)
 	var all []byte
 	seen := map[string]bool{entry: true}
 	for queue := []string{entry}; len(queue) > 0; queue = queue[1:] {
 		body := readFile(t, out, queue[0])
 		all = append(all, body...)
-		for _, m := range importRe.FindAllSubmatch(body, -1) {
-			if p := path.Join(path.Dir(queue[0]), string(m[1])); !seen[p] {
+		for _, p := range importedJS(queue[0], body) {
+			if !seen[p] {
 				seen[p] = true
 				queue = append(queue, p)
 			}
 		}
 	}
 	return all
+}
+
+var importRe = regexp.MustCompile(`"((?:\./|\.\./|/)[^"]+\.js)"`)
+
+// importedJS is every script body's import specifier resolved, as the browser
+// does, against from's URL, as a slash path in the tree.
+func importedJS(from string, body []byte) []string {
+	var got []string
+	for _, m := range importRe.FindAllSubmatch(body, -1) {
+		spec := string(m[1])
+		if rest, ok := strings.CutPrefix(spec, "/"); ok {
+			got = append(got, path.Clean(rest))
+			continue
+		}
+		got = append(got, path.Join(path.Dir(from), spec))
+	}
+	return got
 }
 
 func TestBuildLowersSyntaxThePinnedEnginesLack(t *testing.T) {
