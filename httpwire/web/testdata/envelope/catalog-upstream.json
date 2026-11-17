@@ -1,0 +1,4 @@
+{
+  "body": "{\"code\":\"arr_refused\",\"message\":\"Sonarr refused the search.\",\"remediation\":\"Check the Sonarr connection in Settings.\",\"upstream\":{\"service\":\"sonarr\",\"status\":401,\"message\":\"Unauthorized\"},\"request_id\":\"req-1\"}\n",
+  "valid": true
+}
