@@ -33,7 +33,7 @@ The option reads `slog.Default()` as each line is logged, so a server built befo
 
 ## Run
 
-`Run(ctx, srv, ln, opts...)` serves `srv` on `ln` until `ctx` is cancelled, then shuts down. Bind `ln` before you call it, for example with `net.ListenConfig.Listen`, so a port already in use fails at once. `srv` and `ln` must not be nil.
+`Run(ctx, srv, ln, opts...)` serves `srv` on `ln` until `ctx` is cancelled, then shuts down. Bind `ln` before you call it, for example with `Listen`, so a port still in use fails before serving starts. `srv` and `ln` must not be nil.
 
 When `ctx` is cancelled, `Run` sets one deadline, now plus the grace, and runs three steps against it:
 
@@ -98,7 +98,7 @@ ops, err := httpserver.ListenOps(ctx, httpserver.OpsConfig{
 if err != nil {
 	return err
 }
-ln, err := net.Listen("tcp", listenAddr)
+ln, err := httpserver.Listen(ctx, httpserver.ListenSetting{Name: "LISTEN_ADDR", Addr: listenAddr})
 if err != nil {
 	return err
 }
@@ -111,7 +111,8 @@ return httpserver.RunWithOps(ctx, ops, httpserver.Served{
 
 - `OpsAddr(value, def)` cuts edge spaces and invisible runes from the raw value and answers `def` for a blank one. The app documents `def` beside its product port. With `def` `""`, a blank value turns the listener off: `ListenOps` binds nothing, `Addr` is nil and `RunWithOps` serves the product listeners alone. httpserver reads no environment.
 - `CheckListenAddrs` takes every TCP listener the app opens, once, and refuses any two that would bind one socket, naming both settings and the port. Ports compare as `net.Listen` resolves them (`09737` is `9737`, `http` is `80`). Two addresses on one port clash when their hosts are equal after unmapping (`[::ffff:127.0.0.1]` is `127.0.0.1`), when either host is unspecified (empty, `0.0.0.0` or `[::]`), or when either is a host name, which may resolve to the other's address. On Linux Go's `tcp` listener on `[::]` also takes IPv4, so `[::]:9737` beside `0.0.0.0:9737` is refused. A blank value, port 0 and a value with no resolvable port pass, and `net.Listen` reports the last.
-- `ListenOps` binds before it returns. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error fails at once. The error names `Setting` and the address, with control characters cleaned. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.
+- `Listen(ctx, setting)` binds one TCP listener. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error, or `ctx` ending, fails at once. The error names the setting and the address, with control characters cleaned, and wraps the cause, so `errors.Is(err, syscall.EADDRINUSE)` and `CausedByCancellation` see through it. Bind each product listener with it.
+- `ListenOps` binds through `Listen` before it returns, `Setting` naming `Addr` in its error. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.
 - It answers `GET` and `HEAD` on `/healthz` and `/metrics` only. Another path answers `not_found` and another method `method_not_allowed` with `Allow: GET, HEAD`, both as the error envelope through `Errors` (nil is `WriteError`).
 - A `Host` outside `Hosts` answers 403 `host_not_allowed`, as on every listener. A request from the host's own network stack passes whatever its names (`WithLoopbackExempt`), so the image's healthcheck on `127.0.0.1` works. With no `Hosts`, only those local requests pass.
 - Both routes log at Debug (`WithProbeLogLevel`) to `Logger`, and `Recoverer` answers a panic with `internal_error`. `ReadTimeout` is 10 s and `WriteTimeout` 30 s, since each route answers in one short response.

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unicode"
 
@@ -27,10 +26,6 @@ const (
 	// so it adds to their grace and stays short.
 	opsShutdownGrace = time.Second
 )
-
-// opsBindRetry is how ListenOps retries EADDRINUSE: a restarted container's
-// previous process can still hold the port for a moment.
-var opsBindRetry = struct{ interval, window time.Duration }{250 * time.Millisecond, 5 * time.Second}
 
 // maxErrorValue bounds a configured value quoted in an error.
 const maxErrorValue = 64
@@ -79,13 +74,12 @@ type Ops struct {
 	claimed atomic.Bool
 }
 
-// ListenOps binds the ops listener before it returns: GET and HEAD on /healthz
-// and /metrics only, under WithProbeLogLevel and Recoverer, with a 10 s read
-// and 30 s write timeout, refusals through Errors, and a Host outside Hosts
-// refused unless LoopbackRequest holds. EADDRINUSE is retried every 250 ms for
-// up to 5 s; another bind error fails at once, naming Setting and the cleaned
-// address. A nil handler is an error even with the listener off. The listener
-// closes when ctx ends before RunWithOps takes it. docs/server.md has the rest.
+// ListenOps binds the ops listener with Listen, Setting naming Addr, before it
+// returns: GET and HEAD on /healthz and /metrics only, under WithProbeLogLevel
+// and Recoverer, with a 10 s read and 30 s write timeout, refusals through
+// Errors, and a Host outside Hosts refused unless LoopbackRequest holds. A nil
+// handler is an error even with the listener off. The listener closes when ctx
+// ends before RunWithOps takes it. docs/server.md has the rest.
 func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if c.Metrics == nil || c.Healthz == nil {
 		return nil, errors.New("httpserver: ListenOps needs non-nil Metrics and Healthz handlers")
@@ -101,7 +95,7 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	if err != nil {
 		return nil, fmt.Errorf("httpserver: %s: %w", c.Setting, err)
 	}
-	ln, err := bindOps(ctx, c.Setting, c.Addr)
+	ln, err := Listen(ctx, ListenSetting{Name: c.Setting, Addr: c.Addr})
 	if err != nil {
 		return nil, err
 	}
@@ -164,38 +158,6 @@ func opsRoutes(metrics, healthz http.Handler, errs ErrorResponder) http.Handler 
 		h.ServeHTTP(w, r)
 	})
 }
-
-func bindOps(ctx context.Context, setting, addr string) (net.Listener, error) {
-	deadline := time.Now().Add(opsBindRetry.window)
-	var lc net.ListenConfig
-	for {
-		ln, err := lc.Listen(ctx, "tcp", addr)
-		if err == nil {
-			return ln, nil
-		}
-		if !errors.Is(err, syscall.EADDRINUSE) || ctx.Err() != nil || !time.Now().Before(deadline) {
-			return nil, listenError(setting, addr, err)
-		}
-		t := time.NewTimer(opsBindRetry.interval)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return nil, listenError(setting, addr, context.Cause(ctx))
-		case <-t.C:
-		}
-	}
-}
-
-func listenError(setting, addr string, err error) error {
-	return fmt.Errorf("httpserver: %s %q: %w", setting, textsafe.SanitizeSingleLineBounded(addr, maxErrorValue), cleanError{err})
-}
-
-// cleanError carries err with its text cleaned: a resolver's error quotes the
-// raw address, which may hold a control character.
-type cleanError struct{ err error }
-
-func (e cleanError) Error() string { return textsafe.SanitizeSingleLineBounded(e.err.Error(), 256) }
-func (e cleanError) Unwrap() error { return e.err }
 
 // Served is a product listener RunWithOps serves with Run and Options.
 type Served struct {

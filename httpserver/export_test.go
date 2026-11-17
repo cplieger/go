@@ -67,9 +67,9 @@ func KeyedRateBuckets(l *KeyedRateLimiter) int {
 func OpsServer(o *Ops) *http.Server   { return o.srv }
 func OpsListener(o *Ops) net.Listener { return o.ln }
 
-// SetOpsBindRetry shortens ListenOps's bind retry for the test.
-func SetOpsBindRetry(t interface{ Cleanup(func()) }, interval, window time.Duration) {
-	prev := opsBindRetry
-	opsBindRetry.interval, opsBindRetry.window = interval, window
-	t.Cleanup(func() { opsBindRetry = prev })
+// SetListenRetry shortens Listen's EADDRINUSE retry for the test.
+func SetListenRetry(t interface{ Cleanup(func()) }, interval, window time.Duration) {
+	prev := listenRetry
+	listenRetry.interval, listenRetry.window = interval, window
+	t.Cleanup(func() { listenRetry = prev })
 }
