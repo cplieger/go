@@ -7,11 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
 
 	"github.com/cplieger/go/textsafe"
 )
@@ -30,20 +28,6 @@ const (
 // maxErrorValue bounds a configured value quoted in an error.
 const maxErrorValue = 64
 
-// OpsAddr is the ops address from OPS_LISTEN_ADDR's raw value: edge spaces and
-// invisible runes cut, and blank, the variable's default, is def, the app's
-// documented ops address. A def of "" makes the listener opt-in.
-func OpsAddr(value, def string) string {
-	if v := strings.TrimFunc(value, edgeRune); v != "" {
-		return v
-	}
-	return def
-}
-
-// edgeRune reports a rune a pasted value can carry at its edges that
-// net.Listen cannot resolve; strings.TrimSpace keeps zero-width runes.
-func edgeRune(r rune) bool { return unicode.IsSpace(r) || invisibleRune(r) }
-
 // OpsConfig configures ListenOps.
 type OpsConfig struct {
 	// Metrics answers GET /metrics; required.
@@ -57,7 +41,7 @@ type OpsConfig struct {
 	Logger *slog.Logger
 	// Setting names the setting Addr came from ("OPS_LISTEN_ADDR") in errors.
 	Setting string
-	// Addr is OpsAddr's answer; "" opens nothing.
+	// Addr is read through ListenAddr; blank opens nothing.
 	Addr string
 	// Hosts are the host names answered besides loopback's.
 	Hosts []string
@@ -84,7 +68,8 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	if c.Metrics == nil || c.Healthz == nil {
 		return nil, errors.New("httpserver: ListenOps needs non-nil Metrics and Healthz handlers")
 	}
-	if c.Addr == "" {
+	addr := ListenAddr(c.Addr, "")
+	if addr == "" {
 		return &Ops{}, nil
 	}
 	errs := c.Errors
@@ -95,7 +80,7 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	if err != nil {
 		return nil, fmt.Errorf("httpserver: %s: %w", c.Setting, err)
 	}
-	ln, err := Listen(ctx, ListenSetting{Name: c.Setting, Addr: c.Addr})
+	ln, err := Listen(ctx, ListenSetting{Name: c.Setting, Addr: addr})
 	if err != nil {
 		return nil, err
 	}

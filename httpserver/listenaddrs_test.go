@@ -27,6 +27,28 @@ func listenSetting(addr string) httpserver.ListenSetting {
 	return httpserver.ListenSetting{Name: "LISTEN_ADDR", Addr: addr}
 }
 
+func TestListenAddr(t *testing.T) {
+	for name, tc := range map[string]struct{ value, def, want string }{
+		"blank takes the default":          {"", ":9738", ":9738"},
+		"spaces only take the default":     {"  \t", ":9738", ":9738"},
+		"edge spaces cut":                  {"  127.0.0.1:9000\t", ":9738", "127.0.0.1:9000"},
+		"zero-width runes cut":             {"\u200b:9000\ufeff", ":9738", ":9000"},
+		"a pasted newline cut":             {":9000\r\n", ":9738", ":9000"},
+		"a bidi control cut":               {"\u202e:9000", ":9738", ":9000"},
+		"a line separator cut":             {":9000\u2028", ":9738", ":9000"},
+		"invisible only takes the default": {"\u200b \u2060", ":9738", ":9738"},
+		"inner runes are kept":             {"[::1]: 9000", ":9738", "[::1]: 9000"},
+		"blank with no default is off":     {" ", "", ""},
+		"a value with no default is kept":  {":9000", "", ":9000"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := httpserver.ListenAddr(tc.value, tc.def); got != tc.want {
+				t.Errorf("ListenAddr(%q, %q) = %q, want %q", tc.value, tc.def, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestListenBindsAddr(t *testing.T) {
 	ln, err := httpserver.Listen(t.Context(), listenSetting("127.0.0.1:0"))
 	if err != nil {
@@ -38,6 +60,17 @@ func TestListenBindsAddr(t *testing.T) {
 		t.Fatalf("dial %s: %v", ln.Addr(), err)
 	}
 	_ = conn.Close()
+}
+
+func TestListenTrimsAddrEdges(t *testing.T) {
+	ln, err := httpserver.Listen(t.Context(), listenSetting(" \u200b127.0.0.1:0\r\n"))
+	if err != nil {
+		t.Fatalf("Listen = %v, want the address bound with its edges cut", err)
+	}
+	defer ln.Close()
+	if host, _, _ := net.SplitHostPort(ln.Addr().String()); host != "127.0.0.1" {
+		t.Errorf("bound %v, want 127.0.0.1", ln.Addr())
+	}
 }
 
 func TestListenRetriesAddrInUse(t *testing.T) {
@@ -109,7 +142,7 @@ func TestListenErrorNamesSettingAndCleanedAddr(t *testing.T) {
 		}
 	})
 	t.Run("a blank address is refused", func(t *testing.T) {
-		for _, addr := range []string{"", " \t"} {
+		for _, addr := range []string{"", " \t", "\u200b\ufeff "} {
 			ln, err := httpserver.Listen(t.Context(), listenSetting(addr))
 			if err == nil {
 				t.Errorf("Listen(%q) bound %v, want an error", addr, ln.Addr())
@@ -157,14 +190,16 @@ func TestListenCancelledDuringRetry(t *testing.T) {
 func TestCheckListenAddrs(t *testing.T) {
 	type s = httpserver.ListenSetting
 	pass := map[string][]s{
-		"two ports":                 {{"LISTEN_ADDR", ":9737"}, {"OPS_LISTEN_ADDR", ":9738"}},
-		"two port-0 addresses":      {{"LISTEN_ADDR", ":0"}, {"OPS_LISTEN_ADDR", "127.0.0.1:0"}},
-		"a blank setting is off":    {{"LISTEN_ADDR", ":9737"}, {"OPS_LISTEN_ADDR", ""}},
-		"two specified addresses":   {{"LISTEN_ADDR", "127.0.0.1:9737"}, {"OPS_LISTEN_ADDR", "127.0.0.2:9737"}},
-		"two families' loopbacks":   {{"LISTEN_ADDR", "[::1]:9737"}, {"OPS_LISTEN_ADDR", "127.0.0.1:9737"}},
-		"no port is left to listen": {{"LISTEN_ADDR", "127.0.0.1"}, {"OPS_LISTEN_ADDR", ":9737"}},
-		"an unknown service name":   {{"LISTEN_ADDR", ":no-such-service"}, {"OPS_LISTEN_ADDR", ":9737"}},
-		"one setting":               {{"LISTEN_ADDR", ":9737"}},
+		"two ports":                        {{"LISTEN_ADDR", ":9737"}, {"OPS_LISTEN_ADDR", ":9738"}},
+		"two port-0 addresses":             {{"LISTEN_ADDR", ":0"}, {"OPS_LISTEN_ADDR", "127.0.0.1:0"}},
+		"a blank setting is off":           {{"LISTEN_ADDR", ":9737"}, {"OPS_LISTEN_ADDR", ""}},
+		"two specified addresses":          {{"LISTEN_ADDR", "127.0.0.1:9737"}, {"OPS_LISTEN_ADDR", "127.0.0.2:9737"}},
+		"two families' loopbacks":          {{"LISTEN_ADDR", "[::1]:9737"}, {"OPS_LISTEN_ADDR", "127.0.0.1:9737"}},
+		"no port is left to listen":        {{"LISTEN_ADDR", "127.0.0.1"}, {"OPS_LISTEN_ADDR", ":9737"}},
+		"an unknown service name":          {{"LISTEN_ADDR", ":no-such-service"}, {"OPS_LISTEN_ADDR", ":9737"}},
+		"one setting":                      {{"LISTEN_ADDR", ":9737"}},
+		"an invisible-only setting is off": {{"LISTEN_ADDR", ":9737"}, {"OPS_LISTEN_ADDR", "\u200b \ufeff"}},
+		"edge runes cut to two ports":      {{"LISTEN_ADDR", " 127.0.0.1:9737\n"}, {"OPS_LISTEN_ADDR", "\u200b127.0.0.1:9738"}},
 	}
 	for name, settings := range pass {
 		t.Run("pass "+name, func(t *testing.T) {
@@ -188,6 +223,8 @@ func TestCheckListenAddrs(t *testing.T) {
 		"one address in two spellings":       {[]s{{"LISTEN_ADDR", "[0:0::1]:9737"}, {"OPS_LISTEN_ADDR", "[::1]:9737"}}, "9737", ""},
 		"a mapped address and its IPv4 form": {[]s{{"LISTEN_ADDR", "[::ffff:127.0.0.1]:9737"}, {"OPS_LISTEN_ADDR", "127.0.0.1:9737"}}, "9737", ""},
 		"a name beside an address":           {[]s{{"LISTEN_ADDR", "myhost:9737"}, {"OPS_LISTEN_ADDR", "127.0.0.1:9737"}}, "9737", "IP literal"},
+		"a pasted newline after the port":    {[]s{{"LISTEN_ADDR", ":9737"}, {"OPS_LISTEN_ADDR", "127.0.0.1:9737\r\n"}}, "9737", ""},
+		"zero-width runes at both edges":     {[]s{{"LISTEN_ADDR", "\ufeff[::1]:9737\u200b"}, {"OPS_LISTEN_ADDR", "[::1]:9737"}}, "9737", ""},
 	}
 	for name, tc := range refuse {
 		t.Run("refuse "+name, func(t *testing.T) {

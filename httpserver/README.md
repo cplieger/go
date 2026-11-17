@@ -104,7 +104,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 - Static files: `StaticHandler` with `WithStaticCacheControl` and `WithStaticETags`, `ContentTypes`, `InlineScriptHashes`, `InlineStyleHashes`.
 - Single-page apps: `SPA` (`SPAConfig`), `Page`, `CheckPages`, `NewPageMatcher` (`PageMatcher`, `PageMatch`), `NotFound`, the manifest (`BundlePath`, `ReadBundle`, `Bundle`, `BundleEntry`, `BundleKind`), `SPAPolicy`, `CheckShell`, and `OutagePage` (`OutageConfig`, `OutageFile`, `OutageClass`, `OutageCommand`).
 - Test helpers in `httpservertest`: `CheckSPA`, `CheckNoUI`, `CheckCodeSpecs`.
-- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `OpsAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`), and `Listen` and `CheckListenAddrs` over `ListenSetting`.
+- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `ListenAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`), and `Listen` and `CheckListenAddrs` over `ListenSetting`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2).
 
@@ -136,6 +136,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - A client matching `Recoverer`'s 500 message reads `internal error`.
 - `ClientResolution.IgnoredPublic` judges an ignored forwarded address as `go/ssrf`'s `IsPublicAddr` does, so a shared (RFC 6598), documentation or other non-routable address no longer sets it.
 - A `StaticHandler` file with an extension outside the content-type table, such as `.jpg` or `.woff`, now answers `application/octet-stream`. Convert it to a listed format, or serve it with your own handler.
+- Code written against `v2.0.0-dev.1` or `v2.0.0-dev.2` calls `ListenAddr` where it called `OpsAddr`, with the same arguments.
 - Code written against `v2.0.0-dev.1` wraps each `OutageConfig.Commands` string as `httpserver.OutageCommand{Run: s}`, since the field is now `[]OutageCommand`. A line that explained a command moves into its `Note`, and a line about the outage as a whole into `Notice`.
 
 ## Related projects
