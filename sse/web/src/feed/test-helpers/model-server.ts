@@ -14,7 +14,7 @@ import { changed, listening, position } from "./feed-harness.js";
 
 export type ModelKind = keyof typeof KINDS;
 
-export interface ModelRow {
+interface ModelRow {
   readonly id: string;
   /** The revision of the commit that wrote the row. */
   readonly v: number;
@@ -22,7 +22,7 @@ export interface ModelRow {
   readonly epoch: string;
 }
 
-export type ModelRows = Readonly<Record<ModelKind, ModelRow>>;
+type ModelRows = Readonly<Record<ModelKind, ModelRow>>;
 
 const SIGNAL_KINDS: ReadonlySet<string> = new Set(["settings"]);
 const WIRE = "0123456789abcdef";
@@ -72,7 +72,7 @@ interface Position {
 }
 
 /** A screen's rows for one subscription, checked against the positions it is handed. */
-export class ModelSink implements FeedSink<ModelRow> {
+class ModelSink implements FeedSink<ModelRow> {
   readonly rows = new Map<string, ModelRow>();
   sub: Subscription | null = null;
   /** Its newest `stale()` read failed, and no read since has answered. */

@@ -122,6 +122,15 @@ func TestFeedFixturesRoundTrip(t *testing.T) {
 			t.Errorf("declared kind %q of source %q is not a valid name pair", kind, source)
 		}
 	}
+	sources := make(map[string]bool, len(fc.Declared.Kinds))
+	for _, source := range fc.Declared.Kinds {
+		sources[source] = true
+	}
+	for _, source := range fc.Declared.Logged {
+		if !sources[source] {
+			t.Errorf("logged source %q has no declared kind", source)
+		}
+	}
 	for _, c := range fc.Changed {
 		t.Run(c.Name, func(t *testing.T) { checkChangedCase(t, c) })
 	}

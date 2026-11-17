@@ -82,7 +82,7 @@ const epochParam = "epoch"
 type sfKind byte
 
 const (
-	sfNone sfKind = iota
+	_ sfKind = iota
 	sfInteger
 	sfString
 	sfOther

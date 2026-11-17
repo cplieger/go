@@ -11,7 +11,6 @@ import {
   parseChanged,
   parseListening,
   parsePosition,
-  peekListening,
   type ChangedFrame,
   type Frozen,
   type ListeningFrame,
@@ -100,15 +99,13 @@ describe("feed fixtures parse as the Go half encodes", () => {
 
   it.each(cases.listening)("listening $name", (c) => {
     const data = frameData(c);
-    const peeked = peekListening(data);
     const parsed = parseListening(data);
     if (c.frozen === undefined) {
-      expect(peeked.ok).toBe(false);
       expect(parsed).toMatchObject({ kind: "invalid", frozen: null });
       return;
     }
     const frozen = frozenOf(c.frozen);
-    expect(peeked).toEqual({ ok: true, frozen });
+    expect(parsed.frozen).toEqual(frozen);
     if (c.error === "other_format") {
       expect(parsed).toEqual({ kind: "other_format", frozen });
       return;

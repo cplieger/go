@@ -16,7 +16,7 @@ export interface ParsedEvent {
  * the sticky last event id. The other three are optional and each fires for one wire feature:
  * a well-formed `retry:` value, a comment line, and the buffer cap being passed.
  */
-export interface ParserHandlers {
+interface ParserHandlers {
   readonly onEvent: (event: ParsedEvent) => void;
   readonly onRetry?: (ms: number) => void;
   readonly onComment?: () => void;
@@ -31,7 +31,7 @@ export interface ParserHandlers {
  * previous frame and including its own terminating blank line. It must be at least
  * MAX_FRAME_BYTES, or a frame the server is entitled to send would abort every connection.
  */
-export interface ParserOptions {
+interface ParserOptions {
   readonly maxBufferBytes: number;
 }
 
@@ -40,7 +40,7 @@ export interface ParserOptions {
  * or a multi-byte character, and the parse resumes from the next chunk. Once a frame passes
  * maxBufferBytes the parser latches off — every further feed is ignored until reset().
  */
-export interface Parser {
+interface Parser {
   feed(chunk: Uint8Array): void;
   /** Returns the parser to its construction state; a partial event is discarded. */
   reset(): void;

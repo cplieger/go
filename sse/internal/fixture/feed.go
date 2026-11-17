@@ -638,7 +638,6 @@ func (src *feedSource) apply(rows []commitRow, kinds []string) feedwire.Changed 
 
 type sourceControl struct {
 	Source string `json:"source"`
-	Kind   string `json:"kind"`
 	Rev    uint64 `json:"rev"`
 }
 

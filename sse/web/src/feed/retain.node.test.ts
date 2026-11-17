@@ -13,7 +13,7 @@ import {
   sink,
 } from "./test-helpers/feed-harness.js";
 import { FEED_VERSION } from "./version.js";
-import { parseListening, peekListening } from "./wire.js";
+import { parseListening } from "./wire.js";
 
 const W1 = "0123456789abcdef";
 const W2 = "fedcba9876543210";
@@ -123,8 +123,8 @@ describe("retainListening", () => {
       listening([{ source: "store", epoch: E1, floors: { runs: 6 } }], W2, FEED_VERSION + 1),
     );
     expect(other?.data).toBe(`{"feed":${String(FEED_VERSION + 1)},"wire":"${W2}"}`);
-    expect(peekListening(other?.data ?? "")).toEqual({
-      ok: true,
+    expect(parseListening(other?.data ?? "")).toEqual({
+      kind: "other_format",
       frozen: { feed: FEED_VERSION + 1, wire: W2 },
     });
     expect(retainListening(other, changed("store", E1, 9, ["runs"]))).toBe(other);

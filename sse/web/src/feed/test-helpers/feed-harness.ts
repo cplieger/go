@@ -19,9 +19,9 @@ export const E2 = "41ab0c9d8e7f6a5b4c3d2e1f00112233";
 interface Row {
   readonly id: string;
 }
-export type Rows = Readonly<Record<"2fa" | "budgets" | "runs" | "queue" | "settings", Row>>;
+type Rows = Readonly<Record<"2fa" | "budgets" | "runs" | "queue" | "settings", Row>>;
 
-export interface SourceFloors {
+interface SourceFloors {
   readonly source: string;
   readonly epoch: string;
   readonly floors: Readonly<Record<string, number>>;

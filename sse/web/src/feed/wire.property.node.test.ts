@@ -6,7 +6,6 @@ import {
   parseChanged,
   parseListening,
   parsePosition,
-  peekListening,
   type ChangedFrame,
   type ListeningFrame,
   type Position,
@@ -81,7 +80,6 @@ describe("the feed wire parsers", () => {
     fc.assert(
       fc.property(frameish, (data) => {
         expect(typeof parseChanged(data).ok).toBe("boolean");
-        expect(typeof peekListening(data).ok).toBe("boolean");
         expect(["ok", "other_format", "invalid"]).toContain(parseListening(data).kind);
       }),
     );
@@ -107,7 +105,6 @@ describe("the feed wire parsers", () => {
     fc.assert(
       fc.property(listening, (l) => {
         const frozen = { feed: 1, wire: l.wire };
-        expect(peekListening(encodeListening(l))).toEqual({ ok: true, frozen });
         expect(parseListening(encodeListening(l))).toEqual({ kind: "ok", frozen, listening: l });
       }),
     );

@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import ts from "typescript";
 
 /** One use of a `[SecureContext]` member in a source file. */
-export interface Finding {
+interface Finding {
   readonly path: string;
   readonly line: number;
   readonly member: string;

@@ -5,7 +5,6 @@ import {
   parseChanged,
   parseListening,
   parsePosition,
-  peekListening,
   validEpoch,
   validKind,
   validSource,
@@ -42,11 +41,10 @@ describe("numbers read as IEEE doubles", () => {
   });
 
   it("reads a feed of -0 as the other format 0", () => {
-    expect(peekListening(`{"feed":-0,"sources":[]}`)).toEqual({
-      ok: true,
+    expect(parseListening(`{"feed":-0,"sources":[]}`)).toEqual({
+      kind: "other_format",
       frozen: { feed: 0, wire: null },
     });
-    expect(parseListening(`{"feed":-0,"sources":[]}`).kind).toBe("other_format");
   });
 });
 
@@ -54,7 +52,11 @@ describe("the 64 KiB bound counts UTF-8 bytes", () => {
   it("refuses a frame whose UTF-16 length fits but whose UTF-8 length does not", () => {
     const data = `{"source":"store","epoch":"${EPOCH}","rev":7,"kinds":["runs"],"x":"${"\u{1f600}".repeat(16_400)}"}`;
     expect(data.length).toBeLessThanOrEqual(MAX_FEED_FRAME_BYTES);
-    expect(peekListening(data)).toEqual({ ok: false, reason: "frame data above 64 KiB" });
+    expect(parseListening(data)).toEqual({
+      kind: "invalid",
+      frozen: null,
+      reason: "frame data above 64 KiB",
+    });
   });
 
   it("measures a string member's UTF-8 bytes at the bound", () => {
@@ -62,8 +64,8 @@ describe("the 64 KiB bound counts UTF-8 bytes", () => {
     const room = MAX_FEED_FRAME_BYTES - name.length - 2;
     const at = `${name}${"\u20ac".repeat(Math.floor(room / 3))}${"a".repeat(room % 3)}"}`;
     const past = at.replace('"}', 'a"}');
-    expect(peekListening(at)).toEqual({ ok: true, frozen: { feed: 1, wire: WIRE } });
-    expect(peekListening(past).ok).toBe(false);
+    expect(parseListening(at).frozen).toEqual({ feed: 1, wire: WIRE });
+    expect(parseListening(past).frozen).toBeNull();
   });
 });
 
@@ -88,8 +90,8 @@ describe("member names are read as data", () => {
   });
 
   it("does not read a missing feed member from the prototype", () => {
-    expect(peekListening(`{"sources":[]}`).ok).toBe(false);
-    expect(peekListening(`{"valueOf":1,"sources":[]}`).ok).toBe(false);
+    expect(parseListening(`{"sources":[]}`).frozen).toBeNull();
+    expect(parseListening(`{"valueOf":1,"sources":[]}`).frozen).toBeNull();
   });
 });
 

@@ -51,16 +51,15 @@ interface Refused {
   readonly reason: string;
 }
 
-export type ChangedResult = { readonly ok: true; readonly changed: ChangedFrame } | Refused;
-export type PeekResult = { readonly ok: true; readonly frozen: Frozen } | Refused;
-export type PositionResult =
-  { readonly ok: true; readonly positions: readonly Position[] } | Refused;
+type ChangedResult = { readonly ok: true; readonly changed: ChangedFrame } | Refused;
+type PeekResult = { readonly ok: true; readonly frozen: Frozen } | Refused;
+type PositionResult = { readonly ok: true; readonly positions: readonly Position[] } | Refused;
 
 /**
  * `other_format`: the frozen members read and `feed` is not `FEED_VERSION`, so nothing else was
  * looked at. `invalid` carries the frozen members when they read and the rest did not parse.
  */
-export type ListeningResult =
+type ListeningResult =
   | { readonly kind: "ok"; readonly frozen: Frozen; readonly listening: ListeningFrame }
   | { readonly kind: "other_format"; readonly frozen: Frozen }
   | { readonly kind: "invalid"; readonly frozen: Frozen | null; readonly reason: string };
@@ -204,15 +203,6 @@ function peekObject(o: JsonObject): PeekResult {
   }
   // + 0 turns a -0 into 0, which is the integer feedwire reads.
   return { ok: true, frozen: { feed: feed + 0, wire } };
-}
-
-/**
- * Reads only the frozen members of a listening frame's data, in any feed format: `feed`, a safe
- * integer, and `wire`, 16 lowercase hex when present. No other member is looked at.
- */
-export function peekListening(data: string): PeekResult {
-  const parsed = frameObject(data);
-  return parsed.ok ? peekObject(parsed.obj) : parsed;
 }
 
 function parseSource(raw: unknown): ListeningSource | string {
