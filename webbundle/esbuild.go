@@ -214,25 +214,31 @@ func buildStyle(src string, e Entry, outdir string, write bool) (built, error) {
 	return runBuild(&opts, "style entry "+e.Path, true)
 }
 
-// BuildStyle returns the CSS file at sheet, a slash path under src, bundled
-// exactly as a Style entry is (the pinned engines, the file loaders, the
-// assets/<name>-<hash> names, minified), and writes nothing. A test passes it
-// where it needs one stylesheet's built text without a whole Build.
-func BuildStyle(src, sheet string) ([]byte, error) {
-	if src == "" {
-		return nil, errors.New("webbundle: BuildStyle: src is empty")
+// Stylesheet names one CSS file for [BuildStyle].
+type Stylesheet struct {
+	Src  string // the static-src root, as Config.Src
+	Path string // the CSS file, a slash path under Src
+}
+
+// BuildStyle returns s.Path bundled exactly as a Style entry is (the pinned
+// engines, the file loaders, the assets/<name>-<hash> names, minified), and
+// writes nothing. A test passes it where it needs one stylesheet's built text
+// without a whole Build.
+func BuildStyle(s Stylesheet) ([]byte, error) {
+	if s.Src == "" {
+		return nil, errors.New("webbundle: BuildStyle: Src is empty")
 	}
-	abs, err := filepath.Abs(src)
+	abs, err := filepath.Abs(s.Src)
 	if err != nil {
 		return nil, fmt.Errorf("webbundle: BuildStyle: %w", err)
 	}
 	b := &build{src: abs}
-	p, err := b.srcFile("stylesheet", sheet)
+	p, err := b.srcFile("stylesheet", s.Path)
 	if err != nil {
 		return nil, err
 	}
 	if path.Ext(p) != cssExt {
-		return nil, fmt.Errorf("webbundle: stylesheet %s is not a .css file", sheet)
+		return nil, fmt.Errorf("webbundle: stylesheet %s is not a .css file", s.Path)
 	}
 	e := Entry{Name: strings.TrimSuffix(path.Base(p), cssExt), Path: p, Kind: Style}
 	r, err := buildStyle(abs, e, filepath.Join(abs, ".webbundle-style"), false)
@@ -241,7 +247,7 @@ func BuildStyle(src, sheet string) ([]byte, error) {
 	}
 	css, ok := r.entries[p]
 	if !ok {
-		return nil, fmt.Errorf("webbundle: stylesheet %s built no CSS", sheet)
+		return nil, fmt.Errorf("webbundle: stylesheet %s built no CSS", s.Path)
 	}
 	i := slices.IndexFunc(r.outputs, func(o output) bool { return o.path == css })
 	return r.outputs[i].contents, nil

@@ -72,7 +72,7 @@ func TestBuildStyleEqualsStyleEntryFile(t *testing.T) {
 	built := readFile(t, c.Out, entryPath(t, readBundle(t, c.Out), "app", webbundle.Style))
 	src, out := readTree(t, c.Src), readTree(t, c.Out)
 
-	got, err := webbundle.BuildStyle(c.Src, "src/app.css")
+	got, err := webbundle.BuildStyle(webbundle.Stylesheet{Src: c.Src, Path: "src/app.css"})
 	if err != nil {
 		t.Fatalf("BuildStyle: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestBuildStyleRefuses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := webbundle.BuildStyle(c.Src, tc.path)
+			got, err := webbundle.BuildStyle(webbundle.Stylesheet{Src: c.Src, Path: tc.path})
 			switch {
 			case err == nil:
 				t.Errorf("BuildStyle(%q) = %q, want an error", tc.path, got)
