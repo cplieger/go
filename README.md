@@ -1,6 +1,6 @@
 # go
 
-These are the general-purpose Go libraries the cplieger projects build on, one Go module per directory. Each module has its own version, its own tags (`<module>/vX.Y.Z`) and its own README, and you import it by its directory:
+These are the general-purpose Go libraries the cplieger projects build on, one Go module per directory. Each module has its own version, its own tags (`<module>/vX.Y.Z`) and its own README, and you import it by its directory, with `/vN` added from major 2 (each module's README gives its exact `go get` line):
 
 ```sh
 go get github.com/cplieger/go/<module>@latest
