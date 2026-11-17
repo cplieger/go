@@ -88,10 +88,12 @@ func (n *node) immediate() []*node {
 	return nil
 }
 
+const kwItems = "items"
+
 var annotations = []string{"description", "format", "contentEncoding", "default"}
 
 var schemaKeywords = append([]string{
-	"type", "properties", "required", "additionalProperties", "propertyNames", "items", "enum", "const",
+	"type", "properties", "required", "additionalProperties", "propertyNames", kwItems, "enum", "const",
 	"minimum", "maximum", "minLength", "maxLength", "x-max-bytes", "pattern", "minItems", "maxItems",
 	"$ref", "anyOf", "oneOf", "discriminator",
 }, annotations...)
@@ -230,8 +232,8 @@ func (p *parser) plain(n *node, m map[string]any, at string) {
 	n.constant, n.hasConst = m["const"]
 	p.bounds(n, m, at)
 	p.members(n, m, at)
-	if v, ok := m["items"]; ok {
-		n.items = p.schema(v, pointer(at, "items"))
+	if v, ok := m[kwItems]; ok {
+		n.items = p.schema(v, pointer(at, kwItems))
 	}
 }
 
