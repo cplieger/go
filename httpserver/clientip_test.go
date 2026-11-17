@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"github.com/cplieger/go/ssrf"
 )
 
 var provenanceTrusted = []netip.Prefix{
@@ -50,8 +51,8 @@ var provenanceCases = []provenanceCase{
 		ip: "192.168.1.20", peer: "10.0.0.1", forwarded: true,
 	},
 	{
-		name: "repeated header lines join as one list", remote: "10.0.0.1:4000", xff: "8.8.8.8\n203.0.113.9",
-		ip: "203.0.113.9", peer: "10.0.0.1", forwarded: true,
+		name: "repeated header lines join as one list", remote: "10.0.0.1:4000", xff: "8.8.8.8\n9.9.9.9",
+		ip: "9.9.9.9", peer: "10.0.0.1", forwarded: true,
 	},
 	{
 		name: "trusted hops only answer the peer", remote: "10.0.0.1:4000", xff: "10.0.0.3, 10.0.0.2",
@@ -86,15 +87,15 @@ var provenanceCases = []provenanceCase{
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "untrusted peer sending a public X-Forwarded-For", remote: "192.168.1.50:4000", xff: "192.168.1.20, 203.0.113.9",
+		name: "untrusted peer sending a public X-Forwarded-For", remote: "192.168.1.50:4000", xff: "192.168.1.20, 9.9.9.9",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "untrusted peer sending a public entry with a port", remote: "192.168.1.50:4000", xff: "198.51.100.7:4711",
+		name: "untrusted peer sending a public entry with a port", remote: "192.168.1.50:4000", xff: "8.8.4.4:4711",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "untrusted peer sending an IPv4-mapped public entry", remote: "192.168.1.50:4000", xff: "::ffff:198.51.100.7",
+		name: "untrusted peer sending an IPv4-mapped public entry", remote: "192.168.1.50:4000", xff: "::ffff:8.8.4.4",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
@@ -102,27 +103,27 @@ var provenanceCases = []provenanceCase{
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "shared address space is public", remote: "192.168.1.50:4000", xff: "100.64.0.1",
-		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
+		name: "shared address space is not public", remote: "192.168.1.50:4000", xff: "100.64.0.1",
+		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
 		name: "untrusted peer sending a private X-Real-IP", remote: "192.168.1.50:4000", realIP: "10.1.2.3",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "untrusted peer sending a public X-Real-IP", remote: "192.168.1.50:4000", realIP: "203.0.113.9",
+		name: "untrusted peer sending a public X-Real-IP", remote: "192.168.1.50:4000", realIP: "9.9.9.9",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "untrusted peer sending a public Forwarded for", remote: "192.168.1.50:4000", fwdHeader: "for=192.0.2.60;proto=http;by=10.0.0.1",
+		name: "untrusted peer sending a public Forwarded for", remote: "192.168.1.50:4000", fwdHeader: "for=1.1.1.1;proto=http;by=10.0.0.1",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a quoted bracketed Forwarded node with a port", remote: "192.168.1.50:4000", fwdHeader: `For="[2001:db8:cafe::17]:4711"`,
+		name: "a quoted bracketed Forwarded node with a port", remote: "192.168.1.50:4000", fwdHeader: `For="[2620:fe::fe]:4711"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a quoted bracketed Forwarded node without a port", remote: "192.168.1.50:4000", fwdHeader: `for="[2001:db8:cafe::17]"`,
+		name: "a quoted bracketed Forwarded node without a port", remote: "192.168.1.50:4000", fwdHeader: `for="[2620:fe::fe]"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
@@ -130,11 +131,11 @@ var provenanceCases = []provenanceCase{
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "an IPv4-mapped public node with a port", remote: "192.168.1.50:4000", xff: "[::ffff:198.51.100.7]:80",
+		name: "an IPv4-mapped public node with a port", remote: "192.168.1.50:4000", xff: "[::ffff:8.8.4.4]:80",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a later Forwarded element names the public client", remote: "192.168.1.50:4000", fwdHeader: "for=192.168.0.9, for=198.51.100.7",
+		name: "a later Forwarded element names the public client", remote: "192.168.1.50:4000", fwdHeader: "for=192.168.0.9, for=8.8.4.4",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
@@ -142,119 +143,119 @@ var provenanceCases = []provenanceCase{
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded IPv4 node with an obfuscated port", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7:_proxy"`,
+		name: "a Forwarded IPv4 node with an obfuscated port", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4:_proxy"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a Forwarded IPv6 node with an obfuscated port", remote: "192.168.1.50:4000", fwdHeader: `for="[2001:db8:cafe::17]:_p.x-1"`,
+		name: "a Forwarded IPv6 node with an obfuscated port", remote: "192.168.1.50:4000", fwdHeader: `for="[2620:fe::fe]:_p.x-1"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a Forwarded IPv4-mapped node is IPv6", remote: "192.168.1.50:4000", fwdHeader: `for="[::ffff:198.51.100.7]:80"`,
+		name: "a Forwarded IPv4-mapped node is IPv6", remote: "192.168.1.50:4000", fwdHeader: `for="[::ffff:8.8.4.4]:80"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a Forwarded quoted-pair is decoded", remote: "192.168.1.50:4000", fwdHeader: `for="\198.51.100.7"`,
+		name: "a Forwarded quoted-pair is decoded", remote: "192.168.1.50:4000", fwdHeader: `for="\8.8.4.4"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a Forwarded comma inside quotes splits nothing", remote: "192.168.1.50:4000", fwdHeader: `for="_x,for=203.0.113.9,"`,
+		name: "a Forwarded comma inside quotes splits nothing", remote: "192.168.1.50:4000", fwdHeader: `for="_x,for=9.9.9.9,"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded semicolon inside quotes splits nothing", remote: "192.168.1.50:4000", fwdHeader: `by="_x;for=203.0.113.9;"`,
+		name: "a Forwarded semicolon inside quotes splits nothing", remote: "192.168.1.50:4000", fwdHeader: `by="_x;for=9.9.9.9;"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded empty obfuscated port is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7:_"`,
+		name: "a Forwarded empty obfuscated port is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4:_"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded obfuscated port outside its alphabet is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7:_a+b"`,
+		name: "a Forwarded obfuscated port outside its alphabet is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4:_a+b"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded six-digit port is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7:123456"`,
+		name: "a Forwarded six-digit port is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4:123456"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded empty port is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2001:db8:cafe::17]:"`,
+		name: "a Forwarded empty port is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2620:fe::fe]:"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded bracketed IPv4 node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[198.51.100.7]"`,
+		name: "a Forwarded bracketed IPv4 node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[8.8.4.4]"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded unbracketed IPv6 node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="2001:db8:cafe::17"`,
+		name: "a Forwarded unbracketed IPv6 node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="2620:fe::fe"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded zoned node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2001:db8:cafe::17%eth0]"`,
+		name: "a Forwarded zoned node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2620:fe::fe%eth0]"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded bytes after the bracket are malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2001:db8:cafe::17]x"`,
+		name: "a Forwarded bytes after the bracket are malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2620:fe::fe]x"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded unclosed bracket is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2001:db8:cafe::17"`,
+		name: "a Forwarded unclosed bracket is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="[2620:fe::fe"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded unterminated quote is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7`,
+		name: "a Forwarded unterminated quote is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded trailing escape is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7\`,
+		name: "a Forwarded trailing escape is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4\`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded byte after the closing quote is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="198.51.100.7"x`,
+		name: "a Forwarded byte after the closing quote is malformed", remote: "192.168.1.50:4000", fwdHeader: `for="8.8.4.4"x`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded quoted-string spans field lines", remote: "192.168.1.50:4000", fwdHeader: "for=\"_foo\nbar\", for=198.51.100.7",
+		name: "a Forwarded quoted-string spans field lines", remote: "192.168.1.50:4000", fwdHeader: "for=\"_foo\nbar\", for=8.8.4.4",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
-		name: "a Forwarded element repeating for is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=192.168.0.9;for=198.51.100.7",
+		name: "a Forwarded element repeating for is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=192.168.0.9;for=8.8.4.4",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "an unquoted Forwarded node with a port is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=198.51.100.7:80",
+		name: "an unquoted Forwarded node with a port is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=8.8.4.4:80",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "an unquoted bracketed Forwarded node is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=[2001:db8::1]",
+		name: "an unquoted bracketed Forwarded node is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=[2620:fe::9]",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded parameter repeated in another case is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=198.51.100.7;by=10.0.0.1;BY=10.0.0.2",
+		name: "a Forwarded parameter repeated in another case is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=8.8.4.4;by=10.0.0.1;BY=10.0.0.2",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded pair value outside the token alphabet is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=198.51.100.7;proto=ht@p",
+		name: "a Forwarded pair value outside the token alphabet is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=8.8.4.4;proto=ht@p",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded pair with no name is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=198.51.100.7;=http",
+		name: "a Forwarded pair with no name is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=8.8.4.4;=http",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded space after a semicolon is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=198.51.100.7; proto=http",
+		name: "a Forwarded space after a semicolon is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=8.8.4.4; proto=http",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded by that is not a node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for=198.51.100.7;by="proxy.example"`,
+		name: "a Forwarded by that is not a node is malformed", remote: "192.168.1.50:4000", fwdHeader: `for=8.8.4.4;by="proxy.example"`,
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "a Forwarded control byte in a quoted-string is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=198.51.100.7;ext=\"a\x01\"",
+		name: "a Forwarded control byte in a quoted-string is malformed", remote: "192.168.1.50:4000", fwdHeader: "for=8.8.4.4;ext=\"a\x01\"",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "Forwarded parameter names fold case", remote: "192.168.1.50:4000", fwdHeader: "FOR=198.51.100.7;Proto=https;By=_edge",
+		name: "Forwarded parameter names fold case", remote: "192.168.1.50:4000", fwdHeader: "FOR=8.8.4.4;Proto=https;By=_edge",
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true, pub: true,
 	},
 	{
@@ -262,28 +263,28 @@ var provenanceCases = []provenanceCase{
 		ip: "192.168.1.50", peer: "192.168.1.50", untrusted: true,
 	},
 	{
-		name: "an empty X-Forwarded-For element is skipped", remote: "10.0.0.1:4000", xff: "203.0.113.9,,10.0.0.2",
-		ip: "203.0.113.9", peer: "10.0.0.1", forwarded: true,
+		name: "an empty X-Forwarded-For element is skipped", remote: "10.0.0.1:4000", xff: "9.9.9.9,,10.0.0.2",
+		ip: "9.9.9.9", peer: "10.0.0.1", forwarded: true,
 	},
 	{
-		name: "a trailing X-Forwarded-For comma is no entry", remote: "10.0.0.1:4000", xff: "203.0.113.9, ",
-		ip: "203.0.113.9", peer: "10.0.0.1", forwarded: true,
+		name: "a trailing X-Forwarded-For comma is no entry", remote: "10.0.0.1:4000", xff: "9.9.9.9, ",
+		ip: "9.9.9.9", peer: "10.0.0.1", forwarded: true,
 	},
 	{
-		name: "an empty X-Forwarded-For line is no entry", remote: "10.0.0.1:4000", xff: "203.0.113.9\n\n10.0.0.2",
-		ip: "203.0.113.9", peer: "10.0.0.1", forwarded: true,
+		name: "an empty X-Forwarded-For line is no entry", remote: "10.0.0.1:4000", xff: "9.9.9.9\n\n10.0.0.2",
+		ip: "9.9.9.9", peer: "10.0.0.1", forwarded: true,
 	},
 	{
-		name: "a vertical tab is not optional whitespace", remote: "10.0.0.1:4000", xff: "\v203.0.113.9",
+		name: "a vertical tab is not optional whitespace", remote: "10.0.0.1:4000", xff: "\v9.9.9.9",
 		ip: "10.0.0.1", peer: "10.0.0.1",
 	},
 	{
-		name: "an X-Forwarded-For entry with a port answers the peer", remote: "10.0.0.1:4000", xff: "203.0.113.9:4711",
+		name: "an X-Forwarded-For entry with a port answers the peer", remote: "10.0.0.1:4000", xff: "9.9.9.9:4711",
 		ip: "10.0.0.1", peer: "10.0.0.1",
 	},
 	{
-		name: "a stray quote does not swallow an appended entry", remote: "10.0.0.1:4000", xff: "\"evil, 203.0.113.9",
-		ip: "203.0.113.9", peer: "10.0.0.1", forwarded: true,
+		name: "a stray quote does not swallow an appended entry", remote: "10.0.0.1:4000", xff: "\"evil, 9.9.9.9",
+		ip: "9.9.9.9", peer: "10.0.0.1", forwarded: true,
 	},
 	{
 		name: "a blank header is no evidence", remote: "192.168.1.50:4000", xff: "  ", realIP: "\t",
@@ -302,7 +303,7 @@ var provenanceCases = []provenanceCase{
 		ip: "fe80::1%eth0", peer: "fe80::1%eth0", untrusted: true,
 	},
 	{
-		name: "an unparseable peer is never trusted", remote: "garbage", xff: "203.0.113.9",
+		name: "an unparseable peer is never trusted", remote: "garbage", xff: "9.9.9.9",
 		untrusted: true, pub: true,
 	},
 }
@@ -353,7 +354,7 @@ func TestResolveClientWithNoTrustedSetIgnoresEveryHeader(t *testing.T) {
 	t.Parallel()
 	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	r.RemoteAddr = "10.0.0.1:4000"
-	r.Header.Set("X-Forwarded-For", "203.0.113.9")
+	r.Header.Set("X-Forwarded-For", "9.9.9.9")
 	want := httpserver.ClientResolution{
 		IP:                  netip.MustParseAddr("10.0.0.1"),
 		Peer:                netip.MustParseAddr("10.0.0.1"),
@@ -362,6 +363,37 @@ func TestResolveClientWithNoTrustedSetIgnoresEveryHeader(t *testing.T) {
 	}
 	if got := httpserver.ResolveClient(r); got != want {
 		t.Errorf("ResolveClient = %+v, want %+v", got, want)
+	}
+}
+
+// IgnoredPublic names only a globally routable unicast address, so a header
+// naming a private, unique-local or shared (CGNAT) address is no public client.
+func TestResolveClientIgnoredPublicNamesOnlyRoutableAddresses(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		xff    string
+		public bool
+	}{
+		{"RFC 1918 10/8", "10.1.2.3", false},
+		{"RFC 1918 172.16/12", "172.31.255.254", false},
+		{"RFC 1918 192.168/16", "192.168.7.9", false},
+		{"RFC 4193 unique local", "fd12:3456:789a::1", false},
+		{"RFC 6598 shared address space low", "100.64.0.1", false},
+		{"RFC 6598 shared address space high", "100.127.255.254", false},
+		{"public IPv4", "9.9.9.9", true},
+		{"public IPv6", "2620:fe::fe", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			r.RemoteAddr = "192.168.1.50:4000"
+			r.Header.Set("X-Forwarded-For", tc.xff)
+			if got := httpserver.ResolveClient(r, provenanceTrusted...).IgnoredPublic; got != tc.public {
+				t.Errorf("IgnoredPublic for X-Forwarded-For %s = %v, want %v", tc.xff, got, tc.public)
+			}
+		})
 	}
 }
 
@@ -387,8 +419,8 @@ func TestResolveClientReportsPeerTrusted(t *testing.T) {
 		{"a trusted peer forwarding only trusted hops", "10.0.0.1:4000", "10.0.0.2", true, false},
 		{"an IPv4 peer inside an IPv4-mapped prefix", "172.16.0.9:4000", "", true, false},
 		{"an IPv4-mapped peer inside an IPv4 prefix", "[::ffff:10.0.0.1]:4000", "", true, false},
-		{"an untrusted peer", "192.168.1.50:4000", "203.0.113.9", false, false},
-		{"a peer that is no address", "pipe", "203.0.113.9", false, false},
+		{"an untrusted peer", "192.168.1.50:4000", "9.9.9.9", false, false},
+		{"a peer that is no address", "pipe", "9.9.9.9", false, false},
 		{"a zoned IPv4-mapped peer", "[::ffff:10.0.0.1%eth0]:4000", "192.168.1.20", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -461,15 +493,14 @@ func derivedResolution(remote string, f httpserver.ForwardingFields, trusted []n
 		peer = peer.Unmap()
 	}
 	isTrusted := func(a netip.Addr) bool { return inPrefixes(a, trusted) }
-	isPublic := func(a netip.Addr) bool { return a.IsGlobalUnicast() && !a.IsPrivate() }
 	res := httpserver.ClientResolution{IP: peer, Peer: peer, PeerTrusted: isTrusted(peer)}
 	if !res.PeerTrusted {
 		res.UntrustedForwarding = len(f.XFF)+len(f.RealIP)+len(f.Forwarded) > 0
 		for _, e := range slices.Concat(f.XFF, f.RealIP) {
-			res.IgnoredPublic = res.IgnoredPublic || isPublic(e.Addr)
+			res.IgnoredPublic = res.IgnoredPublic || ssrf.IsPublicAddr(e.Addr)
 		}
 		for _, e := range f.Forwarded {
-			res.IgnoredPublic = res.IgnoredPublic || (e.Valid && isPublic(e.For))
+			res.IgnoredPublic = res.IgnoredPublic || (e.Valid && ssrf.IsPublicAddr(e.For))
 		}
 		return res
 	}
@@ -573,7 +604,7 @@ func TestParseForwardingReadsForwardedElements(t *testing.T) {
 		{"a quoted-pair is decoded", []string{`for="\1\9\2.0.2.1"`}, []httpserver.ForwardedElement{{a("192.0.2.1"), true}}},
 		{"64 elements are read", []string{repeatList("for=192.0.2.1", 64)}, slices.Repeat([]httpserver.ForwardedElement{{a("192.0.2.1"), true}}, 64)},
 		{"65 elements read as one invalid element", []string{repeatList("for=192.0.2.1", 65)}, []httpserver.ForwardedElement{invalid}},
-		{"16 pairs are read", []string{forwardedPairs(16)}, []httpserver.ForwardedElement{{a("198.51.100.7"), true}}},
+		{"16 pairs are read", []string{forwardedPairs(16)}, []httpserver.ForwardedElement{{a("8.8.4.4"), true}}},
 		{"17 pairs make the element invalid", []string{forwardedPairs(17)}, []httpserver.ForwardedElement{invalid}},
 	}
 	for _, tc := range cases {
@@ -592,7 +623,7 @@ func repeatList(elem string, n int) string {
 
 func forwardedPairs(n int) string {
 	var b strings.Builder
-	b.WriteString("for=198.51.100.7")
+	b.WriteString("for=8.8.4.4")
 	for i := 1; i < n; i++ {
 		fmt.Fprintf(&b, ";p%d=x", i)
 	}
@@ -610,22 +641,22 @@ func TestResolveClientTreatsAnOverCapFieldAsInvalid(t *testing.T) {
 	ignored := func(public bool) httpserver.ClientResolution {
 		return httpserver.ClientResolution{IP: a("192.168.1.50"), Peer: a("192.168.1.50"), UntrustedForwarding: true, IgnoredPublic: public}
 	}
-	hops := func(n int) string { return "203.0.113.9, " + repeatList("10.0.0.2", n-1) }
+	hops := func(n int) string { return "9.9.9.9, " + repeatList("10.0.0.2", n-1) }
 	cases := []struct {
 		name   string
 		remote string
 		header http.Header
 		want   httpserver.ClientResolution
 	}{
-		{"a trusted peer's 64 X-Forwarded-For entries are walked", trustedPeer, headerOf("X-Forwarded-For", hops(64)), forwardedFrom(a("203.0.113.9"))},
+		{"a trusted peer's 64 X-Forwarded-For entries are walked", trustedPeer, headerOf("X-Forwarded-For", hops(64)), forwardedFrom(a("9.9.9.9"))},
 		{"a trusted peer's 65 X-Forwarded-For entries answer the peer", trustedPeer, headerOf("X-Forwarded-For", hops(65)), peerOnly},
 		{"a trusted peer's 100,001 X-Forwarded-For entries answer the peer", trustedPeer, headerOf("X-Forwarded-For", hops(100_001)), peerOnly},
 		{"65 entries over two field lines answer the peer", trustedPeer, headerOf("X-Forwarded-For", hops(33), repeatList("10.0.0.2", 32)), peerOnly},
-		{"64 ignored X-Forwarded-For entries name a public address", untrustedPeer, headerOf("X-Forwarded-For", repeatList("203.0.113.9", 64)), ignored(true)},
-		{"65 ignored X-Forwarded-For entries name nothing", untrustedPeer, headerOf("X-Forwarded-For", repeatList("203.0.113.9", 65)), ignored(false)},
-		{"65 ignored X-Real-IP entries name nothing", untrustedPeer, headerOf("X-Real-IP", repeatList("203.0.113.9", 65)), ignored(false)},
-		{"64 Forwarded elements name a public address", untrustedPeer, headerOf("Forwarded", repeatList("for=203.0.113.9", 64)), ignored(true)},
-		{"65 Forwarded elements name nothing", untrustedPeer, headerOf("Forwarded", repeatList("for=203.0.113.9", 65)), ignored(false)},
+		{"64 ignored X-Forwarded-For entries name a public address", untrustedPeer, headerOf("X-Forwarded-For", repeatList("9.9.9.9", 64)), ignored(true)},
+		{"65 ignored X-Forwarded-For entries name nothing", untrustedPeer, headerOf("X-Forwarded-For", repeatList("9.9.9.9", 65)), ignored(false)},
+		{"65 ignored X-Real-IP entries name nothing", untrustedPeer, headerOf("X-Real-IP", repeatList("9.9.9.9", 65)), ignored(false)},
+		{"64 Forwarded elements name a public address", untrustedPeer, headerOf("Forwarded", repeatList("for=9.9.9.9", 64)), ignored(true)},
+		{"65 Forwarded elements name nothing", untrustedPeer, headerOf("Forwarded", repeatList("for=9.9.9.9", 65)), ignored(false)},
 		{"a 16-pair Forwarded element names a public address", untrustedPeer, headerOf("Forwarded", forwardedPairs(16)), ignored(true)},
 		{"a 100,001-pair Forwarded element names nothing", untrustedPeer, headerOf("Forwarded", forwardedPairs(100_001)), ignored(false)},
 	}
@@ -686,7 +717,7 @@ func TestParseForwardingQuotedTokenMatchesUnquoted(t *testing.T) {
 		{"for=_hidden", `for="_hidden"`},
 		{"for=192.0.2.1;proto=https", `for=192.0.2.1;proto="https"`},
 		{"for=192.0.2.1;by=_edge", `for="192.0.2.1";by="_edge"`},
-		{"for=203.0.113.9;host=example.com", `for="203.0.113.9";host="example.com"`},
+		{"for=9.9.9.9;host=example.com", `for="9.9.9.9";host="example.com"`},
 	} {
 		t.Run(pair[0], func(t *testing.T) {
 			t.Parallel()
@@ -717,10 +748,10 @@ func TestClientIPMatchesResolveClient(t *testing.T) {
 		"[2001:db8:a::1]:4000", "[fe80::1%eth0]:4000", "192.168.1.50", "garbage", "",
 	}
 	xffs := []string{
-		"", "203.0.113.9", "8.8.8.8, 10.0.0.2", "203.0.113.9,,10.0.0.2", "junk, 10.0.0.2",
-		"::ffff:198.51.100.7", `"x, 203.0.113.9`, "10.0.0.3", "2001:db8:a::9, 2001:db8:b::1",
+		"", "9.9.9.9", "8.8.8.8, 10.0.0.2", "9.9.9.9,,10.0.0.2", "junk, 10.0.0.2",
+		"::ffff:8.8.4.4", `"x, 9.9.9.9`, "10.0.0.3", "2001:db8:a::9, 2001:db8:b::1",
 	}
-	forwardeds := []string{"", "for=198.51.100.7", `for="[2001:db8::1]:80"`, "for=unknown", "for=198.51.100.7:80"}
+	forwardeds := []string{"", "for=8.8.4.4", `for="[2001:db8::1]:80"`, "for=unknown", "for=8.8.4.4:80"}
 	for _, trusted := range trustSets {
 		for _, peer := range peers {
 			for _, xff := range xffs {

@@ -4,7 +4,7 @@
 
 httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy.
 
-Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library and `go/textsafe`, and is licensed under Apache-2.0.
+Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `go/ssrf` and `go/textsafe`, and is licensed under Apache-2.0.
 
 ## Why use it
 
