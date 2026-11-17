@@ -118,7 +118,7 @@ func (b *build) readShells() ([]shell, []bool, error) {
 
 // entriesBuilt is what building every entry into the tree gave.
 type entriesBuilt struct {
-	pkgs     map[string]bool // every bundled npm package
+	pkgs     packageRoots
 	urls     map[string]string
 	hashed   []string // each entry's hashed path, by index
 	moduleJS []byte   // every module output's bytes, chunks included
@@ -147,6 +147,9 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 			return Result{}, werr
 		}
 	}
+	if nerr := writeNotices(t, b.src, eb.pkgs); nerr != nil {
+		return Result{}, nerr
+	}
 	entries := make([]httpserver.BundleEntry, len(b.entries))
 	for i, e := range b.entries {
 		entries[i] = httpserver.BundleEntry{Name: e.Name, Kind: httpserver.BundleKind(e.Kind), Path: eb.hashed[i]}
@@ -161,7 +164,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 // buildEntries builds the classic entries, then the module entries, then the
 // style entries into outdir.
 func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
-	eb := &entriesBuilt{pkgs: map[string]bool{}, urls: map[string]string{}, hashed: make([]string, len(b.entries))}
+	eb := &entriesBuilt{pkgs: packageRoots{}, urls: map[string]string{}, hashed: make([]string, len(b.entries))}
 	if err := b.buildClassicEntries(eb, outdir); err != nil {
 		return nil, err
 	}
@@ -191,7 +194,7 @@ func (b *build) take(eb *entriesBuilt, r built, i int) error {
 	if err != nil {
 		return err
 	}
-	maps.Copy(eb.pkgs, pkgs)
+	eb.pkgs.merge(pkgs)
 	if eb.hashed[i] = r.entries[e.Path]; eb.hashed[i] == "" {
 		return fmt.Errorf("webbundle: entry %q built no output", e.Name)
 	}

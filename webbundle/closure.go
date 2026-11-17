@@ -26,26 +26,29 @@ type metafile struct {
 const modulesDir = "node_modules/"
 
 // packageOf names the npm package an input belongs to ("@scope/name" or
-// "name"), or "" for a file of the app's own. The last node_modules segment
-// decides, so a package nested in another's, or a pnpm store path, names the
-// package itself.
-func packageOf(input string) string {
-	var p string
+// "name") and the package's root directory as a slash path relative to Src,
+// or "" for a file of the app's own. The last node_modules segment decides,
+// so a package nested in another's, or a pnpm store path, names the package
+// itself.
+func packageOf(input string) (name, root string) {
+	var base, p string
 	if i := strings.LastIndex(input, "/"+modulesDir); i >= 0 {
-		p = input[i+1+len(modulesDir):]
+		base, p = input[:i+1+len(modulesDir)], input[i+1+len(modulesDir):]
 	} else if rest, ok := strings.CutPrefix(input, modulesDir); ok {
-		p = rest
+		base, p = modulesDir, rest
 	} else {
-		return ""
+		return "", ""
 	}
 	parts := strings.SplitN(p, "/", 3)
 	switch {
 	case strings.HasPrefix(p, "@") && len(parts) == 3:
-		return parts[0] + "/" + parts[1]
+		name = parts[0] + "/" + parts[1]
 	case !strings.HasPrefix(p, "@") && len(parts) >= 2:
-		return parts[0]
+		name = parts[0]
+	default:
+		return "", ""
 	}
-	return ""
+	return name, base + name
 }
 
 func ownInput(input string) bool { return !strings.HasPrefix(input, "<") }
@@ -81,19 +84,43 @@ func chain(from map[string]string, in string) string {
 	return strings.Join(links, " -> ")
 }
 
+// packageRoots holds each bundled npm package's root directories, slash
+// paths under Src, by package name; a package bundled at two versions has
+// two.
+type packageRoots map[string]map[string]bool
+
+func (r packageRoots) add(name, root string) {
+	if r[name] == nil {
+		r[name] = map[string]bool{}
+	}
+	r[name][root] = true
+}
+
+func (r packageRoots) merge(other packageRoots) {
+	for name, roots := range other {
+		for root := range roots {
+			r.add(name, root)
+		}
+	}
+}
+
+func (b *build) allowed(pkg string) bool {
+	return slices.ContainsFunc(b.packages, func(p string) bool { ok, _ := path.Match(p, pkg); return ok })
+}
+
 // checkClosure walks e's closure in m and refuses an input from a package
 // Config.Packages does not list, or one e.Forbid names, naming the importer
 // chain. It returns the packages the closure bundles.
-func (b *build) checkClosure(m *metafile, e Entry) (map[string]bool, error) {
+func (b *build) checkClosure(m *metafile, e Entry) (packageRoots, error) {
 	from := m.closure(e.Path)
-	pkgs := map[string]bool{}
+	pkgs := packageRoots{}
 	for _, in := range slices.Sorted(maps.Keys(from)) {
-		pkg := packageOf(in)
+		pkg, root := packageOf(in)
 		if pkg != "" {
-			pkgs[pkg] = true
-			if !slices.ContainsFunc(b.packages, func(p string) bool { ok, _ := path.Match(p, pkg); return ok }) {
+			if !b.allowed(pkg) {
 				return nil, fmt.Errorf("webbundle: entry %q bundles %s, which Config.Packages does not list: %s", e.Name, pkg, chain(from, in))
 			}
+			pkgs.add(pkg, root)
 		}
 		for _, f := range e.Forbid {
 			if pkg == f || pkg == "" && (in == f || strings.HasPrefix(in, strings.TrimSuffix(f, "/")+"/")) {
