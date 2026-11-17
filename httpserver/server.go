@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -50,30 +52,24 @@ const (
 // returned server (see New).
 type ServerOption func(*http.Server)
 
-// WithSlogErrorLog sets http.Server.ErrorLog to a bridge that forwards
-// net/http's own connection-level lines into slog at level, so they arrive as
-// level-carrying records in an otherwise structured stream instead of as
-// unstructured, level-less standard-logger output that no level-based log rule
-// can match. The lines it covers are net/http's, above all
-// "http: Accept error: ...; retrying" — the trace of an exhausted fd budget,
-// which is a whole-service outage no request-scoped log will report.
-//
-// The LEVEL is the caller's policy and deliberately has no default here,
-// because consumers legitimately disagree: an accept failure is fatal to a
-// service whose only job is to answer probes (Error) and a degradation to one
-// that will retry (Warn). This option only gives that choice a named home
-// instead of three hand-written copies of the same slog.NewLogLogger recipe.
-//
-// It resolves slog.Default() when the option is APPLIED (inside New), so
-// install the process logger before building the server; a later
-// slog.SetDefault does not retroactively re-target an already-built
-// http.Server. Any other *log.Logger is a plain assignment to srv.ErrorLog,
-// and the default (net/http's standard logger) is unchanged when neither is
-// set.
+// WithSlogErrorLog sets http.Server.ErrorLog to forward net/http's own
+// connection-level lines, above all "http: Accept error: ...; retrying" (an
+// exhausted fd budget), into slog.Default() at level, resolved as each line is
+// logged. The level is the caller's: an accept failure is fatal to a probe-only
+// service and a degradation to one that retries. Without it, ErrorLog stays
+// net/http's standard logger.
 func WithSlogErrorLog(level slog.Level) ServerOption {
 	return func(s *http.Server) {
-		s.ErrorLog = slog.NewLogLogger(slog.Default().Handler(), level)
+		s.ErrorLog = log.New(defaultLogWriter(level), "", 0)
 	}
+}
+
+// defaultLogWriter writes each log.Logger line to slog.Default() at its level.
+type defaultLogWriter slog.Level
+
+func (l defaultLogWriter) Write(p []byte) (int, error) {
+	slog.Default().Log(context.Background(), slog.Level(l), strings.TrimSuffix(string(p), "\n"))
+	return len(p), nil
 }
 
 // New builds an *http.Server for handler with streaming-safe defaults:

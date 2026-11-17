@@ -895,6 +895,21 @@ func TestWithSlogErrorLog_bridgesNetHTTPLinesIntoSlog(t *testing.T) {
 	}
 }
 
+// A server built before the app installs its logger still bridges into it.
+func TestWithSlogErrorLog_followsALaterDefault(t *testing.T) {
+	srv := httpserver.New(nil, httpserver.WithSlogErrorLog(slog.LevelWarn))
+	capture := &captureHandler{}
+	swapDefaultLogger(t, slog.New(capture))
+	srv.ErrorLog.Print("http: Accept error: too many open files; retrying")
+	records := capture.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("captured %d records, want 1", len(records))
+	}
+	if records[0].Level != slog.LevelWarn || records[0].Message != "http: Accept error: too many open files; retrying" {
+		t.Errorf("record = %v %q, want Warn with net/http's line", records[0].Level, records[0].Message)
+	}
+}
+
 func TestNew_errorLogDefaultUnchanged(t *testing.T) {
 	// Neither option passed: the default stays net/http's standard logger (nil),
 	// so the additions change no existing default.

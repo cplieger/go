@@ -234,14 +234,23 @@ func TestLogging_recorderCapturesHandlerStatus(t *testing.T) {
 	}
 }
 
+// With no WithLogger, the access line goes to slog.Default as it is when the
+// request ends, so a chain built before the app installs its logger still logs
+// through it.
 func TestLogging_defaultLoggerWhenUnset(t *testing.T) {
-	swapDefaultLogger(t, discardLogger())
-
-	// No WithLogger option: exercises the slog.Default() fallback.
 	h := httpserver.Logging()(okHandler())
-	rr := serve(h, http.MethodGet, "/x", nil)
-	if !httpserver.ValidRequestID(rr.Header().Get(httpserver.HeaderRequestID)) {
-		t.Error("default-logger path did not echo a valid request id")
+	logCap := &captureHandler{}
+	swapDefaultLogger(t, slog.New(logCap))
+	serve(h, http.MethodGet, "/x", nil)
+	recs := logCap.snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("records on the later slog.Default = %d, want 1", len(recs))
+	}
+	if recs[0].Level != slog.LevelInfo || recs[0].Message != "http" {
+		t.Errorf("record = %v %q, want Info %q", recs[0].Level, recs[0].Message, "http")
+	}
+	if got := attrsOf(recs[0])["path"]; got != "/x" {
+		t.Errorf("path = %v, want /x", got)
 	}
 }
 

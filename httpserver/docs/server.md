@@ -29,7 +29,7 @@ Only header reading is bounded by time, so a slow request body is not. A handler
 
 The level is your choice. An accept failure is fatal for a service whose only job is answering probes, and a recoverable problem for one that retries.
 
-The option reads `slog.Default()` when `New` applies it. Install your process logger first, because a later `slog.SetDefault` does not change a server already built. Any other `*log.Logger` is an assignment to `srv.ErrorLog`. With neither, `net/http`'s standard logger is used.
+The option reads `slog.Default()` as each line is logged, so a server built before you install your process logger still logs through it. Any other `*log.Logger` is an assignment to `srv.ErrorLog`. With neither, `net/http`'s standard logger is used.
 
 ## Run
 

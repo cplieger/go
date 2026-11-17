@@ -88,8 +88,8 @@ type logConfig struct {
 // LogOption configures Logging.
 type LogOption func(*logConfig)
 
-// WithLogger sets the slog.Logger used for access-log lines. Defaults to
-// slog.Default().
+// WithLogger sets the slog.Logger used for access-log lines. Nil, the
+// default, means slog.Default() as it is when each line is logged.
 func WithLogger(l *slog.Logger) LogOption {
 	return func(c *logConfig) { c.logger = l }
 }
@@ -695,7 +695,7 @@ func (c *logConfig) emitAccessLog(rec *StatusRecorder, r *http.Request, path, id
 	if c.logLevel != nil {
 		lvl = c.safeLogLevel(r, status, id, path)
 	}
-	c.logger.Log(context.Background(), lvl, "http", args...)
+	orDefault(c.logger).Log(context.Background(), lvl, "http", args...)
 	if c.recordRoute != nil {
 		c.safeRecordMetric(r, path, status, d, id)
 	}
@@ -713,7 +713,7 @@ func (c *logConfig) emitAccessLog(rec *StatusRecorder, r *http.Request, path, id
 func (c *logConfig) safeLoggedPath(r *http.Request, id string) (path string) {
 	defer func() {
 		if v := recover(); v != nil {
-			c.logger.Error("httpserver: path transform failed",
+			orDefault(c.logger).Error("httpserver: path transform failed",
 				"panic", v,
 				"stack", string(debug.Stack()),
 				"request_id", id,
@@ -741,7 +741,7 @@ func (c *logConfig) resolvePathValue(r *http.Request) string {
 func (c *logConfig) safeClientIP(r *http.Request, id, path string) (ip string, ok bool) {
 	defer func() {
 		if v := recover(); v != nil {
-			c.logger.Error("httpserver: client_ip resolver failed",
+			orDefault(c.logger).Error("httpserver: client_ip resolver failed",
 				"panic", v,
 				"stack", string(debug.Stack()),
 				"request_id", id,
@@ -763,7 +763,7 @@ func (c *logConfig) safeClientIP(r *http.Request, id, path string) (ip string, o
 func (c *logConfig) safeLogLevel(r *http.Request, status int, id, path string) (lvl slog.Level) {
 	defer func() {
 		if v := recover(); v != nil {
-			c.logger.Error("httpserver: log level hook failed",
+			orDefault(c.logger).Error("httpserver: log level hook failed",
 				"panic", v,
 				"stack", string(debug.Stack()),
 				"request_id", id,
@@ -785,7 +785,7 @@ func (c *logConfig) safeLogLevel(r *http.Request, status int, id, path string) (
 func (c *logConfig) safeRecordMetric(r *http.Request, path string, status int, d time.Duration, id string) {
 	defer func() {
 		if v := recover(); v != nil {
-			c.logger.Error("httpserver: metric hook failed",
+			orDefault(c.logger).Error("httpserver: metric hook failed",
 				"panic", v,
 				"stack", string(debug.Stack()),
 				"request_id", id,
@@ -802,6 +802,15 @@ func (c *logConfig) safeRecordMetric(r *http.Request, path string, status int, d
 	c.recordRoute(RequestMetric{Method: method, Path: route, Status: status, Latency: d})
 }
 
+// orDefault is l, or slog.Default() as it is now when l is nil: resolving it
+// at construction would miss a default the app installs after wiring.
+func orDefault(l *slog.Logger) *slog.Logger {
+	if l != nil {
+		return l
+	}
+	return slog.Default()
+}
+
 // requestLogger is Logging's handler; Logging documents its behavior.
 func requestLogger(next http.Handler, opts ...LogOption) http.Handler {
 	c := &logConfig{}
@@ -809,9 +818,6 @@ func requestLogger(next http.Handler, opts ...LogOption) http.Handler {
 		if o != nil {
 			o(c)
 		}
-	}
-	if c.logger == nil {
-		c.logger = slog.Default()
 	}
 	if c.maxLoggedPath <= 0 {
 		c.maxLoggedPath = defaultMaxLoggedPath

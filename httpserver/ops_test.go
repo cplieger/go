@@ -351,6 +351,28 @@ func TestListenOpsProbeLogLevel(t *testing.T) {
 }
 
 // holdPort binds a loopback port and answers its address and a release.
+// With a nil Logger, the ops access lines go to slog.Default as it is when
+// each request ends, not when ListenOps ran.
+func TestListenOpsNilLoggerFollowsALaterDefault(t *testing.T) {
+	c := opsConfig("127.0.0.1:0")
+	c.Logger = nil
+	o := listenOps(t, c)
+	h := &captureHandler{}
+	swapDefaultLogger(t, slog.New(h))
+	stop := runOps(t, o)
+	opsDo(t, http.MethodGet, o.Addr().String(), "/nope", "")
+	_ = stop()
+	var lines int
+	for _, r := range h.snapshot() {
+		if r.Message == "http" && r.Level == slog.LevelInfo && attrsOf(r)["path"] == "/nope" {
+			lines++
+		}
+	}
+	if lines != 1 {
+		t.Errorf("Info access lines for /nope on the later slog.Default = %d, want 1", lines)
+	}
+}
+
 func holdPort(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

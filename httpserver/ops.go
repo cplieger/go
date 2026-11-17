@@ -58,7 +58,7 @@ type OpsConfig struct {
 	// Errors writes every refusal; nil is WriteError.
 	Errors ErrorResponder
 	// Logger takes the access lines, refusals and recovered panics; nil is
-	// slog.Default().
+	// slog.Default() as it is when each line is logged.
 	Logger *slog.Logger
 	// Setting names the setting Addr came from ("OPS_LISTEN_ADDR") in errors.
 	Setting string
@@ -97,11 +97,7 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	if errs == nil {
 		errs = WriteError
 	}
-	logger := c.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	hosts, err := opsHostPolicy(c.Hosts, errs, logger)
+	hosts, err := opsHostPolicy(c.Hosts, errs, c.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("httpserver: %s: %w", c.Setting, err)
 	}
@@ -110,15 +106,15 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 		return nil, err
 	}
 	srv := New(Chain(opsRoutes(c.Metrics, c.Healthz, errs),
-		Logging(WithLogger(logger), WithProbeLogLevel("/healthz", "/metrics")),
-		Recoverer(WithRecoverLogger(logger), WithRecoverResponder(errs)),
+		Logging(WithLogger(c.Logger), WithProbeLogLevel("/healthz", "/metrics")),
+		Recoverer(WithRecoverLogger(c.Logger), WithRecoverResponder(errs)),
 		hosts.Middleware()))
 	srv.ReadTimeout = opsReadTimeout
 	srv.WriteTimeout = opsWriteTimeout
 	return &Ops{
 		srv:     srv,
 		ln:      ln,
-		logger:  logger,
+		logger:  c.Logger,
 		setting: c.Setting,
 		release: context.AfterFunc(ctx, func() { _ = ln.Close() }),
 		cause:   func() error { return context.Cause(ctx) },
@@ -281,7 +277,7 @@ func (o *Ops) stopped(err error) error {
 		return nil
 	case errors.Is(err, ErrShutdownGraceExpired):
 		_ = o.srv.Close()
-		o.logger.Warn("httpserver: ops requests still in flight at the end of the ops listener's grace were cut off",
+		orDefault(o.logger).Warn("httpserver: ops requests still in flight at the end of the ops listener's grace were cut off",
 			"setting", o.setting, "addr", o.ln.Addr().String(), "grace", opsShutdownGrace.String())
 		return nil
 	}

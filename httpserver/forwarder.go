@@ -64,13 +64,9 @@ func WithInterfaceAddrs(read func() ([]InterfaceAddrs, error)) ForwarderOption {
 }
 
 // WithForwarderLogger sends the failed-read warning to logger. Nil, the
-// default, means slog.Default() as it is when NewForwarderCheck runs.
+// default, means slog.Default() as it is when the warning is logged.
 func WithForwarderLogger(logger *slog.Logger) ForwarderOption {
-	return func(c *ForwarderCheck) {
-		if logger != nil {
-			c.logger = logger
-		}
-	}
+	return func(c *ForwarderCheck) { c.logger = logger }
 }
 
 // ForwarderCheck reports whether a socket peer is a forwarder in front of
@@ -95,7 +91,6 @@ func NewForwarderCheck(opts ...ForwarderOption) *ForwarderCheck {
 		routeFile:     DefaultRouteFile,
 		ipv6RouteFile: DefaultIPv6RouteFile,
 		interfaces:    readInterfaceAddrs,
-		logger:        slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -136,7 +131,7 @@ func (c *ForwarderCheck) IsForwarder(peer netip.Addr) bool {
 
 func (c *ForwarderCheck) warnOnce(warned *atomic.Bool, source string, err error) {
 	if warned.CompareAndSwap(false, true) {
-		c.logger.Warn("httpserver: forwarder check could not read the host's network, so every peer counts as a forwarder",
+		orDefault(c.logger).Warn("httpserver: forwarder check could not read the host's network, so every peer counts as a forwarder",
 			"source", source, "error", err)
 	}
 }

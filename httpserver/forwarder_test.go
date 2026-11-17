@@ -218,3 +218,24 @@ func TestForwarderCheck_warnsOncePerSource(t *testing.T) {
 		})
 	}
 }
+
+// An app builds its check while parsing config, before it installs its
+// default logger; the failed-read warning still reaches that logger.
+func TestForwarderCheck_nilLoggerFollowsALaterDefault(t *testing.T) {
+	c := topology{ifaces: bridge.ifaces}.check(t, nil)
+	h := &captureHandler{}
+	swapDefaultLogger(t, slog.New(h))
+	if !c.IsForwarder(netip.MustParseAddr("192.168.1.50")) {
+		t.Error("IsForwarder = false, want true")
+	}
+	recs := h.snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("records on the later slog.Default = %d, want 1", len(recs))
+	}
+	if recs[0].Level != slog.LevelWarn {
+		t.Errorf("level = %v, want WARN", recs[0].Level)
+	}
+	if got := attrsOf(recs[0])["source"]; got != "route table" {
+		t.Errorf("source = %v, want %q", got, "route table")
+	}
+}
