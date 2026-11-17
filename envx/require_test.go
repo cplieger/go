@@ -224,21 +224,12 @@ func TestSecret_failure_classes_are_nameable(t *testing.T) {
 	}
 }
 
-// TestSecret_secret_file_path_rule pins the KEY_FILE path rule at full precision, both
-// halves of it.
-//
-// The rule is the OR of pathinside's two hygiene predicates — !IsCanonical(path) ||
-// HasDotDot(path) — and it judges the path AS WRITTEN. It replaced a substring ".." test,
-// which loosens exactly one class and no other: a path that is ALREADY in Clean form and
-// whose ".." occurrences all sit inside a component NAME. Such a path traverses nowhere
-// (every component is an ordinary name, and Clean form means the string opened is the
-// string validated), so refusing it bought nothing. The accepted half is asserted by
-// actually reading the secret rather than by the absence of a rejection: the point is
-// that these operators get their credential, not merely a different error.
-//
-// The refused half is asserted exhaustively by shape, because that is the half a
-// loosening could have damaged: any ".." component, and any unclean spelling whether or
-// not it traverses.
+// TestSecret_secret_file_path_rule pins both halves of the KEY_FILE path rule,
+// !IsCanonical(path) || HasDotDot(path), judged as written. A Clean path whose dots
+// all sit inside component names traverses nowhere, so it is accepted; that half is
+// asserted by reading the secret, not by the absence of a rejection. The refused half
+// is asserted by shape: any ".." component, and any unclean spelling whether or not
+// it traverses.
 func TestSecret_secret_file_path_rule(t *testing.T) {
 	dir := t.TempDir()
 	// The canonical spelling of a real, readable secret file whose NAME carries two
@@ -253,21 +244,7 @@ func TestSecret_secret_file_path_rule(t *testing.T) {
 	}
 
 	t.Run("two dots inside a name is an ordinary file and is read", func(t *testing.T) {
-		for _, name := range []string{"key..v2", "...", "....", "token..", "..v2"} {
-			p := filepath.Join(dir, name)
-			if err := os.WriteFile(p, []byte("s3cret\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("ENVX_TEST_PATHRULE_FILE", p)
-			got, err := Secret("ENVX_TEST_PATHRULE")
-			if err != nil {
-				t.Errorf("Secret() for %q = %v; %q is an ordinary filename, not a traversal", name, err, name)
-				continue
-			}
-			if got != "s3cret" {
-				t.Errorf("Secret() for %q = %q, want s3cret", name, got)
-			}
-		}
+		assertDottedNamesAreRead(t, dir, "key..v2", "..v2", "...v2", "a...b")
 	})
 
 	t.Run("a directory whose name begins with two dots is traversed into normally", func(t *testing.T) {
@@ -319,6 +296,27 @@ func TestSecret_secret_file_path_rule(t *testing.T) {
 				t.Errorf("value = %q for a refused path, want empty: a broken pointer never falls through to KEY", v)
 			}
 		})
+	}
+}
+
+// assertDottedNamesAreRead writes each name under dir as a secret file and
+// requires Secret to accept its path and return the content.
+func assertDottedNamesAreRead(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("ENVX_TEST_PATHRULE_FILE", p)
+		got, err := Secret("ENVX_TEST_PATHRULE")
+		if err != nil {
+			t.Errorf("Secret() for %q = %v; %q is an ordinary filename, not a traversal", name, err, name)
+			continue
+		}
+		if got != "s3cret" {
+			t.Errorf("Secret() for %q = %q, want s3cret", name, got)
+		}
 	}
 }
 
