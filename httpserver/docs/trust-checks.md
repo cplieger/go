@@ -29,7 +29,7 @@ The answer is a `ClientResolution`:
 | `PeerTrusted` | The peer is inside the trusted set, whether or not it forwarded a client. `Forwarded` implies it and `UntrustedForwarding` excludes it |
 | `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
 | `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |
-| `IgnoredPublic` | One of those ignored headers named a public address, meaning global unicast and outside the private ranges |
+| `IgnoredPublic` | One of those ignored headers named a public address, as `go/ssrf`'s `IsPublicAddr` judges one: globally routable unicast, so private (RFC 1918, RFC 4193), shared (RFC 6598), loopback, link-local and documentation addresses are not public |
 | `ForwardedHTTPS` | A trusted peer sent exactly one `X-Forwarded-Proto` field holding the one token `https`, any case. A list such as `https, http`, a repeated field, an empty value or an untrusted peer reads as plain, and `Forwarded: proto=` is not read. A listed proxy must overwrite the client's field, as Caddy does, not append to it |
 
 Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `PeerTrusted` tells that proxy apart from a direct client, so read another header a proxy sets, such as `X-Forwarded-Proto`, only when it is true. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
@@ -54,10 +54,10 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `ParseHostList(entries, opts...)` parses an operator allowlist, such as a config array or a comma-split environment variable, into an immutable `*HostPolicy`. Malformed entries come back separately, as with `ParseCIDRs`.
 - `(*HostPolicy).Middleware()` answers 403 with the code `host_not_allowed` for a request whose `Host` is not listed, and logs one Warn line, `httpserver: host not allowed`. An inactive policy returns the handler unwrapped.
 - `(*HostPolicy).Allows(r)` is the same decision for one request. `Active()` and `Size()` describe the policy, for startup logs.
-- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger. A nil or zero-value policy logs through `slog.Default`.
+- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger. A policy with none, a zero-value policy and a nil policy log through `slog.Default` as it is at that moment.
 - `WithHostResponder(fn)` writes the refusal through your `ErrorResponder` instead of `WriteError`, so your app's catalog can add its own remediation. It receives 403, `host_not_allowed` and `host not allowed`, and the status and code are the same on every listener.
 - `WithLoopbackExempt(true)` admits a request from this host's own network stack, described below.
-- `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.
+- `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when the refusal is logged, so a policy parsed before the app installs its logger still logs through it. Pass a logger with a discarding handler to silence it.
 
 The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
 
@@ -120,7 +120,7 @@ The check reads Linux's `/proc/net/route` and `/proc/net/ipv6_route` and the hos
 
 - `WithRouteFiles(ipv4, ipv6)` reads the route tables from other paths, in the same formats.
 - `WithInterfaceAddrs(read)` replaces the read of the interfaces, each an `InterfaceAddrs` of name, prefixes and loopback flag.
-- `WithForwarderLogger(logger)` sends the Warn line to `logger`. Nil, the default, means `slog.Default()` as it is when `NewForwarderCheck` runs.
+- `WithForwarderLogger(logger)` sends the Warn line to `logger`. Nil, the default, means `slog.Default()` as it is when the warning is logged.
 
 ## Bind classification
 

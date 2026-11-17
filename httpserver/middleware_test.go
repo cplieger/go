@@ -202,17 +202,25 @@ func TestRecoverer_noPanicPassesThrough(t *testing.T) {
 	}
 }
 
+// With no WithRecoverLogger, the panic goes to slog.Default as it is when the
+// panic is recovered, so a chain built before the app installs its logger
+// still reports through it. A nil option is skipped.
 func TestRecoverer_nilOptionIgnoredAndDefaultLogger(t *testing.T) {
-	swapDefaultLogger(t, discardLogger())
-
-	// A nil option must be skipped; with no WithRecoverLogger the slog.Default()
-	// fallback is exercised.
 	h := httpserver.Recoverer(nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("x")
 	}))
+	logCap := &captureHandler{}
+	swapDefaultLogger(t, slog.New(logCap))
 	rr := serve(h, http.MethodGet, "/x", nil)
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rr.Code)
+	}
+	recs := logCap.snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("records on the later slog.Default = %d, want 1", len(recs))
+	}
+	if recs[0].Level != slog.LevelError || recs[0].Message != "httpserver: recovered from panic" {
+		t.Errorf("record = %v %q, want Error %q", recs[0].Level, recs[0].Message, "httpserver: recovered from panic")
 	}
 }
 

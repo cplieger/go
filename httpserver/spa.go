@@ -26,12 +26,12 @@ const immutableCache = "public, max-age=31536000, immutable"
 
 // SPA serves a single-page app's bundle (BundlePath) for GET and HEAD. A
 // listed asset answers through StaticHandler (immutable; a BundleClassic entry
-// no-cache), a notice answers text/plain, /favicon.ico 204, and any other path
-// under assets/ or licenses/ a refusal, whatever the pages match; then a page
-// path answers its shell, and any other path the default shell with 404. A
-// path at or under APIPrefix, a dot segment no page matches and another method
-// answer a refusal through Errors. Every answer carries SPAPolicy's policy and
-// every no-cache ETag binds it; unbuilt, a page answers ui_unbuilt.
+// no-cache), a notice text/plain, /favicon.ico 204, and any other path under
+// assets/ or licenses/ a refusal, whatever the pages match; then a page path
+// answers its shell, any other the default shell with 404 (no-cache). A path
+// at or under APIPrefix, a dot segment no page matches, another method and,
+// unbuilt, a page (ui_unbuilt) answer a refusal through Errors, no-store.
+// Every answer carries SPAPolicy's policy and every no-cache ETag binds it.
 func SPA(c SPAConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	policy, err := SPAPolicy(c.CSPAdd)
 	if err != nil {
@@ -211,12 +211,12 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", s.policy)
 	p := r.URL.Path
 	if underPrefix(p, s.apiPrefix) || underPrefix(path.Clean(p), s.apiPrefix) {
-		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
+		refuse(s.errs, w, r, http.StatusNotFound, "not_found", "not found")
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
-		s.refuse(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		refuse(s.errs, w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	if s.built && s.serveTree(w, r) {
@@ -232,14 +232,14 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Location", m.Redirect)
 			w.WriteHeader(http.StatusTemporaryRedirect)
 		case !s.built:
-			s.refuse(w, r, http.StatusServiceUnavailable, "ui_unbuilt", "the web UI is not built")
+			refuse(s.errs, w, r, http.StatusServiceUnavailable, "ui_unbuilt", "the web UI is not built")
 		default:
 			s.shells[m.Name].serve(w, r, http.StatusOK)
 		}
 		return
 	}
 	if !s.built || hasDotSegment(strings.TrimPrefix(p, "/")) {
-		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
+		refuse(s.errs, w, r, http.StatusNotFound, "not_found", "not found")
 		return
 	}
 	s.notFound.serve(w, r, http.StatusNotFound)
@@ -261,15 +261,19 @@ func (s *spaServer) serveTree(w http.ResponseWriter, r *http.Request) bool {
 	case p == "/favicon.ico":
 		w.WriteHeader(http.StatusNoContent)
 	case s.refused[name], underPrefix(path.Clean(p), "/assets"), underPrefix(path.Clean(p), "/licenses"):
-		s.refuse(w, r, http.StatusNotFound, "not_found", "not found")
+		refuse(s.errs, w, r, http.StatusNotFound, "not_found", "not found")
 	default:
 		return false
 	}
 	return true
 }
 
-func (s *spaServer) refuse(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string) {
-	s.errs(w, r, status, code, msg)
+// refuse answers a refusal through errs with Cache-Control: no-store, set
+// before errs runs, so no cache keeps a refusal past the build or the outage
+// that caused it.
+func refuse(errs ErrorResponder, w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string) {
+	w.Header().Set("Cache-Control", "no-store")
+	errs(w, r, status, code, msg)
 }
 
 // serve writes f with status, no-cache. A 200 carries f's ETag and its gzip

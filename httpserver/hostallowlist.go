@@ -201,7 +201,7 @@ func WithHostResponder(fn ErrorResponder) HostAllowlistOption {
 
 // WithHostAllowlistLogger sets the slog.Logger that Middleware and LogRefusal
 // report each refusal to. Nil, the default, means slog.Default() as it is when
-// ParseHostList runs. Pass a logger with a discarding handler to silence it.
+// the refusal is logged. Pass a logger with a discarding handler to silence it.
 func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.logger = l }
 }
@@ -232,9 +232,6 @@ func ParseHostList(entries []string, opts ...HostAllowlistOption) (policy *HostP
 		if o != nil {
 			o(c)
 		}
-	}
-	if c.logger == nil {
-		c.logger = slog.Default()
 	}
 	p := &HostPolicy{
 		allowed:        make(map[string]struct{}),
@@ -396,15 +393,15 @@ func listenerAddr(r *http.Request) netip.Addr {
 
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
 // caller that admits by its own rule and writes its own refusal. It logs
-// through the policy's logger (WithHostAllowlistLogger); a nil or zero-value
-// policy uses slog.Default. The line carries no path, which can hold a token; the
-// access line with the same request_id has it. The Host is empty when the
-// request named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
+// through the policy's logger (WithHostAllowlistLogger), or slog.Default as it
+// is at that moment when the policy has none or is nil. The line carries no
+// path, which can hold a token; the access line with the same request_id has
+// it. The Host is empty when the request named none: HTTP/1.0 or HTTP/2
+// without one, or an empty Host header.
 func (p *HostPolicy) LogRefusal(r *http.Request) {
-	if p == nil || p.logger == nil {
-		// ParseHostList always sets the logger, so none means a policy it did
-		// not build.
-		p = &HostPolicy{logger: slog.Default()}
+	var logger *slog.Logger
+	if p != nil {
+		logger = p.logger
 	}
 	reason := "host not in allowlist"
 	switch {
@@ -421,5 +418,5 @@ func (p *HostPolicy) LogRefusal(r *http.Request) {
 	if id := RequestIDFromContext(r.Context()); id != "" {
 		attrs = append(attrs, slog.String("request_id", id))
 	}
-	p.logger.LogAttrs(r.Context(), slog.LevelWarn, "httpserver: host not allowed", attrs...)
+	orDefault(logger).LogAttrs(r.Context(), slog.LevelWarn, "httpserver: host not allowed", attrs...)
 }

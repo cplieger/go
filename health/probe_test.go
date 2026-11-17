@@ -188,7 +188,7 @@ func TestRunProbeExits(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.Command(os.Args[0], "-test.run=^TestRunProbeExits$")
-			cmd.Env = append(os.Environ(), "HEALTH_RUNPROBE_CASE=1", "HEALTH_RUNPROBE_PATH="+tc.path)
+			cmd.Env = append(os.Environ(), "HEALTH_RUNPROBE_CASE=1", "HEALTH_RUNPROBE_PATH="+tc.path, childGORACE())
 			err := cmd.Run()
 			code := 0
 			if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
@@ -212,7 +212,7 @@ func TestRunProbe_unhealthy_writesTheReason(t *testing.T) {
 	}
 	t.Parallel()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestRunProbe_unhealthy_writesTheReason$")
-	cmd.Env = append(os.Environ(), "HEALTH_DIAG_CASE=1", "HEALTH_DIAG_PATH="+filepath.Join(t.TempDir(), "app.healthy"))
+	cmd.Env = append(os.Environ(), "HEALTH_DIAG_CASE=1", "HEALTH_DIAG_PATH="+filepath.Join(t.TempDir(), "app.healthy"), childGORACE())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()

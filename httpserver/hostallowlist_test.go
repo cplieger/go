@@ -535,6 +535,23 @@ func TestHostPolicyMiddleware_LogsRefusal(t *testing.T) {
 			t.Errorf("got %d records on slog.Default, want 1", len(recs))
 		}
 	})
+
+	t.Run("nil logger follows a default installed after parsing", func(t *testing.T) {
+		p, _ := httpserver.ParseHostList([]string{"good.example"})
+		h := &captureHandler{}
+		swapDefaultLogger(t, slog.New(h))
+		serve(p, "bad.example", "203.0.113.9:5000", "")
+		recs := h.snapshot()
+		if len(recs) != 1 {
+			t.Fatalf("got %d records on the later slog.Default, want 1", len(recs))
+		}
+		if recs[0].Level != slog.LevelWarn || recs[0].Message != "httpserver: host not allowed" {
+			t.Errorf("record = %v %q, want Warn %q", recs[0].Level, recs[0].Message, "httpserver: host not allowed")
+		}
+		if got := attrsOf(recs[0])["reason"]; got != "host not in allowlist" {
+			t.Errorf("reason = %v, want %q", got, "host not in allowlist")
+		}
+	})
 }
 
 // TestHostPolicy_LogRefusal_isMiddlewaresLine: a caller with its own admit

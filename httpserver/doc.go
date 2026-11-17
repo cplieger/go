@@ -9,11 +9,12 @@
 // (LimitBody, RequireMethod, DecodeBody), an embedded StaticHandler,
 // single-page app serving from a bundle manifest (SPA, PageMatcher,
 // OutagePage), a constant-time NewStaticTokenVerifier, ClassifyBind, a
-// graceful server (New, Run) and the ops listener (ListenOps, RunWithOps,
-// CheckListenAddrs). Package httpservertest checks an app's use of them.
+// graceful server (New, Run, Listen) and the ops listener (ListenOps,
+// RunWithOps, CheckListenAddrs). Package httpservertest checks an app's use of
+// them.
 //
 // Middleware is func(http.Handler) http.Handler and Chain lists the outermost
 // first, so Chain(mux, Logging(), Recoverer(), SecurityHeaders()) logs a
 // recovered panic as its 500. The package depends on nothing beyond the
-// standard library and go/textsafe.
+// standard library, go/ssrf and go/textsafe.
 package httpserver

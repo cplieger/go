@@ -25,6 +25,7 @@ const (
 	cspHeader      = "Content-Security-Policy"
 	immutableCache = "public, max-age=31536000, immutable"
 	noCache        = "no-cache"
+	noStore        = "no-store"
 	sampleSegment  = "checkspa"
 	crossOrigin    = "https://cross-site.invalid"
 )
@@ -35,8 +36,8 @@ const (
 // manifest, /favicon.ico, a same-origin and a cross-site POST, a path under
 // c.APIPrefix and an unknown path. Each answer outside c.APIPrefix carries
 // exactly SPAPolicy(c.CSPAdd) and its status, body, table content type,
-// Cache-Control and ETag; a refusal decodes as the envelope. A missing or
-// unreadable bundle is fatal.
+// Cache-Control and ETag; a refusal SPA writes decodes as the envelope with
+// no-store. A missing or unreadable bundle is fatal.
 func CheckSPA(t testing.TB, h http.Handler, c httpserver.SPAConfig) { //nolint:gocritic // hugeParam: SPA's own value config, read once
 	t.Helper()
 	b, found, err := httpserver.ReadBundle(c.Assets)
@@ -292,7 +293,7 @@ func (s *spaCheck) checkRefusals() {
 		http.StatusMethodNotAllowed, "method_not_allowed")
 	cross := s.serve(http.MethodPost, page, "Sec-Fetch-Site", "cross-site", "Origin", crossOrigin)
 	if cross.Code == http.StatusForbidden {
-		s.checkRefusal("POST "+page+" (cross-site)", cross, http.StatusForbidden, "cross_origin_refused")
+		s.checkEnvelope("POST "+page+" (cross-site)", cross, http.StatusForbidden, "cross_origin_refused")
 	} else {
 		s.checkRefusal("POST "+page+" (cross-site)", cross, http.StatusMethodNotAllowed, "method_not_allowed")
 	}
@@ -342,7 +343,16 @@ func (s *spaCheck) checkUnknown(where string, rec *httptest.ResponseRecorder) {
 	}
 }
 
+// checkRefusal checks a refusal SPA writes, which carries no-store; a refusal
+// the app's middleware writes in front of SPA is checkEnvelope's.
 func (s *spaCheck) checkRefusal(where string, rec *httptest.ResponseRecorder, status int, code httpserver.ErrorCode) {
+	s.checkEnvelope(where, rec, status, code)
+	if got := rec.Header().Get("Cache-Control"); got != noStore {
+		s.t.Errorf("CheckSPA: %s: Cache-Control = %q, want %q", where, got, noStore)
+	}
+}
+
+func (s *spaCheck) checkEnvelope(where string, rec *httptest.ResponseRecorder, status int, code httpserver.ErrorCode) {
 	s.checkPolicy(where, rec)
 	if rec.Code != status {
 		s.t.Errorf("CheckSPA: %s: status = %d, want %d %s", where, rec.Code, status, code)

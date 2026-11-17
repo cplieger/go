@@ -56,7 +56,7 @@ type recoverConfig struct {
 type RecoverOption func(*recoverConfig)
 
 // WithRecoverLogger sets the slog.Logger used to report a recovered panic.
-// Defaults to slog.Default().
+// Nil, the default, means slog.Default() as it is when the panic is logged.
 func WithRecoverLogger(l *slog.Logger) RecoverOption {
 	return func(c *recoverConfig) { c.logger = l }
 }
@@ -100,9 +100,6 @@ func Recoverer(opts ...RecoverOption) Middleware {
 		if o != nil {
 			o(c)
 		}
-	}
-	if c.logger == nil {
-		c.logger = slog.Default()
 	}
 	if c.responder == nil {
 		c.responder = WriteError
@@ -149,7 +146,7 @@ func (c *recoverConfig) recoverPanic(w http.ResponseWriter, committed committedR
 	}
 	stack := debug.Stack()
 	requestID := RequestIDFromContext(r.Context())
-	c.logger.Error("httpserver: recovered from panic",
+	orDefault(c.logger).Error("httpserver: recovered from panic",
 		"panic", v,
 		"stack", string(stack),
 		"request_id", requestID,
@@ -171,7 +168,7 @@ func (c *recoverConfig) recoverPanic(w http.ResponseWriter, committed committedR
 func (c *recoverConfig) fireHook(v any, stack []byte, requestID string) {
 	defer func() {
 		if hv := recover(); hv != nil {
-			c.logger.Error("httpserver: panic hook failed", "panic", hv, "stack", string(debug.Stack()), "request_id", requestID)
+			orDefault(c.logger).Error("httpserver: panic hook failed", "panic", hv, "stack", string(debug.Stack()), "request_id", requestID)
 		}
 	}()
 	c.hook(v, stack)
@@ -184,7 +181,7 @@ func (c *recoverConfig) fireHook(v any, stack []byte, requestID string) {
 func (c *recoverConfig) writeRecoverResponse(w http.ResponseWriter, r *http.Request, committed committedResponse, requestID string) {
 	defer func() {
 		if rv := recover(); rv != nil {
-			c.logger.Error("httpserver: recover responder failed", "panic", rv, "stack", string(debug.Stack()), "request_id", requestID)
+			orDefault(c.logger).Error("httpserver: recover responder failed", "panic", rv, "stack", string(debug.Stack()), "request_id", requestID)
 			if !committed.Wrote() {
 				WriteError(w, r, http.StatusInternalServerError, "internal_error", internalErrorMsg)
 			}

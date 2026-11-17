@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/cplieger/go/textsafe"
 )
@@ -13,6 +16,49 @@ import (
 // ListenSetting is one TCP listener's setting and value, such as
 // {"LISTEN_ADDR", ":9737"}.
 type ListenSetting struct{ Name, Addr string }
+
+// listenRetry is how Listen retries EADDRINUSE: a restarted container's
+// previous process can still hold the port for a moment.
+var listenRetry = struct{ interval, window time.Duration }{250 * time.Millisecond, 5 * time.Second}
+
+// Listen binds s.Addr over TCP. A blank Addr is an error. A port in use
+// (EADDRINUSE) is retried every 250 ms for up to 5 s; another error, or ctx
+// ending, fails at once. The error names s.Name and the address, control
+// characters cleaned, and wraps the cause.
+func Listen(ctx context.Context, s ListenSetting) (net.Listener, error) {
+	if strings.TrimSpace(s.Addr) == "" {
+		return nil, listenError(s, errors.New("no address"))
+	}
+	deadline := time.Now().Add(listenRetry.window)
+	var lc net.ListenConfig
+	for {
+		ln, err := lc.Listen(ctx, "tcp", s.Addr)
+		if err == nil {
+			return ln, nil
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) || ctx.Err() != nil || !time.Now().Before(deadline) {
+			return nil, listenError(s, err)
+		}
+		t := time.NewTimer(listenRetry.interval)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, listenError(s, context.Cause(ctx))
+		case <-t.C:
+		}
+	}
+}
+
+func listenError(s ListenSetting, err error) error {
+	return fmt.Errorf("httpserver: %s %q: %w", clean(s.Name), clean(s.Addr), cleanError{err})
+}
+
+// cleanError carries err with its text cleaned: a resolver's error quotes the
+// raw address, which may hold a control character.
+type cleanError struct{ err error }
+
+func (e cleanError) Error() string { return textsafe.SanitizeSingleLineBounded(e.err.Error(), 256) }
+func (e cleanError) Unwrap() error { return e.err }
 
 // CheckListenAddrs refuses, naming both settings and the port, every pair of
 // settings that would bind one socket: the same port as net.Listen resolves it

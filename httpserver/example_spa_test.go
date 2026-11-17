@@ -50,7 +50,7 @@ func ExampleSPA() {
 	// Output:
 	// /items/7 200 text/html; charset=utf-8 "no-cache"
 	// /assets/app-3f2a.js 200 text/javascript; charset=utf-8 "public, max-age=31536000, immutable"
-	// /assets/gone.js 404 application/json ""
+	// /assets/gone.js 404 application/json "no-store"
 	// /nowhere 404 text/html; charset=utf-8 "no-cache"
 }
 
@@ -60,7 +60,11 @@ func ExampleOutagePage() {
 		App:       "myapp",
 		APIPrefix: "/api",
 		Files:     []httpserver.OutageFile{{Name: "ACCOUNTS_PATH, /config/accounts.db", Class: httpserver.OutageNewer}},
-		Commands:  []string{"docker exec myapp myapp accounts restore <archive>"},
+		Notice:    "Sign-in is off until the accounts file opens.",
+		Commands: []httpserver.OutageCommand{{
+			Run:  "docker exec myapp myapp accounts restore <archive>",
+			Note: "Restores the accounts file from an export archive.",
+		}},
 	})
 	if err != nil {
 		panic(err)
@@ -76,7 +80,7 @@ func ExampleOutagePage() {
 	fmt.Println(err)
 	// Output:
 	// 503 no-store
-	// httpserver: outage file "DATA_PATH" has class "corrupt"; want damaged, format, newer, unreadable or key
+	// httpserver: outage file "DATA_PATH" has class "corrupt"; want damaged, format, newer, unreadable, key or unwritable
 }
 
 func ExampleKeyedRateLimiter_Middleware() {

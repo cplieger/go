@@ -152,6 +152,9 @@ func wantRefusal(t *testing.T, rec *httptest.ResponseRecorder, status int, code 
 	if env := strictEnvelope(t, rec); env.Code != code {
 		t.Errorf("code = %q, want %q", env.Code, code)
 	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q on a refusal, want no-store", cc)
+	}
 	wantPolicy(t, rec, defaultPolicy)
 }
 
@@ -212,6 +215,26 @@ func TestSPAUnknownPathAnswersShell404(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSPATailPatternAnswersEveryDepth(t *testing.T) {
+	c := spaConfig(t, nil)
+	c.Pages = []httpserver.Page{{Name: "file", Pattern: "/file/{path...}"}}
+	h := newSPA(t, c)
+	for _, target := range []string{"/file/a/b/c.ts", "/file/.github/x.yaml"} {
+		t.Run(pathName(target), func(t *testing.T) {
+			wantShell(t, spaServe(h, http.MethodGet, target), http.StatusOK, indexHTML)
+		})
+	}
+	t.Run("the bare prefix redirects to its slash", func(t *testing.T) {
+		rec := spaServe(h, http.MethodGet, "/file")
+		if rec.Code != http.StatusTemporaryRedirect {
+			t.Errorf("status = %d, want 307", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/file/" {
+			t.Errorf("Location = %q, want /file/", loc)
+		}
+	})
 }
 
 func TestSPARedirectIs307(t *testing.T) {
@@ -782,6 +805,9 @@ func TestSPAErrorsResponderAnswersRefusals(t *testing.T) {
 	errs := func(w http.ResponseWriter, r *http.Request, status int, code httpserver.ErrorCode, msg string) {
 		if w.Header().Get("Content-Security-Policy") == "" {
 			t.Errorf("%s: the policy is not set before the responder runs", code)
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s: Cache-Control = %q before the responder runs, want no-store", code, cc)
 		}
 		codes = append(codes, code)
 		w.WriteHeader(status)

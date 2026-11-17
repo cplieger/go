@@ -271,6 +271,18 @@ func TestCheckSPAFailsWrongStatus(t *testing.T) {
 	wantFailure(t, runCheckSPA(t, h, c), "/checkspa-", "status")
 }
 
+func TestCheckSPAFailsCacheableRefusal(t *testing.T) {
+	c := fixtureConfig(t)
+	for _, target := range []string{"/" + httpserver.BundlePath, "/assets/checkspa-unlisted.js"} {
+		t.Run(strings.ReplaceAll(target, "/", "|"), func(t *testing.T) {
+			h := tamper(fixtureSPA(t, c), atPath(target), func(rec *httptest.ResponseRecorder) {
+				rec.Header().Set("Cache-Control", "no-cache")
+			})
+			wantFailure(t, runCheckSPA(t, h, c), target, "Cache-Control")
+		})
+	}
+}
+
 func TestCheckSPAFailsRefusalNotEnvelope(t *testing.T) {
 	c := fixtureConfig(t)
 	h := tamper(fixtureSPA(t, c), atPath("/"+httpserver.BundlePath), func(rec *httptest.ResponseRecorder) {
