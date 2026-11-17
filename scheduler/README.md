@@ -126,13 +126,6 @@ These are deliberate non-goals, which keep the library small.
 - [Overlap guard and run coalescing](docs/coordination.md) covers `TryLock`, `Exclusive` and `SlotFile`, for a job that starts from more than one process.
 - [Trigger broker](docs/trigger.md) covers the `trigger` package, for a daemon that runs every job itself.
 
-## Moving from v1
-
-- Change every import of `github.com/cplieger/go/scheduler` to `github.com/cplieger/go/scheduler/v2`, and `github.com/cplieger/go/scheduler/trigger` to `github.com/cplieger/go/scheduler/v2/trigger`.
-- Replace a call to the `trigger` package's `Listen(path)` with `ownersock.Listen(ownersock.Config{Path: path})` from `github.com/cplieger/go/ownersock`, with the socket in a private directory of its own, such as `/run/myapp/trigger.sock`. Point `Submit` at the same path.
-- A client running as a user other than the daemon's, root included, is now refused: run `docker exec` (or the client) as the daemon's user.
-- Everything else is unchanged.
-
 ## Contributing
 
 Issues and pull requests are welcome. The [shared contributing rules](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md) apply.

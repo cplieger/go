@@ -27,7 +27,8 @@ go func() {
 		return trigger.Result{OK: ok, Duration: elapsed}
 	})
 }()
-// ownersock creates /run/myapp at 0700 and admits only this process's own user.
+// ownersock creates /run/myapp at 0700 when this user can write /run, and admits
+// only this process's own user.
 ln, err := ownersock.Listen(ownersock.Config{Path: "/run/myapp/trigger.sock"})
 srv := &trigger.Server[payload]{Queue: queue}
 served := make(chan error, 1)
@@ -55,13 +56,13 @@ final, err := trigger.Submit(ctx, "/run/myapp/trigger.sock", payload{Repos: repo
 
 Bind the socket with [ownersock](https://github.com/cplieger/go/tree/main/ownersock) and pass the listener to `Server.Serve`. `Serve` trusts every connection the listener accepts, so the listener decides who may trigger a run. `ownersock.Listen` checks each connection's peer credentials and closes one from any other user before reading it. It also refuses a second start beside a live daemon and replaces a socket a killed daemon left behind.
 
-Give the socket a private directory of its own, such as `/run/myapp` for `/run/myapp/trigger.sock`. ownersock refuses a path that breaks these rules:
+Give the socket a private directory of its own, such as `/run/myapp` for `/run/myapp/trigger.sock`. A daemon that does not run as root needs a parent directory it can write, or its image creates the socket directory at build time, owned by the daemon's user at mode 0700. ownersock refuses a path that breaks these rules:
 
 - The path is absolute and clean, and at most 107 bytes, the length a Linux unix socket path holds.
-- Its directory has mode 0700 and is owned by the server's user. `ownersock.Listen` creates a missing directory at 0700 and refuses an existing one that is more open, owned by another user or a symlink.
+- Its directory is owned by the server's user and grants no group or other access. `ownersock.Listen` creates a missing directory at mode 0700. It refuses an existing directory that grants group or other access, is owned by another user or is a symlink, and never changes its mode.
 - The directory is never `/tmp` itself, which every user can open.
 
-ownersock runs on Linux. A trigger subcommand must run as the daemon's user: `docker exec` runs as the image's user unless you pass `--user`.
+ownersock runs on Linux. A trigger subcommand must run as the daemon's user: `docker exec` runs as the container's user (the image's `USER`, or the `--user` the container was started with) unless you pass `--user`.
 
 A request line is capped at 8 MiB, and a client has 30 seconds after connecting to send it. A connection that closes without sending a request gets no event and is logged at DEBUG.
 
