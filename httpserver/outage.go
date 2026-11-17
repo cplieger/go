@@ -110,7 +110,7 @@ type outageView struct {
 // lists under assets/ answers as SPA serves it, so the page's style loads.
 // Names and commands are cleaned through textsafe. A path at or under
 // APIPrefix answers not_found and another method method_not_allowed, through
-// Errors. The error names the class, style, bundle or prefix it refuses.
+// Errors, no-store. The error names the class, style, bundle or prefix it refuses.
 func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if c.Title == "" || c.App == "" {
 		return nil, errors.New("httpserver: an outage page needs a Title and an App")
@@ -200,12 +200,12 @@ func (p *outagePage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Security-Policy", p.policy)
 	if underPrefix(r.URL.Path, p.apiPrefix) || underPrefix(path.Clean(r.URL.Path), p.apiPrefix) {
-		p.errs(w, r, http.StatusNotFound, "not_found", "not found")
+		refuse(p.errs, w, r, http.StatusNotFound, "not_found", "not found")
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		h.Set("Allow", "GET, HEAD")
-		p.errs(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		refuse(p.errs, w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	if p.served[strings.TrimPrefix(r.URL.Path, "/")] {

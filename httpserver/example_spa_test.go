@@ -50,7 +50,7 @@ func ExampleSPA() {
 	// Output:
 	// /items/7 200 text/html; charset=utf-8 "no-cache"
 	// /assets/app-3f2a.js 200 text/javascript; charset=utf-8 "public, max-age=31536000, immutable"
-	// /assets/gone.js 404 application/json ""
+	// /assets/gone.js 404 application/json "no-store"
 	// /nowhere 404 text/html; charset=utf-8 "no-cache"
 }
 

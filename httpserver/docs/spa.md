@@ -98,7 +98,7 @@ The first row that applies answers:
 | A path with a segment starting with `.` | `not_found` (404) |
 | Any other path | The default shell, `index.html`, with 404, so the router draws its not-found screen |
 
-Every refusal is the error envelope written through `Errors`. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
+Every refusal is the error envelope written through `Errors`, with `Cache-Control: no-store` set before `Errors` runs, so no cache keeps a refusal after the build that fixes it. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
 
 The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. `/.env` and `/assets/.env` answer `not_found`.
 
@@ -139,6 +139,7 @@ Because the policy allows no inline script or style, `SPA` refuses at start a sh
 | A `module` or `style` output, a chunk, a font, an image | `public, max-age=31536000, immutable` | The manifest hash |
 | A `classic` entry, a shell, a notice | `no-cache` | Bound to the policy |
 | The default shell answered with 404 | `no-cache` | None |
+| A refusal, `ui_unbuilt` included | `no-store` | None |
 
 A file under `assets/` is named by its content hash, so it can be cached for a year. A `classic` entry is the exception, because it runs under the policy on its own response, and `SPA` writes that policy at serve time. A build that changes only the policy keeps the script's name, so a year-long cache would keep the old policy on it.
 
@@ -146,7 +147,7 @@ Every `no-cache` ETag is computed once at start as the first 32 hex digits of SH
 
 ## Unbuilt
 
-With no `bundle.json`, `SPA` logs one Warn at start naming `go generate ./...`, every page path answers `ui_unbuilt` (503), and every other path answers `not_found`. So `go test` and a backend-only build run without the bundler's toolchain.
+With no `bundle.json`, `SPA` logs one Warn at start naming `go generate ./...`, every page path answers `ui_unbuilt` (503), and every other path answers `not_found`, each with `Cache-Control: no-store`, so the browser asks again once the bundle is built. So `go test` and a backend-only build run without the bundler's toolchain.
 
 ## A build with no web UI
 
@@ -165,7 +166,7 @@ The `httpservertest` package holds the checks, so `httpserver` itself imports no
 
 The bundle's own paths are checked whatever the pages match. Only an unknown-path or dot-file probe outside `assets/` and `licenses/` that a page matches is left out, since that page answers it.
 
-Every answer outside `APIPrefix` must carry exactly the policy `SPAPolicy(c.CSPAdd)` returns, and every refusal must decode as the envelope with its `request_id` equal to `X-Request-ID`. A missing or unreadable bundle fails at once, so run it on a fixture tree or on the built one.
+Every answer outside `APIPrefix` must carry exactly the policy `SPAPolicy(c.CSPAdd)` returns, and every refusal `SPA` writes must decode as the envelope with its `request_id` equal to `X-Request-ID` and carry `Cache-Control: no-store`. A missing or unreadable bundle fails at once, so run it on a fixture tree or on the built one.
 
 `CheckNoUI(t, h)` fails `t` unless `h` answers `not_found` (404) to `GET`, `HEAD` and `POST` on the root, a shell, the manifest, an asset, a notice, `/favicon.ico` and an unknown path. Every answer but a `HEAD` one carries the envelope.
 
@@ -209,6 +210,6 @@ The page writes each file's `Name` and the one sentence of its `OutageClass`, ne
 
 The closing line is "Reload this page once the command finishes.", since a repair runs in the serving process. With `Restart` it is "Run the command above or restart the container, then reload this page." Each name and command goes through `go/textsafe`'s single-line sanitizer, which turns control characters, line breaks and invisible runes into spaces. It is then cut at 512 bytes, with `...` marking the cut.
 
-The page is rendered once, through `html/template`, with no script and no inline style. Every `GET` or `HEAD` outside `APIPrefix` answers it with 503, `Cache-Control: no-store`, `text/html` and `SPA`'s default policy. The exception is a file the manifest lists under `assets/`, which answers exactly as `SPA` serves it, so the stylesheet and the fonts and icons it loads arrive. A path at or under `APIPrefix` answers `not_found`, since the API answers its own outage, and another method answers `method_not_allowed` with `Allow: GET, HEAD`.
+The page is rendered once, through `html/template`, with no script and no inline style. Every `GET` or `HEAD` outside `APIPrefix` answers it with 503, `Cache-Control: no-store`, `text/html` and `SPA`'s default policy. The exception is a file the manifest lists under `assets/`, which answers exactly as `SPA` serves it, so the stylesheet and the fonts and icons it loads arrive. A path at or under `APIPrefix` answers `not_found`, since the API answers its own outage, and another method answers `method_not_allowed` with `Allow: GET, HEAD`. Both refusals carry `Cache-Control: no-store`, as `SPA`'s do.
 
 `OutagePage` refuses an empty `Title` or `App`, an `APIPrefix` that is not a clean path, a class outside the five, a manifest `ReadBundle` refuses, and, with a built bundle, a `Style` naming no style entry.

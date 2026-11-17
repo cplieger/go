@@ -149,6 +149,9 @@ func TestOutagePageErrorsResponderAnswersRefusals(t *testing.T) {
 		if w.Header().Get("Content-Security-Policy") == "" {
 			t.Errorf("%s: the policy is not set before the responder runs", code)
 		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s: Cache-Control = %q before the responder runs, want no-store", code, cc)
+		}
 		codes = append(codes, code)
 		w.WriteHeader(status)
 	}
