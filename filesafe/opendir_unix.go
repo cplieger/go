@@ -23,10 +23,11 @@ func openDirInRoot(root *os.Root, dir string) (*os.File, error) {
 	return f, nil
 }
 
-// notDirectoryErr returns the error of a failed O_DIRECTORY open, with the
-// EOPNOTSUPP that OpenBSD, NetBSD and DragonFly answer for a socket, testing
-// its type before O_DIRECTORY (their vfs_vnops.c vn_open), as ENOTDIR, as Go's
-// os.rootOpenDir translates it.
+// notDirectoryErr returns the error of a failed O_DIRECTORY open, with
+// EOPNOTSUPP reported as ENOTDIR. OpenBSD, NetBSD and DragonFly test for a
+// socket before O_DIRECTORY and answer EOPNOTSUPP (vn_open in vfs_vnops.c).
+// os.Root translates that errno only for intermediate components
+// (os/root_unix.go rootOpenDir).
 func notDirectoryErr(err error) error {
 	if pe, ok := errors.AsType[*fs.PathError](err); ok && errors.Is(pe.Err, syscall.EOPNOTSUPP) {
 		return &fs.PathError{Op: pe.Op, Path: pe.Path, Err: syscall.ENOTDIR}

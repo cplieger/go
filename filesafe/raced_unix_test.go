@@ -78,9 +78,9 @@ func TestOpenParentInRoot_SwappedComponentIsErrRaced(t *testing.T) {
 }
 
 // TestRacedOpen_Classification pins racedOpen's rule directly: ENOTDIR, ELOOP
-// and either errno a socket open answers are races, a name that is no longer
-// what the Lstat saw is a race, and a vanished name or a failure on an
-// unchanged name is not.
+// and ENXIO are races, a name that is no longer what the Lstat saw is a race,
+// and a vanished name or a failure on an unchanged name, EOPNOTSUPP included,
+// is not.
 func TestRacedOpen_Classification(t *testing.T) {
 	t.Parallel()
 	root, dir := openTestRoot(t)
@@ -102,7 +102,7 @@ func TestRacedOpen_Classification(t *testing.T) {
 		"os.Root not a directory":  {&fs.PathError{Op: "open", Path: "f", Err: errors.New("not a directory")}, true},
 		"closed root":              {&fs.PathError{Op: "openat", Path: "f", Err: os.ErrClosed}, false},
 		"ENXIO":                    {&fs.PathError{Op: "openat", Path: "f", Err: syscall.ENXIO}, true},
-		"EOPNOTSUPP":               {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EOPNOTSUPP}, true},
+		"unchanged EOPNOTSUPP":     {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EOPNOTSUPP}, false},
 		"unchanged EMFILE":         {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EMFILE}, false},
 		"unchanged io error":       {&fs.PathError{Op: "openat", Path: "f", Err: syscall.EIO}, false},
 	} {

@@ -11,10 +11,9 @@ import (
 )
 
 // TestNoFollowRefusal_ALinkIsErrSymlinkTargetWhateverTheErrno pins that a
-// final symlink an O_NOFOLLOW open refused is ErrSymlinkTarget under each
-// kernel's errno: ELOOP on Linux, macOS, OpenBSD and illumos, EMLINK on
-// FreeBSD and DragonFly (open(2)), EINVAL on DragonFly (Go's os.isNoFollowErr).
-// An ELOOP with nothing to lstat is an ancestor loop and takes the same arm.
+// final symlink an O_NOFOLLOW open refused is ErrSymlinkTarget whatever errno
+// the kernel chose (noFollowRefusal names them). An ELOOP with nothing to
+// lstat is an ancestor loop and takes the same arm.
 func TestNoFollowRefusal_ALinkIsErrSymlinkTargetWhateverTheErrno(t *testing.T) {
 	t.Parallel()
 	link := found(lstatOccupants(t).symlink)

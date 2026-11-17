@@ -94,17 +94,17 @@ func RemoveFileInRoot(root *os.Root, name string) error {
 var pinOpenHook func(name string)
 
 // racedOpen classifies an open of name that failed after an Lstat of it
-// proved a directory or a regular file and no symlink. A directory is opened
-// through name/., so ENOTDIR, ELOOP, ENXIO and EOPNOTSUPP (a socket's open,
-// see socketRefusal) and os.Root's own errors can only mean the name changed,
-// as can any other failure on a name that, looked up again, is not the file
-// the Lstat saw or is present after an open that found nothing. Those are
-// ErrRaced, which a retry can cure; a closed root, a name now gone and every
-// other failure come back as they are.
+// proved a directory or a regular file and no symlink. ENOTDIR (a directory
+// is opened through name/.), ELOOP, ENXIO and os.Root's own errors mean the
+// name changed. Any other failure is a race when name, looked up again, is not
+// the file the Lstat saw, or is present after an open that found nothing. That
+// covers EOPNOTSUPP, a socket's answer off Linux that O_SHLOCK or FUSE also
+// give for an unchanged file. A race is ErrRaced, which a retry can cure; a
+// closed root, a name now gone and every other failure come back as they are.
 func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
 	var errno syscall.Errno
 	isErrno := errors.As(err, &errno)
-	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP || errno == syscall.ENXIO || errno == syscall.EOPNOTSUPP) ||
+	changed := isErrno && (errno == syscall.ENOTDIR || errno == syscall.ELOOP || errno == syscall.ENXIO) ||
 		!isErrno && !errors.Is(err, os.ErrClosed)
 	if !changed {
 		now, lErr := root.Lstat(name)
