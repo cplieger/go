@@ -1,0 +1,28 @@
+{
+  "components": {
+    "schemas": {
+      "Slug": {
+        "pattern": "^[a-z]+$",
+        "type": "string"
+      }
+    }
+  },
+  "info": { "title": "fixture", "version": "1" },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/slugs/{slug}": {
+      "get": {
+        "operationId": "getSlug",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": { "$ref": "#/components/schemas/Slug" }
+          }
+        ],
+        "responses": { "204": { "description": "No Content" } }
+      }
+    }
+  }
+}
