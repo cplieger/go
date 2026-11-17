@@ -733,3 +733,106 @@ func ownNonLoopbackIPv4(t *testing.T) net.IP {
 	t.Skip("this host has no non-loopback IPv4 address")
 	return nil
 }
+
+// WithIPLiteralHosts admits a Host that is an IP address, with or without a
+// port, beside the allowlist: IPv4, or IPv6 in brackets with a zone as
+// net/netip parses one. A name stays under the allowlist, so a rebound page,
+// whose Host is the attacker's name, is still refused.
+func TestHostPolicyIPLiteralHosts(t *testing.T) {
+	cases := []struct {
+		name, host string
+		want       bool
+	}{
+		{"ipv4", "192.0.2.7", true},
+		{"ipv4 with a port", "192.0.2.7:8080", true},
+		{"ipv4 with a trailing dot", "192.0.2.7.", true},
+		{"bracketed ipv6", "[2001:db8::7]", true},
+		{"bare ipv6", "2001:db8::7", true},
+		{"bracketed ipv6 with a port", "[2001:db8::7]:8080", true},
+		{"bracketed v4-mapped ipv6", "[::ffff:192.0.2.7]:8080", true},
+		{"ipv6 with a zone", "[fe80::1%eth0]", true},
+		{"ipv6 with a zone and a port", "[fe80::1%eth0]:8080", true},
+		{"ipv6 with a percent-encoded zone", "[fe80::1%25eth0]:8080", true},
+		{"listed name still passes", "app.example:8080", true},
+
+		{"name refused", "attacker.evil", false},
+		{"name with a port refused", "attacker.evil:8080", false},
+		{"ip-shaped name refused", "192.0.2.7.attacker.evil", false},
+		{"bracketed ipv4 refused (brackets are ipv6-only)", "[192.0.2.7]", false},
+		{"bracketed ipv4 with a zone refused", "[192.0.2.7%eth0]", false},
+		{"bracketed name refused", "[attacker.evil]:8080", false},
+		{"ipv4 with a bad port refused", "192.0.2.7:garbage", false},
+		{"zoned ipv6 with a bad port refused", "[fe80::1%eth0]:99999", false},
+		{"zoned ipv6 with an empty zone refused", "[fe80::1%]", false},
+		{"zoned ipv6 with text after the bracket refused", "[fe80::1%eth0]x", false},
+		{"unclosed bracket refused", "[fe80::1%eth0", false},
+		{"unbracketed zoned ipv6 refused", "fe80::1%eth0", false},
+		{"leading-zero ipv4 refused", "192.0.2.007", false},
+		{"empty Host refused", "", false},
+	}
+	request := func(host string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
+		req.Host = host
+		req.RemoteAddr = "203.0.113.9:5000"
+		return req
+	}
+	p, invalid := httpserver.ParseHostList([]string{"app.example"},
+		httpserver.WithIPLiteralHosts(true), httpserver.WithHostAllowlistLogger(discardLogger()))
+	if len(invalid) != 0 {
+		t.Fatalf("unexpected invalid entries: %v", invalid)
+	}
+	h := p.Middleware()(okHandler())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := p.Allows(request(tc.host)); got != tc.want {
+				t.Errorf("Allows(Host %q) = %v, want %v", tc.host, got, tc.want)
+			}
+			want := http.StatusForbidden
+			if tc.want {
+				want = http.StatusOK
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, request(tc.host))
+			if rec.Code != want {
+				t.Errorf("Middleware(Host %q) = %d, want %d", tc.host, rec.Code, want)
+			}
+		})
+	}
+}
+
+// The option is off by default, false means the same as leaving it out, and
+// the last call wins.
+func TestHostPolicyIPLiteralHostsOffByDefaultAndLastWins(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []httpserver.HostAllowlistOption
+		want bool
+	}{
+		{"option omitted", nil, false},
+		{"false", []httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(false)}, false},
+		{"true", []httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(true)}, true},
+		{
+			"true then false closes it",
+			[]httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(true), httpserver.WithIPLiteralHosts(false)},
+			false,
+		},
+		{
+			"false then true opens it",
+			[]httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(false), httpserver.WithIPLiteralHosts(true)},
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := httpserver.ParseHostList([]string{"app.example"}, tc.opts...)
+			for _, host := range []string{"192.0.2.7:8080", "[2001:db8::7]:8080", "[fe80::1%eth0]:8080"} {
+				req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
+				req.Host = host
+				req.RemoteAddr = "203.0.113.9:5000"
+				if got := p.Allows(req); got != tc.want {
+					t.Errorf("Allows(Host %q) = %v, want %v", host, got, tc.want)
+				}
+			}
+		})
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -95,27 +96,28 @@ func FuzzCanonicalHost(f *testing.F) {
 
 // FuzzHostPolicyAllows pins the security invariant of the gate against
 // arbitrary Host and RemoteAddr input: an ACTIVE policy admits a request ONLY
-// when the Host is a well-formed spelling of an allowlisted name, or the
-// loopback carve-out is enabled AND both the Host and the socket peer are
-// loopback. The justification is re-derived with an independent authority
+// when the Host is a well-formed spelling of an allowlisted name, the
+// IP-literal option is on AND the Host is an IP address, or the loopback
+// carve-out is enabled AND both the Host and the socket peer are loopback. The
+// justification is re-derived with an independent authority
 // parser written from the RFC 3986 grammar below — deliberately NOT
 // CanonicalHost, so a parser bug cannot vouch for itself. The oracle may be
 // marginally LOOSER than production on shapes production rejects (a rejection
 // is never a security failure); it must never be looser on admission.
 func FuzzHostPolicyAllows(f *testing.F) {
-	f.Add("example.com", "203.0.113.9:5000", true)
-	f.Add("127.0.0.1", "127.0.0.1:5000", true)
-	f.Add("attacker.evil", "127.0.0.1:5000", false)
-	f.Add("localhost:80", "[::1]:9", true)
-	f.Add("", "", false)
+	f.Add("example.com", "203.0.113.9:5000", true, false)
+	f.Add("127.0.0.1", "127.0.0.1:5000", true, false)
+	f.Add("attacker.evil", "127.0.0.1:5000", false, false)
+	f.Add("localhost:80", "[::1]:9", true, false)
+	f.Add("", "", false, false)
 	// Repair-collision Hosts (must never admit) and the portless-peer shape
 	// (must never satisfy the carve-out).
-	f.Add("[webterm.example.com]", "203.0.113.9:5000", false)
-	f.Add("webterm.example[.]com", "203.0.113.9:5000", false)
-	f.Add("webterm.example.com:garbage:443", "203.0.113.9:5000", false)
-	f.Add("webterm.example.com..", "203.0.113.9:5000", false)
-	f.Add("127.0.0.1", "127.0.0.1", true)
-	f.Add("[::ffff:127.0.0.1]:80", "[::1]:5", true)
+	f.Add("[webterm.example.com]", "203.0.113.9:5000", false, false)
+	f.Add("webterm.example[.]com", "203.0.113.9:5000", false, false)
+	f.Add("webterm.example.com:garbage:443", "203.0.113.9:5000", false, false)
+	f.Add("webterm.example.com..", "203.0.113.9:5000", false, false)
+	f.Add("127.0.0.1", "127.0.0.1", true, false)
+	f.Add("[::ffff:127.0.0.1]:80", "[::1]:5", true, false)
 	// Case-fold laundering against the second allowlist entry. It exists
 	// BECAUSE the first one cannot express this class: "webterm.example.com"
 	// carries neither 'i' nor 'k', and those are the only two ASCII letters
@@ -123,19 +125,22 @@ func FuzzHostPolicyAllows(f *testing.F) {
 	// so no laundering input could ever have reached the old single-entry
 	// oracle. That is why the fuzzer never found the widening it was written
 	// to catch.
-	f.Add("\u212Aibana.example", "203.0.113.9:5000", false)
-	f.Add("k\u0130bana.example", "203.0.113.9:5000", false)
-	f.Add("\u212A\u0130bana.example:443", "203.0.113.9:5000", true)
+	f.Add("\u212Aibana.example", "203.0.113.9:5000", false, false)
+	f.Add("k\u0130bana.example", "203.0.113.9:5000", false, false)
+	f.Add("\u212A\u0130bana.example:443", "203.0.113.9:5000", true, false)
+	// IP literals under WithIPLiteralHosts, and the names it must still refuse.
+	f.Add("192.0.2.7:8080", "203.0.113.9:5000", false, true)
+	f.Add("[fe80::1%eth0]:8080", "203.0.113.9:5000", false, true)
+	f.Add("[192.0.2.7]", "203.0.113.9:5000", false, true)
+	f.Add("192.0.2.7.attacker.evil", "203.0.113.9:5000", false, true)
+	f.Add("[fe80::1%eth0]x", "203.0.113.9:5000", false, true)
 
 	// A fixed, active allowlist: one browser-facing host, plus one whose name
 	// carries the two letters a Unicode case fold can synthesize.
 	allowed := []string{"webterm.example.com", "kibana.example"}
-	f.Fuzz(func(t *testing.T, host, remoteAddr string, exempt bool) {
-		var opts []httpserver.HostAllowlistOption
-		if exempt {
-			opts = append(opts, httpserver.WithLoopbackExempt(true))
-		}
-		p, _ := httpserver.ParseHostList(allowed, opts...)
+	f.Fuzz(func(t *testing.T, host, remoteAddr string, exempt, ipLiterals bool) {
+		p, _ := httpserver.ParseHostList(allowed,
+			httpserver.WithLoopbackExempt(exempt), httpserver.WithIPLiteralHosts(ipLiterals))
 
 		req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
 		req.Host = host
@@ -144,15 +149,18 @@ func FuzzHostPolicyAllows(f *testing.F) {
 		if !p.Allows(req) {
 			return // a rejection can never be a security failure for an active gate
 		}
-		// Admitted: it must be justified by exactly one of the two rules,
-		// re-derived independently below.
+		// Admitted: it must be justified by one of the three rules, re-derived
+		// independently below.
 		if name, ok := splitAuthority(host); ok && slices.Contains(allowed, strings.TrimSuffix(oracleLowerASCII(name), ".")) {
+			return
+		}
+		if ipLiterals && oracleIPLiteral(host) {
 			return
 		}
 		if exempt && oracleLoopbackHost(host) && loopbackAddr(remoteAddr) {
 			return
 		}
-		t.Errorf("active gate admitted an unjustified request: host=%q remoteAddr=%q exempt=%v", host, remoteAddr, exempt)
+		t.Errorf("active gate admitted an unjustified request: host=%q remoteAddr=%q exempt=%v ipLiterals=%v", host, remoteAddr, exempt, ipLiterals)
 	})
 }
 
@@ -384,6 +392,20 @@ func bracketedLoopback(host string) bool {
 	inner := host[1:end]
 	ip := net.ParseIP(inner)
 	return ip != nil && strings.Contains(inner, ":") && ip.IsLoopback()
+}
+
+// oracleIPLiteral reports whether a wire Host is an IP address once one
+// optional port, the brackets and one trailing dot are cut, read with
+// net.SplitHostPort and netip.ParseAddr alone.
+func oracleIPLiteral(host string) bool {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	} else {
+		name = strings.TrimSuffix(strings.TrimPrefix(name, "["), "]")
+	}
+	_, err := netip.ParseAddr(strings.TrimSuffix(name, "."))
+	return err == nil
 }
 
 // loopbackAddr reports whether a RemoteAddr is a loopback peer, using the
