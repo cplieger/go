@@ -100,7 +100,7 @@ The first row that applies answers:
 
 Every refusal is the error envelope written through `Errors`, with `Cache-Control: no-store` set before `Errors` runs, so no cache keeps a refusal after the build that fixes it. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
 
-The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. `/.env` and `/assets/.env` answer `not_found`.
+The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. A tail page `/file/{path...}` takes every depth the same way: `/file/a/b/c.ts` and `/file/.github/x.yaml` answer its shell, and `/file` redirects to `/file/`. `/.env` and `/assets/.env` answer `not_found`.
 
 ## Pages
 

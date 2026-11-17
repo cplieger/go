@@ -102,7 +102,7 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 - Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `WithHostResponder` and `LogRefusal`), `CanonicalHost`, `CrossOrigin`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
 - Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorResponse`, `ErrorCode` and `ErrorResponder`, `CodeSpecs` (`CodeSpec`), `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler` with `WithStaticCacheControl` and `WithStaticETags`, `ContentTypes`, `InlineScriptHashes`, `InlineStyleHashes`.
-- Single-page apps: `SPA` (`SPAConfig`), `Page`, `CheckPages`, `NewPageMatcher` (`PageMatcher`, `PageMatch`), `NotFound`, the manifest (`BundlePath`, `ReadBundle`, `Bundle`, `BundleEntry`, `BundleKind`), `SPAPolicy`, `CheckShell`, and `OutagePage` (`OutageConfig`, `OutageFile`, `OutageClass`).
+- Single-page apps: `SPA` (`SPAConfig`), `Page`, `CheckPages`, `NewPageMatcher` (`PageMatcher`, `PageMatch`), `NotFound`, the manifest (`BundlePath`, `ReadBundle`, `Bundle`, `BundleEntry`, `BundleKind`), `SPAPolicy`, `CheckShell`, and `OutagePage` (`OutageConfig`, `OutageFile`, `OutageClass`, `OutageCommand`).
 - Test helpers in `httpservertest`: `CheckSPA`, `CheckNoUI`, `CheckCodeSpecs`.
 - Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `OpsAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`), and `Listen` and `CheckListenAddrs` over `ListenSetting`.
 
@@ -134,7 +134,9 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - Give every `WriteError` call and every `ErrorResponder` a non-empty code. The empty code is now malformed and answers `invalid_error_code`.
 - Replace `ListenMetrics`, `MetricsHandlers` and `MetricsServer` with `ListenOps` and `RunWithOps`, and pass every listener's address to `CheckListenAddrs` at start.
 - A client matching `Recoverer`'s 500 message reads `internal error`.
+- `ClientResolution.IgnoredPublic` judges an ignored forwarded address as `go/ssrf`'s `IsPublicAddr` does, so a shared (RFC 6598), documentation or other non-routable address no longer sets it.
 - A `StaticHandler` file with an extension outside the content-type table, such as `.jpg` or `.woff`, now answers `application/octet-stream`. Convert it to a listed format, or serve it with your own handler.
+- Code written against `v2.0.0-dev.1` wraps each `OutageConfig.Commands` string as `httpserver.OutageCommand{Run: s}`, since the field is now `[]OutageCommand`. A line that explained a command moves into its `Note`, and a line about the outage as a whole into `Notice`.
 
 ## Related projects
 
