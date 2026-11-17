@@ -98,9 +98,9 @@ var pinOpenHook func(name string)
 // is opened through name/.), ELOOP, ENXIO and os.Root's own errors mean the
 // name changed. Any other failure is a race when name, looked up again, is not
 // the file the Lstat saw, or is present after an open that found nothing. That
-// covers EOPNOTSUPP, a socket's answer off Linux that O_SHLOCK or FUSE also
-// give for an unchanged file. A race is ErrRaced, which a retry can cure; a
-// closed root, a name now gone and every other failure come back as they are.
+// covers EOPNOTSUPP, a socket's answer off Linux that a FUSE filesystem can
+// also give for an unchanged file. A race is ErrRaced, which a retry can cure;
+// a closed root, a name now gone and every other failure come back as they are.
 func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
 	var errno syscall.Errno
 	isErrno := errors.As(err, &errno)

@@ -77,10 +77,11 @@ func TestOpenParentInRoot_SwappedComponentIsErrRaced(t *testing.T) {
 	}
 }
 
-// TestRacedOpen_Classification pins racedOpen's rule directly: ENOTDIR, ELOOP
-// and ENXIO are races, a name that is no longer what the Lstat saw is a race,
-// and a vanished name or a failure on an unchanged name, EOPNOTSUPP included,
-// is not.
+// TestRacedOpen_Classification pins racedOpen's rule directly: ENOTDIR, ELOOP,
+// ENXIO and os.Root's own errors are races, a name that is no longer what the
+// Lstat saw or is present after an open that found nothing is a race, and a
+// vanished name or any other failure on an unchanged name, EOPNOTSUPP
+// included, is not.
 func TestRacedOpen_Classification(t *testing.T) {
 	t.Parallel()
 	root, dir := openTestRoot(t)
