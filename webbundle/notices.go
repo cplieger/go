@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode"
 )
 
 const licensesDir = "licenses/"
@@ -36,24 +35,27 @@ type notice struct {
 	body []byte
 }
 
-// writeNotices copies each bundled package's notice files to
-// licenses/<package>/ and writes licenses/index.txt, one "<package>
-// <version>" line per bundled version, sorted. A package root with no notice
-// file, or two versions of a package whose notice files of one name differ,
-// fails the build: either would ship the bundle without a licence text it
-// redistributes.
+// writeNotices copies the notice files of each bundled package version to
+// licenses/<package>@<version>/ and writes licenses/index.txt, one
+// "<package> <version>" line per directory, sorted. Every version gets its
+// own directory, so a bundle holding two versions of a package ships both
+// licence texts. A package root with no notice file fails the build.
 func writeNotices(t *tree, src string, pkgs packageRoots) error {
 	if len(pkgs) == 0 {
 		return nil
 	}
+	written := map[string][]byte{}
 	var index []string
 	for _, name := range slices.Sorted(maps.Keys(pkgs)) {
-		versions, err := writePackageNotices(t, src, name, pkgs[name])
-		if err != nil {
-			return err
-		}
-		for _, v := range versions {
-			index = append(index, name+" "+v)
+		for _, root := range slices.Sorted(maps.Keys(pkgs[name])) {
+			version, notices, err := readNotices(name, filepath.Join(src, filepath.FromSlash(root)))
+			if err != nil {
+				return err
+			}
+			index = append(index, name+" "+version)
+			if err := writeVersionNotices(t, name+"@"+version, notices, written); err != nil {
+				return err
+			}
 		}
 	}
 	slices.Sort(index)
@@ -61,33 +63,26 @@ func writeNotices(t *tree, src string, pkgs packageRoots) error {
 	return t.write(licensesDir+"index.txt", []byte(strings.Join(index, "\n")+"\n"), 0o644)
 }
 
-// writePackageNotices copies the notice files of every root of the package
-// name into licenses/<name>/, one copy of each file name, and returns the
-// version at each root.
-func writePackageNotices(t *tree, src, name string, roots map[string]bool) ([]string, error) {
-	written := map[string][]byte{}
-	var versions []string
-	for _, root := range slices.Sorted(maps.Keys(roots)) {
-		version, notices, err := readNotices(name, filepath.Join(src, filepath.FromSlash(root)))
-		if err != nil {
-			return nil, err
+// writeVersionNotices writes notices under licenses/<dir>/. written holds
+// every notice already written by its path: pnpm installs one version once
+// per set of peers, and those copies carry the same files, so a second copy
+// is skipped and one whose bytes differ (a patched package) is refused.
+func writeVersionNotices(t *tree, dir string, notices []notice, written map[string][]byte) error {
+	for _, n := range notices {
+		p := licensesDir + dir + "/" + n.name
+		prev, ok := written[p]
+		switch {
+		case ok && !bytes.Equal(prev, n.body):
+			return fmt.Errorf("webbundle: two copies of %s carry different %s files", dir, n.name)
+		case ok:
+			continue
 		}
-		versions = append(versions, version)
-		for _, n := range notices {
-			prev, ok := written[n.name]
-			switch {
-			case ok && !bytes.Equal(prev, n.body):
-				return nil, fmt.Errorf("webbundle: %s is bundled at more than one version and their %s files differ; dedupe it", name, n.name)
-			case ok:
-				continue
-			}
-			written[n.name] = n.body
-			if err := t.write(licensesDir+name+"/"+n.name, n.body, 0o644); err != nil {
-				return nil, err
-			}
+		written[p] = n.body
+		if err := t.write(p, n.body, 0o644); err != nil {
+			return err
 		}
 	}
-	return versions, nil
+	return nil
 }
 
 // readNotices reads the version and the notice files of the package name
@@ -146,8 +141,23 @@ func packageVersion(root *os.Root, name string) (string, error) {
 	switch {
 	case pkg.Version == "":
 		return "", fmt.Errorf("webbundle: bundled package %s: package.json has no version", name)
-	case strings.ContainsFunc(pkg.Version, unicode.IsSpace):
-		return "", fmt.Errorf("webbundle: bundled package %s: package.json's version %q holds a space", name, pkg.Version)
+	case !versionSegment(pkg.Version):
+		return "", fmt.Errorf("webbundle: bundled package %s: package.json's version %q is not a semver version", name, pkg.Version)
 	}
 	return pkg.Version, nil
+}
+
+// versionSegment reports whether v holds only semver's characters (digits,
+// letters, '.', '-' and '+') and starts with a digit, so it names one
+// licenses/ directory and one index line.
+func versionSegment(v string) bool {
+	if v == "" || v[0] < '0' || v[0] > '9' {
+		return false
+	}
+	for _, r := range v {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && r != '.' && r != '-' && r != '+' {
+			return false
+		}
+	}
+	return true
 }

@@ -40,18 +40,17 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 			}
 		}
 		slices.Sort(copied)
-		want := []string{
-			"@cplieger/fixture-a/LICENSE.md",
-			"@cplieger/fixture-a/Licence.txt",
-			"@cplieger/fixture-a/NOTICE",
-			"@cplieger/fixture-a/copying",
+		notices := []string{"LICENSE.md", "Licence.txt", "NOTICE", "copying"}
+		var want []string
+		for _, n := range notices {
+			want = append(want, "@cplieger/fixture-a@1.2.3/"+n)
 		}
 		if !slices.Equal(copied, want) {
 			t.Errorf("licenses/ holds %q, want %q", copied, want)
 		}
-		for _, name := range want {
-			if src := readFile(t, c.Src, "node_modules/"+name); string(tree["licenses/"+name]) != string(src) {
-				t.Errorf("licenses/%s does not hold the package file's bytes", name)
+		for _, n := range notices {
+			if src := readFile(t, c.Src, pkg+n); string(tree["licenses/@cplieger/fixture-a@1.2.3/"+n]) != string(src) {
+				t.Errorf("licenses/@cplieger/fixture-a@1.2.3/%s does not hold the package file's bytes", n)
 			}
 		}
 		if got, want := string(tree["licenses/index.txt"]), "@cplieger/fixture-a 1.2.3\n"; got != want {
@@ -97,30 +96,25 @@ func fixtureNested(nestedLicense string) files {
 
 func TestNoticesOfEveryBundledVersion(t *testing.T) {
 	t.Parallel()
-	t.Run("SameNotices", func(t *testing.T) {
-		t.Parallel()
-		c := newFixture(t, fixtureNested("fixture-a licence\n"))
-		r := mustBuild(t, c)
-		tree := readTree(t, c.Out)
-		want := "@cplieger/fixture-a 1.2.3\n@cplieger/fixture-a 2.0.0\n@cplieger/fixture-c 0.3.0\n"
-		if got := string(tree["licenses/index.txt"]); got != want {
-			t.Errorf("licenses/index.txt = %q, want %q", got, want)
+	c := newFixture(t, fixtureNested("fixture-a v2 licence\n"))
+	r := mustBuild(t, c)
+	tree := readTree(t, c.Out)
+	want := "@cplieger/fixture-a 1.2.3\n@cplieger/fixture-a 2.0.0\n@cplieger/fixture-c 0.3.0\n"
+	if got := string(tree["licenses/index.txt"]); got != want {
+		t.Errorf("licenses/index.txt = %q, want %q", got, want)
+	}
+	for name, body := range map[string]string{
+		"@cplieger/fixture-a@1.2.3/LICENSE.md": "fixture-a licence\n",
+		"@cplieger/fixture-a@2.0.0/LICENSE.md": "fixture-a v2 licence\n",
+		"@cplieger/fixture-c@0.3.0/COPYING":    "fixture-c copying\n",
+	} {
+		if got := string(tree["licenses/"+name]); got != body {
+			t.Errorf("licenses/%s = %q, want %q", name, got, body)
 		}
-		if got := string(tree["licenses/@cplieger/fixture-a/LICENSE.md"]); got != "fixture-a licence\n" {
-			t.Errorf("licenses/@cplieger/fixture-a/LICENSE.md = %q", got)
-		}
-		if got := string(tree["licenses/@cplieger/fixture-c/COPYING"]); got != "fixture-c copying\n" {
-			t.Errorf("licenses/@cplieger/fixture-c/COPYING = %q", got)
-		}
-		if want := []string{"@cplieger/fixture-a", "@cplieger/fixture-c"}; !slices.Equal(r.Notices, want) {
-			t.Errorf("Result.Notices = %q, want %q", r.Notices, want)
-		}
-	})
-	t.Run("DifferentNotices", func(t *testing.T) {
-		t.Parallel()
-		c := newFixture(t, fixtureNested("fixture-a v2 licence\n"))
-		buildRefused(t, c, "@cplieger/fixture-a", "LICENSE.md")
-	})
+	}
+	if want := []string{"@cplieger/fixture-a", "@cplieger/fixture-c"}; !slices.Equal(r.Notices, want) {
+		t.Errorf("Result.Notices = %q, want %q", r.Notices, want)
+	}
 }
 
 // A pnpm install links each package from node_modules/.pnpm, once per set of
@@ -143,20 +137,49 @@ func TestNoticesOfAStorePackage(t *testing.T) {
 	})
 	mustBuild(t, c)
 	tree := readTree(t, c.Out)
-	if got := string(tree["licenses/@cplieger/fixture-a/NOTICE.txt"]); got != "store notice\n" {
-		t.Errorf("licenses/@cplieger/fixture-a/NOTICE.txt = %q, want the store package's notice", got)
+	if got := string(tree["licenses/@cplieger/fixture-a@1.2.3/NOTICE.txt"]); got != "store notice\n" {
+		t.Errorf("licenses/@cplieger/fixture-a@1.2.3/NOTICE.txt = %q, want the store package's notice", got)
 	}
 	if got, want := string(tree["licenses/index.txt"]), "@cplieger/fixture-a 1.2.3\n"; got != want {
 		t.Errorf("licenses/index.txt = %q, want %q", got, want)
 	}
 }
 
-func TestNoticesRefuseAPackageWithoutVersion(t *testing.T) {
+func TestNoticesRefuseAVersionNamingNoDirectory(t *testing.T) {
 	t.Parallel()
+	for name, tc := range map[string]struct{ field, want string }{
+		"Missing":  {``, "has no version"},
+		"Empty":    {`"version": "", `, "has no version"},
+		"Slash":    {`"version": "1.0.0/../x", `, "not a semver version"},
+		"Space":    {`"version": "1.0.0 2", `, "not a semver version"},
+		"NotDigit": {`"version": "latest", `, "not a semver version"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := newFixture(t, files{
+				"node_modules/@cplieger/fixture-a/package.json": `{"name": "@cplieger/fixture-a", ` + tc.field + `"type": "module", "main": "index.js"}`,
+			})
+			buildRefused(t, c, "@cplieger/fixture-a", tc.want)
+		})
+	}
+}
+
+// pnpm keeps one version once per set of peers; a patched copy whose notice
+// differs from its twin cannot share the version's directory.
+func TestNoticesRefuseTwoCopiesOfOneVersionThatDiffer(t *testing.T) {
+	t.Parallel()
+	const store = "node_modules/.pnpm/@cplieger+fixture-a@1.2.3/node_modules/@cplieger/fixture-a/"
+	const peers = "node_modules/.pnpm/@cplieger+fixture-a@1.2.3_peer@1.0.0/node_modules/@cplieger/fixture-a/"
 	c := newFixture(t, files{
-		"node_modules/@cplieger/fixture-a/package.json": `{"name": "@cplieger/fixture-a", "type": "module", "main": "index.js"}`,
+		"src/app.ts":           "import { greet } from \"../" + store + "index.js\";\nimport { greet as hail } from \"../" + peers + "index.js\";\ngreet(\"x\");\nhail(\"y\");\n",
+		store + "package.json": `{"name": "@cplieger/fixture-a", "version": "1.2.3", "type": "module", "main": "index.js"}`,
+		store + "index.js":     "export function greet(to) { console.log(\"store\", to); }\n",
+		store + "LICENSE":      "store licence\n",
+		peers + "package.json": `{"name": "@cplieger/fixture-a", "version": "1.2.3", "type": "module", "main": "index.js"}`,
+		peers + "index.js":     "export function greet(to) { console.info(\"peers\", to); }\n",
+		peers + "LICENSE":      "patched licence\n",
 	})
-	buildRefused(t, c, "@cplieger/fixture-a", "version")
+	buildRefused(t, c, "@cplieger/fixture-a@1.2.3", "LICENSE")
 }
 
 // A build with no npm package writes no licenses/ tree.
