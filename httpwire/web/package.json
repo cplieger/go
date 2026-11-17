@@ -1,0 +1,76 @@
+{
+  "name": "@cplieger/httpwire",
+  "version": "0.0.0",
+  "description": "Decode the error envelope, list pages and idempotency keys of a Go httpwire JSON API in the browser",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cplieger/go.git",
+    "directory": "httpwire/web"
+  },
+  "homepage": "https://github.com/cplieger/go/tree/main/httpwire",
+  "bugs": {
+    "url": "https://github.com/cplieger/go/issues"
+  },
+  "author": "cplieger <917744+cplieger@users.noreply.github.com>",
+  "keywords": [
+    "api",
+    "json",
+    "error-envelope",
+    "pagination",
+    "idempotency-key",
+    "typescript"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/",
+    "!src/**/*.test.ts",
+    "!src/**/*-setup.ts",
+    "!src/**/test-helpers/**",
+    "jsr.json",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "cplieger": {
+    "browsers": [
+      "chromium",
+      "firefox",
+      "webkit"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
+    "test": "vitest --run",
+    "lint:eslint": "eslint .",
+    "lint:prettier": "prettier --check .",
+    "lint:knip": "knip",
+    "lint:fix": "eslint . --fix && prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@stryker-mutator/core": "10.1.1",
+    "@stryker-mutator/typescript-checker": "10.1.1",
+    "@stryker-mutator/vitest-runner": "10.1.1",
+    "@types/node": "26.6.6",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "@vitest/browser": "5.1.0",
+    "@vitest/browser-playwright": "5.1.0",
+    "@vitest/coverage-v8": "5.1.0",
+    "eslint": "10.15.0",
+    "knip": "6.45.1",
+    "playwright": "1.65.1",
+    "prettier": "3.10.1",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-eslint": "8.72.2",
+    "vitest": "5.1.0"
+  },
+  "overrides": {
+    "qs": "^6.15.2",
+    "minimatch": "^11.0.1"
+  }
+}
