@@ -228,6 +228,8 @@ func RunWithOps(ctx context.Context, ops *Ops, served ...Served) error {
 			return errors.New("httpserver: RunWithOps already served this Ops")
 		}
 		if !ops.release() {
+			// AfterFunc closes ln in its own goroutine, so close it here to have it closed on return.
+			_ = ops.ln.Close()
 			closeServed(served)
 			return fmt.Errorf("httpserver: %s closed before serving: %w", ops.setting, ops.cause())
 		}
