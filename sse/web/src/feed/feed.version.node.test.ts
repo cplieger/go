@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createFeed } from "./feed.js";
-import * as gen from "./test-helpers/client.gen.js";
+import * as gen from "./test-helpers/generated-client.js";
 import type { FeedOptions } from "./types.js";
 import { FEED_VERSION, FeedVersionMismatch } from "./version.js";
 

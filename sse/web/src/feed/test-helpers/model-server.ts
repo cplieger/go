@@ -3,7 +3,7 @@ import type { Frame } from "../../stream.js";
 import { createFeed } from "../feed.js";
 import type { CatchUp, ChangesAnswer, Feed, FeedSink, Subscription } from "../types.js";
 import { FEED_VERSION } from "../version.js";
-import { KINDS, LOGGED_SOURCES } from "./client.gen.js";
+import { KINDS, LOGGED_SOURCES } from "./generated-client.js";
 import { changed, listening, position } from "./feed-harness.js";
 
 // A server for the feed's model-based properties: logged and unlogged sources, each with its

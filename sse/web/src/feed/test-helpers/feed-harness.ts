@@ -11,7 +11,7 @@ import type {
 } from "../types.js";
 import { FEED_VERSION } from "../version.js";
 import { encodeChanged, encodeListening, formatPosition } from "./wire-encode.js";
-import { KINDS, LOGGED_SOURCES } from "./client.gen.js";
+import { KINDS, LOGGED_SOURCES } from "./generated-client.js";
 
 export const E1 = "9f2c4e1a7b3d5f60819a2b3c4d5e6f70";
 export const E2 = "41ab0c9d8e7f6a5b4c3d2e1f00112233";
