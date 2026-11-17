@@ -1,6 +1,6 @@
 # Server and shutdown
 
-This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog`, the shutdown sequence `Run` follows and the metrics listener of an app that opens no port of its own.
+This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog`, the shutdown sequence `Run` follows and the ops listener that serves `/healthz` and `/metrics`.
 
 ## New
 
@@ -75,32 +75,44 @@ After `ctx` fires, it checks `done` once more. A drain that used the whole grace
 
 What to log, at which level, and what exit code to use stay your decisions for all three helpers.
 
-## The metrics listener
+## The ops listener
 
-An app that opens no port of its own can still offer an opt-in page for Prometheus and a health endpoint. `ListenMetrics(ctx, addr, MetricsHandlers{Metrics: ..., Healthz: ...}, opts...)` builds that listener in one call:
+`/healthz` and `/metrics` live on a listener of their own, the ops listener, so they never share a port with the app's product routes or its API. An app with no product port uses the same listener alone.
 
 ```go
-ms, err := httpserver.ListenMetrics(ctx, cfg.MetricsListenAddr, httpserver.MetricsHandlers{
+opsAddr := httpserver.OpsAddr(envx.String("OPS_LISTEN_ADDR"), ":9738")
+if err := httpserver.CheckListenAddrs(
+	httpserver.ListenSetting{Name: "LISTEN_ADDR", Addr: listenAddr},
+	httpserver.ListenSetting{Name: "OPS_LISTEN_ADDR", Addr: opsAddr},
+); err != nil {
+	return err
+}
+ops, err := httpserver.ListenOps(ctx, httpserver.OpsConfig{
+	Setting: "OPS_LISTEN_ADDR",
+	Addr:    opsAddr,
 	Metrics: reg.Handler(),
 	Healthz: health.CheckHandler(checks...),
+	Hosts:   []string{"app.example.com", "prometheus.lan"},
+	Errors:  catalog.Responder(),
 })
 if err != nil {
-	slog.Error("cannot listen on METRICS_LISTEN_ADDR; refusing to start", "error", err)
-	os.Exit(1)
+	return err
 }
-done := make(chan error, 1)
-go func() { done <- ms.Serve(ctx) }()
-// ... the app's work; cancel ctx on the way out ...
-if err := <-done; err != nil {
-	slog.Error("metrics listener stopped", "error", err)
+ln, err := net.Listen("tcp", listenAddr)
+if err != nil {
+	return err
 }
+return httpserver.RunWithOps(ctx, ops, httpserver.Served{
+	Server:   httpserver.New(handler),
+	Listener: ln,
+	Options:  []httpserver.RunOption{httpserver.WithPreDrain(release)},
+})
 ```
 
-- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work. A startup that gives up after that, before it calls `Serve`, calls `Close` to release the port.
-- An empty `addr` opens nothing. `Serve` then returns nil at once, without running `Run` or its options, and `Addr` is nil, so the app needs no branch for a listener that is off.
-- It routes only `/metrics` and `/healthz`, for `GET` and the `HEAD` a `GET` pattern also matches. Any other path is 404, after an unclean path is first redirected to its clean form, and any other method 405, so the listener never serves the app's own routes.
-- Both paths log under `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
-- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply.
-- `opts` reach `New`, so `WithSlogErrorLog` routes net/http's own error lines into `slog`.
-- It reads no environment. The app owns its setting's name, parsing and edge trimming.
-- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options. A second `Serve`, or a `Serve` after `Close`, on a listener that is on returns an error. Once `Serve` runs, stop it by cancelling `ctx`: `Close` then returns an error and leaves it serving.
+- `OpsAddr(value, def)` cuts edge spaces and invisible runes from the raw value and answers `def` for a blank one. The app documents `def` beside its product port. With `def` `""`, a blank value turns the listener off: `ListenOps` binds nothing, `Addr` is nil and `RunWithOps` serves the product listeners alone. httpserver reads no environment.
+- `CheckListenAddrs` takes every TCP listener the app opens, once, and refuses any two that would bind one socket, naming both settings and the port. Ports compare as `net.Listen` resolves them (`09737` is `9737`, `http` is `80`). Two addresses on one port clash when their hosts are equal after unmapping (`[::ffff:127.0.0.1]` is `127.0.0.1`), when either host is unspecified (empty, `0.0.0.0` or `[::]`), or when either is a host name, which may resolve to the other's address. On Linux Go's `tcp` listener on `[::]` also takes IPv4, so `[::]:9737` beside `0.0.0.0:9737` is refused. A blank value, port 0 and a value with no resolvable port pass, and `net.Listen` reports the last.
+- `ListenOps` binds before it returns. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error fails at once. The error names `Setting` and the address, with control characters cleaned. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.
+- It answers `GET` and `HEAD` on `/healthz` and `/metrics` only. Another path answers `not_found` and another method `method_not_allowed` with `Allow: GET, HEAD`, both as the error envelope through `Errors` (nil is `WriteError`).
+- A `Host` outside `Hosts` answers 403 `host_not_allowed`, as on every listener. A request from the host's own network stack passes whatever its names (`WithLoopbackExempt`), so the image's healthcheck on `127.0.0.1` works. With no `Hosts`, only those local requests pass.
+- Both routes log at Debug (`WithProbeLogLevel`) to `Logger`, and `Recoverer` answers a panic with `internal_error`. `ReadTimeout` is 10 s and `WriteTimeout` 30 s, since each route answers in one short response.
+- `RunWithOps` serves each `Served` with `Run` and its `Options`, and the ops listener beside them, until `ctx` ends or one fails. A product listener's return, or an ops failure, stops the rest, and every error is returned, joined. The ops listener stops only after every product `Run` has returned, so `/healthz` answers through the drain (its draining 503 included). Its own grace is then 1 s, and a request still running at its end is cut and logged at Warn, never returned. With no `Served`, it serves the ops listener alone. One `Ops` serves once.

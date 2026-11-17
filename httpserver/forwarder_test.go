@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // v4route is one /proc/net/route row: addresses in little-endian hex, flags

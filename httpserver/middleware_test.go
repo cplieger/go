@@ -9,12 +9,11 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"slices"
-	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // recordingMW returns a middleware that appends "<name>-in" before calling next
@@ -90,8 +89,8 @@ func TestRecoverer_panicWrites500AndLogs(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
-		t.Errorf("body = %+v, want code=internal_error error='internal server error'", body)
+	if body.Code != "internal_error" || body.Message != "internal error" {
+		t.Errorf("body = %+v, want code=internal_error error='internal error'", body)
 	}
 
 	recs := logCap.snapshot()
@@ -705,7 +704,7 @@ func TestRouteTimeout_slowHandlerTimesOut(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("timeout body is not JSON: %v (body=%q)", err, rr.Body.String())
 	}
-	if body.Code != "timeout" || body.Error != "server too slow" {
+	if body.Code != "timeout" || body.Message != "server too slow" {
 		t.Errorf("body = %+v, want code=timeout error='server too slow'", body)
 	}
 }
@@ -859,8 +858,8 @@ func TestRouteTimeout_emptyMsgDefaults(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Error != "request timed out" {
-		t.Errorf("default timeout message = %q, want 'request timed out'", body.Error)
+	if body.Message != "request timed out" {
+		t.Errorf("default timeout message = %q, want 'request timed out'", body.Message)
 	}
 	if body.Code != "timeout" {
 		t.Errorf("code = %q, want timeout", body.Code)
@@ -977,7 +976,7 @@ func TestRecoverer_customResponderRendersNonJSON(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "application/xml" {
 		t.Errorf("Content-Type = %q, want application/xml (custom responder)", ct)
 	}
-	if got, want := rr.Body.String(), `<error code="internal_error">internal server error</error>`; got != want {
+	if got, want := rr.Body.String(), `<error code="internal_error">internal error</error>`; got != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}
 	// The panic is still logged regardless of the responder.
@@ -1006,7 +1005,7 @@ func TestRecoverer_nilResponderKeepsJSONDefault(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal error" {
 		t.Errorf("body = %+v, want the default internal_error envelope", body)
 	}
 }
@@ -1068,7 +1067,7 @@ func TestRecoverer_panicHookPanicIsIsolated(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v (body=%q)", err, rr.Body.String())
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal error" {
 		t.Errorf("body = %+v, want the default internal_error envelope", body)
 	}
 
@@ -1135,7 +1134,7 @@ func TestRecoverer_responderPanicBeforeCommitFallsBackToJSON500(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v (body=%q)", err, rr.Body.String())
 	}
-	if body.Code != "internal_error" || body.Error != "internal server error" {
+	if body.Code != "internal_error" || body.Message != "internal error" {
 		t.Errorf("body = %+v, want the default internal_error envelope", body)
 	}
 
@@ -1193,15 +1192,14 @@ func TestRouteTimeout_envelopeCarriesContextRequestID(t *testing.T) {
 	if body.RequestID != "corr-42" {
 		t.Errorf("timeout envelope request_id = %q, want %q", body.RequestID, "corr-42")
 	}
-	if body.Code != "timeout" || body.Error != "server too slow" {
+	if body.Code != "timeout" || body.Message != "server too slow" {
 		t.Errorf("body = %+v, want code=timeout error='server too slow'", body)
 	}
 }
 
-func TestRouteTimeout_envelopeOmitsRequestIDWithoutContext(t *testing.T) {
-	// Without an id in the request context (no Logging upstream) the
-	// envelope omits the field entirely (omitempty wire shape), matching
-	// WriteError's behavior for an id-less request.
+func TestRouteTimeout_mintsRequestIDWithoutContext(t *testing.T) {
+	// Without an id in the request context (no Logging upstream) the 503
+	// still names one, on the header and in the body alike.
 	slow := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
@@ -1212,8 +1210,13 @@ func TestRouteTimeout_envelopeOmitsRequestIDWithoutContext(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rr.Code)
 	}
-	if strings.Contains(rr.Body.String(), "request_id") {
-		t.Errorf("id-less timeout envelope contains request_id: %q", rr.Body.String())
+	var body httpserver.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.RequestID == "" || rr.Header().Get(httpserver.HeaderRequestID) != body.RequestID {
+		t.Errorf("request_id = %q, header = %q, want one minted id in both",
+			body.RequestID, rr.Header().Get(httpserver.HeaderRequestID))
 	}
 }
 

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -86,34 +87,13 @@ func WithRecoverResponder(fn ErrorResponder) RecoverOption {
 	}
 }
 
-// Recoverer returns middleware that recovers a panic from a downstream handler,
-// logs it at Error with the stack and the request id (via
-// RequestIDFromContext), fires any WithPanicHook callback, and writes a 500
-// error via the configured ErrorResponder - WriteError by default, i.e. the
-// JSON envelope {"error":"internal server error","code":"internal_error"}.
-// Override the responder with WithRecoverResponder to render the 500 on another
-// content type. Without it, a handler panic unwinds to net/http, which closes
-// the connection abruptly with no response body.
-//
-// The http.ErrAbortHandler sentinel is deliberately NOT recovered: per the
-// net/http contract it is re-panicked so the server aborts the response the way
-// the handler intended (it is not logged and fires no hook).
-//
-// Placement relative to Logging matters. Put Recoverer INSIDE Logging,
-// i.e. Logging outermost, as in Chain(mux, Logging(), Recoverer()): the
-// recovered request then records a 500 before Logging's deferred access
-// line runs, so the request logs as 500. If Recoverer sits OUTSIDE the logger,
-// Logging's deferred line runs during the panic unwind and records the
-// StatusRecorder's default 200, a misleading access line even though the client
-// still receives the 500.
-//
-// The 500 is best-effort and never double-writes: if the handler already
-// committed the response (wrote headers or body) before panicking, the status
-// is on the wire and cannot be changed, so Recoverer skips the body entirely
-// (it still logs the panic and fires the hook) rather than corrupting the
-// partial response or mislabeling its status under an outer Logging. To detect
-// commitment it observes the response through a StatusRecorder, reusing an
-// existing one (such as Logging's) when present.
+// Recoverer recovers a downstream panic, logs it at Error with its stack and
+// request id, fires any WithPanicHook, and answers 500 internal_error through
+// its ErrorResponder (WriteError unless WithRecoverResponder). It re-panics
+// http.ErrAbortHandler, as net/http requires, and writes nothing when the
+// handler had already committed the response. Put it inside Logging
+// (Chain(mux, Logging(), Recoverer())) so the access line records the 500;
+// outside it, Logging's deferred line records 200.
 func Recoverer(opts ...RecoverOption) Middleware {
 	c := &recoverConfig{}
 	for _, o := range opts {
@@ -206,12 +186,15 @@ func (c *recoverConfig) writeRecoverResponse(w http.ResponseWriter, r *http.Requ
 		if rv := recover(); rv != nil {
 			c.logger.Error("httpserver: recover responder failed", "panic", rv, "stack", string(debug.Stack()), "request_id", requestID)
 			if !committed.Wrote() {
-				WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
+				WriteError(w, r, http.StatusInternalServerError, "internal_error", internalErrorMsg)
 			}
 		}
 	}()
-	c.responder(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
+	c.responder(w, r, http.StatusInternalServerError, "internal_error", internalErrorMsg)
 }
+
+// internalErrorMsg is the one message every internal_error answer carries.
+const internalErrorMsg = "internal error"
 
 // securityConfig holds resolved SecurityHeaders configuration. An empty field
 // means the corresponding header is not sent.
@@ -544,19 +527,23 @@ func RouteDeadline(h http.Handler, d time.Duration) http.Handler {
 // untouched.
 type jsonTimeoutWriter struct {
 	http.ResponseWriter
+	requestID string
 }
 
-// WriteHeader applies the JSON content headers to an unlabeled 503 before
-// forwarding the status to the underlying writer.
+// WriteHeader applies the JSON content headers, and the request id the
+// pre-rendered body carries, to an unlabeled 503 before forwarding the status.
 func (w *jsonTimeoutWriter) WriteHeader(code int) {
 	if code == http.StatusServiceUnavailable && w.Header().Get("Content-Type") == "" {
 		JSONHeaders(w)
+		if w.Header().Get(HeaderRequestID) == "" {
+			w.Header().Set(HeaderRequestID, w.requestID)
+		}
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
 
 // RouteTimeout answers 503 with a JSON ErrorResponse (code "timeout", msg or
-// "request timed out", and the request id when the context has one) once h has
+// "request timed out") once h has
 // run longer than d; a non-positive d returns h unwrapped. It does not stop h:
 // h keeps running with its request context cancelled and can still commit
 // after the 503, so never wrap a handler that changes state; use RouteDeadline
@@ -572,9 +559,15 @@ func RouteTimeout(h http.Handler, d time.Duration, msg string) http.Handler {
 		msg = "request timed out"
 	}
 	// http.TimeoutHandler takes its body at construction, so it is built per
-	// request to carry that request's id.
+	// request to carry that request's id; an id minted here reaches h too, so
+	// h's own answers and the 503 name the same request.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := RequestIDFromContext(r.Context())
+		if id == "" {
+			id = rand.Text()
+			r = r.WithContext(WithRequestID(r.Context(), id))
+		}
 		th := http.TimeoutHandler(h, d, errorBodyJSON(r, "timeout", msg))
-		th.ServeHTTP(&jsonTimeoutWriter{ResponseWriter: w}, r)
+		th.ServeHTTP(&jsonTimeoutWriter{ResponseWriter: w, requestID: id}, r)
 	})
 }

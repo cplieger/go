@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // keysOf lists a record's attribute keys in order.

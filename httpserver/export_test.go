@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"net"
 	"net/http"
 	"net/netip"
+	"time"
 )
 
 // ForwardingFields projects parseForwarding's one parse of a request's
@@ -49,4 +51,25 @@ func CountDigestCompares() (calls *int, restore func()) {
 	n, prev := 0, compareDigest
 	compareDigest = func(x, y []byte) int { n++; return prev(x, y) }
 	return &n, func() { compareDigest = prev }
+}
+
+// SetKeyedRateClock replaces l's clock, so a test moves time without sleeping.
+func SetKeyedRateClock(l *KeyedRateLimiter, now func() time.Time) { l.now = now }
+
+// KeyedRateBuckets answers how many buckets l holds.
+func KeyedRateBuckets(l *KeyedRateLimiter) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.buckets)
+}
+
+// OpsServer and OpsListener answer the server and listener ListenOps built.
+func OpsServer(o *Ops) *http.Server   { return o.srv }
+func OpsListener(o *Ops) net.Listener { return o.ln }
+
+// SetOpsBindRetry shortens ListenOps's bind retry for the test.
+func SetOpsBindRetry(t interface{ Cleanup(func()) }, interval, window time.Duration) {
+	prev := opsBindRetry
+	opsBindRetry.interval, opsBindRetry.window = interval, window
+	t.Cleanup(func() { opsBindRetry = prev })
 }

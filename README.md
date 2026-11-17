@@ -30,7 +30,7 @@ Nothing here imports a cplieger repository outside this one.
 | --- | --- |
 | [`httpclient`](httpclient) | Makes your Go HTTP calls survive flaky servers, with retries, backoff and Retry-After built in. |
 | [`httpcache`](httpcache) | Makes your Go client's repeated GET requests cost less: when the server answers `304 Not Modified`, the answer comes from memory. |
-| [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown. |
+| [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy. |
 | [`ownersock`](ownersock) | Gives your Go app an admin socket that only processes running as the app's own user can reach, serving HTTP over a unix socket with a client whose errors tell the command-line user what to do. |
 | [`sse`](sse) | Keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client. |
 

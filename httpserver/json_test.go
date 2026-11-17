@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 func TestJSONHeaders(t *testing.T) {
@@ -122,7 +122,7 @@ func TestWriteError_withRequestID(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Error != "no access" || got.Code != "forbidden" || got.RequestID != "rid-9" {
+	if got.Message != "no access" || got.Code != "forbidden" || got.RequestID != "rid-9" {
 		t.Errorf("body = %+v, want {no access forbidden rid-9}", got)
 	}
 }
@@ -139,25 +139,11 @@ func TestWriteError_nilRequestIsSafe(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.RequestID != "" {
-		t.Errorf("RequestID = %q, want empty for nil request", got.RequestID)
+	if got.RequestID == "" {
+		t.Error("RequestID is empty, want a minted id for a nil request")
 	}
-	if got.Error != "boom" || got.Code != "internal" {
+	if got.Message != "boom" || got.Code != "internal" {
 		t.Errorf("body = %+v", got)
-	}
-}
-
-func TestWriteError_omitsEmptyOptionalFields(t *testing.T) {
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil) // no request id in context
-	httpserver.WriteError(rr, req, http.StatusBadRequest, "", "just a message")
-
-	body := rr.Body.String()
-	if strings.Contains(body, "\"code\"") {
-		t.Errorf("empty code not omitted: %s", body)
-	}
-	if strings.Contains(body, "request_id") {
-		t.Errorf("empty request_id not omitted: %s", body)
 	}
 }
 
@@ -194,8 +180,8 @@ func TestWriteError_malformedCodeIsReplaced(t *testing.T) {
 			if got.Code != httpserver.InvalidErrorCode {
 				t.Errorf("Code = %q, want %q", got.Code, httpserver.InvalidErrorCode)
 			}
-			if got.Error != "host not allowed" {
-				t.Errorf("Error = %q, want the human message untouched", got.Error)
+			if got.Message != "host not allowed" {
+				t.Errorf("Error = %q, want the human message untouched", got.Message)
 			}
 		})
 	}

@@ -6,9 +6,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
-	"mime"
+	"maps"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -19,13 +20,15 @@ type StaticOption func(*staticConfig)
 // staticConfig holds resolved StaticHandler configuration.
 type staticConfig struct {
 	cacheControl func(assetPath string) string
+	tags         map[string]string
+	callerTags   bool
 }
 
 // WithStaticCacheControl sets the per-asset Cache-Control policy, "no-cache"
 // for every asset by default. fn receives the asset path with no leading
 // slash, "index.html" for "/", and returns the header value; an empty value
-// omits the header. It chooses the value only: ETags, gzip and revalidation
-// are fixed. A nil fn keeps the default.
+// omits the header. It chooses the value only; WithStaticETags sets the tags.
+// A nil fn keeps the default.
 func WithStaticCacheControl(fn func(assetPath string) string) StaticOption {
 	return func(c *staticConfig) {
 		if fn != nil {
@@ -34,13 +37,27 @@ func WithStaticCacheControl(fn func(assetPath string) string) StaticOption {
 	}
 }
 
+// WithStaticETags gives each file its entity-tag by path in fsys (no leading
+// slash), each a quoted strong entity-tag such as `"3f2a"`, and StaticHandler
+// then hashes no file. A named file answers its tag and its gzip body the tag
+// plus "-gz"; an unnamed file is served with no ETag, Cache-Control or gzip
+// body. A nil map names no file. StaticHandler refuses a path naming no file
+// and a tag that is not a strong entity-tag (RFC 9110 section 8.8.3).
+func WithStaticETags(tags map[string]string) StaticOption {
+	return func(c *staticConfig) {
+		c.tags = maps.Clone(tags)
+		c.callerTags = true
+	}
+}
+
 // StaticHandler serves fsys, typically an embed.FS, whose zero ModTime leaves
 // a bare http.FileServer nothing to revalidate on. It reads the tree once and
-// gives each file a sha256 ETag and, when smaller, a gzip body. A known asset
-// carries its ETag, Cache-Control and Vary: Accept-Encoding; a GET or HEAD
-// offering gzip without Range gets the gzip body under its own "-gz" ETag.
-// Everything else falls through to http.FileServer. The error is non-nil only
-// when walking fsys fails.
+// gives each file a sha256 ETag (or the WithStaticETags tag) and, when
+// smaller, a gzip body. Every file answers its type from ContentTypes. A
+// tagged file carries its ETag, Cache-Control and Vary: Accept-Encoding; a
+// GET or HEAD offering gzip without Range gets the gzip body under its own
+// "-gz" ETag. Everything else falls through to http.FileServer. The error is
+// non-nil when walking fsys fails or WithStaticETags is refused.
 func StaticHandler(fsys fs.FS, opts ...StaticOption) (http.Handler, error) {
 	c := &staticConfig{
 		cacheControl: func(string) string { return "no-cache" },
@@ -50,32 +67,54 @@ func StaticHandler(fsys fs.FS, opts ...StaticOption) (http.Handler, error) {
 			o(c)
 		}
 	}
-	etags, gzipped, err := buildStaticMaps(fsys)
+	files, err := buildStaticFiles(fsys, c)
 	if err != nil {
 		return nil, err
 	}
-	fileServer := http.FileServer(http.FS(fsys))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-		if name == "" {
-			name = "index.html"
+	return &staticServer{files: files, cacheControl: c.cacheControl, fileServer: http.FileServer(http.FS(fsys))}, nil
+}
+
+type staticServer struct {
+	files        map[string]staticFile
+	cacheControl func(assetPath string) string
+	fileServer   http.Handler
+}
+
+func (s *staticServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	name := staticName(r.URL.Path)
+	f, known := s.files[name]
+	if !known {
+		s.fileServer.ServeHTTP(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", f.gz.contentType)
+	if f.etag != "" {
+		h.Set("ETag", f.etag)
+		if cc := s.cacheControl(name); cc != "" {
+			h.Set("Cache-Control", cc)
 		}
-		etag, known := etags[name]
-		if known {
-			h := w.Header()
-			h.Set("ETag", etag)
-			if cc := c.cacheControl(name); cc != "" {
-				h.Set("Cache-Control", cc)
-			}
-			// Asset bodies vary by Accept-Encoding (some carry a gzip
-			// representation), so shared caches must key on it on every path.
-			h.Add("Vary", "Accept-Encoding")
-		}
-		if gz, ok := gzipped[name]; ok && serveGzip(w, r, etag, gz) {
-			return
-		}
-		fileServer.ServeHTTP(w, r)
-	}), nil
+		// Asset bodies vary by Accept-Encoding (some carry a gzip
+		// representation), so shared caches must key on it on every path.
+		h.Add("Vary", "Accept-Encoding")
+	}
+	if f.gz.body != nil && serveGzip(w, r, f.etag, f.gz) {
+		return
+	}
+	s.fileServer.ServeHTTP(w, r)
+}
+
+// staticName is the tree path http.FileServer answers urlPath from: a
+// directory path answers its index.
+func staticName(urlPath string) string {
+	name := strings.TrimPrefix(path.Clean(urlPath), "/")
+	switch {
+	case name == "":
+		return "index.html"
+	case strings.HasSuffix(urlPath, "/"):
+		return name + "/index.html"
+	}
+	return name
 }
 
 // gzAsset is a precomputed gzip representation of an embedded asset.
@@ -84,30 +123,80 @@ type gzAsset struct {
 	body        []byte
 }
 
-// buildStaticMaps walks the static tree once, computing a content-hash ETag
-// for every file and a gzip body for each asset that compresses smaller.
-func buildStaticMaps(fsys fs.FS) (etags map[string]string, gzipped map[string]gzAsset, err error) {
-	etags = make(map[string]string)
-	gzipped = make(map[string]gzAsset)
-	err = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
+// staticFile is one file of the tree: its tag ("" untagged) and its type,
+// with the gzip body when one is kept.
+type staticFile struct {
+	etag string
+	gz   gzAsset
+}
+
+// buildStaticFiles walks the static tree once, tagging each file (by its
+// sha256, or from c.tags) and keeping a gzip body for each tagged file that
+// compresses smaller.
+func buildStaticFiles(fsys fs.FS, c *staticConfig) (map[string]staticFile, error) {
+	files := make(map[string]staticFile)
+	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
 			return walkErr
 		}
-		if d.IsDir() {
-			return nil
-		}
-		b, readErr := fs.ReadFile(fsys, p)
-		if readErr != nil {
-			return readErr
-		}
-		sum := sha256.Sum256(b)
-		etags[p] = fmt.Sprintf(`"%x"`, sum[:])
-		if gz, ok := gzipAsset(b, p); ok {
-			gzipped[p] = gz
-		}
-		return nil
+		f, err := readStaticFile(fsys, p, c)
+		files[p] = f
+		return err
 	})
-	return etags, gzipped, err
+	if err != nil {
+		return nil, err
+	}
+	if err := checkStaticTags(files, c.tags); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func readStaticFile(fsys fs.FS, p string, c *staticConfig) (staticFile, error) {
+	f := staticFile{gz: gzAsset{contentType: contentTypeOf(p)}}
+	if c.callerTags {
+		if f.etag = c.tags[p]; f.etag == "" {
+			return f, nil
+		}
+	}
+	b, err := fs.ReadFile(fsys, p)
+	if err != nil {
+		return f, err
+	}
+	if !c.callerTags {
+		sum := sha256.Sum256(b)
+		f.etag = fmt.Sprintf(`"%x"`, sum[:])
+	}
+	if gz, ok := gzipAsset(b, p); ok {
+		f.gz = gz
+	}
+	return f, nil
+}
+
+func checkStaticTags(files map[string]staticFile, tags map[string]string) error {
+	for _, p := range slices.Sorted(maps.Keys(tags)) {
+		if _, ok := files[p]; !ok {
+			return fmt.Errorf("httpserver: WithStaticETags names %q, which is no file in the tree", p)
+		}
+		if !strongEntityTag(tags[p]) {
+			return fmt.Errorf("httpserver: WithStaticETags tag %q for %q is not a quoted strong entity-tag", tags[p], p)
+		}
+	}
+	return nil
+}
+
+// strongEntityTag reports whether s is DQUOTE *etagc DQUOTE (RFC 9110
+// section 8.8.3), the form whose "-gz" sibling serveGzip derives.
+func strongEntityTag(s string) bool {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return false
+	}
+	for i := 1; i < len(s)-1; i++ {
+		if c := s[i]; c != 0x21 && (c < 0x23 || c == 0x7f) {
+			return false
+		}
+	}
+	return true
 }
 
 // gzipAsset returns the gzip representation of b, or ok=false when gzip does
@@ -127,11 +216,7 @@ func gzipAsset(b []byte, name string) (gzAsset, bool) {
 	if buf.Len() >= len(b) {
 		return gzAsset{}, false
 	}
-	ct := mime.TypeByExtension(path.Ext(name))
-	if ct == "" {
-		ct = http.DetectContentType(b)
-	}
-	return gzAsset{contentType: ct, body: bytes.Clone(buf.Bytes())}, true
+	return gzAsset{contentType: contentTypeOf(name), body: bytes.Clone(buf.Bytes())}, true
 }
 
 // serveGzip writes the precompressed representation of an asset and reports

@@ -158,8 +158,7 @@ type HostAllowlistOption func(*hostPolicyConfig)
 // hostPolicyConfig holds resolved HostPolicy configuration.
 type hostPolicyConfig struct {
 	logger         *slog.Logger
-	code           ErrorCode
-	msg            string
+	responder      ErrorResponder
 	loopbackExempt bool
 }
 
@@ -169,9 +168,12 @@ type hostPolicyConfig struct {
 // it.
 const maxLoggedHost = 128
 
-// defaultHostRefusalMsg is the 403 message and refusal hint of a policy
-// built with no WithHostAllowlistError.
-const defaultHostRefusalMsg = "host not allowed"
+// The refusal is the same on every listener of every app, so a probe or an
+// alert rule reads one answer.
+const (
+	hostRefusalCode ErrorCode = "host_not_allowed"
+	hostRefusalMsg  string    = "host not allowed"
+)
 
 // WithLoopbackExempt selects whether a request from this host's own network
 // stack bypasses the allowlist: a socket peer and Host that are both loopback,
@@ -185,18 +187,15 @@ func WithLoopbackExempt(exempt bool) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.loopbackExempt = exempt }
 }
 
-// WithHostAllowlistError sets the error code and message written in the 403
-// JSON envelope (via WriteError) when a request's Host is not allowed. Defaults
-// to "host_not_allowed" / "host not allowed". Override it to name the app's own
-// configuration knob, e.g. "host not allowed; add it to KWEB_ALLOWED_HOSTS".
-//
-// code is the machine token and msg the sentence; they are separately typed
-// (see ErrorCode) so the pair cannot be supplied transposed. An empty code
-// omits the field, which is how an app with a bare {"error":…} taxonomy keeps
-// its envelope shape.
-func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
+// WithHostResponder sets the ErrorResponder that writes Middleware's refusal,
+// in place of WriteError: it receives 403, host_not_allowed and "host not
+// allowed", so an application's catalog writes its own remediation. A nil fn
+// keeps WriteError.
+func WithHostResponder(fn ErrorResponder) HostAllowlistOption {
 	return func(c *hostPolicyConfig) {
-		c.code, c.msg = code, msg
+		if fn != nil {
+			c.responder = fn
+		}
 	}
 }
 
@@ -215,44 +214,20 @@ func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 type HostPolicy struct {
 	allowed        map[string]struct{}
 	logger         *slog.Logger
-	code           ErrorCode
-	msg            string
+	responder      ErrorResponder
 	loopbackExempt bool
 	active         bool
 }
 
-// ParseHostList parses operator-supplied allowlist entries (a config array or a
-// comma-split environment variable) into a HostPolicy, returning the entries it
-// could not use separately — a shape deliberately identical to ParseCIDRs so a
-// strict caller can reject bad input while a lenient caller logs it and
-// proceeds.
-//
-// Each entry is trimmed; a blank entry is skipped and does not engage the gate.
-// A usable entry is canonicalized via CanonicalHost and added to the allowlist.
-// An entry that is not a well-formed host[:port] under CanonicalHost's strict
-// grammar is reported as invalid (returned, never added): a pasted URL
-// ("http://example.com"), a lone port (":9848") that belongs in the bind
-// address, bracket or colon garbage, a non-ASCII name (configure the Punycode
-// A-label instead), or an IP-like numeric string that is not a valid address
-// ("127.0.0.001").
-//
-// Activation, and the fail-closed contract: the policy is INACTIVE only when no
-// non-blank entry was supplied at all (unset or all-whitespace configuration) —
-// then Middleware is a pass-through and Allows returns true, the
-// backward-compatible "accept every Host" default. As soon as ANY non-blank
-// entry is supplied the gate is ACTIVE, even if every entry was invalid: a
-// misconfigured allowlist (all entries malformed) then rejects every request
-// rather than silently disabling the protection. Because invalid entries are
-// returned rather than retained as unmatchable keys, a caller that wants to
-// fail loud can inspect the invalid slice at startup and refuse to boot; a
-// caller that wants to proceed logs it and runs with the valid subset (or, when
-// the subset is empty, a fail-closed deny-all).
-//
-// Pair it with WithLoopbackExempt for a containerized service whose own
-// loopback health check or in-container clients must keep working, and with
-// WithHostAllowlistError to name the app's configuration knob in the 403.
+// ParseHostList parses allowlist entries into a HostPolicy and returns the
+// entries it could not use, as ParseCIDRs does. Each entry is trimmed and
+// canonicalized by CanonicalHost; a blank one is skipped. The policy is
+// inactive (every Host passes) only when no entry is non-blank; any non-blank
+// entry makes it active, so a list of only malformed entries refuses every
+// request instead of switching the check off. A caller that must fail loud
+// refuses to start on a non-empty invalid slice.
 func ParseHostList(entries []string, opts ...HostAllowlistOption) (policy *HostPolicy, invalid []string) {
-	c := &hostPolicyConfig{code: "host_not_allowed", msg: defaultHostRefusalMsg}
+	c := &hostPolicyConfig{responder: WriteError}
 	for _, o := range opts {
 		if o != nil {
 			o(c)
@@ -264,8 +239,7 @@ func ParseHostList(entries []string, opts ...HostAllowlistOption) (policy *HostP
 	p := &HostPolicy{
 		allowed:        make(map[string]struct{}),
 		logger:         c.logger,
-		code:           c.code,
-		msg:            c.msg,
+		responder:      c.responder,
 		loopbackExempt: c.loopbackExempt,
 	}
 	for _, e := range entries {
@@ -324,10 +298,10 @@ func (p *HostPolicy) Allows(r *http.Request) bool {
 
 // Middleware returns the allowlist as httpserver middleware. An inactive or nil
 // policy returns the next handler unwrapped, the "off" contract RateLimiter and
-// RouteTimeout share. An active policy answers a disallowed Host with a 403 via
-// WriteError (see WithHostAllowlistError) before the next handler runs, and
-// logs one Warn with the reason, host, remote, hint and, when the context has
-// one, request_id (see WithHostAllowlistLogger). Put it outermost among
+// RouteTimeout share. An active policy answers a disallowed Host with 403
+// host_not_allowed through its responder (WithHostResponder) before the next
+// handler runs, and logs one Warn with the reason, host, remote and, when the
+// context has one, request_id (see WithHostAllowlistLogger). Put it outermost among
 // request-authorization middleware: a DNS-rebinding request makes Origin and
 // Host agree, so only the exact-Host check breaks it (CWE-346).
 func (p *HostPolicy) Middleware() Middleware {
@@ -341,7 +315,7 @@ func (p *HostPolicy) Middleware() Middleware {
 				return
 			}
 			p.LogRefusal(r)
-			WriteError(w, r, http.StatusForbidden, p.code, p.msg)
+			p.responder(w, r, http.StatusForbidden, hostRefusalCode, hostRefusalMsg)
 		})
 	}
 }
@@ -422,16 +396,15 @@ func listenerAddr(r *http.Request) netip.Addr {
 
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
 // caller that admits by its own rule and writes its own refusal. It logs
-// through the policy's logger (WithHostAllowlistLogger) with its hint
-// (WithHostAllowlistError); a nil or zero-value policy uses slog.Default and
-// the default hint. The line carries no path, which can hold a token; the
+// through the policy's logger (WithHostAllowlistLogger); a nil or zero-value
+// policy uses slog.Default. The line carries no path, which can hold a token; the
 // access line with the same request_id has it. The Host is empty when the
 // request named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
 func (p *HostPolicy) LogRefusal(r *http.Request) {
 	if p == nil || p.logger == nil {
 		// ParseHostList always sets the logger, so none means a policy it did
 		// not build.
-		p = &HostPolicy{logger: slog.Default(), msg: defaultHostRefusalMsg}
+		p = &HostPolicy{logger: slog.Default()}
 	}
 	reason := "host not in allowlist"
 	switch {
@@ -444,7 +417,6 @@ func (p *HostPolicy) LogRefusal(r *http.Request) {
 		slog.String("reason", reason),
 		slog.String("host", boundLoggedPath(r.Host, maxLoggedHost)),
 		slog.String("remote", r.RemoteAddr),
-		slog.String("hint", p.msg),
 	}
 	if id := RequestIDFromContext(r.Context()); id != "" {
 		attrs = append(attrs, slog.String("request_id", id))
