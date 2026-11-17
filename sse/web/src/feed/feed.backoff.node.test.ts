@@ -244,6 +244,30 @@ describe("rule 7: a catch-up that fails as retry", () => {
     ]);
   });
 
+  it("a failed re-read's wait that ends inside a retry wait leaves the next stale() to the retry wait's end", async () => {
+    const h = harness({ random: () => 1 });
+    const unseeded = failingSink("noseed");
+    h.feed.onFrame(store({ runs: 100 }));
+    h.feed.watch("runs", unseeded, position());
+    h.feed.watch("runs", sink(), position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 110, ["runs"]));
+    // At 50 the unseeded re-read fails (its wait ends at 550) and the catch-up goes out.
+    await advance(COALESCE);
+    await advance(10);
+    // The catch-up fails as retry at 60: the retry wait ends at 560.
+    await h.calls[0]?.fail("retry");
+    await advance(40);
+    h.feed.onFrame(changed("store", E1, 120, ["runs"]));
+    await advance(459);
+    expect(unseeded.times).toEqual([50]);
+    expect(h.calls).toHaveLength(1);
+    await advance(1);
+    expect(unseeded.times).toEqual([50, 560]);
+    expect(h.calls).toHaveLength(2);
+    await advance(10_000);
+    expect(unseeded.times).toEqual([50, 560]);
+  });
+
   it("a listening frame ends a retry wait at once", async () => {
     const h = harness({ random: () => 1 });
     h.feed.onFrame(store({ runs: 150 }));

@@ -209,7 +209,8 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     sub.failures++;
     sub.wait = setTimeout(() => {
       sub.wait = null;
-      if (sub.marked) {
+      // During the source's retry wait the subscription stays marked: the wait's end flushes it.
+      if (sub.marked && sub.src.retryWait === null) {
         stale(sub);
       }
     }, backoff(sub.failures));
