@@ -116,14 +116,14 @@ type outageView struct {
 	Commands                      []OutageCommand
 }
 
-// OutagePage serves the static page an app shows while a file it needs
-// cannot open: every GET or HEAD outside APIPrefix answers 503, no-store,
-// under SPAPolicy's default policy, with the title, each file's Name and class
-// sentence, the Notice, each command's Run and Note, and the closing line; the
-// four named fields are cleaned through textsafe. A file the bundle lists under
-// assets/ answers as SPA serves it; a path at or under APIPrefix answers
-// not_found and another method method_not_allowed, through Errors, no-store.
-// The error names the refused field (a blank Title or App too), class or bundle.
+// OutagePage serves the static page an app shows while a file it needs cannot
+// open: every GET or HEAD outside APIPrefix answers 503, no-store, under
+// SPAPolicy's default policy, with the title, the closing line and each file's
+// class sentence as given, and each file's Name, the Notice and each command's
+// Run and Note cleaned through textsafe. A file the bundle lists under assets/
+// answers as SPA serves it; a path at or under APIPrefix answers not_found and
+// another method method_not_allowed, through Errors, no-store. The error names
+// the refused field (a blank Title or App too), class or bundle.
 func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.App) == "" {
 		return nil, errors.New("httpserver: an outage page needs a Title and an App")
@@ -163,7 +163,8 @@ func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hug
 	return p, nil
 }
 
-// newOutageView is the page's text for c, each line cleaned.
+// newOutageView is the page's text for c: Notice, each file Name and each
+// command Run and Note go through outageLine; Title and App are drawn as given.
 func newOutageView(c OutageConfig) (outageView, error) { //nolint:gocritic // hugeParam: OutagePage's config, read once
 	v := outageView{Title: c.Title, Notice: outageLine(c.Notice), Closing: outageReload}
 	if c.Restart {
