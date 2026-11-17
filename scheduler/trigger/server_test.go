@@ -4,11 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"log/slog"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,14 +17,10 @@ import (
 // t.Cleanup (listener close, queue close, executor drain, handler wait).
 func startTestServer(t *testing.T, run func(*Job[testPayload])) string {
 	t.Helper()
-	sock := testSocketPath(t)
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](16)
 	execDone := startExecutor(q, run)
 
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
 	srv := &Server[testPayload]{Queue: q}
 	serveDone := serveBackground(srv, ln)
 
@@ -76,70 +69,6 @@ func nextEvent(t *testing.T, dec *json.Decoder) Event {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no event within 5s")
 		return Event{}
-	}
-}
-
-// TestListen_RemovesStaleSocketAndSetsOwnerOnly pins the boot hygiene: a
-// stale socket file from a SIGKILLed predecessor is replaced, and the live
-// socket is owner-only (triggering scoped to the container's user).
-// Not parallel: Listen temporarily changes the process-wide umask.
-func TestListen_RemovesStaleSocketAndSetsOwnerOnly(t *testing.T) {
-	sock := testSocketPath(t)
-
-	stale, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("setup stale socket: %v", err)
-	}
-	// Simulate a SIGKILL: the file stays, nobody listens. Closing the
-	// listener would remove the file, so leak it deliberately and only
-	// unlink-guard via Listen.
-	stale.(*net.UnixListener).SetUnlinkOnClose(false)
-	_ = stale.Close()
-	if _, err := os.Stat(sock); err != nil {
-		t.Fatalf("stale socket file missing after setup: %v", err)
-	}
-
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() over a stale socket = %v, want nil", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-
-	info, err := os.Stat(sock)
-	if err != nil {
-		t.Fatalf("stat live socket: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("socket permissions = %o, want 0600 (owner-only trigger authority)", perm)
-	}
-}
-
-// TestListen_UnremovableStaleSocketFailsBoot pins the stale-socket hygiene's
-// failure mode: when the stale file exists but cannot be unlinked (no write
-// permission on the parent), Listen must surface that permission error —
-// failing boot loudly — rather than proceeding to a bind that would fail
-// with a misleading address-in-use error.
-func TestListen_UnremovableStaleSocketFailsBoot(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses directory write permissions")
-	}
-	parent := t.TempDir()
-	sock := filepath.Join(parent, "trigger.sock")
-	if err := os.WriteFile(sock, nil, 0o600); err != nil {
-		t.Fatalf("setup stale file: %v", err)
-	}
-	if err := os.Chmod(parent, 0o500); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
-
-	ln, err := Listen(sock)
-	if err == nil {
-		_ = ln.Close()
-		t.Fatal("Listen() = nil error over an unremovable stale socket, want the unlink's permission error")
-	}
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Errorf("Listen() error = %v, want a permission error from the stale-file unlink (not a bind failure)", err)
 	}
 }
 
@@ -219,16 +148,12 @@ func TestServer_FailedRunReportsNotOK(t *testing.T) {
 // unboundedly or blocking the trigger, and the rejection reaches the
 // OnRejected hook with the decoded payload.
 func TestServer_RejectsWhenQueueFull(t *testing.T) {
-	sock := testSocketPath(t)
+	ln, sock := listenTestSocket(t)
 
 	// No executor: jobs sit in the queue. Capacity 1, pre-filled.
 	q := NewQueue[testPayload](1)
 	if err := q.Submit(NewJob(External, testPayload{})); err != nil {
 		t.Fatalf("pre-fill submit: %v", err)
-	}
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
 	}
 	var mu sync.Mutex
 	var rejected []error
@@ -278,13 +203,9 @@ func TestServer_UndecodableRequestAnswersDone(t *testing.T) {
 // own "triggered run queued" line gets the decoded payload.
 func TestServer_HooksReceiveAcceptedPayload(t *testing.T) {
 	accepted := make(chan testPayload, 1)
-	sock := testSocketPath(t)
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](16)
 	execDone := startExecutor(q, runOK)
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
 	srv := &Server[testPayload]{Queue: q, OnAccepted: func(p testPayload) { accepted <- p }}
 	serveDone := serveBackground(srv, ln)
 	t.Cleanup(func() { _ = ln.Close(); q.Close(); <-execDone; <-serveDone })
@@ -311,7 +232,7 @@ func TestServer_HooksReceiveAcceptedPayload(t *testing.T) {
 // reports a failed job instead of hanging or being silently dropped — while
 // the in-flight run drains with its real outcome.
 func TestServer_ShutdownCancelsQueuedRequestWithExplicitResult(t *testing.T) {
-	sock := testSocketPath(t)
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](16)
 
 	entered := make(chan struct{})
@@ -331,10 +252,6 @@ func TestServer_ShutdownCancelsQueuedRequestWithExplicitResult(t *testing.T) {
 		}
 	})
 
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
 	srv := &Server[testPayload]{Queue: q}
 	serveDone := serveBackground(srv, ln)
 
@@ -565,66 +482,6 @@ func TestRelayEvents_DepartedClientLogsEachFailedWrite(t *testing.T) {
 	}
 }
 
-// TestListen_RefusesALiveSocketInsteadOfStealingIt pins the fix for the defect
-// that made a second daemon possible in one container. Listen used to unlink
-// unconditionally before binding, so this call SUCCEEDED: it took the path away
-// from the live listener, which kept an unreferenced socket and never learned it
-// had been displaced. The kernel already refuses the bind, so the only thing the
-// old pre-emptive unlink bought was defeating that refusal.
-func TestListen_RefusesALiveSocketInsteadOfStealingIt(t *testing.T) {
-	sock := testSocketPath(t)
-
-	live, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("setup live listener: %v", err)
-	}
-	t.Cleanup(func() { _ = live.Close() })
-
-	second, err := Listen(sock)
-	if err == nil {
-		_ = second.Close()
-		t.Fatal("Listen() over a LIVE socket = nil error, want errAddrInUse — a second owner must never be created")
-	}
-	if !errors.Is(err, errAddrInUse) {
-		t.Errorf("Listen() error = %v, want errAddrInUse", err)
-	}
-	if !strings.Contains(err.Error(), sock) {
-		t.Errorf("Listen() error = %q, want it to name the contested path %q", err, sock)
-	}
-
-	// The live listener still owns the path: a dial must reach IT, not a
-	// displaced second socket.
-	c, derr := net.Dial("unix", sock)
-	if derr != nil {
-		t.Fatalf("dial after refused second Listen = %v, want the original listener still serving", derr)
-	}
-	_ = c.Close()
-}
-
-// TestListen_StaleSocketIsUnlinkedNotRefused is the other half of the same
-// decision: the dial probe is what tells a dead socket from a live one, so a
-// SIGKILLed predecessor's file must still be reclaimed rather than reported as
-// a live owner. Without the probe this case would fail boot forever.
-func TestListen_StaleSocketIsUnlinkedNotRefused(t *testing.T) {
-	sock := testSocketPath(t)
-
-	stale, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("setup stale socket: %v", err)
-	}
-	stale.(*net.UnixListener).SetUnlinkOnClose(false)
-	_ = stale.Close()
-
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() over a STALE socket = %v, want nil (the file is dead, so reclaim it)", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	if errors.Is(err, errAddrInUse) {
-		t.Error("a stale socket must not be reported as a live owner")
-	}
-}
-
 // waitForDebug polls the captured records until one at DEBUG contains want.
 // A deadline-bounded poll rather than a sleep-to-wait: the connection is
 // served on the server's own goroutine, so the record is the only thing the
@@ -647,24 +504,18 @@ func waitForDebug(t *testing.T, rec recordHandler, want string) {
 	}
 }
 
-// TestServer_ConnectionThatSendsNoRequestIsNotWarnedAbout pins the level this
-// package owes its OWN probe. Listen dials a contested path to tell a live
-// owner from a SIGKILLed predecessor's file and closes without writing, so the
-// live daemon accepts a connection carrying no request; warning about it puts a
-// WARN in a healthy daemon's log every time a second owner is correctly
-// refused. Nothing was asked for and nothing was lost, so the record is DEBUG
-// and the app's hooks never see it.
-// Not parallel: captureLogs swaps the process-wide slog default, and Listen
-// changes the process-wide umask.
+// TestServer_ConnectionThatSendsNoRequestIsNotWarnedAbout pins the level a
+// connection carrying no request gets. A second start's liveness probe
+// (ownersock.Listen dials a contested path) connects and closes without
+// writing, so warning about it would put a WARN in a healthy daemon's log each
+// time a second owner is correctly refused. Nothing was asked for and nothing
+// was lost, so the record is DEBUG and the app's hooks never see it.
+// Not parallel: captureLogs swaps the process-wide slog default.
 func TestServer_ConnectionThatSendsNoRequestIsNotWarnedAbout(t *testing.T) {
 	rec := captureLogs(t)
-	sock := testSocketPath(t)
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](16)
 	execDone := startExecutor(q, runOK)
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
 	var mu sync.Mutex
 	var accepted, rejected int
 	srv := &Server[testPayload]{
@@ -675,12 +526,11 @@ func TestServer_ConnectionThatSendsNoRequestIsNotWarnedAbout(t *testing.T) {
 	serveDone := serveBackground(srv, ln)
 	t.Cleanup(func() { _ = ln.Close(); q.Close(); <-execDone; <-serveDone })
 
-	// The real second-owner path: Listen probes the live socket and closes.
-	second, lerr := Listen(sock)
-	if lerr == nil {
-		_ = second.Close()
-		t.Fatal("second Listen() over a live socket = nil error, want a refusal")
+	probe, err := net.DialTimeout("unix", sock, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
 	}
+	_ = probe.Close()
 	waitForDebug(t, rec, "closed without sending a request")
 
 	for _, r := range rec.snapshot() {
@@ -759,11 +609,7 @@ func TestServe_ReturnsAfterContextAndRoutesLogs(t *testing.T) {
 	var mu sync.Mutex
 	l := slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	sock := testSocketPath(t)
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](4)
 	ctx, cancel := context.WithCancel(t.Context())
 	srv := &Server[testPayload]{Queue: q, Logger: l}
@@ -802,10 +648,7 @@ func TestServe_ReturnsAfterContextAndRoutesLogs(t *testing.T) {
 		t.Fatal("Serve did not return after ctx ended")
 	}
 
-	ln2, err := Listen(testSocketPath(t))
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
+	ln2, _ := listenTestSocket(t)
 	srv2 := &Server[testPayload]{Queue: NewQueue[testPayload](1)}
 	done2 := make(chan error, 1)
 	go func() { done2 <- srv2.Serve(t.Context(), ln2) }()
@@ -831,11 +674,7 @@ func (lw *lockedWriter) Write(p []byte) (int, error) {
 // run it accepted is still going, and the client reads that run's done event
 // before Serve returns.
 func TestServe_WaitsForAnInFlightRunsFinalEvent(t *testing.T) {
-	sock := testSocketPath(t)
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](4)
 	release := make(chan struct{})
 	execDone := startExecutor(q, func(j *Job[testPayload]) {
@@ -893,11 +732,7 @@ func TestServe_WaitsForAnInFlightRunsFinalEvent(t *testing.T) {
 // and ctx ends only while a run is still draining, Serve still reports the
 // listener closing, not a clean shutdown.
 func TestServe_ListenerClosedFirstStaysAnErrorDuringTheDrain(t *testing.T) {
-	sock := testSocketPath(t)
-	ln, err := Listen(sock)
-	if err != nil {
-		t.Fatalf("Listen() = %v", err)
-	}
+	ln, sock := listenTestSocket(t)
 	q := NewQueue[testPayload](4)
 	release := make(chan struct{})
 	execDone := startExecutor(q, func(j *Job[testPayload]) {

@@ -7,7 +7,7 @@ This page covers the `trigger` package, for a daemon that runs every job itself.
 `Exclusive` coordinates runs across processes. The `trigger` package is the alternative for a daemon that owns every run. One daemon owns every job execution, and triggers only submit requests. Triggers include the built-in ticker and each subcommand started with `docker exec`.
 
 - One bounded FIFO `trigger.Queue` feeds one executor goroutine, and that single goroutine is what keeps runs from overlapping.
-- A `trigger.Server` accepts requests on an owner-only unix socket inside the container and streams `queued`, `started` and `done` events back.
+- A `trigger.Server` accepts requests on a unix socket inside the container and streams `queued`, `started` and `done` events back. Your daemon binds the socket with [ownersock](https://github.com/cplieger/go/tree/main/ownersock), so only processes running as its own user can trigger a run.
 - `trigger.Submit` is the synchronous client a trigger subcommand wraps.
 
 There is no coalescing. Every accepted request gets its own run, its own arguments and its own result, in arrival order.
@@ -27,7 +27,8 @@ go func() {
 		return trigger.Result{OK: ok, Duration: elapsed}
 	})
 }()
-ln, err := trigger.Listen("/tmp/myapp.sock") // owner-only, stale file unlinked
+// ownersock creates /run/myapp at 0700 and admits only this process's own user.
+ln, err := ownersock.Listen(ownersock.Config{Path: "/run/myapp/trigger.sock"})
 srv := &trigger.Server[payload]{Queue: queue}
 served := make(chan error, 1)
 go func() { served <- srv.Serve(ctx, ln) }() // blocks until ctx ends, then closes ln and waits for the handlers
@@ -38,7 +39,7 @@ go func() { served <- srv.Serve(ctx, ln) }() // blocks until ctx ends, then clos
 // the process with the connection half-open.
 ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 defer stop()
-final, err := trigger.Submit(ctx, "/tmp/myapp.sock", payload{Repos: repos}, nil)
+final, err := trigger.Submit(ctx, "/run/myapp/trigger.sock", payload{Repos: repos}, nil)
 // map final.OK / errors.Is(err, trigger.ErrUnreachable) to the exit code
 ```
 
@@ -52,9 +53,15 @@ final, err := trigger.Submit(ctx, "/tmp/myapp.sock", payload{Repos: repos}, nil)
 
 ## The socket
 
-`Listen(path)` binds the socket with owner-only permissions, so only the container's own user can trigger a run. When the path is already bound, it checks whether a live daemon answers. A live daemon makes `Listen` fail, and a socket left by a killed daemon is removed and bound again.
+Bind the socket with [ownersock](https://github.com/cplieger/go/tree/main/ownersock) and pass the listener to `Server.Serve`. `Serve` trusts every connection the listener accepts, so the listener decides who may trigger a run. `ownersock.Listen` checks each connection's peer credentials and closes one from any other user before reading it. It also refuses a second start beside a live daemon and replaces a socket a killed daemon left behind.
 
-Call `Listen` during single-threaded boot. It narrows the process-wide umask while it binds, so a file another goroutine creates at that moment gets owner-only permissions.
+Give the socket a private directory of its own, such as `/run/myapp` for `/run/myapp/trigger.sock`. ownersock refuses a path that breaks these rules:
+
+- The path is absolute and clean, and at most 107 bytes, the length a Linux unix socket path holds.
+- Its directory has mode 0700 and is owned by the server's user. `ownersock.Listen` creates a missing directory at 0700 and refuses an existing one that is more open, owned by another user or a symlink.
+- The directory is never `/tmp` itself, which every user can open.
+
+ownersock runs on Linux. A trigger subcommand must run as the daemon's user: `docker exec` runs as the image's user unless you pass `--user`.
 
 A request line is capped at 8 MiB, and a client has 30 seconds after connecting to send it. A connection that closes without sending a request gets no event and is logged at DEBUG.
 
@@ -62,6 +69,8 @@ A request line is capped at 8 MiB, and a client has 30 seconds after connecting 
 
 `Submit` blocks for the whole queue wait plus the run, and has no read deadline. Cancel its context to stop waiting. A non-nil error wraps one of these values, or is the context's own error:
 
-- `ErrUnreachable` means no daemon accepted within 5 seconds. The container may be down, or the exec user may differ from the socket's owner.
+- `ErrUnreachable` means no daemon accepted within 5 seconds. The container may be down, or the exec user cannot open the socket's private directory.
 - `ErrSend` means the request could not be written.
 - `ErrConnectionLost` means the event stream ended before the final `done` event, because the daemon died or was stopped mid-run.
+
+A user who can open the socket but is not the server's user, such as root, has the connection closed before the daemon reads it, which `Submit` reports as `ErrSend` or `ErrConnectionLost`.

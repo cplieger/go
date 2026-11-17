@@ -1,4 +1,4 @@
-module github.com/cplieger/go/scheduler
+module github.com/cplieger/go/scheduler/v2
 
 go 1.27.4
 

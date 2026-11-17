@@ -26,8 +26,8 @@ const dialTimeout = 5 * time.Second
 // each in its own vocabulary.
 var (
 	// ErrUnreachable wraps a failed dial: no daemon is accepting on the
-	// socket (container down, or a mismatched exec user against the
-	// owner-only socket file).
+	// socket (container down, or an exec user the socket's private directory
+	// keeps out).
 	ErrUnreachable = errors.New("cannot reach the scheduler daemon")
 	// ErrSend wraps a failed request write.
 	ErrSend = errors.New("cannot send trigger request")
