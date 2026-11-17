@@ -14,7 +14,16 @@ import (
 // FIFO would block a plain O_RDONLY open(2) forever. O_NONBLOCK covers the
 // same hazard again.
 func openDirInRoot(root *os.Root, dir string) (*os.File, error) {
-	return root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, notDirectoryErr(err)
+	}
+	return f, nil
+}
+
+// notDirectoryErr returns the error of a failed O_DIRECTORY open.
+func notDirectoryErr(err error) error {
+	return err
 }
 
 // dirOpenName is an ambient path with a trailing separator, which the kernel

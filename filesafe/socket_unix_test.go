@@ -13,8 +13,9 @@ import (
 )
 
 // TestReaders_RefuseAUnixSocketWithErrNotRegular pins that every regular-file
-// reader refuses a Unix socket with a *NotRegularError, not open(2)'s raw
-// ENXIO, which a socket answers before a descriptor exists to check.
+// reader refuses a Unix socket with a *NotRegularError, not the raw errno
+// open(2) answers before a descriptor exists to check (ENXIO on Linux,
+// EOPNOTSUPP on macOS).
 func TestReaders_RefuseAUnixSocketWithErrNotRegular(t *testing.T) {
 	t.Parallel()
 	// A short directory: a socket path is capped near 108 bytes.
@@ -102,9 +103,24 @@ func TestReaders_RefuseASymlinkToASocket(t *testing.T) {
 	}
 }
 
-// TestSocketRefusal_KeepsOtherOutcomes pins socketRefusal's other arms: a
-// non-ENXIO error, a stat that finds a regular file and a stat that fails all
-// return the open's error unchanged.
+// TestSocketRefusal_NamesTheSocket pins both errnos a socket open answers:
+// ENXIO on Linux (open(2)), and EOPNOTSUPP on macOS (Apple's open(2)), the
+// BSDs and illumos (their vn_open), each named as the socket stat finds.
+func TestSocketRefusal_NamesTheSocket(t *testing.T) {
+	t.Parallel()
+	sock := found(lstatOccupants(t).socket)
+	for _, errno := range []syscall.Errno{syscall.ENXIO, syscall.EOPNOTSUPP} {
+		err := socketRefusal(&fs.PathError{Op: "open", Path: "s", Err: errno}, "s", sock)
+		var nre *NotRegularError
+		if !errors.Is(err, ErrNotRegular) || !errors.As(err, &nre) || nre.Mode&os.ModeSocket == 0 {
+			t.Errorf("socketRefusal(%v on a socket) = %v, want a *NotRegularError naming a socket", errno, err)
+		}
+	}
+}
+
+// TestSocketRefusal_KeepsOtherOutcomes pins socketRefusal's other arms: an
+// errno no socket open answers, a stat that finds a regular file and a stat
+// that fails all return the open's error unchanged.
 func TestSocketRefusal_KeepsOtherOutcomes(t *testing.T) {
 	t.Parallel()
 	f := filepath.Join(t.TempDir(), "f")
@@ -118,7 +134,7 @@ func TestSocketRefusal_KeepsOtherOutcomes(t *testing.T) {
 		err  error
 		stat func() (os.FileInfo, error)
 	}{
-		"not ENXIO":    {&fs.PathError{Op: "open", Path: "x", Err: syscall.EACCES}, regular},
+		"EACCES":       {&fs.PathError{Op: "open", Path: "x", Err: syscall.EACCES}, regular},
 		"regular file": {enxio, regular},
 		"stat fails":   {enxio, failing},
 	} {
