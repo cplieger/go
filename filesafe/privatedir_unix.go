@@ -14,12 +14,20 @@ import (
 // owner-only access.
 const privateDirMode os.FileMode = 0o700
 
+// privateDirCreatedHook, when set by a test, runs after ensurePrivateDir
+// created the directory and before it opens it, the point where a
+// filesystem that ignores the requested mode has already stored its own.
+var privateDirCreatedHook func(dir string)
+
 // ensurePrivateDir is EnsurePrivateDir after path validation; the sequence
 // and every refusal are documented there.
 func ensurePrivateDir(clean string, c *cfg) (PrivateDirResult, error) {
 	created, err := mkdirPrivate(clean)
 	if err != nil {
 		return PrivateDirResult{}, err
+	}
+	if created && privateDirCreatedHook != nil {
+		privateDirCreatedHook(clean)
 	}
 	f, err := openPrivateDir(clean)
 	if err != nil {
@@ -83,28 +91,32 @@ func mkdirPrivate(dir string) (bool, error) {
 // openPrivateDir opens dir with O_DIRECTORY|O_NOFOLLOW, so the kernel
 // refuses a non-directory or a final-component link before this process
 // holds a descriptor, and O_NONBLOCK, so a planted FIFO cannot stall the
-// open. With O_DIRECTORY set, Linux reports a final-component symlink as
-// ENOTDIR rather than ELOOP, hence refusedOccupant.
+// open. Which errno names that refusal differs by kernel, hence
+// occupantRefusal.
 func openPrivateDir(dir string) (*os.File, error) {
 	f, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err == nil {
-		return f, nil
+	if err != nil {
+		return nil, occupantRefusal(err, dir, func() (os.FileInfo, error) { return os.Lstat(dir) })
 	}
-	if errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
-		return nil, refusedOccupant(dir, err)
-	}
-	return nil, err
+	return f, nil
 }
 
-// refusedOccupant names what the kernel refused: ErrSymlinkTarget for a
-// link, ErrNotDirectory for anything else. Its second look at the pathname
-// is sound because the open already failed: a name swapped in between can
+// occupantRefusal names a refused open by what lstat finds at dir, since
+// each kernel picks its own errno (a link is ENOTDIR on Linux, EMLINK on
+// FreeBSD; a socket is EOPNOTSUPP on OpenBSD): ErrSymlinkTarget for a link,
+// ErrNotDirectory for another non-directory, the open's error for a
+// directory or a failed lstat. A name swapped in after the failed open can
 // only mislabel the error, never admit a descriptor.
-func refusedOccupant(dir string, err error) error {
-	if fi, lerr := os.Lstat(dir); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+func occupantRefusal(err error, dir string, lstat func() (os.FileInfo, error)) error {
+	fi, lerr := lstat()
+	switch {
+	case lerr != nil || fi.IsDir():
+		return err
+	case fi.Mode()&os.ModeSymlink != 0:
 		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, dir, err)
+	default:
+		return fmt.Errorf("%w: %s: %w", ErrNotDirectory, dir, err)
 	}
-	return fmt.Errorf("%w: %s: %w", ErrNotDirectory, dir, err)
 }
 
 // statOwnedDir stats the OPEN descriptor and refuses anything that is not

@@ -94,17 +94,13 @@ func RemoveFileInRoot(root *os.Root, name string) error {
 var pinOpenHook func(name string)
 
 // racedOpen classifies an open of name that failed after an Lstat of it
-// returned before. ENOTDIR, ELOOP and ENXIO can only mean the name changed:
-// each caller's Lstat proved a directory or a regular file and no symlink, a
-// directory is opened through name/. (so a non-directory there answers
-// ENOTDIR), and open(2) answers ENXIO only for a socket or a device with no
-// driver. An error os.Root makes itself ("not a directory", "path escapes
-// from parent") means the resolution met something the Lstat did not see;
-// a closed root is the caller's misuse. Any other failure is a race when
-// name, looked up again, is present but is not the file the Lstat saw, or is
-// present after an open that found nothing. Those are ErrRaced, the refusal
-// a retry can cure; a name that is gone stays fs.ErrNotExist and every other
-// failure is returned as it is.
+// proved a directory or a regular file and no symlink. ENOTDIR (a directory
+// is opened through name/.), ELOOP, ENXIO and os.Root's own errors mean the
+// name changed. Any other failure is a race when name, looked up again, is not
+// the file the Lstat saw, or is present after an open that found nothing. That
+// covers EOPNOTSUPP, a socket's answer off Linux that a FUSE filesystem can
+// also give for an unchanged file. A race is ErrRaced, which a retry can cure;
+// a closed root, a name now gone and every other failure come back as they are.
 func racedOpen(root *os.Root, name string, before os.FileInfo, err error) error {
 	var errno syscall.Errno
 	isErrno := errors.As(err, &errno)

@@ -62,13 +62,14 @@ func OpenRegularNoFollow(path string) (*os.File, os.FileInfo, error) {
 	return f, fi, nil
 }
 
-// socketRefusal turns open(2)'s ENXIO, which a Unix socket (or a device with
-// no driver) answers before any descriptor exists, into the *NotRegularError
-// the descriptor check would have given, reading what is at name with stat.
-// Any other error, or a name stat finds regular or cannot read, is returned
-// as it is.
+// socketRefusal turns the errno a Unix socket's open(2) answers, ENXIO on
+// Linux (also a device with no driver) and EOPNOTSUPP on macOS, the BSDs and
+// illumos (xnu vn_authorize_open_existing, vn_open, vn_openat), into the
+// *NotRegularError the descriptor check would have given, reading what is at
+// name with stat. Other errors, or a name stat finds regular or cannot read,
+// come back as they are.
 func socketRefusal(err error, name string, stat func() (os.FileInfo, error)) error {
-	if !errors.Is(err, syscall.ENXIO) {
+	if !errors.Is(err, syscall.ENXIO) && !errors.Is(err, syscall.EOPNOTSUPP) {
 		return err
 	}
 	fi, statErr := stat()

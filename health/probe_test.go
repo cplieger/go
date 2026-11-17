@@ -3,6 +3,7 @@ package health
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,8 +30,9 @@ func markerAged(t *testing.T, age time.Duration) string {
 }
 
 // overlongName is a marker path whose last element is longer than any
-// filesystem allows, so Lstat fails with ENAMETOOLONG in a writable folder,
-// for any user, root included.
+// filesystem allows, so Lstat fails in a writable folder, for any user, root
+// included: ENAMETOOLONG on Unix, ERROR_INVALID_NAME on Windows
+// (https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#maximum-path-length-limitation).
 func overlongName(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), strings.Repeat("a", 300))
@@ -124,12 +126,17 @@ func TestProbe_maxAge_boundary(t *testing.T) {
 // with a reason naming the stat error, never "marker absent".
 func TestProbe_statFailure_reason(t *testing.T) {
 	t.Parallel()
-	code, reason := probeCheck(overlongName(t))
+	p := overlongName(t)
+	_, statErr := os.Lstat(p)
+	if statErr == nil || errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("fixture: os.Lstat(overlong name) = %v, want a stat error that is not absence", statErr)
+	}
+	code, reason := probeCheck(p)
 	if code != 1 {
 		t.Fatalf("probeCheck(overlong name) = %d, want 1", code)
 	}
-	if !strings.HasPrefix(reason, "unhealthy: marker stat failed: ") || !strings.Contains(reason, "file name too long") {
-		t.Errorf("reason = %q, want the stat failure with its error", reason)
+	if want := "unhealthy: marker stat failed: " + statErr.Error(); reason != want {
+		t.Errorf("reason = %q, want %q", reason, want)
 	}
 }
 
