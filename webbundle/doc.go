@@ -1,0 +1,19 @@
+// Package webbundle builds a single-page app's web bundle with esbuild, at
+// build time: the tree httpserver.SPA serves.
+//
+// An app's bundle command fills one [Config] and calls [Build]. It runs from
+// the Dockerfile's builder stage and from go generate, never in the app
+// binary. Build writes every built file as assets/<name>-<hash>.<ext>, each
+// shell at the tree's root with its logical script and stylesheet paths
+// replaced by the hashed ones, every bundled npm package's licence notices
+// under licenses/, and bundle.json, the manifest listing every written file
+// with its SHA-256 and every entry with its logical name, kind and hashed
+// path. The tree is built beside Out and swapped in whole, so a failed build
+// leaves the last good one, and two builds of the same inputs write the same
+// bytes.
+//
+// [RenderPages] and [RenderPageCorpus] give the bytes of the TypeScript page
+// table and the page corpus go generate commits; Build refuses either file
+// when it is stale. [BuildStyle] returns one stylesheet built exactly as a
+// Style entry is, for a test that compares CSS with the built bundle.
+package webbundle
