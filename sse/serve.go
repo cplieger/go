@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // ServeOption configures one Serve call.
