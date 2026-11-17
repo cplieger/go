@@ -57,7 +57,7 @@ A full read the client asks for through `stale()` is **re-reading** until the pr
 ## Every path to a seed and a stream position
 
 | Path | Where the floors come from | What covers the seed |
-|---|---|---|
+| --- | --- | --- |
 | Page load and first connect | the connection's `listening` frame | a seed before the frame waits for it; a seed after it is checked at once |
 | A tab attaching to a running `SharedWorker` | the frame the worker host retained, posted before any later frame | the retained floors hold every frame the host received before the attach |
 | A hello that resumed | the replayed frames, then the `listening` frame | nothing was lost; the frame catches a subscription up only when a commit landed while the server joined the connection |
