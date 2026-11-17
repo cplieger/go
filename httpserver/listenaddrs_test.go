@@ -108,6 +108,19 @@ func TestListenErrorNamesSettingAndCleanedAddr(t *testing.T) {
 			t.Errorf("error %q does not name the setting", err)
 		}
 	})
+	t.Run("a blank address is refused", func(t *testing.T) {
+		for _, addr := range []string{"", " \t"} {
+			ln, err := httpserver.Listen(t.Context(), listenSetting(addr))
+			if err == nil {
+				t.Errorf("Listen(%q) bound %v, want an error", addr, ln.Addr())
+				_ = ln.Close()
+				continue
+			}
+			if !strings.Contains(err.Error(), "LISTEN_ADDR") || !strings.Contains(err.Error(), "no address") {
+				t.Errorf("Listen(%q) error %q does not name the setting and the blank address", addr, err)
+			}
+		}
+	})
 	t.Run("a control character in the name never reaches the error", func(t *testing.T) {
 		ln, err := httpserver.Listen(t.Context(), httpserver.ListenSetting{Name: "LISTEN\x1b[31m\n_ADDR", Addr: "127.0.0.1:99999"})
 		if err == nil {

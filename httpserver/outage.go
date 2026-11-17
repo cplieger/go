@@ -118,14 +118,14 @@ type outageView struct {
 
 // OutagePage serves the static page an app shows while a file it needs
 // cannot open: every GET or HEAD outside APIPrefix answers 503, no-store,
-// under SPAPolicy's default policy, with the title, each file's name and its
-// class's sentence, the notice, the commands and their notes, and the closing
-// line, each line from c cleaned through textsafe; a file the bundle lists
-// under assets/ answers as SPA serves it, so the page's style loads. A path at
-// or under APIPrefix answers not_found and another method method_not_allowed,
-// through Errors, no-store. The error names the field, class or bundle it refuses.
+// under SPAPolicy's default policy, with the title, each file's Name and class
+// sentence, the Notice, each command's Run and Note, and the closing line; the
+// four named fields are cleaned through textsafe. A file the bundle lists under
+// assets/ answers as SPA serves it; a path at or under APIPrefix answers
+// not_found and another method method_not_allowed, through Errors, no-store.
+// The error names the refused field (a blank Title or App too), class or bundle.
 func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
-	if c.Title == "" || c.App == "" {
+	if strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.App) == "" {
 		return nil, errors.New("httpserver: an outage page needs a Title and an App")
 	}
 	if err := checkAPIPrefix(c.APIPrefix); err != nil {

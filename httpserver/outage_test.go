@@ -250,6 +250,8 @@ func TestOutagePageRefusesBadConfig(t *testing.T) {
 	for name, edit := range map[string]func(*httpserver.OutageConfig){
 		"no title":              func(c *httpserver.OutageConfig) { c.Title = "" },
 		"no app":                func(c *httpserver.OutageConfig) { c.App = "" },
+		"a blank title":         func(c *httpserver.OutageConfig) { c.Title = " \t" },
+		"a blank app":           func(c *httpserver.OutageConfig) { c.App = " \t" },
 		"no API prefix":         func(c *httpserver.OutageConfig) { c.APIPrefix = "" },
 		"an unclean API prefix": func(c *httpserver.OutageConfig) { c.APIPrefix = "/api/" },
 		"a style the bundle does not build": func(c *httpserver.OutageConfig) {
@@ -278,7 +280,7 @@ func TestOutagePageRefusesBadConfig(t *testing.T) {
 			c := outageConfig(t)
 			edit(&c)
 			if h, err := httpserver.OutagePage(c); err == nil || h != nil {
-				t.Errorf("OutagePage = %v, %v; want a nil handler and an error", h, err)
+				t.Errorf("OutagePage error = %v, handler nil = %t; want an error and a nil handler", err, h == nil)
 			}
 		})
 	}

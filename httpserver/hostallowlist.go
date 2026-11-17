@@ -394,9 +394,10 @@ func listenerAddr(r *http.Request) netip.Addr {
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
 // caller that admits by its own rule and writes its own refusal. It logs
 // through the policy's logger (WithHostAllowlistLogger), or slog.Default as it
-// is at that moment when the policy has none or is nil. The line carries no path, which can hold a token; the
-// access line with the same request_id has it. The Host is empty when the
-// request named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
+// is at that moment when the policy has none or is nil. The line carries no
+// path, which can hold a token; the access line with the same request_id has
+// it. The Host is empty when the request named none: HTTP/1.0 or HTTP/2
+// without one, or an empty Host header.
 func (p *HostPolicy) LogRefusal(r *http.Request) {
 	var logger *slog.Logger
 	if p != nil {

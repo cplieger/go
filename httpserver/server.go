@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -64,12 +65,21 @@ func WithSlogErrorLog(level slog.Level) ServerOption {
 	}
 }
 
-// defaultLogWriter writes each log.Logger line to slog.Default() at its level.
+// defaultLogWriter writes each log.Logger line to slog.Default() at its level,
+// recording the log.Logger caller as the source the way slog.NewLogLogger does.
 type defaultLogWriter slog.Level
 
 func (l defaultLogWriter) Write(p []byte) (int, error) {
-	slog.Default().Log(context.Background(), slog.Level(l), strings.TrimSuffix(string(p), "\n"))
-	return len(p), nil
+	ctx, lvl := context.Background(), slog.Level(l)
+	h := slog.Default().Handler()
+	if !h.Enabled(ctx, lvl) {
+		return len(p), nil
+	}
+	// Skip runtime.Callers, Write, log.(*Logger).output and the Print, Printf
+	// or Println that called it.
+	var pcs [1]uintptr
+	runtime.Callers(4, pcs[:])
+	return len(p), h.Handle(ctx, slog.NewRecord(time.Now(), lvl, strings.TrimSuffix(string(p), "\n"), pcs[0]))
 }
 
 // New builds an *http.Server for handler with streaming-safe defaults:

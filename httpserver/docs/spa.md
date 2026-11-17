@@ -95,7 +95,7 @@ The first row that applies answers:
 | `/favicon.ico` | 204 with no body |
 | Any other path under `assets/` or `licenses/` once its dot segments are cleaned, the manifest, or a shell's own file name such as `/index.html` | `not_found` (404) |
 | A page path | Its shell, 200, or the 307 redirect `ServeMux` answers it with |
-| A path with a segment starting with `.` | `not_found` (404) |
+| A path no page matches with a segment starting with `.` | `not_found` (404) |
 | Any other path | The default shell, `index.html`, with 404, so the router draws its not-found screen |
 
 Every refusal is the error envelope written through `Errors`, with `Cache-Control: no-store` set before `Errors` runs, so no cache keeps a refusal after the build that fixes it. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
@@ -218,4 +218,4 @@ The closing line is "Reload this page once the command finishes.", since a repai
 
 The page is rendered once, through `html/template`, with no script and no inline style. Every `GET` or `HEAD` outside `APIPrefix` answers it with 503, `Cache-Control: no-store`, `text/html` and `SPA`'s default policy. The exception is a file the manifest lists under `assets/`, which answers exactly as `SPA` serves it, so the stylesheet and the fonts and icons it loads arrive. A path at or under `APIPrefix` answers `not_found`, since the API answers its own outage, and another method answers `method_not_allowed` with `Allow: GET, HEAD`. Both refusals carry `Cache-Control: no-store`, as `SPA`'s do.
 
-`OutagePage` refuses an empty `Title` or `App`, an `APIPrefix` that is not a clean path, a file `Name` or command `Run` left with nothing but spaces after cleaning, a class outside the six, a manifest `ReadBundle` refuses, and, with a built bundle, a `Style` naming no style entry.
+`OutagePage` refuses an empty or blank `Title` or `App`, an `APIPrefix` that is not a clean path, a file `Name` or command `Run` left with nothing but spaces after cleaning, a class outside the six, a manifest `ReadBundle` refuses, and, with a built bundle, a `Style` naming no style entry.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,11 +21,14 @@ type ListenSetting struct{ Name, Addr string }
 // previous process can still hold the port for a moment.
 var listenRetry = struct{ interval, window time.Duration }{250 * time.Millisecond, 5 * time.Second}
 
-// Listen binds s.Addr over TCP. A port in use (EADDRINUSE) is retried every
-// 250 ms for up to 5 s; another error, or ctx ending, fails at once. The error
-// names s.Name and the address, control characters cleaned, and wraps the
-// cause.
+// Listen binds s.Addr over TCP. A blank Addr is an error. A port in use
+// (EADDRINUSE) is retried every 250 ms for up to 5 s; another error, or ctx
+// ending, fails at once. The error names s.Name and the address, control
+// characters cleaned, and wraps the cause.
 func Listen(ctx context.Context, s ListenSetting) (net.Listener, error) {
+	if strings.TrimSpace(s.Addr) == "" {
+		return nil, listenError(s, errors.New("no address"))
+	}
 	deadline := time.Now().Add(listenRetry.window)
 	var lc net.ListenConfig
 	for {
