@@ -93,27 +93,36 @@ describe("connectionOf over a running stream", () => {
   });
 
   it("says lost with no since while the server refuses a stream that never opened", async () => {
+    // Pinned: a draw near 0 ends the second backoff inside one 100 ms step, leaving it connecting.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const sf = scriptedFetch();
     sf.expect({ status: 503 });
     sf.expect({ status: 503 });
+    let lostAt: number | null = null;
     const stream = createStream({
       url: "/events",
       fetch: sf.fetch,
       versions: createVersionMap(),
       onFrame: () => undefined,
       revalidate: () => Promise.resolve(),
+      onLifecycle(ev) {
+        if (ev.kind === "state" && ev.from === "open") {
+          lostAt = Date.now();
+        }
+      },
     });
+    const now = (): Connection => connectionOf(stream.state(), lostAt);
     stream.start();
     await flush(10);
     expect(stream.state().kind).toBe("backoff");
-    expect(connectionOf(stream.state(), null)).toEqual({ state: "lost", since: null });
+    expect(now()).toEqual({ state: "lost", since: null });
 
     while (sf.connections.length < 2) {
       await vi.advanceTimersByTimeAsync(100);
     }
     await flush(10);
     expect(stream.state().kind).toBe("backoff");
-    expect(connectionOf(stream.state(), null)).toEqual({ state: "lost", since: null });
+    expect(now()).toEqual({ state: "lost", since: null });
     stream.stop();
   });
 });
