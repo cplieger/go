@@ -91,18 +91,21 @@ headerStatus.connection(connectionOf(attachment.state(), lostAt).state);
 The `./feed` entry keeps a tab's stores current from the server's `changed` and `listening` frames ([the feed](https://github.com/cplieger/go/blob/main/sse/feedwire/README.md)). Every store is read once in full, its response's `Feed-Position` header seeds its subscription, and from then on each frame either says nothing that store has not seen, or names the kinds to catch up from the store's position. A source whose log the server keeps answers a catch-up with rows; any other kind is read again in full.
 
 ```ts
-import { catchUpOf, noteWireVersion } from "@cplieger/reactive/fetch";
 import { type TabAttachment, attachToWorker } from "@cplieger/sse";
 import { createFeed } from "@cplieger/sse/feed";
-import { FEED_VERSION, KINDS, LOGGED_SOURCES } from "./client.gen.js";
+
+// The server's feedwire.Version, each kind's source, and the sources that keep a log.
+const FEED_VERSION = 1;
+const KINDS = { budgets: "ledger", accounts: "ledger", health: "status" };
+const LOGGED_SOURCES = ["ledger"];
 
 let link: TabAttachment | null = null;
 const feed = createFeed({
   feedVersion: FEED_VERSION,
   kinds: KINDS,
   logged: LOGGED_SOURCES,
-  catchUp: catchUpOf(changesRead),
-  onWire: noteWireVersion,
+  catchUp: readChanges,
+  onWire: noteServerVersion,
   reconnect: () => link?.reconnect(),
 });
 link = attachToWorker({ spawn, fallback, onFrame: (frame) => feed.onFrame(frame) });
@@ -111,7 +114,8 @@ const res = await readBudgets();
 const sub = feed.watch("budgets", budgetsSink, res.headers);
 ```
 
-- `feedVersion` is the generated client's `FEED_VERSION`. `createFeed` throws `FeedVersionMismatch`, naming both numbers, when it is not this package's, so a build that pairs a frame encoder and a parser of different formats fails its first test that creates a feed.
+- `feedVersion` is the feed format the app was built for, the server's `feedwire.Version`. `createFeed` throws `FeedVersionMismatch`, naming both numbers, when it is not this package's, so a build that pairs a frame encoder and a parser of different formats fails its first test that creates a feed.
+- `catchUp` sends one catch-up request for `{ source, epoch, since, kinds }` and resolves to `{ ok: true, answer }` with the changed rows, or `{ ok: false, failure }`, where `failure` is `"retry"` for a request that may succeed if sent again and `"refused"` otherwise. The feed aborts its signal once every subscription in the request has stopped.
 - A sink's `stale()` re-reads in full, calls `sub.seed(headers)` with that read's headers before its promise settles, and returns the promise. A read that settles with no seed backs off on the stream's reconnect curve (`timing` and `random` take the stream's).
 - `onFrame` returns `false` for an app event, so the same handler can pass it on. It throws on a feed frame that does not parse, so the stream reports `frame_rejected`; the feed has already called `reconnect` once for that episode, through the closure, because the link is made after the feed.
 - `onWire` gets every `listening` frame's `wire`, in any feed format. A `listening` frame of another feed format stops the feed applying frames until one of its own format arrives, with no read and no reconnect, so the page shows its reload banner instead of reading in a loop.
