@@ -43,6 +43,16 @@ func Derive(t *Table, guardCodes func(Access) []string) (*Table, error) {
 	if t == nil {
 		return nil, errors.New("httpwire: Derive of a nil table")
 	}
+	d, errs := derive(t, guardCodes)
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return d, nil
+}
+
+// derive answers the derived copy beside every refusal, so New can go on
+// checking the bindings and the document against it.
+func derive(t *Table, guardCodes func(Access) []string) (*Table, []error) {
 	d := cloneTable(t)
 	if d.MaxBody == 0 {
 		d.MaxBody = defaultMaxBody
@@ -56,10 +66,7 @@ func Derive(t *Table, guardCodes func(Access) []string) (*Table, error) {
 		c.row(r, names)
 	}
 	c.patterns(refs)
-	if len(c.errs) > 0 {
-		return nil, errors.Join(c.errs...)
-	}
-	return d, nil
+	return d, c.errs
 }
 
 // Union is a row's error union, deduplicated in a fixed order: the row's own
@@ -174,7 +181,7 @@ func cloneRows(rows []Endpoint) []Endpoint {
 		ep.Changes = slices.Clone(ep.Changes)
 		ep.Events = slices.Clone(ep.Events)
 		ep.PersonActions = slices.Clone(ep.PersonActions)
-		ep.Errors = nil
+		ep.Errors = slices.Clone(ep.Errors)
 		if ep.Reasons != nil {
 			r := make(map[string]ReasonSet, len(ep.Reasons))
 			for code, set := range ep.Reasons {
@@ -312,6 +319,14 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	} else if (wildcards > 0) != (ep.Params != nil) {
 		c.fail("%s: Params is set exactly when the path has wildcards", at)
 	}
+	for _, f := range []struct {
+		t    reflect.Type
+		name string
+	}{{ep.Params, "Params"}, {ep.Query, "Query"}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
+		if f.t == noneType {
+			c.fail("%s: %s is httpwire.None; leave it nil to declare none", at, f.name)
+		}
+	}
 	if ep.Request != nil && ep.Method == http.MethodGet {
 		c.fail("%s: a GET takes no Request body", at)
 	}
@@ -407,6 +422,8 @@ func statusProblem(ep *Endpoint, st int) string {
 
 func successProblem(ep *Endpoint, s Success) string {
 	switch {
+	case s.Response == noneType:
+		return "sets Response to httpwire.None; leave it nil to declare none"
 	case ep.Kind != JSON && s.Response != nil:
 		return "sets a Response, which only a JSON row answers"
 	case ep.Kind == Redirect:
@@ -545,7 +562,7 @@ func (c *tableChecker) events(ep *Endpoint, at string) {
 			c.fail("%s: declared twice", ev)
 		}
 		seen[e.Name] = true
-		if e.Data == nil {
+		if e.Data == nil || e.Data == noneType {
 			c.fail("%s: no Data type", ev)
 		}
 		if e.Readers != (Access{}) {

@@ -1,0 +1,315 @@
+{
+  "components": {
+    "schemas": {
+      "Changed": {
+        "properties": {
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": ["array", "null"]
+          }
+        },
+        "required": ["kinds"],
+        "type": "object"
+      },
+      "Job": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"],
+        "type": "object"
+      },
+      "Nudge": {
+        "properties": {
+          "at": {
+            "type": "integer"
+          }
+        },
+        "required": ["at"],
+        "type": "object"
+      },
+      "OtherBody": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["name"],
+        "type": "object"
+      },
+      "StartRequest": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": ["kind"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/archive": {
+      "post": {
+        "description": "Exports an archive.",
+        "operationId": "archive.export",
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Export"
+      }
+    },
+    "/api/auth/keys": {
+      "get": {
+        "description": "Lists the API keys.",
+        "operationId": "auth.keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  },
+                  "type": ["array", "null"]
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List keys"
+      },
+      "post": {
+        "description": "Creates an API key.",
+        "operationId": "auth.keyCreate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtherBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Created"
+          }
+        },
+        "summary": "Create a key"
+      }
+    },
+    "/api/events/wait": {
+      "get": {
+        "description": "Waits for a nudge.",
+        "operationId": "events.wait",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Nudge"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Wait"
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "description": "Lists the jobs.",
+        "operationId": "jobs.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  },
+                  "type": ["array", "null"]
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List jobs"
+      },
+      "post": {
+        "description": "Starts a job.",
+        "operationId": "jobs.start",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Accepted"
+          }
+        },
+        "summary": "Start a job"
+      }
+    },
+    "/api/jobs/{id}": {
+      "get": {
+        "description": "Reads one job.",
+        "operationId": "jobs.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read a job"
+      }
+    },
+    "/api/settings": {
+      "patch": {
+        "description": "Saves the sign-in methods.",
+        "operationId": "settings.save",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtherBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Save sign-in"
+      }
+    },
+    "/api/sso": {
+      "get": {
+        "description": "Redirects to the provider.",
+        "operationId": "auth.sso",
+        "responses": {
+          "302": {
+            "description": "Found"
+          }
+        },
+        "summary": "Sign in"
+      }
+    },
+    "/api/stream": {
+      "get": {
+        "description": "Streams changes.",
+        "operationId": "live.stream",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-events": {
+                  "changed": {
+                    "$ref": "#/components/schemas/Changed"
+                  }
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Stream"
+      }
+    }
+  }
+}

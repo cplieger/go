@@ -14,13 +14,23 @@ import (
 )
 
 type (
-	jobQuery     struct{ State string }
-	jobParams    struct{ ID string }
-	job          struct{ ID string }
-	startRequest struct{ Kind string }
-	nudge        struct{ At int64 }
-	otherBody    struct{ Name string }
-	changed      struct{ Kinds []string }
+	jobQuery  struct{ State string }
+	jobParams struct{ ID string }
+	job       struct {
+		ID string `json:"id"`
+	}
+	startRequest struct {
+		Kind string `json:"kind"`
+	}
+	nudge struct {
+		At int64 `json:"at"`
+	}
+	otherBody struct {
+		Name string `json:"name"`
+	}
+	changed struct {
+		Kinds []string `json:"kinds"`
+	}
 )
 
 var (
@@ -759,4 +769,19 @@ func TestDeriveChecksASharedOwnerOnce(t *testing.T) {
 	if n := strings.Count(err.Error(), "nil Err"); n != 1 {
 		t.Errorf("the nil Err is reported %d times, want once: %v", n, err)
 	}
+}
+
+func TestDeriveRefusesNoneAsADeclaredType(t *testing.T) {
+	none := reflect.TypeFor[httpwire.None]()
+	runRefusals(t, map[string]refusal{
+		"Params":           {edit("jobs.get", func(e *httpwire.Endpoint) { e.Params = none }), []string{`row "jobs.get": Params is httpwire.None`}},
+		"Query":            {edit("jobs.list", func(e *httpwire.Endpoint) { e.Query = none }), []string{`row "jobs.list": Query is httpwire.None`}},
+		"Request":          {edit("jobs.start", func(e *httpwire.Endpoint) { e.Request = none }), []string{`row "jobs.start": Request is httpwire.None`}},
+		"Response":         {edit("jobs.get", func(e *httpwire.Endpoint) { e.Response = none }), []string{`row "jobs.get": Response is httpwire.None`}},
+		"a mount Response": {edit("auth.keys", func(e *httpwire.Endpoint) { e.Response = none }), []string{`row "auth.keys": Response is httpwire.None`}},
+		"a Success Response": {edit("events.wait", func(e *httpwire.Endpoint) {
+			e.Successes = []httpwire.Success{{Status: http.StatusCreated, Response: none}}
+		}), []string{`row "events.wait": extra success 201 sets Response to httpwire.None`}},
+		"an event's Data": {edit("live.stream", func(e *httpwire.Endpoint) { e.Events[0].Data = none }), []string{`row "live.stream"`, `event "changed"`, "Data"}},
+	})
 }
