@@ -800,6 +800,9 @@ func TestScope_marksOnlyWhereTheCursorLags(t *testing.T) {
 		wide, sc := openStream(t, srv, srv.URL, nil)
 		defer wide.Body.Close()
 		hello, _ := readHello(t, sc)
+		// The stream writes its first mark check after the hello; wait for it
+		// so the scope posted below cannot race it into a mark.
+		synctest.Wait()
 		post := func(seq int, topics string) {
 			t.Helper()
 			body := fmt.Sprintf(`{"conn":%q,"seq":%d,"topics":%s}`, hello.Conn, seq, topics)
@@ -823,6 +826,7 @@ func TestScope_marksOnlyWhereTheCursorLags(t *testing.T) {
 		narrow, sc2 := openStream(t, srv, srv.URL, http.Header{scopeHeader: {`["run:a"]`}})
 		defer narrow.Body.Close()
 		readHello(t, sc2)
+		synctest.Wait()
 		if _, err := h.Publish(Event{Topic: "run:a", Data: []byte("a2")}); err != nil {
 			t.Fatal(err)
 		}

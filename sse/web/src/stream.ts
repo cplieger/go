@@ -752,19 +752,15 @@ export function createStream(opts: StreamOptions): Stream {
   }
 
   function deliver(frame: Frame): void {
-    let threw = false;
-    let error: unknown;
-    try {
-      opts.onFrame(frame);
-    } catch (e: unknown) {
-      threw = true;
-      error = e;
-    }
+    // The frame counts as delivered before onFrame runs, so a reconnect() made from inside it
+    // resumes after this frame instead of replaying it.
     if (frame.id !== null) {
       advance(frame.id);
     }
-    if (threw) {
-      emit({ kind: "frame_rejected", type: frame.type, error });
+    try {
+      opts.onFrame(frame);
+    } catch (e: unknown) {
+      emit({ kind: "frame_rejected", type: frame.type, error: e });
       schedule("hello", false);
     }
   }

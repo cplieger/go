@@ -16,7 +16,8 @@ import {
 import workerUrl from "./test-helpers/worker-entry.ts?sharedworker&url";
 import { type VersionMap, createVersionMap } from "./versions.js";
 
-const SKIP_REASON = "ssetest fixture not started: set SSE_FIXTURE to the built ssetest/cmd binary";
+const SKIP_REASON =
+  "sse fixture not started: set SSE_FIXTURE to the binary built from internal/ssefixture";
 const fixture = import.meta.env["SSE_FIXTURE"];
 if (!fixture) {
   console.warn(`[vitest] ${SKIP_REASON}`);
@@ -151,7 +152,7 @@ function setHidden(hidden: boolean): void {
 
 const sharedWorkerAvailable = Boolean(fixture) && typeof SharedWorker !== "undefined";
 
-describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the ssetest fixture", () => {
+describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the sse fixture", () => {
   let client: FixtureClient;
   let fixtureUrl: string;
   let pages: Page[] = [];

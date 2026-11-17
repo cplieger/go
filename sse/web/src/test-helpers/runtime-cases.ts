@@ -16,7 +16,7 @@ import {
   fakeVisibility,
 } from "./stream-harness.js";
 
-export interface CaseEnvironment {
+interface CaseEnvironment {
   readonly url: string;
   readonly fetch: typeof fetch;
 }

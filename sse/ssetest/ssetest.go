@@ -1,8 +1,6 @@
 // Package ssetest is the test seam between the sse hub and its clients: an
 // httptest server for a hub, a frame reader for the wire, and a recorder that
-// answers http.ErrNotSupported to the deadline setters. The controllable
-// server the TypeScript integration suites drive is the ssetest/cmd binary,
-// built on an internal fixture.
+// answers http.ErrNotSupported to the deadline setters.
 package ssetest
 
 import (

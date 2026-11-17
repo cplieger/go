@@ -47,7 +47,7 @@ export interface TransportCallbacks {
  * tags every callback with it, which is what lets the runtime tell a live report from one belonging
  * to an attempt it has already replaced.
  */
-export interface ConnectOptions {
+interface ConnectOptions {
   readonly url: string;
   readonly fetch: typeof fetch;
   readonly headers: Readonly<Record<string, string>>;

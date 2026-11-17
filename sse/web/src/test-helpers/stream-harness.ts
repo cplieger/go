@@ -85,13 +85,9 @@ export function fakeOnline(initial = true): FakeOnline {
 }
 
 /**
- * One revalidate call the test settles by hand. Shared with runtime-cases.ts,
- * which drives the same shape from its own harness.
- *
- * `reject` takes an `Error` rather than `unknown` because that is what every
- * caller passes, and narrowing it here is what lets both harnesses hand the
- * promise's own `reject` straight through — the wider signature needed a
- * normalizing wrapper whose non-Error branch no test could reach.
+ * One revalidate call the test settles by hand; runtime-cases.ts drives the same shape from its own
+ * harness. `reject` takes an `Error`, what every caller passes, so both harnesses hand the
+ * promise's own `reject` straight through.
  */
 export interface PendingRun {
   readonly ctx: RevalidateContext;

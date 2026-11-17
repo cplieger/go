@@ -3,5 +3,5 @@
   "compilerOptions": {
     "lib": ["ESNext", "WebWorker"]
   },
-  "include": ["src/index.ts", "src/test-helpers/worker-entry.ts"]
+  "include": ["src/index.ts", "src/feed/index.ts", "src/test-helpers/worker-entry.ts"]
 }
