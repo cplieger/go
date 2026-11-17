@@ -27,6 +27,10 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 			pkg + "licenses.d.ts":                        "export {};\n",
 			pkg + "LICENSE-OFL-1.1":                      "fixture-a font licence\n",
 			pkg + "COPYING.LESSER":                       "fixture-a lesser copying\n",
+			pkg + "third_party_notices.txt":              "fixture-a third-party notices\n",
+			pkg + "NOTICE.css":                           ".notice {}\n",
+			pkg + "license.json":                         "{}\n",
+			pkg + "LICENSE.js.map":                       "{}\n",
 			pkg + "NOTICE.map":                           "{}\n",
 			pkg + "LICENSES/extra":                       "nested\n",
 			pkg + "lib/LICENSE":                          "nested\n",
@@ -43,7 +47,7 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 			}
 		}
 		slices.Sort(copied)
-		notices := []string{"COPYING.LESSER", "LICENSE-OFL-1.1", "LICENSE.md", "Licence.txt", "NOTICE", "copying"}
+		notices := []string{"COPYING.LESSER", "LICENSE-OFL-1.1", "LICENSE.md", "Licence.txt", "NOTICE", "copying", "third_party_notices.txt"}
 		var want []string
 		for _, n := range notices {
 			want = append(want, "@cplieger/fixture-a@1.2.3/"+n)
@@ -86,6 +90,66 @@ func TestNoticesFollowCollectLicensesFamilies(t *testing.T) {
 		if !slices.Contains(r.Notices, "@cplieger/fixture-font") {
 			t.Errorf("Result.Notices = %q, want @cplieger/fixture-font among them", r.Notices)
 		}
+	})
+	t.Run("BesideTheBundledFiles", func(t *testing.T) {
+		t.Parallel()
+		const ui = "node_modules/@cplieger/fixture-ui/"
+		c := newFixture(t, files{
+			"src/app.ts":                         "import { notice } from \"@cplieger/fixture-ui/src/feedback/notice/notice.js\";\nnotice();\n",
+			"src/app.css":                        "@import \"@cplieger/fixture-ui/css/system.css\";\n",
+			ui + "package.json":                  `{"name": "@cplieger/fixture-ui", "version": "1.3.0", "type": "module"}`,
+			ui + "LICENSE":                       "ui licence\n",
+			ui + "THIRD_PARTY_NOTICES.md":        "ui third-party notices\n",
+			ui + "css/system.css":                "@font-face { font-family: F; src: url(\"../fonts/f.woff2\"); }\n.mark { background: url(\"../icons/svg/check.svg\"); }\n",
+			ui + "fonts/f.woff2":                 "wOF2 fixture font bytes",
+			ui + "fonts/LICENSE-fixture-font":    "font licence\n",
+			ui + "fonts/notice.css":              ".notice {}\n",
+			ui + "icons/LICENSE-glyphs":          "glyph licence\n",
+			ui + "icons/svg/notice.svg":          fixtureMark,
+			ui + "icons/svg/check.svg":           fixtureMark,
+			ui + "src/feedback/notice/notice.js": "export function notice() { console.log(\"notice\"); }\n",
+			ui + "src/feedback/notice/NOTICE.ts": "export {};\n",
+			ui + "templates/LICENSE-unused":      "covers no bundled file\n",
+		})
+		mustBuild(t, c)
+		tree := readTree(t, c.Out)
+		const dir = "licenses/@cplieger/fixture-ui@1.3.0/"
+		want := map[string]string{
+			"LICENSE":                    "ui licence\n",
+			"THIRD_PARTY_NOTICES.md":     "ui third-party notices\n",
+			"fonts/LICENSE-fixture-font": "font licence\n",
+			"icons/LICENSE-glyphs":       "glyph licence\n",
+		}
+		var got []string
+		for name := range tree {
+			if rest, ok := strings.CutPrefix(name, dir); ok {
+				got = append(got, rest)
+			}
+		}
+		slices.Sort(got)
+		if keys := slices.Sorted(maps.Keys(want)); !slices.Equal(got, keys) {
+			t.Errorf("%s holds %q, want %q", dir, got, keys)
+		}
+		for name, body := range want {
+			if string(tree[dir+name]) != body {
+				t.Errorf("%s%s = %q, want %q", dir, name, tree[dir+name], body)
+			}
+			if _, ok := readBundle(t, c.Out).Files[dir+name]; !ok {
+				t.Errorf("%s does not list %s%s", httpserver.BundlePath, dir, name)
+			}
+		}
+	})
+	t.Run("RootWithNone", func(t *testing.T) {
+		t.Parallel()
+		const ui = "node_modules/@cplieger/fixture-ui/"
+		c := newFixture(t, files{
+			"src/app.css":                     "@import \"@cplieger/fixture-ui/css/system.css\";\n",
+			ui + "package.json":               `{"name": "@cplieger/fixture-ui", "version": "1.3.0"}`,
+			ui + "css/system.css":             "@font-face { font-family: F; src: url(\"../fonts/f.woff2\"); }\n",
+			ui + "fonts/f.woff2":              "wOF2 fixture font bytes",
+			ui + "fonts/LICENSE-fixture-font": "font licence\n",
+		})
+		buildRefused(t, c, "@cplieger/fixture-ui", "root")
 	})
 	t.Run("PackageWithNone", func(t *testing.T) {
 		t.Parallel()

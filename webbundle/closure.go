@@ -86,20 +86,36 @@ func chain(from map[string]string, in string) string {
 
 // packageRoots holds each bundled npm package's root directories, slash
 // paths under Src, by package name; a package bundled at two versions has
-// two.
-type packageRoots map[string]map[string]bool
+// two. Each root maps to the directories inside it, root "." included, that
+// hold a bundled file or lie between one and the root: those whose notices
+// cover what the bundle ships.
+type packageRoots map[string]map[string]map[string]bool
 
-func (r packageRoots) add(name, root string) {
+// add records input, a bundled file of package name rooted at root.
+func (r packageRoots) add(name, root, input string) {
 	if r[name] == nil {
-		r[name] = map[string]bool{}
+		r[name] = map[string]map[string]bool{}
 	}
-	r[name][root] = true
+	dirs := r[name][root]
+	if dirs == nil {
+		dirs = map[string]bool{".": true}
+		r[name][root] = dirs
+	}
+	for d := path.Dir(strings.TrimPrefix(input, root+"/")); !dirs[d]; d = path.Dir(d) {
+		dirs[d] = true
+	}
 }
 
 func (r packageRoots) merge(other packageRoots) {
 	for name, roots := range other {
-		for root := range roots {
-			r.add(name, root)
+		if r[name] == nil {
+			r[name] = map[string]map[string]bool{}
+		}
+		for root, dirs := range roots {
+			if r[name][root] == nil {
+				r[name][root] = map[string]bool{}
+			}
+			maps.Copy(r[name][root], dirs)
 		}
 	}
 }
@@ -120,7 +136,7 @@ func (b *build) checkClosure(m *metafile, e Entry) (packageRoots, error) {
 			if !b.allowed(pkg) {
 				return nil, fmt.Errorf("webbundle: entry %q bundles %s, which Config.Packages does not list: %s", e.Name, pkg, chain(from, in))
 			}
-			pkgs.add(pkg, root)
+			pkgs.add(pkg, root, in)
 		}
 		if in == e.Path {
 			continue

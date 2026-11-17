@@ -15,23 +15,36 @@ import (
 
 const licensesDir = "licenses/"
 
-// noticeFamilies and sourceExts are the families cplieger/ci
-// configs/collect-licenses.sh copies for a Go module (copy_files), with the
-// script's .go exclusion widened to the source files an npm package ships.
+// noticeFamilies are the names cplieger/ci configs/collect-licenses.sh
+// copies for a Go module (copy_files, and the main module's
+// THIRD_PARTY_NOTICES.md). A notice-named file of a type the bundle reads
+// (notice.ts, NOTICE.css) is code, not a notice: the script's .go exclusion
+// widened to every extension esbuild loads here.
 var (
-	noticeFamilies = []string{"LICENSE", "LICENCE", "COPYING", "NOTICE"}
-	sourceExts     = []string{".JS", ".MJS", ".CJS", ".TS", ".MTS", ".CTS", ".MAP"}
+	noticeFamilies = []string{"LICENSE", "LICENCE", "COPYING", "NOTICE", "THIRD_PARTY_NOTICES"}
+	bundledExts    = bundledExtensions()
 )
+
+func bundledExtensions() map[string]bool {
+	exts := map[string]bool{}
+	for _, e := range []string{".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".css", ".json", ".map"} {
+		exts[strings.ToUpper(e)] = true
+	}
+	for e := range fileLoaders() {
+		exts[strings.ToUpper(e)] = true
+	}
+	return exts
+}
 
 func isNotice(name string) bool {
 	upper := strings.ToUpper(name)
 	hasPrefix := func(p string) bool { return strings.HasPrefix(upper, p) }
-	return slices.ContainsFunc(noticeFamilies, hasPrefix) && !slices.Contains(sourceExts, path.Ext(upper))
+	return slices.ContainsFunc(noticeFamilies, hasPrefix) && !bundledExts[path.Ext(upper)]
 }
 
-// notice is one notice file at a package's root.
+// notice is one notice file of a package.
 type notice struct {
-	name string
+	name string // its slash path inside the package
 	body []byte
 }
 
@@ -39,7 +52,9 @@ type notice struct {
 // licenses/<package>@<version>/ and writes licenses/index.txt, one
 // "<package> <version>" line per directory, sorted. Every version gets its
 // own directory, so a bundle holding two versions of a package ships both
-// licence texts. A package root with no notice file fails the build.
+// licence texts. A notice beside bundled files keeps its path inside the
+// package (fonts/LICENSE-x), since it covers those files only. A package
+// root with no notice file fails the build.
 func writeNotices(t *tree, src string, pkgs packageRoots) error {
 	if len(pkgs) == 0 {
 		return nil
@@ -48,7 +63,7 @@ func writeNotices(t *tree, src string, pkgs packageRoots) error {
 	var index []string
 	for _, name := range slices.Sorted(maps.Keys(pkgs)) {
 		for _, root := range slices.Sorted(maps.Keys(pkgs[name])) {
-			version, notices, err := readNotices(name, filepath.Join(src, filepath.FromSlash(root)))
+			version, notices, err := readNotices(name, filepath.Join(src, filepath.FromSlash(root)), pkgs[name][root])
 			if err != nil {
 				return err
 			}
@@ -85,9 +100,9 @@ func writeVersionNotices(t *tree, dir string, notices []notice, written map[stri
 	return nil
 }
 
-// readNotices reads the version and the notice files of the package name
-// rooted at dir, refusing a package with none.
-func readNotices(name, dir string) (string, []notice, error) {
+// readNotices reads the version of the package name rooted at dir and the
+// notice files in each of dirs, refusing a package whose root has none.
+func readNotices(name, dir string, dirs map[string]bool) (string, []notice, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return "", nil, fmt.Errorf("webbundle: notices of %s: %w", name, err)
@@ -97,34 +112,48 @@ func readNotices(name, dir string) (string, []notice, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	entries, err := fs.ReadDir(root.FS(), ".")
+	var notices []notice
+	for _, d := range slices.Sorted(maps.Keys(dirs)) {
+		found, err := dirNotices(root, d)
+		if err != nil {
+			return "", nil, fmt.Errorf("webbundle: notices of %s: %w", name, err)
+		}
+		if d == "." && len(found) == 0 {
+			return "", nil, fmt.Errorf("webbundle: bundled package %s %s ships no LICENSE, LICENCE, COPYING, NOTICE or THIRD_PARTY_NOTICES file at its root", name, version)
+		}
+		notices = append(notices, found...)
+	}
+	return version, notices, nil
+}
+
+// dirNotices reads the notice files in dir, a slash path inside root.
+func dirNotices(root *os.Root, dir string) ([]notice, error) {
+	entries, err := fs.ReadDir(root.FS(), dir)
 	if err != nil {
-		return "", nil, fmt.Errorf("webbundle: notices of %s: %w", name, err)
+		return nil, err
 	}
 	var notices []notice
 	for _, e := range entries {
 		if !isNotice(e.Name()) {
 			continue
 		}
+		p := path.Join(dir, e.Name())
 		// Stat follows a symlink, as the script's [ -f ] does; the root keeps
 		// it inside the package.
-		info, err := root.Stat(e.Name())
+		info, err := root.Stat(p)
 		if err != nil {
-			return "", nil, fmt.Errorf("webbundle: notices of %s: %w", name, err)
+			return nil, err
 		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		body, err := root.ReadFile(e.Name())
+		body, err := root.ReadFile(p)
 		if err != nil {
-			return "", nil, fmt.Errorf("webbundle: notices of %s: %w", name, err)
+			return nil, err
 		}
-		notices = append(notices, notice{name: e.Name(), body: body})
+		notices = append(notices, notice{name: p, body: body})
 	}
-	if len(notices) == 0 {
-		return "", nil, fmt.Errorf("webbundle: bundled package %s %s ships no LICENSE, LICENCE, COPYING or NOTICE file at its root", name, version)
-	}
-	return version, notices, nil
+	return notices, nil
 }
 
 func packageVersion(root *os.Root, name string) (string, error) {
