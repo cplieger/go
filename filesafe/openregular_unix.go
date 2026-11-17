@@ -21,11 +21,17 @@ func openNoFollow(clean string) (*os.File, error) {
 }
 
 // noFollowRefusal names what an O_NOFOLLOW open of name refused, reading
-// what is at name with lstat: ErrSymlinkTarget for a link (an ancestor
-// ELOOP takes the same arm), and socketRefusal's verdict otherwise.
+// what is at name with lstat: ErrSymlinkTarget for ELOOP (an ancestor loop
+// too) or a link, since FreeBSD and DragonFly refuse a final link with
+// EMLINK, NetBSD with EFTYPE and DragonFly also with EINVAL (Go's
+// os.isNoFollowErr), and socketRefusal's verdict otherwise.
 func noFollowRefusal(err error, name string, lstat func() (os.FileInfo, error)) error {
 	if errors.Is(err, syscall.ELOOP) {
 		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, name, err)
 	}
-	return socketRefusal(err, name, lstat)
+	fi, lerr := lstat()
+	if lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, name, err)
+	}
+	return socketRefusal(err, name, func() (os.FileInfo, error) { return fi, lerr })
 }

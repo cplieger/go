@@ -91,8 +91,8 @@ func mkdirPrivate(dir string) (bool, error) {
 // openPrivateDir opens dir with O_DIRECTORY|O_NOFOLLOW, so the kernel
 // refuses a non-directory or a final-component link before this process
 // holds a descriptor, and O_NONBLOCK, so a planted FIFO cannot stall the
-// open. With O_DIRECTORY set, Linux reports a final-component symlink as
-// ENOTDIR rather than ELOOP, hence occupantRefusal.
+// open. Which errno names that refusal differs by kernel, hence
+// occupantRefusal.
 func openPrivateDir(dir string) (*os.File, error) {
 	f, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -101,19 +101,22 @@ func openPrivateDir(dir string) (*os.File, error) {
 	return f, nil
 }
 
-// occupantRefusal names what the kernel refused, reading what is at dir with
-// lstat: ErrSymlinkTarget for a link, ErrNotDirectory for anything else.
-// Its second look at the pathname is sound because the open already failed:
-// a name swapped in between can only mislabel the error, never admit a
-// descriptor.
+// occupantRefusal names a refused open by what lstat finds at dir, since
+// each kernel picks its own errno (a link is ENOTDIR on Linux, EMLINK on
+// FreeBSD; a socket is EOPNOTSUPP on OpenBSD): ErrSymlinkTarget for a link,
+// ErrNotDirectory for another non-directory, the open's error for a
+// directory or a failed lstat. A name swapped in after the failed open can
+// only mislabel the error, never admit a descriptor.
 func occupantRefusal(err error, dir string, lstat func() (os.FileInfo, error)) error {
-	if !errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, syscall.ELOOP) {
+	fi, lerr := lstat()
+	switch {
+	case lerr != nil || fi.IsDir():
 		return err
-	}
-	if fi, lerr := lstat(); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+	case fi.Mode()&os.ModeSymlink != 0:
 		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, dir, err)
+	default:
+		return fmt.Errorf("%w: %s: %w", ErrNotDirectory, dir, err)
 	}
-	return fmt.Errorf("%w: %s: %w", ErrNotDirectory, dir, err)
 }
 
 // statOwnedDir stats the OPEN descriptor and refuses anything that is not

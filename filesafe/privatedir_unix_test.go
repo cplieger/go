@@ -226,7 +226,7 @@ func TestEnsurePrivateDirRefusesPlantedOccupant(t *testing.T) {
 			name: "fifo",
 			plant: func(t *testing.T, path string) {
 				t.Helper()
-				if err := syscall.Mkfifo(path, 0o600); err != nil {
+				if err := MkfifoForTest(path); err != nil {
 					t.Fatalf("mkfifo: %v", err)
 				}
 			},

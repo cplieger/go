@@ -15,10 +15,6 @@ import (
 // created directory's mode.
 const msgPrivateDirRepaired = "filesafe: created directory did not keep the requested mode; repaired"
 
-// MkfifoForTest creates a FIFO at path. It is exported for the external test
-// package; on Windows it returns an error, so callers skip the case.
-func MkfifoForTest(path string) error { return syscall.Mkfifo(path, 0o600) }
-
 // stubFsyncRootDir replaces the package fsyncRootDir seam with one that
 // returns err, restoring the original on test end. Every write entry point
 // commits through this seam. Callers must not use t.Parallel: package state.

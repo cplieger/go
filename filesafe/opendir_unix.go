@@ -3,6 +3,8 @@
 package filesafe
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +23,14 @@ func openDirInRoot(root *os.Root, dir string) (*os.File, error) {
 	return f, nil
 }
 
-// notDirectoryErr returns the error of a failed O_DIRECTORY open.
+// notDirectoryErr returns the error of a failed O_DIRECTORY open, with the
+// EOPNOTSUPP that OpenBSD, NetBSD and DragonFly answer for a socket, testing
+// its type before O_DIRECTORY (their vfs_vnops.c vn_open), as ENOTDIR, as Go's
+// os.rootOpenDir translates it.
 func notDirectoryErr(err error) error {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok && errors.Is(pe.Err, syscall.EOPNOTSUPP) {
+		return &fs.PathError{Op: pe.Op, Path: pe.Path, Err: syscall.ENOTDIR}
+	}
 	return err
 }
 
