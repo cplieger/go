@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decodeEnvelope } from "./envelope.js";
+import fieldCodesFile from "../testdata/field-codes.json?raw";
+import { decodeEnvelope, SCHEMA_FIELD_CODES } from "./envelope.js";
 import { ENVELOPE_FIXTURES } from "./testing/index.js";
 
 function decodeBody(body: string): ReturnType<typeof decodeEnvelope> {
@@ -144,5 +145,15 @@ describe("decodeEnvelope", () => {
         decodeEnvelope({ ...minimal, upstream: { service: "x", status, message: "" } }),
       ).toBeUndefined();
     }
+  });
+});
+
+describe("SCHEMA_FIELD_CODES", () => {
+  it("lists the Go field-code map's codes in its order", () => {
+    expect(SCHEMA_FIELD_CODES).toEqual(JSON.parse(fieldCodesFile));
+  });
+
+  it("cannot be changed at run time", () => {
+    expect(Object.isFrozen(SCHEMA_FIELD_CODES)).toBe(true);
   });
 });

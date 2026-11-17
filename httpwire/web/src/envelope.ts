@@ -4,6 +4,20 @@ export interface FieldError {
   message: string;
 }
 
+/**
+ * The codes the Go server's decode and schema check write into `FieldError.code`. A field's own
+ * refusal code and an app's validators write other codes into the same list, so `code` stays `string`.
+ */
+export const SCHEMA_FIELD_CODES = Object.freeze([
+  "malformed",
+  "required",
+  "unknown",
+  "enum",
+  "union",
+  "range",
+  "pattern",
+] as const);
+
 export interface ErrorEnvelope {
   code: string;
   message: string;
