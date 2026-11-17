@@ -48,6 +48,11 @@ func TestBuildRefusesShell(t *testing.T) {
 			want:  []string{"index.html", "style attribute"},
 		},
 		{
+			name:  "UndeclaredStylesheet",
+			shell: edit("</head>", `<link rel="stylesheet" href="/theme.css"></head>`),
+			want:  []string{"index.html", "/theme.css"},
+		},
+		{
 			name:  "EventHandlerAttribute",
 			shell: edit("<body>", `<body onload="start()">`),
 			want:  []string{"index.html", "onload"},
@@ -72,6 +77,19 @@ func TestBuildRefusesShell(t *testing.T) {
 			buildRefused(t, c, tc.want...)
 		})
 	}
+}
+
+func TestBuildRefusesClassicEntryNothingReads(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{"src/worker.js": "self.addEventListener(\"connect\", () => {});\n"})
+	c.Entries = append(c.Entries, webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic})
+	buildRefused(t, c, "worker", "BUNDLE_URLS")
+}
+
+func TestBuildRefusesScriptImportingCSS(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{"src/app.ts": "import \"./app.css\";\nconsole.log(1);\n"})
+	buildRefused(t, c, "CSS", "Style entry")
 }
 
 func TestBuildPassesAttributesNamedLikeHandlers(t *testing.T) {

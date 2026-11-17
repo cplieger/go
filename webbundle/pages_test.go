@@ -47,6 +47,7 @@ func TestRenderRefusesPages(t *testing.T) {
 		{name: "NameNotIdentifier", apiPrefix: "/api", pages: []httpserver.Page{{Name: "two-words", Pattern: "/a"}}},
 		{name: "UnderAPIPrefix", apiPrefix: "/api", pages: []httpserver.Page{{Name: "a", Pattern: "/api/a"}}},
 		{name: "NoAPIPrefix", apiPrefix: "", pages: []httpserver.Page{{Name: "a", Pattern: "/a"}}},
+		{name: "ProtoName", apiPrefix: "/api", pages: []httpserver.Page{{Name: "__proto__", Pattern: "/a"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,6 +234,20 @@ func TestRenderPageCorpusCoversEachPattern(t *testing.T) {
 			}
 			if len(corpus) > 32+4 {
 				t.Errorf("%d cases for one pattern, want at most 32 and the 4 shared ones", len(corpus))
+			}
+		})
+	}
+}
+
+func TestRenderPageCorpusRootPatterns(t *testing.T) {
+	t.Parallel()
+	for name, pattern := range map[string]string{"Subtree": "/", "Exact": "/{$}"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, c := range renderCorpus(t, []httpserver.Page{{Name: "home", Pattern: pattern}}, "/api") {
+				if !strings.HasPrefix(c.Path, "/") {
+					t.Errorf("case path %q is not an absolute path", c.Path)
+				}
 			}
 		})
 	}

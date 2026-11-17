@@ -145,10 +145,30 @@ shared(new SharedWorker(BUNDLE_URLS.worker));
 	if !bytes.Contains(workerBody, []byte("connect")) {
 		t.Errorf("the classic entry %s does not hold its own closure:\n%s", worker, workerBody)
 	}
-	app := readFile(t, c.Out, entryPath(t, b, "app", webbundle.Module))
+	app := loadedJS(t, c.Out, entryPath(t, b, "app", webbundle.Module))
 	if !bytes.Contains(app, []byte(strconv.Quote("/"+worker))) {
-		t.Errorf("the module entry does not read BUNDLE_URLS.worker as %q:\n%s", "/"+worker, app)
+		t.Errorf("the module entry and the chunks it imports do not read BUNDLE_URLS.worker as %q:\n%s", "/"+worker, app)
 	}
+}
+
+// loadedJS is a module entry's bytes followed by those of every chunk it
+// imports, directly or through another chunk.
+func loadedJS(t testing.TB, out, entry string) []byte {
+	t.Helper()
+	importRe := regexp.MustCompile(`"(\./[^"]+\.js)"`)
+	var all []byte
+	seen := map[string]bool{entry: true}
+	for queue := []string{entry}; len(queue) > 0; queue = queue[1:] {
+		body := readFile(t, out, queue[0])
+		all = append(all, body...)
+		for _, m := range importRe.FindAllSubmatch(body, -1) {
+			if p := path.Join(path.Dir(queue[0]), string(m[1])); !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return all
 }
 
 func TestBuildLowersSyntaxThePinnedEnginesLack(t *testing.T) {
@@ -214,6 +234,8 @@ func TestBuildRefusesConfig(t *testing.T) {
 		{name: "NoOut", edit: func(c *webbundle.Config) { c.Out = "" }, want: []string{"Out"}},
 		{name: "OutIsSrc", edit: func(c *webbundle.Config) { c.Out = c.Src }, want: []string{"Out"}},
 		{name: "OutHoldsSrc", edit: func(c *webbundle.Config) { c.Out = filepath.Dir(c.Src) }, want: []string{"Out"}},
+		{name: "OutInsideSrc", edit: func(c *webbundle.Config) { c.Out = filepath.Join(c.Src, "static") }, want: []string{"Out"}},
+		{name: "OutIsFile", edit: func(c *webbundle.Config) { c.Out = filepath.Join(c.Src, "index.html") }, want: []string{"Out"}},
 		{name: "TooManyEntries", edit: func(c *webbundle.Config) { c.Entries = many }, want: []string{"32"}},
 		{name: "EntryOutsideSrc", edit: func(c *webbundle.Config) { c.Entries[0].Path = "../app.ts" }, want: []string{"../app.ts"}},
 		{name: "EntryMissing", edit: func(c *webbundle.Config) { c.Entries[0].Path = "src/gone.ts" }, want: []string{"src/gone.ts"}},
@@ -221,6 +243,15 @@ func TestBuildRefusesConfig(t *testing.T) {
 		{name: "EmptyName", edit: func(c *webbundle.Config) { c.Entries[0].Name = "" }, want: []string{"src/app.ts"}},
 		{name: "NameWithSlash", edit: func(c *webbundle.Config) { c.Entries[0].Name = "a/b" }, want: []string{"a/b"}},
 		{name: "NameDotFile", edit: func(c *webbundle.Config) { c.Entries[0].Name = ".app" }, want: []string{".app"}},
+		{name: "NameWithSpace", edit: func(c *webbundle.Config) { c.Entries[0].Name = "my app" }, want: []string{"my app"}},
+		{name: "StyleNotCSS", edit: func(c *webbundle.Config) { c.Entries[1].Path = "src/app.ts" }, want: []string{"src/app.ts"}},
+		{name: "ScriptIsCSS", edit: func(c *webbundle.Config) { c.Entries[0].Path = "src/app.css" }, want: []string{"src/app.css"}},
+		{name: "ShellNotHTML", edit: func(c *webbundle.Config) { c.Shells = []string{"index.html", "package.json"} }, want: []string{"package.json"}},
+		{name: "ShellTwice", edit: func(c *webbundle.Config) { c.Shells = []string{"index.html", "index.html"} }, want: []string{"index.html"}},
+		{name: "NoDefaultShell", edit: func(c *webbundle.Config) { c.Shells = []string{"login.html"} }, want: []string{"index.html"}},
+		{name: "PackagePatternBad", edit: func(c *webbundle.Config) { c.Packages = []string{"[x"} }, want: []string{"[x"}},
+		{name: "PagesFileOutsideSrc", edit: func(c *webbundle.Config) { c.PagesFile = "../pages.gen.ts" }, want: []string{"../pages.gen.ts"}},
+		{name: "BundleURLsMemberDefined", edit: func(c *webbundle.Config) { c.Define = map[string]string{"BUNDLE_URLS.worker": `"/x.js"`} }, want: []string{"BUNDLE_URLS.worker"}},
 		{
 			name: "SameLogicalPathTwice",
 			edit: func(c *webbundle.Config) {
@@ -299,6 +330,15 @@ func TestBuildKeepsOutputGitignore(t *testing.T) {
 			t.Errorf("after a failed build Out/.gitignore = %q, want %q", got, ignore)
 		}
 	})
+	t.Run("NotRegular", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, nil)
+		writeFiles(t, c.Out, files{"elsewhere": "*\n"})
+		if err := os.Symlink("elsewhere", filepath.Join(c.Out, ".gitignore")); err != nil {
+			t.Fatal(err)
+		}
+		buildRefused(t, c, ".gitignore")
+	})
 	t.Run("NoneWritten", func(t *testing.T) {
 		t.Parallel()
 		c := newFixture(t, nil)
@@ -307,6 +347,17 @@ func TestBuildKeepsOutputGitignore(t *testing.T) {
 			t.Errorf("a build with no Out/.gitignore left one: %v", err)
 		}
 	})
+}
+
+func TestBuildRemovesInterruptedTemporaryTree(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, nil)
+	left := filepath.Join(filepath.Dir(c.Out), ".static.webbundle-1234")
+	writeFiles(t, left, files{"assets/app-OLD.js": "stale"})
+	mustBuild(t, c)
+	if _, err := os.Lstat(left); !os.IsNotExist(err) {
+		t.Errorf("an interrupted build's temporary tree is still beside Out: %v", err)
+	}
 }
 
 func prefixed(prefix string, tree map[string][]byte) map[string][]byte {
