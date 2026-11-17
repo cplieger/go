@@ -130,6 +130,7 @@ These are deliberate non-goals, which keep the library small.
 
 - Change every import of `github.com/cplieger/go/scheduler` to `github.com/cplieger/go/scheduler/v2`, and `github.com/cplieger/go/scheduler/trigger` to `github.com/cplieger/go/scheduler/v2/trigger`.
 - Replace a call to the `trigger` package's `Listen(path)` with `ownersock.Listen(ownersock.Config{Path: path})` from `github.com/cplieger/go/ownersock`, with the socket in a private directory of its own, such as `/run/myapp/trigger.sock`. Point `Submit` at the same path.
+- A client running as a user other than the daemon's, root included, is now refused: run `docker exec` (or the client) as the daemon's user.
 - Everything else is unchanged.
 
 ## Contributing

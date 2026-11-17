@@ -73,4 +73,4 @@ A request line is capped at 8 MiB, and a client has 30 seconds after connecting 
 - `ErrSend` means the request could not be written.
 - `ErrConnectionLost` means the event stream ended before the final `done` event, because the daemon died or was stopped mid-run.
 
-A user who can open the socket but is not the server's user, such as root, has the connection closed before the daemon reads it, which `Submit` reports as `ErrSend` or `ErrConnectionLost`.
+A client running as a user other than the daemon's, root included, is refused: run `docker exec` (or the client) as the daemon's user. Root can open the socket's private directory, so its connection is closed before the daemon reads it, and `Submit` reports `ErrSend` or `ErrConnectionLost`.
