@@ -41,7 +41,7 @@ srv.ConnContext = ownersock.ConnContext
 return httpserver.Run(ctx, srv, ln)
 ```
 
-Give the socket a directory of its own, such as `/data/admin/admin.sock` or `/run/myapp-admin/admin.sock`, never the app's data directory or a shared folder such as `/tmp` itself. `Listen` creates a missing directory at mode 0700; its parent must already exist. An existing directory that grants group or other access is refused with `filesafe.ErrModeTooOpen` and left unchanged: `Listen` never runs chmod on it.
+Give the socket a directory of its own, such as `/data/admin/admin.sock` or `/run/myapp-admin/admin.sock`, never the app's data directory or a shared folder such as `/tmp` itself. `Listen` creates a missing directory at mode 0700; its parent must already exist and be writable by the server's user. Only root can create a directory in `/run`, so a server that runs as any other user either keeps its socket under a directory it owns, such as `/data/admin/admin.sock`, or has its image create the socket's directory at build time, owned by the server's user at mode 0700. An existing directory that grants group or other access is refused with `filesafe.ErrModeTooOpen` and left unchanged: `Listen` never runs chmod on it.
 
 A handler checks the mark before it acts:
 

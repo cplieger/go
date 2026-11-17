@@ -7,10 +7,13 @@
 // filesafe.ErrModeTooOpen and left unchanged, never chmodded. Give the
 // socket a directory of its own (/data/admin/admin.sock,
 // /run/myapp-admin/admin.sock), never the app's data directory or a shared
-// one such as /tmp. A live socket at the path refuses start,
-// a socket nothing answers is replaced, and any other file at the path is
-// refused and left alone. A path longer than the 107 bytes Linux's sun_path
-// holds (unix(7)) is refused before the directory is touched.
+// one such as /tmp. A missing directory's parent must be writable by the
+// server's user; only root can write /run, so a server running as another
+// user has its image create that directory. A live socket at the path
+// refuses start, a socket nothing answers is replaced, and any other file
+// at the path is refused and left alone. A path longer than the 107 bytes
+// Linux's sun_path holds (unix(7)) is refused before the directory is
+// touched.
 //
 // Every connection the listener accepts is peer-checked: on Linux the peer's
 // uid, read with SO_PEERCRED, must equal the server's effective uid, and on

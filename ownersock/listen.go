@@ -33,7 +33,9 @@ type Config struct {
 	// Logger receives the refusal warnings; nil is slog.Default().
 	Logger *slog.Logger
 	// Path is the socket's absolute, clean path, at most 107 bytes, in a
-	// directory of its own that filesafe.EnsurePrivateDir accepts.
+	// directory of its own that filesafe.EnsurePrivateDir accepts. A missing
+	// directory is created at 0700, so its parent must be writable by the
+	// server's user.
 	Path string
 }
 
