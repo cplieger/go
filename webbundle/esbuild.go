@@ -14,13 +14,37 @@ import (
 	"github.com/evanw/esbuild/pkg/api"
 )
 
-// engines is the fleet's browser support floor, bumped with esbuild: syntax
-// one of them lacks is lowered, or the build fails naming the feature and
-// the engine. esbuild's esnext target would ship such syntax unchanged.
-var engines = []api.Engine{
-	{Name: api.EngineChrome, Version: "157"},
-	{Name: api.EngineFirefox, Version: "160"},
-	{Name: api.EngineSafari, Version: "27"},
+// Engine is a browser engine and the oldest version of it a bundle runs on.
+type Engine struct {
+	Name    string // "chrome", "firefox" or "safari"
+	Version string // the engine's version, as "157" or "27"
+}
+
+// supportFloor is the fleet's browser support floor, bumped with esbuild.
+// esbuild's esnext target would ship syntax one of them lacks unchanged.
+var supportFloor = []Engine{
+	{Name: "chrome", Version: "157"},
+	{Name: "firefox", Version: "160"},
+	{Name: "safari", Version: "27"},
+}
+
+// Engines returns the browser engines and versions Build and BuildStyle
+// target: syntax one of them lacks is lowered, or the build fails naming the
+// feature and the engine. A test that needs the support floor reads it here.
+func Engines() []Engine { return slices.Clone(supportFloor) }
+
+var esbuildEngine = map[string]api.EngineName{
+	"chrome":  api.EngineChrome,
+	"firefox": api.EngineFirefox,
+	"safari":  api.EngineSafari,
+}
+
+func engines() []api.Engine {
+	out := make([]api.Engine, len(supportFloor))
+	for i, e := range supportFloor {
+		out[i] = api.Engine{Name: esbuildEngine[e.Name], Version: e.Version}
+	}
+	return out
 }
 
 // fileLoaders sets esbuild's file loader, which esbuild configures for no
@@ -52,7 +76,7 @@ func options(src, outdir string, write bool) api.BuildOptions {
 		ChunkNames:        "assets/chunks/[name]-[hash]",
 		AssetNames:        "assets/[name]-[hash]",
 		Loader:            fileLoaders(),
-		Engines:           engines,
+		Engines:           engines(),
 		MinifyWhitespace:  true,
 		MinifyIdentifiers: true,
 		MinifySyntax:      true,

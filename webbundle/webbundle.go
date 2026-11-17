@@ -133,13 +133,17 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	head, err := b.writeIcons(t)
+	if err != nil {
+		return Result{}, err
+	}
 	for i, e := range b.entries {
 		if e.Kind == Classic && !named[i] && !bytes.Contains(eb.moduleJS, []byte(`"`+eb.urls[e.Name]+`"`)) {
 			return Result{}, fmt.Errorf("webbundle: classic entry %q is named by no shell and read through BUNDLE_URLS by no module entry", e.Name)
 		}
 	}
 	for _, sh := range shells {
-		if werr := t.write(sh.name, sh.render(eb.hashed), 0o644); werr != nil {
+		if werr := t.write(sh.name, sh.render(eb.hashed, head), 0o644); werr != nil {
 			return Result{}, werr
 		}
 	}

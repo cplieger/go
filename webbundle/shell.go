@@ -20,18 +20,20 @@ type attr struct {
 }
 
 type tag struct {
-	name  string // lower-case
-	attrs []attr
-	end   int // the byte after the tag's '>'
+	name    string // lower-case
+	attrs   []attr
+	start   int // the tag's '<'
+	end     int // the byte after the tag's '>'
+	closing bool
 }
 
 // rawText are the elements whose content is text, never markup, so a '<'
 // inside one starts no tag.
 var rawText = []string{"script", "style", "textarea", "title"}
 
-// scanTags calls fn on each start tag in html, comments and the content of
-// raw-text elements skipped, as an HTML tokenizer reads them: quoted
-// attribute values may hold '>' and names compare case-insensitively.
+// scanTags calls fn on each start and end tag in html, comments and the
+// content of raw-text elements skipped, as an HTML tokenizer reads them:
+// quoted attribute values may hold '>' and names compare case-insensitively.
 func scanTags(html []byte, fn func(tag)) {
 	for i := 0; i < len(html); {
 		rest := html[i:]
@@ -44,10 +46,16 @@ func scanTags(html []byte, fn func(tag)) {
 				return
 			}
 			i += 4 + end + 3
+		case rest[1] == '/' && len(rest) > 2 && isLetter(rest[2]):
+			t := readTag(html, i+2)
+			t.start, t.closing = i, true
+			fn(t)
+			i = t.end
 		case !isLetter(rest[1]):
 			i++
 		default:
 			t := readTag(html, i+1)
+			t.start = i
 			fn(t)
 			i = t.end
 			if slices.Contains(rawText, t.name) {
@@ -133,6 +141,9 @@ type shell struct {
 	name  string
 	body  []byte
 	links []link
+	head  int // the offset of </head>; -1 is none
+
+	iconRels bool // whether to refuse a link Build writes for the icon
 }
 
 type link struct {
@@ -157,22 +168,45 @@ func (b *build) readShell(name string) (shell, error) {
 	for i, e := range b.entries {
 		logical[logicalPath(e)] = i
 	}
-	sh := shell{name: name, body: body}
+	sh := shell{name: name, body: body, head: -1, iconRels: b.icon != ""}
 	named := map[string]bool{}
 	scanTags(body, func(t tag) {
-		for _, a := range t.attrs {
-			if err == nil {
-				err = sh.attr(t, a, logical, named)
-			}
+		if err == nil {
+			err = sh.tag(t, logical, named)
 		}
 	})
+	if err == nil && sh.iconRels && sh.head < 0 {
+		err = fmt.Errorf("webbundle: shell %s has no </head> to end with the icon links", name)
+	}
 	return sh, err
+}
+
+func (s *shell) tag(t tag, logical map[string]int, named map[string]bool) error {
+	if t.closing {
+		if t.name == "head" && s.head < 0 {
+			s.head = t.start
+		}
+		return nil
+	}
+	for _, a := range t.attrs {
+		if err := s.attr(t, a, logical, named); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // attr checks one attribute of t and records it when it names an entry.
 func (s *shell) attr(t tag, a attr, logical map[string]int, named map[string]bool) error {
 	if strings.HasPrefix(a.name, "on") {
 		return fmt.Errorf("webbundle: shell %s: <%s> carries %s, an inline event handler the policy blocks", s.name, t.name, a.name)
+	}
+	if t.name == "link" && a.name == "rel" && s.iconRels {
+		for rel := range strings.FieldsSeq(strings.ToLower(a.value)) {
+			if slices.Contains(iconRels, rel) {
+				return fmt.Errorf("webbundle: shell %s carries a <link rel=%q>; Build writes the %s link from Config.Icon", s.name, a.value, rel)
+			}
+		}
 	}
 	ref := t.name == "script" && a.name == "src" || t.name == "link" && a.name == "href"
 	if !ref || !rootScriptOrStyle(a.value) {
@@ -199,15 +233,24 @@ func rootScriptOrStyle(v string) bool {
 }
 
 // render returns the shell with each logical path replaced by its entry's
-// hashed one.
-func (s *shell) render(hashed []string) []byte {
-	out := make([]byte, 0, len(s.body)+len(s.links)*16)
+// hashed one and head inserted before </head>.
+func (s *shell) render(hashed []string, head []byte) []byte {
+	out := make([]byte, 0, len(s.body)+len(s.links)*16+len(head))
 	at := 0
+	inserted := len(head) == 0
 	for _, l := range s.links {
+		if !inserted && s.head < l.start {
+			out = append(append(out, s.body[at:s.head]...), head...)
+			at, inserted = s.head, true
+		}
 		out = append(out, s.body[at:l.start]...)
 		out = append(out, '/')
 		out = append(out, hashed[l.entry]...)
 		at = l.end
+	}
+	if !inserted {
+		out = append(append(out, s.body[at:s.head]...), head...)
+		at = s.head
 	}
 	return append(out, s.body[at:]...)
 }

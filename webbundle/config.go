@@ -85,11 +85,17 @@ func newBuild(c *Config) (*build, error) {
 		corpusFile: cmpOr(c.PageCorpusFile, defaultCorpusFile),
 		define:     maps.Clone(c.Define),
 		icon:       c.Icon,
-		iconPNGs:   c.IconPNGs,
+		iconPNGs:   maps.Clone(c.IconPNGs),
 		manifest:   c.Manifest,
 	}
-	for _, err := range []error{b.checkEntries(c.Entries), checkDefine(c.Define), b.checkShells(c.Pages), b.checkFiles()} {
-		if err != nil {
+	for _, check := range []func() error{
+		func() error { return b.checkEntries(c.Entries) },
+		func() error { return checkDefine(c.Define) },
+		func() error { return b.checkShells(c.Pages) },
+		b.checkFiles,
+		b.checkIcon,
+	} {
+		if err := check(); err != nil {
 			return nil, err
 		}
 	}

@@ -193,6 +193,25 @@ hold();
 	}
 }
 
+func TestEnginesAreTheSupportFloor(t *testing.T) {
+	t.Parallel()
+	got := webbundle.Engines()
+	names := map[string]bool{}
+	for _, e := range got {
+		if _, err := strconv.Atoi(e.Version); err != nil {
+			t.Errorf("engine %s has version %q, want a major version", e.Name, e.Version)
+		}
+		names[e.Name] = true
+	}
+	if want := []string{"chrome", "firefox", "safari"}; len(got) != len(want) || !slices.Equal(slices.Sorted(maps.Keys(names)), want) {
+		t.Errorf("Engines() = %+v, want one each of %q", got, want)
+	}
+	got[0].Version = "1"
+	if again := webbundle.Engines(); again[0].Version == "1" {
+		t.Errorf("Engines() returns the package's own slice: a caller's write changed it")
+	}
+}
+
 func TestBuildDefines(t *testing.T) {
 	t.Parallel()
 	t.Run("JSONValueApplied", func(t *testing.T) {

@@ -87,6 +87,19 @@ func (t *tree) write(name string, body []byte, perm fs.FileMode) error {
 	return nil
 }
 
+// writeHashed writes body as assets/<stem>-<hash><ext>, the hash being the
+// first 8 bytes of its SHA-256 in hex, and returns that path. It refuses a
+// path already written, which only another file of the same name and bytes
+// could hold.
+func (t *tree) writeHashed(stem, ext string, body []byte) (string, error) {
+	sum := sha256.Sum256(body)
+	name := "assets/" + stem + "-" + hex.EncodeToString(sum[:8]) + ext
+	if _, err := t.root.Lstat(name); err == nil {
+		return "", fmt.Errorf("webbundle: two files are %s", name)
+	}
+	return name, t.write(name, body, 0o644)
+}
+
 // keepGitignore copies Out/.gitignore byte for byte into the tree, so the
 // swap neither deletes nor rewrites the file an app commits to keep Out in a
 // clean clone; it writes none when Out has none.

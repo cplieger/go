@@ -25,7 +25,8 @@ import (
 // iconWithinShare of the pixels, and no channel off by more than
 // iconPixelLimit. The references are unraid-templates' icons/seadex-scout.png
 // and icons/subflux.png at 6f1cdbd, which scripts/icons.py renders from
-// icons/src/*.svg (the copies in testdata/icons) through cairosvg.
+// icons/src/*.svg (the copies in testdata/icons) through cairosvg. Measured
+// at 512 px: seadex-scout 99.82% within 8 and worst 46, subflux 99.93% and 43.
 const (
 	iconChannelTolerance = 8
 	iconWithinShare      = 0.995
@@ -251,6 +252,87 @@ func TestIconWithTextFails(t *testing.T) {
 	buildRefused(t, c, "brand/icon.svg", "text")
 }
 
+func TestIconRefusesWhatTheRendererCannotDraw(t *testing.T) {
+	t.Parallel()
+	const open = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">`
+	cases := []struct{ name, svg, want string }{
+		{name: "Mask", svg: open + `<mask id="m"><rect width="8" height="8"/></mask><rect width="64" height="64"/></svg>`, want: "mask"},
+		{name: "Image", svg: open + `<image href="a.png" width="64" height="64"/></svg>`, want: "image"},
+		{name: "Transform", svg: open + `<g transform="scale(2)"><path d="M0 0H8" stroke="#fff"/></g></svg>`, want: "transform"},
+		{name: "FilterAttribute", svg: open + `<rect width="64" height="64" filter="url(#f)"/></svg>`, want: "filter"},
+		{name: "FilterInStyle", svg: open + `<rect width="64" height="64" style="fill: #fff; filter: blur(1px)"/></svg>`, want: "filter"},
+		{name: "Class", svg: open + `<rect class="mark" width="64" height="64"/></svg>`, want: "class"},
+		{name: "EvenOdd", svg: open + `<path fill-rule="evenodd" d="M0 0H64V64H0z"/></svg>`, want: "evenodd"},
+		{name: "GroupOpacity", svg: open + `<g opacity="0.5"><rect width="64" height="64"/></g></svg>`, want: "opacity"},
+		{name: "NotSquare", svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 32"><rect width="64" height="32"/></svg>`, want: "64x32"},
+		{name: "NotSVGRoot", svg: `<g xmlns="http://www.w3.org/2000/svg"><rect width="64" height="64"/></g>`, want: "<g>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFixture(t, files{"icon.svg": tc.svg})
+			c.Icon = "icon.svg"
+			buildRefused(t, c, "icon.svg", tc.want)
+		})
+	}
+	t.Run("NotSVGFile", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"icon.png": solidPNG(t, 64)})
+		c.Icon = "icon.png"
+		buildRefused(t, c, "icon.png", ".svg")
+	})
+	t.Run("PlainAttributesPass", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"icon.svg": `<?xml version="1.0"?>
+<!-- <svg> in a comment -->
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mark" viewBox="0 0 64 64"><title>Mark</title><rect width="64" height="64" style="fill: #3372bf"/></svg>`})
+		c.Icon = "icon.svg"
+		mustBuild(t, c)
+	})
+}
+
+// A stroke with no stroke-width is 1 unit wide, SVG's initial value
+// (https://www.w3.org/TR/SVG2/painting.html#StrokeWidth): 8 px at 512 px
+// for a 64-unit viewBox.
+func TestIconStrokeWidthInitialValue(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{"icon.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M0 32H64" stroke="#ffffff"/></svg>`})
+	c.Icon = "icon.svg"
+	mustBuild(t, c)
+	img := decodePNG(t, readFile(t, c.Out, pngsBySize(t, c.Out, readBundle(t, c.Out))[512]))
+	alpha := func(y int) uint8 { return color.NRGBAModel.Convert(img.At(256, y)).(color.NRGBA).A }
+	for _, y := range []int{253, 258} {
+		if a := alpha(y); a != 255 {
+			t.Errorf("row %d inside the stroke has alpha %d, want 255", y, a)
+		}
+	}
+	for _, y := range []int{250, 261} {
+		if a := alpha(y); a != 0 {
+			t.Errorf("row %d outside a 1-unit stroke has alpha %d, want 0", y, a)
+		}
+	}
+}
+
+func TestManifestWithoutShortName(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{"icon.svg": seedIcon(t, "subflux.svg")})
+	c.Icon = "icon.svg"
+	c.Manifest = &webbundle.Manifest{Name: "Fixture App", ThemeColor: "#112233", BackgroundColor: "#f7f5f4"}
+	mustBuild(t, c)
+	b := readBundle(t, c.Out)
+	manifests := listed(b, regexp.MustCompile(`^assets/[^/]+\.webmanifest$`))
+	if len(manifests) != 1 {
+		t.Fatalf("listed manifests %q, want one", manifests)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(readFile(t, c.Out, manifests[0]), &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["short_name"]; ok {
+		t.Errorf("the manifest holds short_name %v with no ShortName set", m["short_name"])
+	}
+}
+
 func TestIconPNGs(t *testing.T) {
 	t.Parallel()
 	committed := func(t testing.TB, sizes map[int]int) (files, map[int]string) {
@@ -291,6 +373,21 @@ func TestIconPNGs(t *testing.T) {
 		c := newFixture(t, tree)
 		c.Icon, c.IconPNGs = "icon.svg", names
 		buildRefused(t, c, "180")
+	})
+	t.Run("ExtraSize", func(t *testing.T) {
+		t.Parallel()
+		tree, names := committed(t, map[int]int{32: 32, 64: 64, 180: 180, 192: 192, 512: 512})
+		c := newFixture(t, tree)
+		c.Icon, c.IconPNGs = "icon.svg", names
+		buildRefused(t, c, "64")
+	})
+	t.Run("NotPNG", func(t *testing.T) {
+		t.Parallel()
+		tree, names := committed(t, map[int]int{32: 32, 180: 180, 192: 192, 512: 512})
+		tree[names[180]] = "not a png"
+		c := newFixture(t, tree)
+		c.Icon, c.IconPNGs = "icon.svg", names
+		buildRefused(t, c, names[180])
 	})
 	t.Run("WithoutIcon", func(t *testing.T) {
 		t.Parallel()
