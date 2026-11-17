@@ -781,7 +781,8 @@ func TestExclusiveCrashReleasesLock(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestExclusiveCrashHelper$", "-test.v") // #nosec G204 -- re-executes this test binary
 	cmd.Env = append(os.Environ(),
 		"SCHEDULER_EXCLUSIVE_CRASH_HELPER=1",
-		"SCHEDULER_EXCLUSIVE_CRASH_DIR="+dir)
+		"SCHEDULER_EXCLUSIVE_CRASH_DIR="+dir,
+		childGORACE())
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatalf("StdoutPipe: %v", err)
