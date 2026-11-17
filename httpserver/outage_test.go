@@ -22,6 +22,13 @@ var outageSentences = map[httpserver.OutageClass]string{
 	httpserver.OutageNewer:      "The file was written by a newer version of seadex-scout.",
 	httpserver.OutageUnreadable: "The file cannot be read.",
 	httpserver.OutageKey:        "The key file is missing or does not match this accounts file.",
+	httpserver.OutageUnwritable: "The file cannot be written. Free space on its disk.",
+}
+
+// The six classes in the order docs/spa.md lists them.
+var outageClassList = []httpserver.OutageClass{
+	httpserver.OutageDamaged, httpserver.OutageFormat, httpserver.OutageNewer,
+	httpserver.OutageUnreadable, httpserver.OutageKey, httpserver.OutageUnwritable,
 }
 
 const (
@@ -31,6 +38,8 @@ const (
 	accountsRow = "ACCOUNTS_PATH, /config/accounts.db"
 	restoreCmd  = "docker exec seadex-scout seadex-scout accounts restore <archive>"
 	resetCmd    = "docker exec seadex-scout seadex-scout accounts reset"
+	restoreNote = "Restores the accounts file from an export archive."
+	noticeLine  = "Sign-in is off until the accounts file opens."
 )
 
 func outageConfig(t *testing.T) httpserver.OutageConfig {
@@ -41,7 +50,8 @@ func outageConfig(t *testing.T) httpserver.OutageConfig {
 		Title:     outageTitle,
 		App:       "seadex-scout",
 		Files:     []httpserver.OutageFile{{Name: accountsRow, Class: httpserver.OutageKey}},
-		Commands:  []string{restoreCmd, resetCmd},
+		Notice:    noticeLine,
+		Commands:  []httpserver.OutageCommand{{Run: restoreCmd, Note: restoreNote}, {Run: resetCmd}},
 		APIPrefix: "/api",
 	}
 }
@@ -200,12 +210,12 @@ func TestOutagePageWritesNoErrorText(t *testing.T) {
 		c.Files = nil
 		var want []string
 		want = append(want, outageTitle, outageTitle)
-		for _, class := range []httpserver.OutageClass{httpserver.OutageDamaged, httpserver.OutageFormat, httpserver.OutageNewer, httpserver.OutageUnreadable, httpserver.OutageKey} {
+		for _, class := range outageClassList {
 			name := "FILE_" + strings.ToUpper(string(class)) + ", /config/" + string(class) + ".db"
 			c.Files = append(c.Files, httpserver.OutageFile{Name: name, Class: class})
 			want = append(want, name, outageSentences[class])
 		}
-		want = append(want, restoreCmd, resetCmd, reloadLine)
+		want = append(want, noticeLine, restoreCmd, restoreNote, resetCmd, reloadLine)
 		got := pageText(spaServe(newOutage(t, c), http.MethodGet, "/").Body.String())
 		if !slices.Equal(got, want) {
 			t.Errorf("page text = %q, want %q", got, want)
@@ -221,7 +231,7 @@ func TestOutagePageWritesNoErrorText(t *testing.T) {
 }
 
 func TestOutagePageRefusesUnknownClass(t *testing.T) {
-	for _, class := range []httpserver.OutageClass{"", "Damaged", "corrupt", "locked", " key"} {
+	for _, class := range []httpserver.OutageClass{"", "Damaged", "corrupt", "locked", " key", "Unwritable", "unwritable ", "unwriteable", "full"} {
 		t.Run(strconv.Quote(string(class)), func(t *testing.T) {
 			c := outageConfig(t)
 			c.Files = []httpserver.OutageFile{{Name: "DATA_PATH, /config/data.db", Class: httpserver.OutageDamaged}, {Name: accountsRow, Class: class}}
@@ -248,6 +258,18 @@ func TestOutagePageRefusesBadConfig(t *testing.T) {
 		"a style that is a script entry": func(c *httpserver.OutageConfig) {
 			c.Style = "worker.css"
 		},
+		"a file with no name": func(c *httpserver.OutageConfig) {
+			c.Files = []httpserver.OutageFile{{Class: httpserver.OutageKey}}
+		},
+		"a file name that cleans to blank": func(c *httpserver.OutageConfig) {
+			c.Files = []httpserver.OutageFile{{Name: " \r\n\t", Class: httpserver.OutageKey}}
+		},
+		"a command with no run": func(c *httpserver.OutageConfig) {
+			c.Commands = []httpserver.OutageCommand{{Run: restoreCmd}, {Note: restoreNote}}
+		},
+		"a command run that cleans to blank": func(c *httpserver.OutageConfig) {
+			c.Commands = []httpserver.OutageCommand{{Run: "\r\n", Note: restoreNote}}
+		},
 		"a broken bundle": func(c *httpserver.OutageConfig) {
 			c.Assets = bundleTree(t, spaFiles(), append(slices.Clone(spaListed), "missing.html"), spaEntries)
 		},
@@ -262,17 +284,62 @@ func TestOutagePageRefusesBadConfig(t *testing.T) {
 	}
 }
 
-func TestOutagePageWritesCommands(t *testing.T) {
-	rec := spaServe(newOutage(t, outageConfig(t)), http.MethodGet, "/")
-	text := pageText(rec.Body.String())
-	for _, cmd := range []string{restoreCmd, resetCmd} {
-		if !slices.Contains(text, cmd) {
-			t.Errorf("page text %q does not hold the command %q", text, cmd)
+var listItem = regexp.MustCompile(`(?s)<li>(.*?)</li>`)
+
+func TestOutagePageWritesNoticeAndCommands(t *testing.T) {
+	t.Run("the notice above the commands, each note under its command", func(t *testing.T) {
+		body := spaServe(newOutage(t, outageConfig(t)), http.MethodGet, "/").Body.String()
+		text := pageText(body)
+		want := []string{noticeLine, restoreCmd, restoreNote, resetCmd, reloadLine}
+		if len(text) < len(want) || !slices.Equal(text[len(text)-len(want):], want) {
+			t.Errorf("page text %q does not end %q", text, want)
 		}
-	}
-	if !strings.Contains(rec.Body.String(), "&lt;archive&gt;") {
-		t.Errorf("body %q does not escape the command's placeholder", rec.Body.String())
-	}
+		var items [][]string
+		for _, m := range listItem.FindAllStringSubmatch(body, -1) {
+			items = append(items, pageText(m[1]))
+		}
+		if want := [][]string{{restoreCmd, restoreNote}, {resetCmd}}; !slices.EqualFunc(items, want, slices.Equal) {
+			t.Errorf("command items = %q, want %q", items, want)
+		}
+		if !strings.Contains(body, "&lt;archive&gt;") {
+			t.Errorf("body %q does not escape the command's placeholder", body)
+		}
+	})
+	none := outageConfig(t)
+	none.Notice = ""
+	none.Commands[0].Note = ""
+	noneBody := spaServe(newOutage(t, none), http.MethodGet, "/").Body.String()
+	t.Run("no notice and no notes draw none", func(t *testing.T) {
+		text := pageText(noneBody)
+		want := []string{outageTitle, outageTitle, accountsRow, outageSentences[httpserver.OutageKey], restoreCmd, resetCmd, reloadLine}
+		if !slices.Equal(text, want) {
+			t.Errorf("page text = %q, want %q", text, want)
+		}
+		if got, want := strings.Count(noneBody, "<p>"), len(none.Files)+1; got != want {
+			t.Errorf("body %q holds %d paragraphs, want %d (each file and the closing line)", noneBody, got, want)
+		}
+		for _, m := range listItem.FindAllStringSubmatch(noneBody, -1) {
+			if strings.Contains(m[1], "<br>") {
+				t.Errorf("command item %q draws a note line", m[1])
+			}
+		}
+	})
+	t.Run("a notice and a note that clean to blank draw none", func(t *testing.T) {
+		c := outageConfig(t)
+		c.Notice = "\n "
+		c.Commands[0].Note = " \x1b"
+		if body := spaServe(newOutage(t, c), http.MethodGet, "/").Body.String(); body != noneBody {
+			t.Errorf("body = %q, want the page with no notice and no notes %q", body, noneBody)
+		}
+	})
+	t.Run("a notice with no commands", func(t *testing.T) {
+		c := outageConfig(t)
+		c.Commands = nil
+		text := pageText(spaServe(newOutage(t, c), http.MethodGet, "/").Body.String())
+		if want := []string{noticeLine, reloadLine}; !slices.Equal(text[len(text)-2:], want) {
+			t.Errorf("page text %q does not end %q", text, want)
+		}
+	})
 }
 
 func TestOutagePageClosingLine(t *testing.T) {
@@ -285,7 +352,7 @@ func TestOutagePageClosingLine(t *testing.T) {
 	t.Run("restart when Restart is set", func(t *testing.T) {
 		c := outageConfig(t)
 		c.Restart = true
-		c.Commands = []string{"docker exec seadex-scout seadex-scout import resolve"}
+		c.Commands = []httpserver.OutageCommand{{Run: "docker exec seadex-scout seadex-scout import resolve"}}
 		text := pageText(spaServe(newOutage(t, c), http.MethodGet, "/").Body.String())
 		if text[len(text)-1] != restartLine || slices.Contains(text, reloadLine) {
 			t.Errorf("page text %q, want it to end %q with no reload line", text, restartLine)
@@ -293,23 +360,43 @@ func TestOutagePageClosingLine(t *testing.T) {
 	})
 }
 
-func TestOutagePageCleansNameAndCommands(t *testing.T) {
-	c := outageConfig(t)
-	c.Files = []httpserver.OutageFile{{Name: "ACCOUNTS_PATH, /config/\u202eaccounts.db\nforged line", Class: httpserver.OutageKey}}
-	c.Commands = []string{"docker exec seadex-scout\r\nseadex-scout accounts reset\x1b[2J"}
-	body := spaServe(newOutage(t, c), http.MethodGet, "/").Body.String()
-	for _, bad := range []string{"\u202e", "\nforged", "\r", "\x1b"} {
-		if strings.Contains(body, bad) {
-			t.Errorf("body %q holds %q", body, bad)
+func TestOutagePageCleansEveryDrawnField(t *testing.T) {
+	t.Run("one line with no control or bidi rune", func(t *testing.T) {
+		c := outageConfig(t)
+		c.Files = []httpserver.OutageFile{{Name: "ACCOUNTS_PATH, /config/\u202eaccounts.db\nforged line", Class: httpserver.OutageKey}}
+		c.Notice = "Sign-in is off\u2028forged notice"
+		c.Commands = []httpserver.OutageCommand{{Run: "docker exec seadex-scout\r\nseadex-scout accounts reset\x1b[2J", Note: "Starts\u2066 over\u0085empty"}}
+		body := spaServe(newOutage(t, c), http.MethodGet, "/").Body.String()
+		for _, bad := range []string{"\u202e", "\nforged", "\r", "\x1b", "\u2028", "\u2066", "\u0085"} {
+			if strings.Contains(body, bad) {
+				t.Errorf("body %q holds %q", body, bad)
+			}
 		}
-	}
-	text := pageText(body)
-	if !slices.Contains(text, "ACCOUNTS_PATH, /config/ accounts.db forged line") {
-		t.Errorf("page text %q does not hold the cleaned name", text)
-	}
-	if !slices.Contains(text, "docker exec seadex-scout  seadex-scout accounts reset [2J") {
-		t.Errorf("page text %q does not hold the cleaned command", text)
-	}
+		text := pageText(body)
+		for _, want := range []string{
+			"ACCOUNTS_PATH, /config/ accounts.db forged line",
+			"Sign-in is off forged notice",
+			"docker exec seadex-scout  seadex-scout accounts reset [2J",
+			"Starts  over empty",
+		} {
+			if !slices.Contains(text, want) {
+				t.Errorf("page text %q does not hold the cleaned line %q", text, want)
+			}
+		}
+	})
+	t.Run("each cut at 512 bytes", func(t *testing.T) {
+		long := strings.Repeat("a", 600)
+		c := outageConfig(t)
+		c.Files = []httpserver.OutageFile{{Name: "N" + long, Class: httpserver.OutageKey}}
+		c.Notice = "B" + long
+		c.Commands = []httpserver.OutageCommand{{Run: "R" + long, Note: "T" + long}}
+		text := pageText(spaServe(newOutage(t, c), http.MethodGet, "/").Body.String())
+		for _, lead := range []string{"N", "B", "R", "T"} {
+			if want := lead + long[:511] + "..."; !slices.Contains(text, want) {
+				t.Errorf("page text holds no %q line cut at 512 bytes", lead)
+			}
+		}
+	})
 }
 
 func TestOutagePageLinksStyleEntry(t *testing.T) {

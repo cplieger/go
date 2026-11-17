@@ -182,7 +182,11 @@ page, err := httpserver.OutagePage(httpserver.OutageConfig{
 	App:       "myapp",
 	APIPrefix: "/api",
 	Files:     []httpserver.OutageFile{{Name: "ACCOUNTS_PATH, /config/accounts.db", Class: httpserver.OutageDamaged}},
-	Commands:  []string{"docker exec myapp myapp accounts restore <archive>"},
+	Notice:    "Sign-in is off until the accounts file opens.",
+	Commands: []httpserver.OutageCommand{{
+		Run:  "docker exec myapp myapp accounts restore <archive>",
+		Note: "Restores the accounts file from an export archive.",
+	}},
 })
 ```
 
@@ -193,8 +197,9 @@ page, err := httpserver.OutagePage(httpserver.OutageConfig{
 | `Title` | The page's title and heading. Required |
 | `App` | The app's name, written into the class sentences. Required |
 | `APIPrefix` | The API's path prefix. Required |
-| `Files` | Each file that cannot open, as a name and a class |
-| `Commands` | The command lines that recover it, as run in the container |
+| `Files` | Each file that cannot open, as a `Name` and a `Class`. Each `Name` is required |
+| `Notice` | One line drawn above the commands. Empty draws none |
+| `Commands` | The commands that recover the files, in order. Each is a `Run`, the command line as run in the container and required, and a `Note` drawn under it. An empty `Note` draws none |
 | `Restart` | The closing line names a container restart instead of a reload |
 | `Errors` | Answers under `APIPrefix` and for a refused method. Nil is `WriteError` |
 
@@ -207,9 +212,10 @@ The page writes each file's `Name` and the one sentence of its `OutageClass`, ne
 | `OutageNewer` | The file was written by a newer version of _App_. |
 | `OutageUnreadable` | The file cannot be read. |
 | `OutageKey` | The key file is missing or does not match this accounts file. |
+| `OutageUnwritable` | The file cannot be written. Free space on its disk. |
 
-The closing line is "Reload this page once the command finishes.", since a repair runs in the serving process. With `Restart` it is "Run the command above or restart the container, then reload this page." Each name and command goes through `go/textsafe`'s single-line sanitizer, which turns control characters, line breaks and invisible runes into spaces. It is then cut at 512 bytes, with `...` marking the cut.
+The closing line is "Reload this page once the command finishes.", since a repair runs in the serving process. With `Restart` it is "Run the command above or restart the container, then reload this page." Each file's `Name`, the `Notice`, and each command's `Run` and `Note` go through `go/textsafe`'s single-line sanitizer, which turns control characters, line breaks, bidi controls and the Unicode line and paragraph separators into spaces. Each is then cut at 512 bytes, with `...` marking the cut. A `Notice` or `Note` left with nothing but spaces draws none.
 
 The page is rendered once, through `html/template`, with no script and no inline style. Every `GET` or `HEAD` outside `APIPrefix` answers it with 503, `Cache-Control: no-store`, `text/html` and `SPA`'s default policy. The exception is a file the manifest lists under `assets/`, which answers exactly as `SPA` serves it, so the stylesheet and the fonts and icons it loads arrive. A path at or under `APIPrefix` answers `not_found`, since the API answers its own outage, and another method answers `method_not_allowed` with `Allow: GET, HEAD`. Both refusals carry `Cache-Control: no-store`, as `SPA`'s do.
 
-`OutagePage` refuses an empty `Title` or `App`, an `APIPrefix` that is not a clean path, a class outside the five, a manifest `ReadBundle` refuses, and, with a built bundle, a `Style` naming no style entry.
+`OutagePage` refuses an empty `Title` or `App`, an `APIPrefix` that is not a clean path, a file `Name` or command `Run` left with nothing but spaces after cleaning, a class outside the six, a manifest `ReadBundle` refuses, and, with a built bundle, a `Style` naming no style entry.

@@ -16,26 +16,27 @@ import (
 
 // OutageConfig configures OutagePage.
 type OutageConfig struct {
-	Assets    fs.FS          // the bundle; its style entry styles the page when built
-	Errors    ErrorResponder // answers under APIPrefix and for a refused method; nil is WriteError
-	Style     string         // the style entry's logical name ("app.css"); "" is unstyled
-	Title     string         // required: "seadex-scout cannot start"
-	App       string         // required: the app's name, written into the class sentences
-	APIPrefix string         // the API's path prefix ("/api"); the page answers nothing at or under it
-	Files     []OutageFile   // each file that cannot open
-	Commands  []string       // the lines that recover it, as run in the container
-	Restart   bool           // the closing line names a container restart instead of a reload
+	Assets    fs.FS           // the bundle; its style entry styles the page when built
+	Errors    ErrorResponder  // answers under APIPrefix and for a refused method; nil is WriteError
+	Style     string          // the style entry's logical name ("app.css"); "" is unstyled
+	Title     string          // required: "seadex-scout cannot start"
+	App       string          // required: the app's name, written into the class sentences
+	APIPrefix string          // the API's path prefix ("/api"); the page answers nothing at or under it
+	Notice    string          // one line drawn above the commands; "" draws none
+	Files     []OutageFile    // each file that cannot open
+	Commands  []OutageCommand // the commands that recover the files, in order
+	Restart   bool            // the closing line names a container restart instead of a reload
 }
 
 // OutageFile is one file that cannot open. The page writes Name and the
 // class's sentence; the error that classed it belongs in the log.
 type OutageFile struct {
-	Name  string      // the file's setting and path as the person knows it ("ACCOUNTS_PATH, /config/accounts.db")
+	Name  string      // required: the file's setting and path as the person knows it ("ACCOUNTS_PATH, /config/accounts.db")
 	Class OutageClass // why it cannot open
 }
 
 // OutageClass is why a file cannot open, from a closed set: OutagePage
-// refuses any value but the five constants.
+// refuses any value but the six constants.
 type OutageClass string
 
 // The outage classes, each with the one sentence the page writes for it.
@@ -45,7 +46,15 @@ const (
 	OutageNewer      OutageClass = "newer"      // "The file was written by a newer version of <app>."
 	OutageUnreadable OutageClass = "unreadable" // "The file cannot be read."
 	OutageKey        OutageClass = "key"        // "The key file is missing or does not match this accounts file."
+	OutageUnwritable OutageClass = "unwritable" // "The file cannot be written. Free space on its disk."
 )
+
+// OutageCommand is one command line that recovers the files, as run in the
+// container, and the note the page draws under it.
+type OutageCommand struct {
+	Run  string // required: "docker exec seadex-scout seadex-scout accounts restore <archive>"
+	Note string // "" draws none
+}
 
 // outageSentence is each class's sentence, OutageConfig.App written in place
 // of <app>.
@@ -55,12 +64,13 @@ var outageSentence = map[OutageClass]string{
 	OutageNewer:      "The file was written by a newer version of <app>.",
 	OutageUnreadable: "The file cannot be read.",
 	OutageKey:        "The key file is missing or does not match this accounts file.",
+	OutageUnwritable: "The file cannot be written. Free space on its disk.",
 }
 
 const (
 	outageReload  = "Reload this page once the command finishes."
 	outageRestart = "Run the command above or restart the container, then reload this page."
-	// maxOutageLine bounds each name and command the page writes, in bytes.
+	// maxOutageLine bounds each line the page draws from OutageConfig, in bytes.
 	maxOutageLine = 512
 )
 
@@ -81,10 +91,13 @@ var outageTemplate = template.Must(template.New("outage").Parse(`<!doctype html>
 {{- range .Files}}
 <p><code class="cp-mono">{{.Name}}</code><br>{{.Sentence}}</p>
 {{- end}}
+{{- with .Notice}}
+<p>{{.}}</p>
+{{- end}}
 {{- if .Commands}}
 <ul class="cp-stack">
 {{- range .Commands}}
-<li><code class="cp-mono">{{.}}</code></li>
+<li><code class="cp-mono">{{.Run}}</code>{{with .Note}}<br>{{.}}{{end}}</li>
 {{- end}}
 </ul>
 {{- end}}
@@ -98,19 +111,19 @@ var outageTemplate = template.Must(template.New("outage").Parse(`<!doctype html>
 type outageFileView struct{ Name, Sentence string }
 
 type outageView struct {
-	Title, Style, Closing string
-	Files                 []outageFileView
-	Commands              []string
+	Title, Style, Notice, Closing string
+	Files                         []outageFileView
+	Commands                      []OutageCommand
 }
 
 // OutagePage serves the static page an app shows while a file it needs
 // cannot open: every GET or HEAD outside APIPrefix answers 503, no-store,
 // under SPAPolicy's default policy, with the title, each file's name and its
-// class's sentence, the commands and the closing line; a file the bundle
-// lists under assets/ answers as SPA serves it, so the page's style loads.
-// Names and commands are cleaned through textsafe. A path at or under
-// APIPrefix answers not_found and another method method_not_allowed, through
-// Errors, no-store. The error names the class, style, bundle or prefix it refuses.
+// class's sentence, the notice, the commands and their notes, and the closing
+// line, each line from c cleaned through textsafe; a file the bundle lists
+// under assets/ answers as SPA serves it, so the page's style loads. A path at
+// or under APIPrefix answers not_found and another method method_not_allowed,
+// through Errors, no-store. The error names the field, class or bundle it refuses.
 func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if c.Title == "" || c.App == "" {
 		return nil, errors.New("httpserver: an outage page needs a Title and an App")
@@ -150,25 +163,42 @@ func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hug
 	return p, nil
 }
 
-// newOutageView is the page's text for c, each name and command cleaned.
+// newOutageView is the page's text for c, each line cleaned.
 func newOutageView(c OutageConfig) (outageView, error) { //nolint:gocritic // hugeParam: OutagePage's config, read once
-	v := outageView{Title: c.Title, Closing: outageReload}
+	v := outageView{Title: c.Title, Notice: outageLine(c.Notice), Closing: outageReload}
 	if c.Restart {
 		v.Closing = outageRestart
 	}
-	for _, f := range c.Files {
-		name := textsafe.SanitizeSingleLineBounded(f.Name, maxOutageLine)
+	for i, f := range c.Files {
+		name := outageLine(f.Name)
+		if name == "" {
+			return outageView{}, fmt.Errorf("httpserver: outage file %d has no Name", i+1)
+		}
 		sentence, ok := outageSentence[f.Class]
 		if !ok {
-			return outageView{}, fmt.Errorf("httpserver: outage file %q has class %q; want damaged, format, newer, unreadable or key",
+			return outageView{}, fmt.Errorf("httpserver: outage file %q has class %q; want damaged, format, newer, unreadable, key or unwritable",
 				name, textsafe.SanitizeSingleLineBounded(string(f.Class), maxErrorValue))
 		}
 		v.Files = append(v.Files, outageFileView{Name: name, Sentence: strings.ReplaceAll(sentence, "<app>", c.App)})
 	}
-	for _, cmd := range c.Commands {
-		v.Commands = append(v.Commands, textsafe.SanitizeSingleLineBounded(cmd, maxOutageLine))
+	for i, cmd := range c.Commands {
+		run := outageLine(cmd.Run)
+		if run == "" {
+			return outageView{}, fmt.Errorf("httpserver: outage command %d has no Run", i+1)
+		}
+		v.Commands = append(v.Commands, OutageCommand{Run: run, Note: outageLine(cmd.Note)})
 	}
 	return v, nil
+}
+
+// outageLine is s as the page draws it: one line through textsafe, cut at
+// maxOutageLine bytes, and "" when nothing but spaces is left.
+func outageLine(s string) string {
+	clean := textsafe.SanitizeSingleLineBounded(s, maxOutageLine)
+	if strings.TrimSpace(clean) == "" {
+		return ""
+	}
+	return clean
 }
 
 // outageStyle is the path the page links for the style entry named style
