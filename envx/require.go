@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -202,13 +201,6 @@ func readSecretFile(path string) ([]byte, error) {
 	}
 	if secretStatHook != nil {
 		secretStatHook()
-	}
-	if !info.Mode().IsRegular() {
-		// Classified like an OS refusal, so the message names the path as
-		// "open <path>: not a regular file (mode ...)" does.
-		return nil, unreadableSecretFile(&fs.PathError{
-			Op: "open", Path: path, Err: fmt.Errorf("not a regular file (mode %s)", info.Mode()),
-		})
 	}
 	if info.Size() > maxSecretFileSize {
 		return nil, &classifiedError{
