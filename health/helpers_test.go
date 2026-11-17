@@ -127,43 +127,53 @@ func TestCaptureLogsRestoresLogGlobals(t *testing.T) {
 	}
 }
 
-// markerIn returns a marker path in a folder of its own, which blockFolder can
-// replace.
-func markerIn(t *testing.T) string {
+// blockMarker puts a non-empty directory at path, so creating the marker
+// (EISDIR) and removing it (ENOTEMPTY) both fail, for any user, root
+// included, on every platform. A file in place of the folder fails a remove
+// only on Unix (ENOTDIR): Windows answers ERROR_PATH_NOT_FOUND, which Go reads
+// as fs.ErrNotExist, an absent marker
+// (https://github.com/golang/go/blob/master/src/syscall/syscall_windows.go, Errno.Is).
+func blockMarker(t *testing.T, path string) {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "run")
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return filepath.Join(dir, "app.healthy")
-}
-
-// blockFolder replaces the empty folder of path with a file, so every write
-// to path fails with ENOTDIR, for any user, root included.
-func blockFolder(t *testing.T, path string) {
-	t.Helper()
-	dir := filepath.Dir(path)
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := os.Remove(dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(path, "occupant"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// unblockFolder undoes blockFolder.
-func unblockFolder(t *testing.T, path string) {
+// unblockMarker undoes blockMarker.
+func unblockMarker(t *testing.T, path string) {
 	t.Helper()
-	dir := filepath.Dir(path)
-	if err := os.Remove(dir); err != nil {
+	if err := os.RemoveAll(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
+}
+
+// openErr is the platform's own error opening path for writing; it fails the
+// test unless that open fails for a reason other than absence.
+func openErr(t *testing.T, path string) error {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err == nil {
+		_ = f.Close()
 	}
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("fixture: open %s for writing = %v, want a failure that is not absence", path, err)
+	}
+	return err
+}
+
+// removeErr is the platform's own error removing path; it fails the test
+// unless that remove fails for a reason other than absence.
+func removeErr(t *testing.T, path string) error {
+	t.Helper()
+	err := os.Remove(path)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("fixture: remove %s = %v, want a failure that is not absence", path, err)
+	}
+	return err
 }
 
 // exists reports whether something is at path, without following a symlink.
