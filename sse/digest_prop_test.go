@@ -27,9 +27,9 @@ type digestOutcome struct {
 	frame    stampedFrame
 }
 
-// versionMapModel is the reference client of design section 8.4: it applies
-// every frame and observes the stamp on commit, and takes a changed entry as a
-// fetch instruction rather than a version.
+// versionMapModel is the reference client: it applies every frame and
+// observes the stamp on commit, and takes a changed entry as a fetch
+// instruction rather than a version.
 type versionMapModel struct {
 	held map[Subject]string
 }
