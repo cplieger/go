@@ -83,8 +83,8 @@ func endInCloses(t *testing.T, open func() (scheduler.Records, EndInFunc)) {
 
 func endInEnded(t *testing.T, open func() (scheduler.Records, EndInFunc)) {
 	for name, tc := range map[string]struct {
-		line scheduler.Line
 		want scheduler.Result
+		line scheduler.Line
 	}{
 		"every line done stays ok":       {line: scheduler.Line{State: scheduler.LineDone}, want: scheduler.ResultOK},
 		"a skipped line reads partial":   {line: scheduler.Line{State: scheduler.LineSkipped, Reason: "gone"}, want: scheduler.ResultPartial},

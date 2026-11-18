@@ -64,7 +64,7 @@ A kind with `MaxItems` (1 to 500) is a batch. `Items(payload)` gives its item co
 
 `Run.Item(ctx, i, fn)` takes the kind's slot in `Batch` class, runs `fn` and records the `Line` it answers: `done`, `skipped` or `review`, with the app's reason code and optional facts. An index outside the batch answers `ErrUnknownLine`, and a line that already ended runs nothing.
 
-At the batch's end, a line still `queued` goes to review: as `cancelled` or `interrupted` with such an end, otherwise as `not_run`. The batch keeps the result its `Run` gave, except that an `ok` end reads `partial` when any line is skipped or in review, so a batch cut short never reads `ok`. A line in review stays on the record until a person dismisses it, which moves it to `skipped` with its reason kept.
+At the batch's end, a line still `queued` or `running` goes to review: as `cancelled` or `interrupted` with such an end, otherwise as `not_run`. The batch keeps the result its `Run` gave, except that an `ok` end reads `partial` when any line is skipped or in review, so a batch cut short never reads `ok`. `CloseLines(lines, end)` is that close as one function: the executor applies it to an end it writes, and a store's own-commit end (`EndIn`, written in the app's transaction) applies it too, so a batch that commits its end early reads the same. A line in review stays on the record until a person dismisses it, which moves it to `skipped` with its reason kept.
 
 ## Proposals
 

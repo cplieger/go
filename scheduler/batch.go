@@ -11,9 +11,8 @@ import (
 // It answers ctx's error once the job is cancelled, ErrUnknownLine for an i
 // outside the batch, and nil, running nothing, for a line already taken. A
 // panic in fn or a line that is not an end ends the batch failed, the line in
-// review, both with run_panicked. A line still queued at the job's end goes
-// to review: cancelled or interrupted with such an end, else not_run, and an
-// ok end then reads partial.
+// review, both with run_panicked. At the job's end CloseLines closes the
+// lines still open.
 func (r *Run[P]) Item(ctx context.Context, i int, fn func(ctx context.Context) Line) error {
 	en, e := r.en, r.e
 	if claimed, err := en.claim(i); !claimed {
@@ -127,17 +126,7 @@ func (e *Executor[P]) setLine(en *job[P], i int, l Line) {
 // answers end unchanged. A store's own-commit end calls it, as the executor
 // does for an end it writes.
 func CloseLines(lines []Line, end End) ([]Line, End) {
-	return slices.Clone(lines), end
-}
-
-// closeLines puts each line still queued in review for end, as Item's godoc
-// states, writes the record when a line moved and answers the batch's end.
-func (e *Executor[P]) closeLines(en *job[P], end End) End {
-	en.recMu.Lock()
-	defer en.recMu.Unlock()
-	if len(en.rec.Lines) == 0 {
-		return end
-	}
+	lines = slices.Clone(lines)
 	reason := ReasonNotRun
 	switch end.Result {
 	case ResultCancelled:
@@ -146,20 +135,30 @@ func (e *Executor[P]) closeLines(en *job[P], end End) End {
 		reason = ReasonInterrupted
 	default:
 	}
-	moved := false
-	for i, l := range en.rec.Lines {
-		if l.State == LineQueued || l.State == LineRunning {
-			en.rec.Lines[i] = Line{State: LineReview, Reason: reason}
-			moved = true
+	for i, l := range lines {
+		if lineOpen(l) {
+			lines[i] = Line{State: LineReview, Reason: reason}
 		}
 	}
-	if moved {
-		e.put(en)
-	}
-	if end.Result == ResultOK && slices.ContainsFunc(en.rec.Lines, func(l Line) bool {
+	if end.Result == ResultOK && slices.ContainsFunc(lines, func(l Line) bool {
 		return l.State == LineSkipped || l.State == LineReview
 	}) {
 		end.Result = ResultPartial
+	}
+	return lines, end
+}
+
+func lineOpen(l Line) bool { return l.State == LineQueued || l.State == LineRunning }
+
+// closeLines applies CloseLines to en's record, writing it when a line
+// moved, and answers the batch's end.
+func (e *Executor[P]) closeLines(en *job[P], end End) End {
+	en.recMu.Lock()
+	defer en.recMu.Unlock()
+	closed, end := CloseLines(en.rec.Lines, end)
+	if slices.ContainsFunc(en.rec.Lines, lineOpen) {
+		en.rec.Lines = closed
+		e.put(en)
 	}
 	return end
 }

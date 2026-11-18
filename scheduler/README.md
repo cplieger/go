@@ -150,7 +150,7 @@ check := health.Check{Signal: ex.Fresh("refresh", ""), Reason: "the refresh has 
 - Executor: `NewExecutor`, `Config`, `KindSpec`, `Executor` with `Run`, `Start`, `Cancel`, `CredentialEnded`, `Schedule`, `Unschedule`, `Fresh`, `Deadline`, `Wake`, `Proposal`, `Hold` and `Live` with its `LiveJob`, the job handle `Run`, and `Observer` with its `Transition`.
 - Jobs and their records: `Job`, `Kind`, `Phase`, `Trigger`, `Class`, `End`, `Result`, `Reason`, `Line`, `LineState`, `ID`, `ProposalID`, `DigestScope`, the `Records` interface with `Record`, `PhaseAt`, `LastEnd`, `ScheduledScope` and `Key`, and the error values.
 - Cadence and deadlines: `Cadence` with `Scheduled`, `TriggerOnly` and `Retry`, and `Watch` with `NewWatch`.
-- Package `schedulertest`: `Records`, the contract test a `Records` implementation runs.
+- Package `schedulertest`: `Records`, the contract test a `Records` implementation runs, and `EndIn`, the contract of its own-commit end.
 
 The full reference is on pkg.go.dev for [scheduler](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2), [trigger](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2/trigger) and [schedulertest](https://pkg.go.dev/github.com/cplieger/go/scheduler/v2/schedulertest).
 

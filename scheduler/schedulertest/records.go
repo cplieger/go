@@ -1,5 +1,6 @@
-// Package schedulertest holds the contract every scheduler.Records keeps, as
-// one test an implementation's own tests call.
+// Package schedulertest holds the contracts a scheduler.Records keeps, as
+// tests an implementation's own tests call: Records, and EndIn for its
+// own-commit end.
 package schedulertest
 
 import (

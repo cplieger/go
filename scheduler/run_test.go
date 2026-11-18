@@ -272,6 +272,34 @@ func TestExecutorReportsStoredEnd(t *testing.T) {
 		})
 	})
 
+	t.Run("a batch whose commit ends it with lines open reads partial", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var r *rig
+			early := grab(done)
+			early.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+				_ = run.Item(ctx, 0, func(context.Context) scheduler.Line { return scheduler.Line{State: scheduler.LineDone} })
+				if !run.Commit() {
+					t.Error("Commit = false for a job nobody cancelled")
+				}
+				if err := r.store.EndIn(run.Job().ID, scheduler.End{Result: scheduler.ResultOK}); err != nil {
+					t.Errorf("EndIn = %v", err)
+				}
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			seen := &transitions{}
+			r = newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{early}, Observer: seen.observer()})
+			s := r.start(t, api("grab", "", "alice", payload{N: 3}))
+			synctest.Wait()
+
+			r.wantEnd(t, s.Job, scheduler.ResultPartial)
+			notRun := line(scheduler.LineReview, scheduler.ReasonNotRun)
+			r.wantLines(t, s.Job, line(scheduler.LineDone, ""), notRun, notRun)
+			if trs := seen.of(s.Job); len(trs) == 0 || trs[len(trs)-1].Result != scheduler.ResultPartial {
+				t.Errorf("transitions %v, want the last to report partial", trs)
+			}
+		})
+	})
+
 	t.Run("with no end in its commit the returned end is written", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			full := spec("full", "passes")
