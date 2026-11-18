@@ -148,3 +148,80 @@ func api(kind scheduler.Kind, scope, owner string, p payload) scheduler.Job[payl
 func timer(kind scheduler.Kind, scope string, p payload) scheduler.Job[payload] {
 	return scheduler.Job[payload]{Kind: kind, Scope: scope, Trigger: scheduler.TriggerSchedule, Payload: p}
 }
+
+// order is the names a test's jobs log as they hold their slot.
+type order struct {
+	names []string
+	mu    sync.Mutex
+}
+
+func (o *order) add(name string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.names = append(o.names, name)
+}
+
+func (o *order) list() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.names)
+}
+
+// logLines is a slog.Handler keeping each line the executor logs, without
+// the attributes a With call adds.
+type logLines struct {
+	recs []slog.Record
+	mu   sync.Mutex
+}
+
+func (l *logLines) Enabled(context.Context, slog.Level) bool { return true }
+
+func (l *logLines) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.recs = append(l.recs, r.Clone())
+	return nil
+}
+
+func (l *logLines) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *logLines) WithGroup(string) slog.Handler      { return l }
+
+// count answers how many lines were logged at level.
+func (l *logLines) count(level slog.Level) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, r := range l.recs {
+		if r.Level == level {
+			n++
+		}
+	}
+	return n
+}
+
+// transitions keeps each Transition the Observer is told of.
+type transitions struct {
+	all []scheduler.Transition
+	mu  sync.Mutex
+}
+
+func (o *transitions) observer() scheduler.Observer {
+	return scheduler.Observer{Transition: func(tr scheduler.Transition) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		o.all = append(o.all, tr)
+	}}
+}
+
+// of answers id's transitions in the order the Observer was told of them.
+func (o *transitions) of(id scheduler.ID) []scheduler.Transition {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []scheduler.Transition
+	for _, tr := range o.all {
+		if tr.Job == id {
+			out = append(out, tr)
+		}
+	}
+	return out
+}
