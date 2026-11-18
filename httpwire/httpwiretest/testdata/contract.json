@@ -1,0 +1,375 @@
+{
+  "components": {
+    "schemas": {
+      "Job": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "owner"],
+        "type": "object"
+      },
+      "JobPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "offset": {
+            "maximum": 999999999999999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prev_cursor": {
+            "type": "string"
+          },
+          "total": {
+            "maximum": 999999999999999,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["items", "offset", "total"],
+        "type": "object"
+      },
+      "Jobs": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "type": ["array", "null"]
+          }
+        },
+        "required": ["jobs"],
+        "type": "object"
+      },
+      "Probe": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-max-bytes": 8
+          },
+          "note": {
+            "type": "string"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/Shape"
+          },
+          "state": {
+            "enum": ["on", "off"],
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": ["name", "shape", "state", "tags"],
+        "type": "object"
+      },
+      "Shape": {
+        "discriminator": {
+          "mapping": {
+            "circle": "#/components/schemas/Shape.circle",
+            "square": "#/components/schemas/Shape.square"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Shape.circle"
+          },
+          {
+            "$ref": "#/components/schemas/Shape.square"
+          }
+        ]
+      },
+      "Shape.circle": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "circle"
+          },
+          "radius": {
+            "type": "integer"
+          }
+        },
+        "required": ["kind", "radius"],
+        "type": "object"
+      },
+      "Shape.square": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "square"
+          },
+          "side": {
+            "type": "integer"
+          }
+        },
+        "required": ["kind", "side"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "contract fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/jobs": {
+      "get": {
+        "description": "List jobs.",
+        "operationId": "jobs.all",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List jobs"
+      }
+    },
+    "/api/jobs.csv": {
+      "get": {
+        "description": "Export jobs.",
+        "operationId": "jobs.csv",
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          },
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Export jobs"
+      }
+    },
+    "/api/jobs/{id}": {
+      "get": {
+        "description": "Read a job.",
+        "operationId": "jobs.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read a job"
+      }
+    },
+    "/api/my/jobs": {
+      "get": {
+        "description": "List my jobs.",
+        "operationId": "jobs.mine",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jobs"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List my jobs"
+      }
+    },
+    "/api/own/jobs": {
+      "get": {
+        "description": "List own jobs.",
+        "operationId": "jobs.own",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jobs"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List own jobs"
+      }
+    },
+    "/api/probe": {
+      "delete": {
+        "description": "Drop the probe.",
+        "operationId": "probe.drop",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Drop the probe"
+      },
+      "get": {
+        "description": "Read the probe.",
+        "operationId": "probe.get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Probe"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the probe"
+      },
+      "post": {
+        "description": "Make a probe.",
+        "operationId": "probe.make",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Probe"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Probe"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Make a probe"
+      }
+    },
+    "/api/probe/away": {
+      "get": {
+        "description": "Leave the probe.",
+        "operationId": "probe.away",
+        "responses": {
+          "302": {
+            "description": "Found"
+          }
+        },
+        "summary": "Leave the probe"
+      }
+    },
+    "/api/probe/file": {
+      "get": {
+        "description": "Read the probe file.",
+        "operationId": "probe.file",
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the probe file"
+      }
+    },
+    "/api/stream": {
+      "get": {
+        "description": "Stream.",
+        "operationId": "live.stream",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-events": {
+                  "changed": {
+                    "$ref": "#/components/schemas/Job"
+                  }
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Stream"
+      }
+    }
+  }
+}

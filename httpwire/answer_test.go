@@ -13,6 +13,7 @@ import (
 
 	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
+	"github.com/cplieger/go/httpwire/httpwiretest"
 )
 
 func TestJSONRowAnswersItsPrimaryStatus(t *testing.T) {
@@ -259,7 +260,10 @@ func TestHeldRowAnswers200And204(t *testing.T) {
 			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
 				return tc.answer, nil
 			})
-			rec := serve(c.mustBuild(t), http.MethodGet, "/api/events/wait", "")
+			api := c.mustBuild(t)
+			httpwiretest.Contract(t, api, []httpwiretest.Case{{Row: "events.wait", Request: httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/events/wait", nil)}})
+			held = 0
+			rec := serve(api, http.MethodGet, "/api/events/wait", "")
 			if rec.Code != tc.status || rec.Body.String() != tc.body || rec.Header().Get("Content-Type") != tc.ctype {
 				t.Errorf("answer %d %q %q, want %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String(), tc.status, tc.ctype, tc.body)
 			}
