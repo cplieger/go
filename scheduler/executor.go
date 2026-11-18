@@ -497,7 +497,6 @@ func (e *Executor[P]) put(en *job[P]) {
 	if en.spec.Kept == 0 {
 		return
 	}
-	en.rec.Rev++
 	if err := e.records.Put(context.Background(), en.rec); err != nil {
 		e.log.Error("job record not written", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID, "err", err)
 	}

@@ -36,7 +36,6 @@ func (f *fixture) running(lines ...scheduler.Line) *scheduler.Record {
 	f.t.Helper()
 	rec := f.start(f.insert(f.record("grab", ""), nil))
 	rec.Lines = lines
-	rec.Rev++
 	f.put(rec)
 	return f.get(rec.ID)
 }

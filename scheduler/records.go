@@ -16,10 +16,12 @@ type Records interface {
 	// true without writing (a keyed resend). It answers ErrCapacity when no
 	// record may make room.
 	Insert(ctx context.Context, r Record, key *Key) (Record, bool, error)
-	// Put writes r over the stored record when r.Rev is newer and the stored
-	// record has not ended; otherwise it writes nothing and answers nil. It
-	// stamps StartedAt as the record first runs and the At of each phase r
-	// newly reached, keeping QueuedAt and every earlier stamp.
+	// Put writes r over the stored record at the stored Rev plus one, whatever
+	// r.Rev says, unless the stored record has ended; then it writes nothing
+	// and answers nil. A stored skipped line that r holds in review stays
+	// skipped, so a Dismiss survives a running batch's writes. It stamps
+	// StartedAt as the record first runs and the At of each phase r newly
+	// reached, keeping QueuedAt and every earlier stamp.
 	Put(ctx context.Context, r Record) error
 	// End writes e unless the record already has an end (one written in the
 	// job's own commit) and answers the stored record either way.
@@ -29,7 +31,10 @@ type Records interface {
 	// ByKey answers the record holding the idempotency key of credential on
 	// row.
 	ByKey(ctx context.Context, credential, row, key string) (Record, bool, error)
-	// Dismiss drops line from id's review list: ErrUnknownJob, ErrUnknownLine.
+	// Dismiss moves line of id from review to skipped, keeping its reason and
+	// facts, and moves Rev. A line in range that is not in review writes
+	// nothing and answers nil; ErrUnknownLine names a line outside the
+	// record's, ErrUnknownJob an unknown id.
 	Dismiss(ctx context.Context, id ID, line int) error
 	// Live answers the queued and running records and the live view's ended
 	// ones at now.
@@ -74,7 +79,7 @@ type Record struct {
 	Lines   []Line    // a batch's, one per item
 
 	Step struct{ N, Of int }
-	Rev  uint64
+	Rev  uint64 // Insert writes the one sent; each write of Put, End or Dismiss moves it by one
 }
 
 // PhaseAt is the first time a job reached a phase.

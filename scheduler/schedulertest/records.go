@@ -46,6 +46,7 @@ const (
 	credential = "cred"
 	row        = "scan.start"
 	phaseFetch = scheduler.Phase("fetch")
+	rejected   = "arr_rejected"
 	unknownID  = scheduler.ID("000000000000000000000000000003e7")
 )
 
@@ -81,11 +82,11 @@ func (f *fixture) insert(r *scheduler.Record, key *scheduler.Key) *scheduler.Rec
 	return &got
 }
 
-// start writes a copy of r moved to running at the next Rev.
+// start writes a copy of r moved to running.
 func (f *fixture) start(r *scheduler.Record) *scheduler.Record {
 	f.t.Helper()
 	n := *r
-	n.State, n.Phase, n.StartedAt, n.Rev = scheduler.StateRunning, scheduler.PhaseStarted, time.Now(), r.Rev+1
+	n.State, n.Phase, n.StartedAt = scheduler.StateRunning, scheduler.PhaseStarted, time.Now()
 	f.put(&n)
 	return f.get(n.ID)
 }
@@ -249,7 +250,7 @@ func storeStamps(t *testing.T, r scheduler.Records) {
 
 	time.Sleep(10 * time.Minute)
 	run := *queued
-	run.State, run.Phase, run.QueuedAt, run.StartedAt, run.Rev = scheduler.StateRunning, scheduler.PhaseStarted, off, off, queued.Rev+1
+	run.State, run.Phase, run.QueuedAt, run.StartedAt = scheduler.StateRunning, scheduler.PhaseStarted, off, off
 	f.put(&run)
 	started := f.get(rec.ID)
 	if !near(started.StartedAt) || !started.QueuedAt.Equal(queued.QueuedAt) {
@@ -259,7 +260,7 @@ func storeStamps(t *testing.T, r scheduler.Records) {
 
 	time.Sleep(10 * time.Minute)
 	fetch := *started
-	fetch.Phase, fetch.StartedAt, fetch.Rev = phaseFetch, off, started.Rev+1
+	fetch.Phase, fetch.StartedAt = phaseFetch, off
 	fetch.Phases = []scheduler.PhaseAt{{Phase: phaseFetch, At: off}}
 	f.put(&fetch)
 	fetched := f.get(rec.ID)
@@ -272,7 +273,7 @@ func storeStamps(t *testing.T, r scheduler.Records) {
 
 	time.Sleep(10 * time.Minute)
 	write := *fetched
-	write.Phase, write.Rev = "write", fetched.Rev+1
+	write.Phase = "write"
 	write.Phases = []scheduler.PhaseAt{{Phase: phaseFetch, At: off}, {Phase: "write", At: off}}
 	f.put(&write)
 	got := f.get(rec.ID)
@@ -311,10 +312,11 @@ func putAfterEnd(t *testing.T, r scheduler.Records) {
 	ended := f.end(rec.ID, scheduler.End{Result: scheduler.ResultOK})
 
 	late := *rec
-	late.State, late.Phase, late.Rev = scheduler.StateRunning, phaseFetch, ended.Rev+10
+	late.State, late.Phase = scheduler.StateRunning, phaseFetch
 	f.put(&late)
-	if got := f.get(rec.ID); got.State != scheduler.StateEnded || got.End == nil || got.Phase == phaseFetch {
-		t.Errorf("a Put after the end left state %q phase %q end %+v; want the ended record unchanged", got.State, got.Phase, got.End)
+	if got := f.get(rec.ID); got.State != scheduler.StateEnded || got.End == nil || got.Phase == phaseFetch || got.Rev != ended.Rev {
+		t.Errorf("a Put after the end left state %q phase %q end %+v rev %d; want the ended record unchanged at rev %d",
+			got.State, got.Phase, got.End, got.Rev, ended.Rev)
 	}
 }
 
@@ -324,7 +326,7 @@ func putAfterEnd(t *testing.T, r scheduler.Records) {
 func putKeepsDismissed(t *testing.T, r scheduler.Records) {
 	f := &fixture{t: t, r: r}
 	rec := f.start(f.insert(f.record("grab", ""), nil))
-	review := scheduler.Line{State: scheduler.LineReview, Reason: "arr_rejected", Facts: json.RawMessage(`{"code":400}`)}
+	review := scheduler.Line{State: scheduler.LineReview, Reason: rejected, Facts: json.RawMessage(`{"code":400}`)}
 	queued := scheduler.Line{State: scheduler.LineQueued}
 	rec.Lines = []scheduler.Line{review, queued, queued}
 	f.put(rec)
@@ -361,10 +363,9 @@ func (f *fixture) batch() *scheduler.Record {
 	rec := f.start(f.insert(f.record("grab", ""), nil))
 	rec.Lines = []scheduler.Line{
 		{State: scheduler.LineDone},
-		{State: scheduler.LineReview, Reason: "arr_rejected", Facts: json.RawMessage(`{"code":400}`)},
+		{State: scheduler.LineReview, Reason: rejected, Facts: json.RawMessage(`{"code":400}`)},
 		{State: scheduler.LineSkipped, Reason: "nothing_found"},
 	}
-	rec.Rev++
 	f.put(rec)
 	return f.end(rec.ID, scheduler.End{Result: scheduler.ResultPartial})
 }
@@ -379,7 +380,7 @@ func dismissReview(t *testing.T, r scheduler.Records) {
 	if len(got.Lines) != 3 {
 		t.Fatalf("after Dismiss: %d lines, want the 3 still there", len(got.Lines))
 	}
-	if l := got.Lines[1]; l.State != scheduler.LineSkipped || l.Reason != "arr_rejected" || string(l.Facts) != `{"code":400}` {
+	if l := got.Lines[1]; l.State != scheduler.LineSkipped || l.Reason != rejected || string(l.Facts) != `{"code":400}` {
 		t.Errorf("the dismissed line = %+v; want skipped, reason arr_rejected, its facts", l)
 	}
 	if got.Lines[0].State != scheduler.LineDone || got.Lines[2].State != scheduler.LineSkipped {

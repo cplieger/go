@@ -36,7 +36,7 @@ func insert(t *testing.T, s *memrecords.Store, n int) scheduler.Record {
 
 func start(t *testing.T, s *memrecords.Store, r scheduler.Record, lines ...scheduler.Line) scheduler.Record {
 	t.Helper()
-	r.State, r.StartedAt, r.Lines, r.Rev = scheduler.StateRunning, time.Now(), lines, r.Rev+1
+	r.State, r.StartedAt, r.Lines = scheduler.StateRunning, time.Now(), lines
 	if err := s.Put(t.Context(), r); err != nil {
 		t.Fatalf("Put = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestFail(t *testing.T) {
 			_, _, err := s.Insert(t.Context(), scheduler.Record{ID: r.ID}, nil)
 			return err
 		},
-		memrecords.OpPut: func() error { return s.Put(t.Context(), scheduler.Record{ID: r.ID}) },
+		memrecords.OpPut: func() error { return s.Put(t.Context(), scheduler.Record{ID: id(99)}) },
 		memrecords.OpEnd: func() error {
 			_, err := s.End(t.Context(), id(99), scheduler.End{Result: scheduler.ResultOK})
 			return err
@@ -191,7 +191,7 @@ func TestFail(t *testing.T) {
 
 func TestPutUnknownAndCursor(t *testing.T) {
 	s := memrecords.New()
-	if err := s.Put(t.Context(), scheduler.Record{ID: id(1), Rev: 2}); !errors.Is(err, scheduler.ErrUnknownJob) {
+	if err := s.Put(t.Context(), scheduler.Record{ID: id(1)}); !errors.Is(err, scheduler.ErrUnknownJob) {
 		t.Errorf("Put(an unknown id) = %v, want ErrUnknownJob", err)
 	}
 	if _, _, err := s.History(t.Context(), "", "nope", 1); !errors.Is(err, memrecords.ErrCursor) {

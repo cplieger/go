@@ -187,8 +187,9 @@ func (s *Store) Insert(_ context.Context, r scheduler.Record, key *scheduler.Key
 	return clone(&r), false, nil
 }
 
-// Put writes r over the stored record when r.Rev is newer and the stored
-// record has not ended; otherwise it writes nothing and answers nil. It
+// Put writes r over the stored record at the stored Rev plus one, whatever
+// r.Rev says, unless the stored record has ended; then it writes nothing and
+// answers nil. A stored skipped line r holds in review stays skipped. It
 // stamps StartedAt and each newly reached phase at the wall time and keeps
 // the stored stamps.
 func (s *Store) Put(_ context.Context, r scheduler.Record) error { //nolint:gocritic // hugeParam: the scheduler.Records signature
@@ -201,14 +202,20 @@ func (s *Store) Put(_ context.Context, r scheduler.Record) error { //nolint:gocr
 	if !ok {
 		return scheduler.ErrUnknownJob
 	}
-	if old.State == scheduler.StateEnded || r.Rev <= old.Rev {
+	if old.State == scheduler.StateEnded {
 		return nil
 	}
 	r = clone(&r)
 	now := time.Now()
+	r.Rev = old.Rev + 1
 	r.QueuedAt, r.StartedAt, r.EndedAt = old.QueuedAt, old.StartedAt, old.EndedAt
 	if r.StartedAt.IsZero() && r.State == scheduler.StateRunning {
 		r.StartedAt = now
+	}
+	for i := range min(len(r.Lines), len(old.Lines)) {
+		if old.Lines[i].State == scheduler.LineSkipped && r.Lines[i].State == scheduler.LineReview {
+			r.Lines[i] = old.Lines[i]
+		}
 	}
 	for i, p := range r.Phases {
 		r.Phases[i].At = now
