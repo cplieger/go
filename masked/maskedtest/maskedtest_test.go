@@ -98,8 +98,8 @@ func TestChecksKeyByImportPath(t *testing.T) {
 		t.Parallel()
 		// Both types are struct { token string } to reflect.Type.String.
 		roots := []reflect.Type{reflect.TypeOf(one.Settings), reflect.TypeOf(two.Settings)}
-		oneLine := fixture + "one/config.struct { token string }.token"
-		twoLine := fixture + "two/config.struct { token string }.token: holds a string (string)"
+		oneLine := "struct { " + fixture + "one/config.token string }.token"
+		twoLine := "struct { " + fixture + "two/config.token string }.token: holds a string (string)"
 		got := maskedtest.Unmasked(maskedtest.Allow{}, roots...)
 		want := []string{oneLine + ": holds a string (string)", twoLine}
 		if !slices.Equal(got, want) {
@@ -108,6 +108,34 @@ func TestChecksKeyByImportPath(t *testing.T) {
 		got = maskedtest.Unmasked(maskedtest.Allow{Fields: []string{oneLine}}, roots...)
 		if want := []string{twoLine}; !slices.Equal(got, want) {
 			t.Errorf("Unmasked(allowing one) =\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("unnamed_struct_of_named_types", func(t *testing.T) {
+		t.Parallel()
+		// Both types are struct { T config.Tok } to reflect.Type.String.
+		roots := []reflect.Type{reflect.TypeFor[struct{ T one.Tok }](), reflect.TypeFor[struct{ T two.Tok }]()}
+		oneLine := "struct { T " + fixture + "one/config.Tok }.T"
+		twoLine := "struct { T " + fixture + "two/config.Tok }.T: holds a string (config.Tok)"
+		got := maskedtest.Unmasked(maskedtest.Allow{}, roots...)
+		want := []string{oneLine + ": holds a string (config.Tok)", twoLine}
+		if !slices.Equal(got, want) {
+			t.Errorf("Unmasked() =\n%q\nwant\n%q", got, want)
+		}
+		got = maskedtest.Unmasked(maskedtest.Allow{Fields: []string{oneLine}}, roots...)
+		if want := []string{twoLine}; !slices.Equal(got, want) {
+			t.Errorf("Unmasked(allowing one) =\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("unnamed_root", func(t *testing.T) {
+		t.Parallel()
+		// Both types are []config.Tok to reflect.Type.String.
+		got := maskedtest.Unmasked(maskedtest.Allow{}, reflect.TypeFor[[]one.Tok](), reflect.TypeFor[[]two.Tok]())
+		want := []string{
+			"[]" + fixture + "one/config.Tok: holds a string (config.Tok)",
+			"[]" + fixture + "two/config.Tok: holds a string (config.Tok)",
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("Unmasked() =\n%q\nwant\n%q", got, want)
 		}
 	})
 }

@@ -10,3 +10,7 @@ type Box struct {
 // Settings has an unnamed struct type with an unexported field, which
 // reflect.Type.String writes alike in both fixture packages.
 var Settings = struct{ token string }{token: "two"}
+
+// Tok is a named text type: reflect.Type.String writes struct{ T Tok } alike
+// in both fixture packages.
+type Tok string

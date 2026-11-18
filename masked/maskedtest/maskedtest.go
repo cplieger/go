@@ -4,9 +4,9 @@
 // masked type nor a reviewed non-secret field. [SecretNamed] checks wire
 // types by name, where every title and path is text: it reports a text field
 // named like a credential. [Leak] checks a printer's output for a secret's
-// text and its HMAC pad forms as the standard library's printers write them
-// (fmt, strconv quoting, encoding/json, hex and base64). Import it only from
-// _test.go files.
+// text and its HMAC pad forms as the standard library's encoders write them
+// into a log line, an error or a response. Import it only from _test.go
+// files.
 package maskedtest
 
 import (
@@ -15,6 +15,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
+	"html/template"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -33,11 +36,10 @@ type Allow struct {
 	Types []reflect.Type
 	// Fields are reviewed non-secret fields, each written as its declaring
 	// type's name, a dot and the field name: "example.com/app.User.Email". A
-	// named type is named by its import path, a dot and its name; an unnamed
-	// struct with an unexported field by that field's import path, a dot and
-	// its reflect.Type.String; any other unnamed type by its String. Two
-	// function-local types of one name in one package share a name, as do two
-	// unnamed structs whose field types differ only in import path.
+	// type is named as reflect.Type.String writes it, with each named type and
+	// unexported field qualified by its import path instead of its package
+	// name: "struct { T example.com/app.Tok }". Two function-local types of
+	// one name in one package share a name.
 	Fields []string
 }
 
@@ -164,18 +166,47 @@ func (w *walker) report(it item, what string) {
 // typeName names t as [Allow.Fields] documents. reflect.Type.String uses the
 // short package name, which two packages can share, and omits the package of
 // an unnamed struct's unexported fields, which makes two such types distinct.
+// Func, chan and interface types keep String: no field is reported inside
+// one. The recursion ends because an unnamed type is never its own element.
 func typeName(t reflect.Type) string {
-	if t.Name() != "" && t.PkgPath() != "" {
+	if t.Name() != "" {
+		if t.PkgPath() == "" {
+			return t.Name()
+		}
 		return t.PkgPath() + "." + t.Name()
 	}
-	if t.Kind() == reflect.Struct {
+	switch t.Kind() {
+	case reflect.Pointer:
+		return "*" + typeName(t.Elem())
+	case reflect.Slice:
+		return "[]" + typeName(t.Elem())
+	case reflect.Array:
+		return "[" + strconv.Itoa(t.Len()) + "]" + typeName(t.Elem())
+	case reflect.Map:
+		return "map[" + typeName(t.Key()) + "]" + typeName(t.Elem())
+	case reflect.Struct:
+		fields := make([]string, 0, t.NumField())
 		for f := range t.Fields() {
-			if !f.IsExported() {
-				return f.PkgPath + "." + t.String()
+			field := typeName(f.Type)
+			switch {
+			case !f.IsExported():
+				field = f.PkgPath + "." + f.Name + " " + field
+			case !f.Anonymous:
+				field = f.Name + " " + field
+			default:
 			}
+			if f.Tag != "" {
+				field += " " + strconv.Quote(string(f.Tag))
+			}
+			fields = append(fields, field)
 		}
+		if len(fields) == 0 {
+			return "struct {}"
+		}
+		return "struct { " + strings.Join(fields, "; ") + " }"
+	default:
+		return t.String()
 	}
-	return t.String()
 }
 
 func isInteger(k reflect.Kind) bool {
@@ -213,7 +244,10 @@ func forms(text string) []string {
 	for _, verb := range []string{"%v", "%d", "%#v"} {
 		out = append(out, unwrap(fmt.Sprintf(verb, b)))
 	}
-	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+	out = append(out, url.QueryEscape(text), url.PathEscape(text), (&url.URL{Path: text}).EscapedPath(),
+		html.EscapeString(text), htmlText(text))
+	// The padded encodings' output contains these runs.
+	for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
 		for offset := range 3 {
 			encoded := enc.EncodeToString(append(make([]byte, offset), text...))
 			// A character covers 6 bits: skip those that hold a prefix bit and
@@ -231,8 +265,10 @@ func forms(text string) []string {
 // value: "x", `x`, [1 2] and []byte{0x1, 0x2}.
 func unwrap(s string) string {
 	for _, w := range [][2]string{{`"`, `"`}, {"`", "`"}, {"[]byte{", "}"}, {"[", "]"}} {
-		if len(s) >= len(w[0])+len(w[1]) && strings.HasPrefix(s, w[0]) && strings.HasSuffix(s, w[1]) {
-			return s[len(w[0]) : len(s)-len(w[1])]
+		if rest, ok := strings.CutPrefix(s, w[0]); ok {
+			if inner, ok := strings.CutSuffix(rest, w[1]); ok {
+				return inner
+			}
 		}
 	}
 	return s
@@ -247,6 +283,17 @@ func jsonString(text string, escapeHTML bool) string {
 	// A string always encodes, and a strings.Builder never fails a write.
 	_ = enc.Encode(text)
 	return strings.TrimSuffix(b.String(), "\n")
+}
+
+var htmlPage = template.Must(template.New("text").Parse("{{.}}"))
+
+// htmlText returns text as html/template writes it in HTML text, which also
+// escapes + and NUL, unlike html.EscapeString.
+func htmlText(text string) string {
+	var b strings.Builder
+	// A string always executes, and a strings.Builder never fails a write.
+	_ = htmlPage.Execute(&b, text)
+	return b.String()
 }
 
 // KeyForms returns the forms of key a printer can show: key itself, and
@@ -274,14 +321,14 @@ func KeyForms(key string) []string {
 	return slices.Compact(out)
 }
 
-// Leak reports whether got contains text or a [KeyForms] pad form as the
-// standard library's printers write a string or []byte holding it: fmt's
-// %s %v %q %+q %#q %#v %x %X of the string and %v %d %#v %x %X of the
-// []byte, strconv's Quote, QuoteToASCII and QuoteToGraphic, encoding/json
-// with HTML escaping on and off, hex in both cases, and std, URL, raw std and
-// raw URL base64 at each byte offset. A quoted or bracketed form is searched
-// without its quotes or brackets, so it is found inside a longer value. text
-// must not be empty, and a text of a few bytes can match by chance.
+// Leak reports whether got holds text or a [KeyForms] pad form as each
+// standard-library encoder whose output reaches a log, an error or a response
+// writes a string or []byte holding it: fmt's string and []byte verbs, strconv
+// quoting, encoding/json with HTML escaping on and off, hex in both cases, std,
+// URL, raw std and raw URL base64 at each byte offset, net/url query and path
+// escaping, html.EscapeString and html/template. A quoted or bracketed form is
+// also searched bare. Any other encoder is the caller's to check. text must not
+// be empty, and a text of a few bytes can match by chance.
 func Leak(got, text string) bool {
 	for _, f := range KeyForms(text) {
 		if strings.Contains(got, f) {

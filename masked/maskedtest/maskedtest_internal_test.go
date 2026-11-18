@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
+	"html/template"
 	"io"
 	"log/slog"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -96,7 +99,7 @@ func TestUnmasked(t *testing.T) {
 			pkg + "kinds.ids: holds an integer sequence ([]int64)",
 			pkg + "kinds.schedule: holds an integer sequence ([60]uint32)",
 			pkg + "kinds.str: holds a string (string)",
-			pkg + "struct { s string }.s: holds a string (string)",
+			"struct { " + pkg + "s string }.s: holds a string (string)",
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("Unmasked() =\n%q\nwant\n%q", got, want)
@@ -114,8 +117,8 @@ func TestUnmasked(t *testing.T) {
 		t.Parallel()
 		got := Unmasked(Allow{}, reflect.TypeFor[struct{ a, b words }]())
 		want := []string{
-			pkg + "struct { a maskedtest.words; b maskedtest.words }.a: holds a string (string)",
-			pkg + "struct { a maskedtest.words; b maskedtest.words }.b: holds a string (string)",
+			"struct { " + pkg + "a " + pkg + "words; " + pkg + "b " + pkg + "words }.a: holds a string (string)",
+			"struct { " + pkg + "a " + pkg + "words; " + pkg + "b " + pkg + "words }.b: holds a string (string)",
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("Unmasked() = %q, want %q", got, want)
@@ -255,6 +258,44 @@ func TestLeak(t *testing.T) {
 			"base64_url":             b64(base64.URLEncoding),
 			"base64_raw_std":         b64(base64.RawStdEncoding),
 			"base64_raw_url":         b64(base64.RawURLEncoding),
+		}
+		for name, render := range printers {
+			for _, s := range []string{secret, "login " + secret + " failed"} {
+				if got := render(s); !Leak(got, secret) {
+					t.Errorf("%s: Leak(%q) = false, want true", name, got)
+				}
+			}
+			if got := render("login " + other + " failed"); Leak(got, secret) {
+				t.Errorf("%s of other text: Leak(%q) = true, want false", name, got)
+			}
+		}
+	})
+	t.Run("url_and_html", func(t *testing.T) {
+		t.Parallel()
+		// +, /, =, & and a space are escaped by net/url, & and < by html, and
+		// + also by html/template. other differs from secret in the middle.
+		const secret, other = "ab+cd/ef=gh&ij<kl mn", "ab+cd/EF=gh&ij<kl mn"
+		page := template.Must(template.New("page").Parse("<p>{{.}}</p>"))
+		urlError := func(u *url.URL) string {
+			return (&url.Error{Op: "Get", URL: u.String(), Err: io.ErrUnexpectedEOF}).Error()
+		}
+		printers := map[string]func(string) string{
+			"url.QueryEscape": url.QueryEscape,
+			"url.PathEscape":  url.PathEscape,
+			"url.Error_query": func(s string) string {
+				return urlError(&url.URL{Scheme: "https", Host: "example.com", Path: "/api", RawQuery: url.Values{"apikey": {s}}.Encode()})
+			},
+			"url.Error_path": func(s string) string {
+				return urlError(&url.URL{Scheme: "https", Host: "example.com", Path: "/feed/" + s})
+			},
+			"html.EscapeString": html.EscapeString,
+			"html/template": func(s string) string {
+				var b strings.Builder
+				if err := page.Execute(&b, s); err != nil {
+					t.Fatalf("Execute() error = %v", err)
+				}
+				return b.String()
+			},
 		}
 		for name, render := range printers {
 			for _, s := range []string{secret, "login " + secret + " failed"} {
