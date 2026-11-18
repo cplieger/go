@@ -23,7 +23,8 @@ type timed struct {
 	// base is what the next wake counts from: the last moving end, the
 	// cadence change, or the start when the scope has neither.
 	base    time.Time
-	since   time.Time // the Schedule call that added it
+	since   time.Time    // the Schedule call that added it
+	lease   health.Lease // the kind's Watch, or {every, Cycles: 3}
 	cadence Cadence
 	gen     uint64 // bumped at each arm, so a superseded timer's func does nothing
 	done    bool   // base is an end whose work was done, or no end, so the wait is the interval
@@ -81,6 +82,7 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 		t.base, t.done = now, true
 	}
 	t.cadence = c
+	t.lease = lease
 	t.watch = NewWatch(lease)
 	if t.fromEnds && e.endsRead {
 		e.baseLocked(key, t)
@@ -116,16 +118,9 @@ func (e *Executor[P]) stopTimerLocked(t *timed) {
 }
 
 // readEnds loads Records.LastEnds once Run starts, then sets the base of
-// each scope first scheduled before it and arms every timer. A failed read
-// is logged and counts each such scope from the start.
+// each scope first scheduled before it and arms every timer.
 func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
-	var ends map[ScheduledScope]LastEnd
-	if e.records != nil {
-		var err error
-		if ends, err = e.records.LastEnds(ctx); err != nil {
-			e.log.Error("last job ends not read; scheduled scopes count from the start", "err", err)
-		}
-	}
+	ends := e.lastEnds(ctx)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for key, end := range ends {
@@ -133,7 +128,7 @@ func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 			e.ends[key] = end
 		}
 	}
-	e.endsRead, e.runAt = true, start
+	e.endsRead, e.countFrom = true, start
 	for key, t := range e.scheduled {
 		if t.fromEnds {
 			e.baseLocked(key, t)
@@ -143,9 +138,22 @@ func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 	}
 }
 
-// baseLocked counts a first-scheduled scope from its last moving end, its
-// covering kinds' included, else from the later of Run's start and its
-// Schedule call.
+// lastEnds reads Records.LastEnds; a failed read is logged and answers none,
+// so each scope counts from now.
+func (e *Executor[P]) lastEnds(ctx context.Context) map[ScheduledScope]LastEnd {
+	if e.records == nil {
+		return nil
+	}
+	ends, err := e.records.LastEnds(ctx)
+	if err != nil {
+		e.log.Error("last job ends not read; scheduled scopes count from now", "err", err)
+		return nil
+	}
+	return ends
+}
+
+// baseLocked counts a scope from its last moving end, its covering kinds'
+// included, else from the later of countFrom and its Schedule call.
 func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
 	t.fromEnds = false
 	if end, ok := e.lastEndLocked(key); ok {
@@ -154,21 +162,22 @@ func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
 		return
 	}
 	t.base, t.done = t.since, true
-	if e.runAt.After(t.since) {
-		t.base = e.runAt
-		t.watch.from(e.runAt)
+	if e.countFrom.After(t.since) {
+		t.base = e.countFrom
+		t.watch.from(e.countFrom)
 	}
 }
 
 // armLocked sets t's timer to its base plus the cadence's wait, jittered.
-// Nothing is armed before Run has read the last ends or after it ended.
+// Nothing is armed before Run has read the last ends, during a Hold(all) or
+// after Run ended.
 func (e *Executor[P]) armLocked(key ScheduledScope, t *timed) {
 	e.armAtLocked(key, t, t.base.Add(JitteredDelay(t.cadence.wait(t.done), jitter)))
 }
 
 func (e *Executor[P]) armAtLocked(key ScheduledScope, t *timed, at time.Time) {
 	e.stopTimerLocked(t)
-	if !e.endsRead || e.closed {
+	if !e.armableLocked() {
 		return
 	}
 	gen := t.gen
@@ -272,6 +281,9 @@ func (e *Executor[P]) stopTimersLocked() {
 		e.stopCheckLocked(t)
 	}
 }
+
+// armableLocked reports whether timers and deadline checks may be set.
+func (e *Executor[P]) armableLocked() bool { return e.endsRead && !e.closed && e.holds == 0 }
 
 // workDone reports whether an end did its work, so the next wake waits the
 // interval and not Retry's d.

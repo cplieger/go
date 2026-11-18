@@ -14,8 +14,8 @@ import (
 // a proposing kind or serving a timer request, answers it instead (Joined). A
 // proposing kind's jobs coalesce per owner. It answers *RecentError, and
 // ErrQueueFull past a queue or proposal bound (the record ended skipped,
-// queue_full); ErrStoreUnavailable when the record cannot be written,
-// ErrBatchSize, ErrUnknownKind and ErrScope.
+// queue_full) and during a Hold(all) (no record); ErrStoreUnavailable when
+// the record cannot be written, ErrBatchSize, ErrUnknownKind and ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -30,26 +30,13 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	}
 
 	e.mu.Lock()
-	for {
-		if s, ok := e.heldLocked(spec, &en.j); ok {
-			e.mu.Unlock()
-			return s, nil
-		}
-		s, admitting, ok := e.joinLocked(&en.j)
-		if ok {
-			e.mu.Unlock()
-			return s, nil
-		}
-		if admitting == nil {
-			break
-		}
+	if s, ok, err := e.matchLocked(ctx, spec, &en.j); ok || err != nil {
 		e.mu.Unlock()
-		select {
-		case <-admitting:
-		case <-ctx.Done():
-			return Started{}, ctx.Err()
-		}
-		e.mu.Lock()
+		return s, err
+	}
+	if e.holds > 0 {
+		e.mu.Unlock()
+		return Started{}, ErrQueueFull
 	}
 	if s, ok, err := e.answerLocked(spec, &en.j); ok || err != nil {
 		e.mu.Unlock()
@@ -65,12 +52,35 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	return e.admit(ctx, en)
 }
 
+// matchLocked answers j from its owner's held proposal or a waiting job,
+// waiting out a match whose record is still being written. It is called
+// holding mu, releases it while it waits and holds it again on return.
+func (e *Executor[P]) matchLocked(ctx context.Context, spec *KindSpec[P], j *Job[P]) (Started, bool, error) {
+	for {
+		if s, ok := e.heldLocked(spec, j); ok {
+			return s, true, nil
+		}
+		s, admitting, ok := e.joinLocked(j)
+		if ok || admitting == nil {
+			return s, ok, nil
+		}
+		e.mu.Unlock()
+		select {
+		case <-admitting:
+		case <-ctx.Done():
+			e.mu.Lock()
+			return Started{}, false, ctx.Err()
+		}
+		e.mu.Lock()
+	}
+}
+
 // admit writes the record of en, which holds its place in the bounds, and
 // queues it.
 func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 	err := e.insert(ctx, en)
 	e.mu.Lock()
-	if err == nil && e.closed {
+	if err == nil && (e.closed || e.holds > 0) {
 		err = errClosed
 	}
 	if err != nil {
@@ -100,8 +110,8 @@ func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 	return s, nil
 }
 
-// errClosed is a Start that met the executor's end; it answers as a full
-// queue.
+// errClosed is a Start that met the executor's end or a Hold(all); it
+// answers as a full queue.
 var errClosed = errors.New("scheduler: closed")
 
 // queueFull is the end of a request the queue refused after its record was
@@ -116,6 +126,7 @@ func (e *Executor[P]) newJob(spec *KindSpec[P], j Job[P]) (*job[P], error) {
 		slot:     e.slots[spec.Slot],
 		admitted: make(chan struct{}),
 		gone:     make(chan struct{}),
+		finished: make(chan struct{}),
 		j:        j,
 		class:    classOf(j.Trigger),
 	}

@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -40,17 +41,22 @@ func keyOf[P any](j *Job[P]) proposalKey {
 
 // Propose holds v as the job's proposal, keyed by its Owner, Kind and Scope,
 // until 15 minutes after the job ends, and names it on the job's record. It
-// answers ErrProposed when the job already proposed. A kind without Proposes
-// panics, and the job ends failed with run_panicked.
+// answers ErrProposed when the job already proposed and context.Canceled,
+// holding nothing, once a cancel, a Hold(all) or a shutdown stopped the job.
+// A kind without Proposes panics, and the job ends failed with run_panicked.
 func (r *Run[P]) Propose(v any) (ProposalID, error) {
 	e, en := r.e, r.en
 	if !en.spec.Proposes {
 		panic(fmt.Sprintf("scheduler: kind %s proposed, and its KindSpec does not set Proposes", en.j.Kind))
 	}
 	e.mu.Lock()
-	if en.proposal != nil {
+	switch {
+	case en.proposal != nil:
 		e.mu.Unlock()
 		return "", ErrProposed
+	case en.stopped:
+		e.mu.Unlock()
+		return "", context.Canceled
 	}
 	p := &proposal{id: ProposalID(newID()), job: en.j.ID, key: keyOf(&en.j), v: v}
 	en.proposal = p

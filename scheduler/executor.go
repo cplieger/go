@@ -14,8 +14,6 @@ import (
 	"github.com/cplieger/go/health/v2"
 )
 
-var errStub = errors.New("scheduler: not built")
-
 // KindSpec declares one kind of job: where it runs, what it records and the
 // work it does.
 type KindSpec[P any] struct {
@@ -136,16 +134,19 @@ type Executor[P any] struct {
 	seen      map[ScheduledScope]struct{} // every scope scheduled in this executor's life
 	// ends is each scope's last moving end, read from Records at Run and
 	// kept from each later end.
-	ends     map[ScheduledScope]LastEnd
-	runAt    time.Time     // when Run started
-	ready    chan struct{} // closed by Run
-	observer Observer
-	live     []*job[P] // admitting, queued and running jobs, in admission order
-	wg       sync.WaitGroup
-	mu       sync.Mutex
+	ends map[ScheduledScope]LastEnd
+	// countFrom is when Run started or the last hold resumed: a scheduled
+	// scope with no last end counts from it.
+	countFrom time.Time
+	ready     chan struct{} // closed by Run
+	observer  Observer
+	live      []*job[P] // admitting, queued and running jobs, in admission order
+	wg        sync.WaitGroup
+	mu        sync.Mutex
 
 	maxQueued, maxPerOwner int
 	waiting                int
+	holds                  int // Hold(all) calls not yet resumed
 	started, closed        bool
 	endsRead               bool // Run has read Records.LastEnds, so timers may be armed
 }
@@ -283,6 +284,7 @@ type job[P any] struct {
 	w         *waiter            // its take of a named slot; nil when it waits for none
 	admitted  chan struct{}      // closed once its record is written or refused
 	gone      chan struct{}      // closed when it leaves the queue without running
+	finished  chan struct{}      // closed once it ran and its end is written
 	cancel    context.CancelFunc // set when it runs
 	startedAt time.Time          // when it took its slot
 	// stopEnd is the end a cancel, a covering start or a shutdown gave it,
@@ -435,6 +437,7 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	phase := en.rec.Phase
 	en.recMu.Unlock()
 	e.emit(en, &Transition{Phase: phase, Result: stored.Result, At: at})
+	close(en.finished)
 }
 
 // end writes en's end and answers the stored one, which an end the job's own

@@ -32,7 +32,9 @@ func TestPhaseTimesKept(t *testing.T) {
 			)
 			full := spec("full", "passes")
 			full.Phases = []scheduler.Phase{"walking_sonarr", "walking_radarr", "publishing"}
+			ran := make(chan struct{})
 			full.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+				defer close(ran)
 				entered = time.Now()
 				id = run.Job().ID
 				puts := r.store.Count(memrecords.OpPut)
@@ -63,6 +65,7 @@ func TestPhaseTimesKept(t *testing.T) {
 			r = newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{full}})
 			r.start(t, timer("full", "", payload{}))
 			time.Sleep(time.Minute)
+			<-ran
 			step := func(n int) struct{ N, Of int } { return struct{ N, Of int }{n, 3} }
 			want := []seen{
 				{phase: scheduler.PhaseStarted, step: struct{ N, Of int }{0, 3}},
