@@ -26,7 +26,7 @@ A keyed start (`Job.Key`) writes its idempotency key in that same insert, and th
 
 A kind whose work ends in one commit of its own writes its end inside that commit, through the store's own call, after `Run.Commit()` answered true. When `Run` returns, the executor leaves an end already stored as it is and reports the stored end, so a crash after the app's commit never leaves a committed write whose record reads `interrupted`.
 
-An end keeps its 32 most severe reasons. Its facts, when they are not a JSON object or are above 2 KiB, are dropped: the end gains the reason `facts_too_large` within the 32, one ERROR line is logged, and the end is still written. `CloseEnd(lines, end)` is that close, with the batch's below, and answers what it cut: the executor applies it to every end it writes, and a store's own-commit end applies it too, logging the cut, so an end reads the same whichever path commits it. A line's facts are bounded alike when `Item` writes the line, which logs at ERROR and adds no reason to the end.
+An end keeps its 32 most severe reasons. Its facts, when they are not a JSON object or are above 2 KiB, are dropped: the end gains the reason `facts_too_large` within the 32, and the end is still written. Each cut is logged at ERROR where it is made: by the executor for the end a `Run` returns, and by a store's own commit for the end that commit writes. `CloseEnd(lines, end)` is that close, with the batch's below, and answers what it cut: the executor applies it to every end a `Run` returns, and a store's own-commit end applies it too, so an end reads the same whichever path commits it. A line's facts are bounded alike when `Item` writes the line, which logs at ERROR and adds no reason to the end.
 
 ## What a request does
 

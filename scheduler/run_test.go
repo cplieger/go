@@ -211,6 +211,39 @@ func TestFactsOverCapDropped(t *testing.T) {
 			}
 		})
 	})
+
+	t.Run("a committed end the Run also returns is logged by each cut", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var r *rig
+			lines := &logLines{}
+			check := spec("check", "")
+			check.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+				committed := scheduler.End{Result: scheduler.ResultPartial, Reasons: []scheduler.Reason{budget}, Facts: factsOf(3072)}
+				if !run.Commit() {
+					t.Error("Commit = false for a job nobody cancelled")
+				}
+				if err := r.store.EndIn(run.Job().ID, committed); err != nil {
+					t.Errorf("EndIn = %v", err)
+				}
+				return committed
+			}
+			log := slog.New(lines)
+			r = newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{check}, Logger: log})
+			r.store.Logger(log)
+			s := r.start(t, api("check", "", "alice", payload{}))
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultPartial, budget, dropped)
+			got := lines.text(slog.LevelError)
+			if len(got) != 2 {
+				t.Fatalf("ERROR lines %q, want 2: the store's and the executor's", got)
+			}
+			for _, want := range []string{"job end cut to its bounds", "job run end cut to its bounds"} {
+				if !slices.ContainsFunc(got, func(l string) bool { return strings.HasPrefix(l, want+" ") }) {
+					t.Errorf("ERROR lines %q, want one with the message %q", got, want)
+				}
+			}
+		})
+	})
 }
 
 // missing answers n distinct reasons, most severe first.

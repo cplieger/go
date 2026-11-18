@@ -150,7 +150,7 @@ func (e *Executor[P]) closeEnd(en *job[P], end End) End {
 	defer en.recMu.Unlock()
 	closed, end, cut := CloseEnd(en.rec.Lines, end)
 	if cut != (Cut{}) {
-		e.log.Error("job end cut to its bounds", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
+		e.log.Error("job run end cut to its bounds", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
 			"reasons_dropped", cut.Reasons, "facts_bytes", cut.FactsBytes)
 	}
 	if slices.ContainsFunc(en.rec.Lines, lineOpen) {
