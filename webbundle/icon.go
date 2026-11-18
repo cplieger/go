@@ -21,6 +21,7 @@ import (
 
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
+	"golang.org/x/net/html"
 )
 
 // The PNG sizes Build writes: the browser tab, apple-touch-icon, and the
@@ -191,7 +192,7 @@ var iconPaint = []string{
 
 // iconGeometry are the other attributes oksvg reads.
 var iconGeometry = []string{
-	nsXMLNS, "version", "id", "viewBox", "href",
+	nsXMLNS, "version", "id", "viewBox", hrefAttr,
 	"x", "y", "width", "height", "rx", "ry", "cx", "cy", "r", "fx", "fy",
 	"x1", "y1", "x2", "y2", "d", "points", "offset", "stop-color", "stop-opacity",
 	"gradientTransform", "gradientUnits", "spreadMethod",
@@ -434,8 +435,9 @@ func renderIcon(svg []byte, size int) ([]byte, error) {
 }
 
 // writeIcons writes the icon, the PNGs and the manifest into t as hashed
-// files under assets/ and returns the link lines each shell's head ends with.
-func (b *build) writeIcons(t *tree) ([]byte, error) {
+// files under assets/ and returns the attributes of the link elements each
+// shell's head ends with.
+func (b *build) writeIcons(t *tree) ([][]html.Attribute, error) {
 	if b.icon == nil {
 		return nil, nil
 	}
@@ -451,12 +453,14 @@ func (b *build) writeIcons(t *tree) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var links bytes.Buffer
-	fmt.Fprintf(&links, "<link rel=\"icon\" href=\"/%s\" type=\"image/svg+xml\">\n", svgPath)
-	fmt.Fprintf(&links, "<link rel=\"icon\" href=\"/%s\" sizes=\"%[2]dx%[2]d\" type=\"image/png\">\n", pngs[tabIcon], tabIcon)
-	fmt.Fprintf(&links, "<link rel=\"apple-touch-icon\" href=\"/%s\">\n", pngs[touchIcon])
+	links := make([][]html.Attribute, 0, len(iconRels)+1)
+	links = append(links,
+		[]html.Attribute{{Key: relAttr, Val: relIcon}, {Key: hrefAttr, Val: "/" + svgPath}, {Key: typeAttr, Val: "image/svg+xml"}},
+		[]html.Attribute{{Key: relAttr, Val: relIcon}, {Key: hrefAttr, Val: "/" + pngs[tabIcon]}, {Key: "sizes", Val: fmt.Sprintf("%[1]dx%[1]d", tabIcon)}, {Key: typeAttr, Val: "image/png"}},
+		[]html.Attribute{{Key: relAttr, Val: relTouchIcon}, {Key: hrefAttr, Val: "/" + pngs[touchIcon]}},
+	)
 	if b.manifest == nil {
-		return links.Bytes(), nil
+		return links, nil
 	}
 	icons := manifestIcons(pngs, PurposeAny)
 	if b.maskable != nil {
@@ -470,8 +474,7 @@ func (b *build) writeIcons(t *tree) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(&links, "<link rel=\"manifest\" href=\"/%s\">\n", p)
-	return links.Bytes(), nil
+	return append(links, []html.Attribute{{Key: relAttr, Val: relManifest}, {Key: hrefAttr, Val: "/" + p}}), nil
 }
 
 // iconFiles lists every file under Src writeIcons copies or renders into
@@ -539,4 +542,10 @@ func manifestIcons(pngs map[int]string, purpose IconPurpose) []any {
 
 // iconRels are the link relations Build writes for the icon, so a shell
 // carrying one of its own would name a second icon.
-var iconRels = []string{"icon", "apple-touch-icon", "manifest"}
+var iconRels = []string{relIcon, relTouchIcon, relManifest}
+
+const (
+	relIcon      = "icon"
+	relTouchIcon = "apple-touch-icon"
+	relManifest  = "manifest"
+)

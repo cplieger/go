@@ -6,7 +6,7 @@ This page describes what `Build` writes to `Out`, for a developer serving it wit
 
 | Path | What it holds |
 | --- | --- |
-| `<shell>.html` | Each shell, with its logical paths replaced by hashed ones (each tag naming one written back with its attributes double-quoted) and, with an icon, the icon links |
+| `<shell>.html` | Each shell, with its logical paths replaced by hashed ones and, with an icon, the icon links, written by `html.Render`: implied tags such as `<head>` are written out, attributes are double-quoted and void elements end in `/>` |
 | `<file>.js` | Each classic entry with a `URL`, such as `sw.js`, unhashed |
 | `assets/<name>-<hash>.<ext>` | Each other entry's output, the fonts and images it uses, and the icon files |
 | `assets/chunks/<name>-<hash>.js` | The code module entries share, and each dynamic `import()` |

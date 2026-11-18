@@ -3,6 +3,7 @@ package webbundle
 import (
 	"bytes"
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,33 +11,32 @@ import (
 
 	"github.com/cplieger/go/httpserver/v2"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
-// shell is one shell read from Src: its bytes and each tag naming an entry's
-// logical path, with the span to replace.
+// shell is one shell read from Src: html.Parse's tree of it and each
+// element naming an entry's logical path.
 type shell struct {
-	name  string
-	body  []byte
-	links []link
-	head  int // the offset of </head>; -1 is none
-
-	iconRels bool // whether to refuse a link Build writes for the icon
+	name string
+	doc  *html.Node
+	head *html.Node
+	refs []ref
 }
 
-// link is a start tag naming an entry: the tag's byte span in the shell and
-// the token it is written back from, its attr'th attribute the logical path.
-type link struct {
-	tok        html.Token
-	entry      int // index into build.entries
-	start, end int
-	attr       int
+// ref is a script or link element naming an entry: its attr'th attribute is
+// the logical path.
+type ref struct {
+	node  *html.Node
+	entry int // index into build.entries
+	attr  int
 }
 
 // readShell refuses a shell httpserver.CheckShell refuses, which is what
-// httpserver.SPA's policy would block, then reads it as html.Parse does, so
-// a comment or a raw-text element's body holds no tags. It also refuses a
-// logical path named twice, by a tag that does not load its entry's kind,
-// or one no entry is.
+// httpserver.SPA's policy would block, then finds the HTML script and link
+// elements of html.Parse's tree naming a logical path, so a comment, a
+// raw-text body or foreign content holds none. It also refuses a logical
+// path named twice, by an element that does not load its entry's kind, or
+// one no entry is.
 func (b *build) readShell(name string) (shell, error) {
 	body, err := os.ReadFile(filepath.Join(b.src, name))
 	if err != nil {
@@ -45,83 +45,79 @@ func (b *build) readShell(name string) (shell, error) {
 	if bad := httpserver.CheckShell(body); bad != nil {
 		return shell{}, fmt.Errorf("webbundle: shell %s %w", name, bad)
 	}
+	doc, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		return shell{}, fmt.Errorf("webbundle: shell %s: %w", name, err)
+	}
 	logical := map[string]int{}
 	for i, e := range b.entries {
 		logical[logicalPath(&e)] = i
 	}
-	sh := shell{name: name, body: body, head: -1, iconRels: b.icon != nil}
-	r := shellReader{shell: &sh, entries: b.entries, logical: logical, named: map[string]bool{}}
-	if err := r.walk(); err != nil {
-		return shell{}, err
-	}
-	if sh.iconRels && sh.head < 0 {
-		return shell{}, fmt.Errorf("webbundle: shell %s has no </head> to end with the icon links", name)
+	sh := shell{name: name, doc: doc, head: headOf(doc)}
+	r := shellReader{shell: &sh, entries: b.entries, logical: logical, named: map[string]bool{}, iconRels: b.icon != nil}
+	for n := range scriptsAndLinks(doc) {
+		if err := r.element(n); err != nil {
+			return shell{}, err
+		}
 	}
 	return sh, nil
 }
 
-// shellReader is one walk over a shell's tokens.
+// headOf returns the head element html.Parse puts first in every document's
+// html element.
+func headOf(doc *html.Node) *html.Node {
+	for n := range doc.Descendants() {
+		if n.Type == html.ElementNode && n.Namespace == "" && n.Data == "head" {
+			return n
+		}
+	}
+	return nil
+}
+
+// scriptsAndLinks yields doc's HTML script and link elements in document
+// order.
+func scriptsAndLinks(doc *html.Node) iter.Seq[*html.Node] {
+	return func(yield func(*html.Node) bool) {
+		for n := range doc.Descendants() {
+			if n.Type == html.ElementNode && n.Namespace == "" && (n.Data == scriptElement || n.Data == linkElement) && !yield(n) {
+				return
+			}
+		}
+	}
+}
+
+// shellReader is one pass over a shell's script and link elements.
 type shellReader struct {
 	*shell
-	logical map[string]int  // entry index by logical path
-	named   map[string]bool // the logical paths read so far
-	entries []Entry
+	logical  map[string]int  // entry index by logical path
+	named    map[string]bool // the logical paths read so far
+	entries  []Entry
+	iconRels bool // whether to refuse a link Build writes for the icon
 }
 
-// walk reads every token of the shell, tracking each one's offset as the sum
-// of the raw bytes before it.
-func (r *shellReader) walk() error {
-	z := html.NewTokenizer(bytes.NewReader(r.body))
-	var f foreignStack
-	for at := 0; ; {
-		z.AllowCDATA(len(f) > 0)
-		tt := z.Next()
-		start := at
-		at += len(z.Raw())
-		switch tt {
-		case html.ErrorToken:
-			return nil
-		case html.EndTagToken:
-			tok := z.Token()
-			f.end(tok.Data)
-			if tok.Data == "head" && r.head < 0 {
-				r.head = start
-			}
-		case html.StartTagToken, html.SelfClosingTagToken:
-			tok := z.Token()
-			inHTML := f.start(z, tok, tt == html.SelfClosingTagToken)
-			if err := r.tag(tok, inHTML, start, at); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-// tag checks one start tag and records it when it names an entry.
-func (r *shellReader) tag(tok html.Token, inHTML bool, start, end int) error {
-	if !inHTML {
-		return nil
-	}
-	for i, a := range tok.Attr {
-		if err := r.iconRel(tok, a); err != nil {
+// element checks one script or link element and records it when it names
+// an entry.
+func (r *shellReader) element(n *html.Node) error {
+	for i, a := range n.Attr {
+		if err := r.iconRel(n, a); err != nil {
 			return err
 		}
-		ref := tok.Data == "script" && a.Key == "src" || tok.Data == linkElement && a.Key == "href"
-		if !ref || !rootScriptOrStyle(a.Val) {
+		isRef := n.Data == scriptElement && a.Key == "src" || n.Data == linkElement && a.Key == hrefAttr
+		if !isRef || !rootScriptOrStyle(a.Val) {
 			continue
 		}
-		e, err := r.entry(tok, a.Val)
+		e, err := r.entry(n, a.Val)
 		if err != nil {
 			return err
 		}
-		r.links = append(r.links, link{tok: tok, entry: e, start: start, end: end, attr: i})
+		r.refs = append(r.refs, ref{node: n, entry: e, attr: i})
 	}
 	return nil
 }
 
 // iconRel refuses a link relation Build writes itself for the icon.
-func (r *shellReader) iconRel(tok html.Token, a html.Attribute) error {
-	if tok.Data != linkElement || a.Key != "rel" || !r.iconRels {
+func (r *shellReader) iconRel(n *html.Node, a html.Attribute) error {
+	if n.Data != linkElement || a.Key != relAttr || !r.iconRels {
 		return nil
 	}
 	for rel := range strings.FieldsSeq(lowerASCII(a.Val)) {
@@ -132,27 +128,34 @@ func (r *shellReader) iconRel(tok html.Token, a html.Attribute) error {
 	return nil
 }
 
-// entry returns the index of the entry whose logical path tok names as p,
-// refusing a path no entry is, one named before and a tag that does not load
-// the entry's kind.
-func (r *shellReader) entry(tok html.Token, p string) (int, error) {
+// entry returns the index of the entry whose logical path n names as p,
+// refusing a path no entry is, one named before and an element that does
+// not load the entry's kind.
+func (r *shellReader) entry(n *html.Node, p string) (int, error) {
 	e, ok := r.logical[p]
 	switch {
 	case !ok:
 		return 0, fmt.Errorf("webbundle: shell %s names %s, which no entry is", r.name, p)
 	case r.named[p]:
 		return 0, fmt.Errorf("webbundle: shell %s names %s more than once", r.name, p)
-	case loads(tok) != r.entries[e].Kind:
+	case loads(n) != r.entries[e].Kind:
 		return 0, fmt.Errorf("webbundle: shell %s names %s, %s entry %q, in %s, which does not load it as one; use %s",
-			r.name, p, r.entries[e].Kind, r.entries[e].Name, tok, kindTag[r.entries[e].Kind])
+			r.name, p, r.entries[e].Kind, r.entries[e].Name, startTag(n), kindTag[r.entries[e].Kind])
 	}
 	r.named[p] = true
 	return e, nil
 }
 
+func startTag(n *html.Node) string {
+	return html.Token{Type: html.StartTagToken, Data: n.Data, Attr: n.Attr}.String()
+}
+
 const (
-	linkElement = "link"
-	mathRoot    = "math"
+	linkElement   = "link"
+	scriptElement = "script"
+	hrefAttr      = "href"
+	relAttr       = "rel"
+	typeAttr      = "type"
 )
 
 var kindTag = map[EntryKind]string{
@@ -166,16 +169,16 @@ var kindTag = map[EntryKind]string{
 // https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
 // reads it, and only a link whose rel holds stylesheet and not alternate
 // applies its stylesheet.
-func loads(tok html.Token) EntryKind {
-	if tok.Data == linkElement {
-		rels := strings.Fields(lowerASCII(attrVal(tok, "rel")))
+func loads(n *html.Node) EntryKind {
+	if n.Data == linkElement {
+		rels := strings.Fields(lowerASCII(attrVal(n, relAttr)))
 		if slices.Contains(rels, "stylesheet") && !slices.Contains(rels, "alternate") {
 			return Style
 		}
 		return ""
 	}
-	typ, hasType := attrOf(tok, "type")
-	lang, hasLang := attrOf(tok, "language")
+	typ, hasType := attrOf(n, typeAttr)
+	lang, hasLang := attrOf(n, "language")
 	switch {
 	case hasType && typ != "":
 	case !hasType && hasLang && lang != "":
@@ -202,8 +205,8 @@ var javaScriptTypes = []string{
 	"text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript",
 }
 
-func attrOf(tok html.Token, key string) (string, bool) {
-	for _, a := range tok.Attr {
+func attrOf(n *html.Node, key string) (string, bool) {
+	for _, a := range n.Attr {
 		if a.Key == key {
 			return a.Val, true
 		}
@@ -211,8 +214,8 @@ func attrOf(tok html.Token, key string) (string, bool) {
 	return "", false
 }
 
-func attrVal(tok html.Token, key string) string {
-	v, _ := attrOf(tok, key)
+func attrVal(n *html.Node, key string) string {
+	v, _ := attrOf(n, key)
 	return v
 }
 
@@ -226,89 +229,6 @@ func lowerASCII(s string) string {
 	}, s)
 }
 
-// foreignStack holds the open SVG and MathML elements, so the walk switches
-// the tokenizer's raw-text reading off inside them as html.Parse does: there
-// a <title> or <style> holds markup.
-type foreignStack []foreignElement
-
-type foreignElement struct {
-	ns, name string
-	html     bool // an integration point: its content is read as HTML
-}
-
-// html reports whether the next token is read as HTML content.
-func (f foreignStack) html() bool { return len(f) == 0 || f[len(f)-1].html }
-
-// start records a start tag and reports whether it is an HTML element,
-// following https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inforeign.
-func (f *foreignStack) start(z *html.Tokenizer, tok html.Token, selfClosing bool) bool {
-	var ns string
-	switch {
-	case f.html():
-		if tok.Data != svgRoot && tok.Data != mathRoot {
-			return true
-		}
-		ns = tok.Data
-	case breakout(tok):
-		for len(*f) > 0 && !f.html() {
-			*f = (*f)[:len(*f)-1]
-		}
-		return f.html()
-	default:
-		top := (*f)[len(*f)-1]
-		ns = top.ns
-		if tok.Data == svgRoot && top.name == "annotation-xml" {
-			ns = svgRoot
-		}
-		z.NextIsNotRawText()
-	}
-	if !selfClosing {
-		*f = append(*f, foreignElement{ns: ns, name: tok.Data, html: integrationPoint(ns, tok)})
-	}
-	return false
-}
-
-// end closes the innermost open foreign element named name, if any.
-func (f *foreignStack) end(name string) {
-	for i, e := range slices.Backward(*f) {
-		if e.name == name {
-			*f = (*f)[:i]
-			return
-		}
-	}
-}
-
-func integrationPoint(ns string, tok html.Token) bool {
-	switch ns {
-	case svgRoot:
-		return slices.Contains([]string{"foreignobject", "desc", "title"}, tok.Data)
-	case mathRoot:
-		if tok.Data == "annotation-xml" {
-			enc := lowerASCII(attrVal(tok, "encoding"))
-			return enc == "text/html" || enc == "application/xhtml+xml"
-		}
-		return slices.Contains([]string{"mi", "mo", "mn", "ms", "mtext"}, tok.Data)
-	}
-	return false
-}
-
-var breakoutTags = []string{
-	"b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt",
-	"em", "embed", "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li",
-	"listing", "menu", "meta", "nobr", "ol", "p", "pre", "ruby", "s", "small", "span",
-	"strong", "strike", "sub", "sup", "table", "tt", "u", "ul", "var",
-}
-
-// breakout reports whether a start tag in foreign content returns to HTML.
-func breakout(tok html.Token) bool {
-	if tok.Data == "font" {
-		return slices.ContainsFunc(tok.Attr, func(a html.Attribute) bool {
-			return a.Key == "color" || a.Key == "face" || a.Key == "size"
-		})
-	}
-	return slices.Contains(breakoutTags, tok.Data)
-}
-
 // rootScriptOrStyle reports whether v has a logical path's shape:
 // "/<name>.js" or "/<name>.css".
 func rootScriptOrStyle(v string) bool {
@@ -317,27 +237,37 @@ func rootScriptOrStyle(v string) bool {
 		(strings.HasSuffix(name, jsExt) || strings.HasSuffix(name, cssExt))
 }
 
-// render returns the shell with each tag naming a logical path written back
-// naming its entry's built one (every attribute double-quoted, as
-// html.Token renders it) and head inserted before </head>.
-func (s *shell) render(paths []string, head []byte) []byte {
-	out := make([]byte, 0, len(s.body)+len(s.links)*16+len(head))
-	at := 0
-	inserted := len(head) == 0
-	for _, l := range s.links {
-		if !inserted && s.head < l.start {
-			out = append(append(out, s.body[at:s.head]...), head...)
-			at, inserted = s.head, true
-		}
-		tok := l.tok
-		tok.Attr = slices.Clone(tok.Attr)
-		tok.Attr[l.attr].Val = "/" + paths[l.entry]
-		out = append(append(out, s.body[at:l.start]...), tok.String()...)
-		at = l.end
+// render writes the shell with each element naming a logical path naming
+// its entry's built one and icon's link elements appended to the head. It
+// edits the tree, so it runs once. html.Render does not promise that every
+// tree reads back as itself, so the written shell is parsed again and
+// refused unless its script and link elements are the edited tree's, and
+// CheckShell runs on it as SPA will.
+func (s *shell) render(paths []string, icon [][]html.Attribute) ([]byte, error) {
+	for _, r := range s.refs {
+		r.node.Attr[r.attr].Val = "/" + paths[r.entry]
 	}
-	if !inserted {
-		out = append(append(out, s.body[at:s.head]...), head...)
-		at = s.head
+	for _, attrs := range icon {
+		s.head.AppendChild(&html.Node{Type: html.ElementNode, Data: linkElement, DataAtom: atom.Link, Attr: attrs})
+		s.head.AppendChild(&html.Node{Type: html.TextNode, Data: "\n"})
 	}
-	return append(out, s.body[at:]...)
+	var out bytes.Buffer
+	if err := html.Render(&out, s.doc); err != nil {
+		return nil, fmt.Errorf("webbundle: shell %s: %w", s.name, err)
+	}
+	back, err := html.Parse(bytes.NewReader(out.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("webbundle: shell %s as written: %w", s.name, err)
+	}
+	if !slices.EqualFunc(slices.Collect(scriptsAndLinks(s.doc)), slices.Collect(scriptsAndLinks(back)), sameElement) {
+		return nil, fmt.Errorf("webbundle: shell %s does not read back as written: html.Render moves or changes a script or link element", s.name)
+	}
+	if bad := httpserver.CheckShell(out.Bytes()); bad != nil {
+		return nil, fmt.Errorf("webbundle: shell %s as written %w", s.name, bad)
+	}
+	return out.Bytes(), nil
+}
+
+func sameElement(a, b *html.Node) bool {
+	return a.Data == b.Data && slices.Equal(a.Attr, b.Attr)
 }

@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"golang.org/x/net/html"
 )
 
 // Config is one app's bundle: where its sources are, where the tree goes,
@@ -144,7 +145,7 @@ func (b *build) readShells() ([]shell, []bool, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, l := range sh.links {
+		for _, l := range sh.refs {
 			named[l.entry] = true
 		}
 		shells = append(shells, sh)
@@ -185,10 +186,8 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 			return Result{}, fmt.Errorf("webbundle: classic entry %q is named by no shell and read through BUNDLE_URLS by no module entry", e.Name)
 		}
 	}
-	for _, sh := range shells {
-		if werr := t.write(sh.name, sh.render(eb.paths, head), 0o644); werr != nil {
-			return Result{}, werr
-		}
+	if werr := writeShells(t, shells, eb.paths, head); werr != nil {
+		return Result{}, werr
 	}
 	for _, f := range b.iconFiles() {
 		eb.own[f] = true
@@ -205,6 +204,20 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 		return Result{}, err
 	}
 	return Result{Outputs: eb.scripts, Files: files, Notices: slices.Sorted(maps.Keys(eb.pkgs))}, nil
+}
+
+// writeShells renders every shell into t.
+func writeShells(t *tree, shells []shell, paths []string, head [][]html.Attribute) error {
+	for _, sh := range shells {
+		body, err := sh.render(paths, head)
+		if err != nil {
+			return err
+		}
+		if err := t.write(sh.name, body, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // buildEntries builds the classic entries, then the module entries, then the

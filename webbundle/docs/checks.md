@@ -29,14 +29,15 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 
 ## Shells
 
-`Build` reads a shell as `html.Parse` from `golang.org/x/net/html` does, which follows the HTML parsing rules a browser does. A tag inside a comment, inside an attribute value, or inside the text of a `<title>`, `<textarea>`, `<noscript>` or `<script>` element is text: it is neither checked nor rewritten. Inside `<svg>` or `<math>` a tag is an element of that markup, and a tag in one of its HTML parts, such as an svg `<title>` or `<desc>`, is an HTML element again. It refuses a shell that `httpserver.SPA`'s Content-Security-Policy would block, or that names entries wrongly:
+`Build` reads each shell once, with `html.Parse` from `golang.org/x/net/html`, which follows the HTML parsing rules a browser does. Only the HTML `<script>` and `<link>` elements of that tree are read and rewritten: a tag inside a comment, inside an attribute value, or inside the text of a `<title>`, `<textarea>`, `<noscript>` or `<script>` element is text, and a tag inside `<svg>` or `<math>` is an element of that markup, unless the parser returns to HTML there (an svg `<title>` or `<desc>`, or an end tag such as `</p>` that closes the foreign content). `Build` edits the tree's elements, appends the icon links to its head, and writes the shell with `html.Render`, then parses the written shell again. It refuses a shell that `httpserver.SPA`'s Content-Security-Policy would block, that names entries wrongly, or that does not read back as written:
 
 - what `httpserver.CheckShell` refuses, the check `SPA` runs at start: an inline `<script>` or `<style>` element, a `style` attribute, an event handler attribute such as `onclick`, which the policy blocks as it blocks an inline script, and a shell `html.Parse` cannot read whole. A `<script>` of a type that is no script, such as `text/template`, never runs and passes
 - a root path ending in `.js` or `.css`, such as `/main.js`, that is no entry's logical path
 - one logical path named twice in the shell
 - a logical path in a tag that does not load its entry's kind: a module entry needs `<script type="module" src>`, a classic entry a `<script src>` with no type or a JavaScript one, and a style entry a `<link rel="stylesheet" href>` that is not an alternate stylesheet
 - a module or style entry no shell names, or a classic entry that no shell names and no module entry reads through `BUNDLE_URLS`
-- with an `Icon`, a shell that already carries an `icon`, `apple-touch-icon` or `manifest` link, or has no `</head>`
+- with an `Icon`, a shell that already carries an `icon`, `apple-touch-icon` or `manifest` link
+- a written shell whose `<script>` and `<link>` elements, read again, are not the edited tree's, with the same attributes in the same order, or that `httpserver.CheckShell` refuses. `html.Render` does not promise that every tree reads back as itself: a `<plaintext>` start tag inside a table, which the parser moves before the table, makes every element after it text
 
 ## Imports
 

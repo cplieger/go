@@ -81,9 +81,10 @@ func TestBuildRefusesShell(t *testing.T) {
 	}
 }
 
-// TestBuildReadsShellAsHTML pins that a shell is read as the HTML tokenizer
-// reads it: a comment (an abrupt "<!-->" or "<!--->" included) or a raw-text
-// element body holds text, never tags.
+// TestBuildReadsShellAsHTML pins that a shell is read as html.Parse reads
+// it: a comment (an abrupt "<!-->" or "<!--->" included) or a raw-text
+// element body holds text, never tags. A built shell is html.Render's, which
+// writes an empty comment as "<!---->".
 func TestBuildReadsShellAsHTML(t *testing.T) {
 	t.Parallel()
 	edit := func(old, repl string) string { return strings.Replace(fixtureShell, old, repl, 1) }
@@ -137,7 +138,7 @@ func TestBuildReadsShellAsHTML(t *testing.T) {
 			c := newFixture(t, files{"index.html": edit(moduleTag, tc.comment+moduleTag)})
 			mustBuild(t, c)
 			shell := string(readFile(t, c.Out, "index.html"))
-			if want := tc.comment + `<script type="module" src="/` + entryPath(t, readBundle(t, c.Out), "app", webbundle.Module) + `">`; !strings.Contains(shell, want) {
+			if want := `<!----><script type="module" src="/` + entryPath(t, readBundle(t, c.Out), "app", webbundle.Module) + `">`; !strings.Contains(shell, want) {
 				t.Errorf("index.html does not hold %s:\n%s", want, shell)
 			}
 		})
@@ -222,9 +223,70 @@ func TestBuildRewritesTheTagsHTMLParseFinds(t *testing.T) {
 	}
 }
 
+// TestBuildRewritesTagsAfterForeignContentEnds pins the end tags that close
+// SVG or MathML content: an </p> or </br> there returns the parser to HTML
+// (https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inforeign),
+// so the module script after it is an HTML script naming the entry.
+func TestBuildRewritesTagsAfterForeignContentEnds(t *testing.T) {
+	t.Parallel()
+	const moduleTag = `<script type="module" src="/app.js"></script>`
+	for _, tc := range []struct{ name, foreign string }{
+		{"SVGThenEndP", "<svg></p>"},
+		{"SVGThenEndBr", "<svg></br>"},
+		{"MathThenEndP", "<math></p>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			shell := strings.Replace(fixtureShell, moduleTag, tc.foreign+moduleTag, 1)
+			if got := parsedElements(t, shell, "script", "src", "/app.js"); got != 1 {
+				t.Fatalf("html.Parse finds %d HTML scripts naming /app.js, the case says 1", got)
+			}
+			c := newFixture(t, files{"index.html": shell})
+			mustBuild(t, c)
+			out := string(readFile(t, c.Out, "index.html"))
+			if want := `src="/` + entryPath(t, readBundle(t, c.Out), "app", webbundle.Module) + `"`; !strings.Contains(out, want) || strings.Contains(out, "/app.js") {
+				t.Errorf("index.html does not name the built module in place of /app.js:\n%s", out)
+			}
+		})
+	}
+	t.Run("SecondStylesheetAfterSVGThenEndP", func(t *testing.T) {
+		t.Parallel()
+		shell := strings.Replace(fixtureShell, "<body>", `<body><svg></p><link rel="stylesheet" href="/app.css">`, 1)
+		if got := parsedElements(t, shell, "link", "href", "/app.css"); got != 2 {
+			t.Fatalf("html.Parse finds %d HTML links naming /app.css, the case says 2", got)
+		}
+		c := newFixture(t, files{"index.html": shell})
+		buildRefused(t, c, "index.html", "/app.css", "more than once")
+		outMissing(t, c.Out)
+	})
+}
+
+// TestBuildRefusesShellRenderDoesNotWriteBack pins the re-read of a built
+// shell: a <plaintext> start tag in a table is put before the table, so the
+// written shell holds it ahead of the script, and everything after it is
+// text when read back.
+func TestBuildRefusesShellRenderDoesNotWriteBack(t *testing.T) {
+	t.Parallel()
+	const moduleTag = `<script type="module" src="/app.js"></script>`
+	shell := strings.Replace(fixtureShell, moduleTag, "<table>"+moduleTag+"<plaintext>", 1)
+	if err := httpserver.CheckShell([]byte(shell)); err != nil {
+		t.Fatalf("CheckShell = %v, the case needs a shell it passes", err)
+	}
+	c := newFixture(t, files{"index.html": shell})
+	buildRefused(t, c, "index.html", "read back")
+	outMissing(t, c.Out)
+}
+
 // parsedLinks counts the HTML link elements html.Parse builds from shell
 // whose href is href.
 func parsedLinks(t *testing.T, shell, href string) int {
+	t.Helper()
+	return parsedElements(t, shell, "link", "href", href)
+}
+
+// parsedElements counts the HTML elements named name that html.Parse builds
+// from shell whose attribute key is val.
+func parsedElements(t *testing.T, shell, name, key, val string) int {
 	t.Helper()
 	doc, err := html.Parse(strings.NewReader(shell))
 	if err != nil {
@@ -232,8 +294,8 @@ func parsedLinks(t *testing.T, shell, href string) int {
 	}
 	n := 0
 	for node := range doc.Descendants() {
-		if node.Type == html.ElementNode && node.Namespace == "" && node.Data == "link" &&
-			slices.ContainsFunc(node.Attr, func(a html.Attribute) bool { return a.Key == "href" && a.Val == href }) {
+		if node.Type == html.ElementNode && node.Namespace == "" && node.Data == name &&
+			slices.ContainsFunc(node.Attr, func(a html.Attribute) bool { return a.Key == key && a.Val == val }) {
 			n++
 		}
 	}

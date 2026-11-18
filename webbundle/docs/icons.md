@@ -11,16 +11,16 @@ With `Config.Icon` set to an `.svg` file under `Src`, `Build` writes these files
 - with `Config.Manifest`, `manifest.webmanifest`, and the files its `src` members name
 - with `Config.MaskableIcon`, PNGs of it at 192 and 512 px for the manifest
 
-It then adds these lines at the end of each shell's `<head>`, right before `</head>`:
+It then appends these elements to each shell's head element, so they are written right before `</head>`:
 
 ```html
-<link rel="icon" href="/assets/icon-84ec58577e86f6b6.svg" type="image/svg+xml">
-<link rel="icon" href="/assets/icon-32-17bfe12faa092c13.png" sizes="32x32" type="image/png">
-<link rel="apple-touch-icon" href="/assets/icon-180-2fb7d3acde97a5c4.png">
-<link rel="manifest" href="/assets/manifest-9d84059a25eb421c.webmanifest">
+<link rel="icon" href="/assets/icon-84ec58577e86f6b6.svg" type="image/svg+xml"/>
+<link rel="icon" href="/assets/icon-32-17bfe12faa092c13.png" sizes="32x32" type="image/png"/>
+<link rel="apple-touch-icon" href="/assets/icon-180-2fb7d3acde97a5c4.png"/>
+<link rel="manifest" href="/assets/manifest-9d84059a25eb421c.webmanifest"/>
 ```
 
-A shell that already carries an `icon`, `apple-touch-icon` or `manifest` link fails the build, and so does a shell with no `</head>`. With no `Icon`, the shells are left as they are, and `SPA` answers `/favicon.ico` with an empty 204.
+A shell that already carries an `icon`, `apple-touch-icon` or `manifest` link fails the build. With no `Icon`, no link is added, and `SPA` answers `/favicon.ico` with an empty 204.
 
 ## The manifest
 
