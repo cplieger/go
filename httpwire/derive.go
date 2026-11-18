@@ -533,8 +533,8 @@ func (c *tableChecker) bodyTypes(ep *Endpoint, at string) {
 }
 
 func accessProblems(a Access) []string {
-	if a.Class < Public || a.Class > Recovery {
-		return []string{fmt.Sprintf("Access Class %d is not Public, Session, Key, Scoped or Recovery", a.Class)}
+	if a.Class < Public || a.Class > Scoped {
+		return []string{fmt.Sprintf("Access Class %d is not Public, Session, Key or Scoped", a.Class)}
 	}
 	var p []string
 	if s := scopeProblem(a); s != "" {
@@ -562,7 +562,7 @@ func scopeProblem(a Access) string {
 		return ""
 	case !isCode(a.Scope):
 		return fmt.Sprintf("Scope %q is not in the code grammar", a.Scope)
-	case a.Class == Public || a.Class == Recovery || a.Class == Session && !a.PersonOnly:
+	case a.Class == Public || a.Class == Session && !a.PersonOnly:
 		return "a Scope is set only on a Key, Scoped or PersonOnly Session row"
 	}
 	return ""

@@ -87,7 +87,7 @@ func guardCodes(a httpwire.Access) []string {
 	switch a.Class {
 	case httpwire.Public:
 		return nil
-	case httpwire.Session, httpwire.Recovery:
+	case httpwire.Session:
 		codes = []string{"auth_required"}
 	case httpwire.Key, httpwire.Scoped:
 		codes = []string{"auth_required", "auth_forbidden"}
@@ -550,7 +550,7 @@ func TestDeriveRefusesAccess(t *testing.T) {
 		"unknown class":            {with("jobs.list", httpwire.Access{Class: 9}), []string{`row "jobs.list"`, "Class"}},
 		"scope on public":          {with("auth.sso", httpwire.Access{Class: httpwire.Public, Scope: "read"}), []string{`row "auth.sso"`, "Scope"}},
 		"scope on session":         {with("jobs.list", httpwire.Access{Class: httpwire.Session, Scope: "read"}), []string{`row "jobs.list"`, "Scope"}},
-		"scope on recovery":        {with("jobs.list", httpwire.Access{Class: httpwire.Recovery, Scope: "read"}), []string{`row "jobs.list"`, "Scope"}},
+		"the class after Scoped":   {with("jobs.list", httpwire.Access{Class: httpwire.Scoped + 1}), []string{`row "jobs.list"`, "not Public, Session, Key or Scoped"}},
 		"scoped with no scope":     {with("jobs.start", httpwire.Access{Class: httpwire.Scoped}), []string{`row "jobs.start"`, "Scope"}},
 		"scope outside grammar":    {with("jobs.start", httpwire.Access{Class: httpwire.Scoped, Scope: "Read All"}), []string{`row "jobs.start"`, "Scope"}},
 		"passive on public":        {with("auth.sso", httpwire.Access{Class: httpwire.Public, Passive: true}), []string{`row "auth.sso"`, "Passive"}},
@@ -570,7 +570,7 @@ func TestDeriveAcceptsAccessForms(t *testing.T) {
 	addRow(httpwire.Endpoint{Name: "key.scope", Method: http.MethodGet, Path: "/api/k2", Access: httpwire.Access{Class: httpwire.Key, Scope: "read"}})(tb)
 	addRow(httpwire.Endpoint{Name: "person.scope", Method: http.MethodGet, Path: "/api/p", Access: httpwire.Access{Class: httpwire.Session, PersonOnly: true, Scope: "admin"}})(tb)
 	addRow(httpwire.Endpoint{Name: "scoped.step", Method: http.MethodPost, Path: "/api/s", Access: httpwire.Access{Class: httpwire.Scoped, Scope: "admin", RecentAuth: true, HTTPS: true}})(tb)
-	addRow(httpwire.Endpoint{Name: "recovery.read", Method: http.MethodGet, Path: "/api/r", Access: httpwire.Access{Class: httpwire.Recovery, Passive: true}})(tb)
+	addRow(httpwire.Endpoint{Name: "session.passive", Method: http.MethodGet, Path: "/api/r", Access: httpwire.Access{Class: httpwire.Session, Passive: true}})(tb)
 	row(tb, "live.stream").Events[0].Readers = httpwire.Access{Class: httpwire.Scoped, Scope: "read"}
 	if _, err := httpwire.Derive(tb, guardCodes); err != nil {
 		t.Errorf("Derive = %v, want nil", err)

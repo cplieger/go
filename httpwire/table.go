@@ -129,7 +129,6 @@ const (
 	Session
 	Key
 	Scoped
-	Recovery
 )
 
 // Kind is what a row answers on success.

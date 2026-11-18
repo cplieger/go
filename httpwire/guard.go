@@ -41,5 +41,4 @@ const (
 	ShapeAnonymous ShapeKind = iota + 1
 	ShapeSession
 	ShapeKey
-	ShapeRecoverySession
 )

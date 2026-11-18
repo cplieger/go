@@ -47,7 +47,7 @@ func verdictOf(a httpwire.Access, p string) verdict {
 		return verdict{code: "auth_required", header: challenge(`Bearer realm="fixture"`)}
 	case p == "revoked":
 		return verdict{code: "auth_required", header: challenge(`Bearer realm="fixture", error="invalid_token"`)}
-	case isKey && (a.Class == httpwire.Session || a.Class == httpwire.Recovery):
+	case isKey && a.Class == httpwire.Session:
 		return verdict{code: "auth_required", header: challenge(`Bearer realm="fixture"`)}
 	case isKey && scopeRank[key] < scopeRank[a.Scope]:
 		return verdict{code: "auth_forbidden", header: challenge(`Bearer realm="fixture", error="insufficient_scope", scope="` + a.Scope + `"`)}
