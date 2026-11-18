@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -266,9 +267,35 @@ func TestTimerRefusedAtAdmissionWakesAfterRetry(t *testing.T) {
 	})
 }
 
+// refusedInserts is a store that keeps the instant of each Insert it
+// refuses, which a test stepping the clock a second at a time cannot see.
+type refusedInserts struct {
+	*memrecords.Store
+	at []time.Time
+	mu sync.Mutex
+}
+
+func (s *refusedInserts) Insert(ctx context.Context, r scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) {
+	got, replayed, err := s.Store.Insert(ctx, r, key)
+	if err != nil {
+		s.mu.Lock()
+		s.at = append(s.at, time.Now())
+		s.mu.Unlock()
+	}
+	return got, replayed, err
+}
+
+func (s *refusedInserts) instants() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.at)
+}
+
 func TestTimerStoreUnavailableWakesAfterRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("full", "passes")}})
+		base := &rig{store: memrecords.New(), log: &runLog{}}
+		ins := &refusedInserts{Store: base.store}
+		r := base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("full", "passes")}, Records: ins})
 		t0 := time.Now()
 		r.schedule(t, "full", "", scheduler.Scheduled(24*time.Hour).Retry(15*time.Minute))
 		deadline := r.ex.Deadline("full", "")
@@ -277,19 +304,22 @@ func TestTimerStoreUnavailableWakesAfterRetry(t *testing.T) {
 		}
 		r.store.Fail(memrecords.OpInsert, errors.New("disk full"))
 
-		lo, hi := jitterBand(24 * time.Hour)
-		sleepUntil(t0.Add(lo - time.Second))
-		if n := r.store.Count(memrecords.OpInsert); n != 0 {
-			t.Fatalf("%d inserts before the first wake's band, want 0", n)
-		}
+		_, hi := jitterBand(24 * time.Hour)
 		for r.store.Count(memrecords.OpInsert) == 0 {
 			if time.Since(t0) > hi {
-				t.Fatalf("no wake within %v, want one in [%v, %v]", hi, lo, hi)
+				t.Fatalf("no wake within %v of the schedule", hi)
 			}
 			time.Sleep(time.Second)
 			synctest.Wait()
 		}
-		refusedBy := time.Now() // the refusal came in the second before
+		refused := ins.instants()
+		if len(refused) != 1 {
+			t.Fatalf("%d refused inserts, want 1", len(refused))
+		}
+		refusedAt := refused[0]
+		if off := refusedAt.Sub(t0); !inBand(off, 24*time.Hour) {
+			t.Errorf("first wake %v after the schedule, want within the band of 24h", off)
+		}
 		if n := len(r.store.All()); n != 0 {
 			t.Errorf("%d records after a failed insert, want 0", n)
 		}
@@ -298,15 +328,12 @@ func TestTimerStoreUnavailableWakesAfterRetry(t *testing.T) {
 			t.Errorf("Deadline after a wake the store refused = %v, want it unmoved at %v", got, deadline)
 		}
 
-		rlo, rhi := jitterBand(15 * time.Minute)
-		sleepUntil(refusedBy.Add(rlo - 2*time.Second))
+		rlo, _ := jitterBand(15 * time.Minute)
+		sleepUntil(refusedAt.Add(rlo - time.Second))
 		if n := r.store.Count(memrecords.OpInsert); n != 1 {
 			t.Errorf("%d inserts before the retry's band, want 1: the refusal never re-fires at once", n)
 		}
-		next := r.nextWake(t, "full", "", refusedBy.Add(-time.Second), 15*time.Minute)
-		if off := next.QueuedAt.Sub(refusedBy); off > rhi {
-			t.Errorf("wake %v after the refusal, want at most %v", off, rhi)
-		}
+		next := r.nextWake(t, "full", "", refusedAt, 15*time.Minute)
 		r.wantEnd(t, next.ID, scheduler.ResultOK)
 	})
 }

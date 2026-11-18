@@ -106,8 +106,8 @@ func (r *rig) openUntil(t *testing.T, cfg scheduler.Config[payload]) (opened *ri
 	}
 }
 
-// run starts Run of a new executor of cfg over r's store and log; done
-// closes when Run returns.
+// run starts Run of a new executor of cfg over r's log and cfg.Records, or
+// r's store when cfg names none; done closes when Run returns.
 func (r *rig) run(t *testing.T, ctx context.Context, cfg scheduler.Config[payload]) (opened *rig, done <-chan struct{}) {
 	t.Helper()
 	cfg.Kinds = slices.Clone(cfg.Kinds)
@@ -116,7 +116,9 @@ func (r *rig) run(t *testing.T, ctx context.Context, cfg scheduler.Config[payloa
 			cfg.Kinds[i].Run = work(r.log)
 		}
 	}
-	cfg.Records = r.store
+	if cfg.Records == nil {
+		cfg.Records = r.store
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
