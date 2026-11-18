@@ -34,8 +34,8 @@ type feedPosition interface {
 }
 
 // WithSchema hands New the table's committed OpenAPI document, which every
-// request and answer is checked against and which gives the wire version.
-// New requires it.
+// request is checked against, httpwiretest.Contract checks answers against,
+// and which gives the wire version. New requires it.
 func WithSchema(doc []byte) Option {
 	return func(o *options) { o.schema, o.schemaSet = doc, true }
 }

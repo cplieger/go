@@ -1,0 +1,66 @@
+# The wire
+
+This page describes what an httpwire API sends and accepts, for anyone writing a client or reading its answers by hand.
+
+## Headers
+
+| Header | Direction | Rule |
+| --- | --- | --- |
+| `Wire-Version` | answer, and a write's request | Every answer carries it. A write that names another one answers `wire_mismatch` (409); a request naming none passes |
+| `X-Request-Id` | both | The context's id, else a valid inbound one, else a fresh one; every answer and envelope carries it |
+| `Idempotency-Key` | request | One quoted string of 1 to 255 printable ASCII characters on a `Keyed` row, refused on any other |
+| `If-Match` | request | One quoted tag on an `IfMatch` row: missing is `if_match_required` (428), malformed `if_match_invalid`, another tag `stale_version` (412) |
+| `Feed-Position` | answer | Every 2xx of a row with `Changes`, from the change feed |
+| `Retry-After` | answer | Whole seconds, rounded up, on a refusal that carries a wait; the envelope's `retry_after_ms` gives the exact wait |
+
+The wire version is the first 16 lowercase hex characters of the SHA-256 of the document's normal form. The normal form drops `summary` and `description` where each is an OpenAPI keyword, the top-level `info` object and each `x-error-codes` entry's `remediation`, then writes the rest with sorted keys and no whitespace. So editing a description never moves the version.
+
+## The error envelope
+
+Every refusal is one JSON object, decoded by the same rules in Go (`DecodeEnvelope`) and TypeScript (`decodeEnvelope`).
+
+| Member | Rule |
+| --- | --- |
+| `code` | required, one or more lowercase ASCII letters, digits and `_` |
+| `message` | required, at most 4 KiB |
+| `remediation` | required, at most 4 KiB |
+| `request_id` | required |
+| `reason` | optional, the same grammar as `code`, at most 64 bytes |
+| `fields` | optional, at most 100 entries of `path`, `code` and `message` |
+| `retry_after_ms` | optional, an integer from 0 to 2^53 - 1 |
+| `upstream` | optional: `service` in the same grammar, `status` from 100 to 599, `message` at most 512 bytes |
+
+A member present as `null` breaks its rule, and an unknown member is ignored. `internal_error` carries the message `internal error` and nothing else. `upstream.message` is another service's text: no code or remediation depends on it.
+
+## Request bodies
+
+A body the binder decodes is sent with `Content-Type: application/json` (a charset, if given, is `utf-8`); anything else answers `unsupported_media_type` (415). It must be one JSON value, and it is checked against the document's schema, which admits no member the row's type does not declare.
+
+## Pages
+
+A List row's query takes `cursor` (at most 1,416 bytes) and `limit` (1 to 200, 50 when absent). Its answer is:
+
+```json
+{"items": [], "offset": 0, "total": 0, "next_cursor": "...", "prev_cursor": "..."}
+```
+
+`offset` is the count of items before the page's first and `total` the count matching the query at this read, at most 999,999,999,999,999. `prev_cursor` is absent exactly when `offset` is 0, and `next_cursor` exactly when the page ends at `total`. A `prev_cursor` answers the `limit` items before the page in list order, or the first page when fewer precede it. Both halves refuse a page that breaks these rules.
+
+A cursor is base64url of a 12-byte nonce, a format, direction and issue-time header, a position of at most 1,024 bytes and a 16-byte tag, sealed with AES-256-GCM. Its additional data binds it to the row, the query without its page parameters, and the owner `WithCursorOwner` names, so every session of one person opens it and nobody else does. It opens for 24 hours. Without `WithCursorKey`, the key is drawn at each start, so cursors stop opening at a restart. A cursor that does not open answers `cursor_invalid`, and the client reads the list again from its first page.
+
+`Seal` and `Open` use the same sealing for a handle bound to one purpose and one credential.
+
+## Tags
+
+A tag is `<16 lowercase hex>.<decimal>`, the decimal with no sign or leading zero and at most 2^64 - 1: the value inside `If-Match`'s quotes and a read answer's `tag` field. Its hex half is the token of what the revision lives in: `OpenToken` of a store file's epoch, read inside the transaction that reads or checks the revision, or the first 8 bytes of a shared file's SHA-256. A revision that an older file puts back never matches a tag read before.
+
+## The document
+
+`ParseSchema` reads the OpenAPI 3.1 document wiregen writes, and refuses any schema keyword outside this set:
+
+- `type`, `properties`, `required`, `additionalProperties`, `propertyNames`, `items`, `enum`, `const`
+- `minimum`, `maximum`, `minLength`, `maxLength`, `x-max-bytes`, `pattern`, `minItems`, `maxItems`
+- `$ref`, `anyOf`, `oneOf`, `discriminator`
+- the annotations `description`, `format`, `contentEncoding` and `default`
+
+A `pattern` must be one of the six `Pattern*` constants, which both halves match with one verdict. It also refuses an unresolved `$ref`, a `$ref` cycle with no object between, and an OpenAPI member wiregen never writes. An object with `properties` and no `additionalProperties` admits no other member. Numbers are read exactly, an integer as `int64` or `uint64`.
