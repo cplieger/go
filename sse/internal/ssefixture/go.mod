@@ -3,7 +3,7 @@ module github.com/cplieger/go/sse/v2/internal/ssefixture
 go 1.27.4
 
 require (
-	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.4
+	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.5
 	github.com/cplieger/go/sse/v2 v2.0.0-00010101000000-000000000000
 )
 
