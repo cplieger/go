@@ -471,3 +471,108 @@ func ended(trs []scheduler.Transition) []scheduler.Result {
 	}
 	return out
 }
+
+func TestPipelinesStepNOfM(t *testing.T) {
+	type mark struct {
+		phase scheduler.Phase
+		step  struct{ N, Of int }
+	}
+	// marks runs one job of kind k, whose Run reaches each of reach in turn
+	// (committing through Commit), and answers the record's phase and step
+	// after each.
+	marks := func(t *testing.T, kinds []scheduler.KindSpec[payload], kind scheduler.Kind, reach ...scheduler.Phase) []mark {
+		t.Helper()
+		var (
+			r   *rig
+			out []mark
+		)
+		for i := range kinds {
+			if kinds[i].Kind != kind {
+				continue
+			}
+			kinds[i].Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+				for _, p := range reach {
+					if p == scheduler.PhaseCommitting {
+						run.Commit()
+					} else {
+						run.Reached(p)
+					}
+					rec, _, err := r.store.Get(t.Context(), run.Job().ID)
+					if err != nil {
+						t.Errorf("Get = %v", err)
+					}
+					out = append(out, mark{rec.Phase, rec.Step})
+				}
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+		}
+		r = newRig(t, scheduler.Config[payload]{Kinds: kinds})
+		r.start(t, api(kind, "", "alice", payload{}))
+		synctest.Wait()
+		return out
+	}
+	at := func(p scheduler.Phase, n, of int) mark { return mark{p, struct{ N, Of int }{n, of}} }
+
+	t.Run("each kind counts step N of its own pipeline", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			full, quick := spec("full_check", "passes"), spec("quick_check", "passes")
+			full.Phases = []scheduler.Phase{"walking", "matching", "publishing"}
+			quick.Phases = []scheduler.Phase{"probing", "publishing"}
+			kinds := []scheduler.KindSpec[payload]{full, quick}
+			got := marks(t, kinds, "quick_check", "probing", "publishing")
+			if want := []mark{at("probing", 1, 2), at("publishing", 2, 2)}; !slices.Equal(got, want) {
+				t.Errorf("quick check marks %v, want %v", got, want)
+			}
+		})
+	})
+
+	t.Run("a pipeline that names started counts it as its first step", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reeval := spec("reevaluate", "passes")
+			reeval.Phases = []scheduler.Phase{scheduler.PhaseStarted, "publishing"}
+			got := marks(t, []scheduler.KindSpec[payload]{reeval}, "reevaluate", scheduler.PhaseStarted, "publishing")
+			if want := []mark{at(scheduler.PhaseStarted, 1, 2), at("publishing", 2, 2)}; !slices.Equal(got, want) {
+				t.Errorf("marks %v, want %v", got, want)
+			}
+		})
+	})
+
+	t.Run("the commit step keeps the step the pipeline reached", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			full := spec("full_check", "passes")
+			full.Phases = []scheduler.Phase{"walking", "matching"}
+			got := marks(t, []scheduler.KindSpec[payload]{full}, "full_check", "walking", "matching", scheduler.PhaseCommitting)
+			if want := []mark{at("walking", 1, 2), at("matching", 2, 2), at(scheduler.PhaseCommitting, 2, 2)}; !slices.Equal(got, want) {
+				t.Errorf("marks %v, want %v", got, want)
+			}
+		})
+	})
+
+	t.Run("the executor keeps its own copy of the pipeline", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			full := spec("full_check", "passes")
+			full.Phases = []scheduler.Phase{"walking", "publishing"}
+			full.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+				run.Reached("walking")
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{full}})
+			full.Phases[0] = "changed"
+			s := r.start(t, api("full_check", "", "alice", payload{}))
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultOK)
+			if rec := r.rec(t, s.Job); rec.Phase != "walking" || rec.Step.N != 1 {
+				t.Errorf("record at %s step %v, want walking, step 1", rec.Phase, rec.Step)
+			}
+		})
+	})
+
+	t.Run("a phase listed twice is refused", func(t *testing.T) {
+		full := spec("full_check", "passes")
+		full.Phases = []scheduler.Phase{"walking", "matching", "walking"}
+		full.Run = func(context.Context, *scheduler.Run[payload]) scheduler.End { return scheduler.End{} }
+		if _, err := scheduler.NewExecutor(scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{full}, Records: memrecords.New()}); err == nil {
+			t.Error("NewExecutor = nil error, want one: step N of M is ambiguous for a repeated phase")
+		}
+	})
+}
