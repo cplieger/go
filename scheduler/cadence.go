@@ -13,7 +13,7 @@ type Cadence struct {
 // Scheduled is a job every interval, jittered ±10 % at each wake; an interval
 // under 1 second is raised to it.
 func Scheduled(every time.Duration) Cadence {
-	return Cadence{}
+	return Cadence{every: max(every, time.Second)}
 }
 
 // Retry sets how long after a moving end whose work was not done (failed or
@@ -21,6 +21,10 @@ func Scheduled(every time.Duration) Cadence {
 // second and capped at the interval; the last call wins. A TriggerOnly cadence
 // ignores it. Retry moves only the next wake, never the scope's deadline.
 func (c Cadence) Retry(d time.Duration) Cadence {
+	if c.every == 0 {
+		return c
+	}
+	c.retry = min(max(d, time.Second), c.every)
 	return c
 }
 
@@ -31,11 +35,14 @@ func TriggerOnly() Cadence {
 
 // Every reports the interval, and false for TriggerOnly.
 func (c Cadence) Every() (time.Duration, bool) {
-	return 0, false
+	return c.every, c.every > 0
 }
 
 // wait is how long after an end the next wake comes: Retry's d when the work
 // was not done and Retry is set, else the interval; 0 for TriggerOnly.
 func (c Cadence) wait(done bool) time.Duration {
-	return 0
+	if !done && c.retry > 0 {
+		return c.retry
+	}
+	return c.every
 }

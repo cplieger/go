@@ -20,21 +20,33 @@ type Watch struct {
 // NewWatch starts a watch whose deadline is now plus l.Duration(). A lease
 // whose Duration is 0 puts the deadline at the beat itself.
 func NewWatch(l health.Lease) *Watch {
-	return &Watch{}
+	return &Watch{start: time.Now(), lease: l.Duration()}
 }
 
 // Beat records that a pass which committed ended at at, so the deadline
 // becomes at plus the lease. Call it only after the pass's last write
 // committed; a beat older than the latest one changes nothing.
-func (w *Watch) Beat(at time.Time) {}
+func (w *Watch) Beat(at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.last.IsZero() || at.After(w.last) {
+		w.last = at
+	}
+}
 
 // Fresh answers a Signal that is healthy until the deadline has passed. It
 // reads the watch at each call, so one Signal follows every later Beat.
 func (w *Watch) Fresh() health.Signal {
-	return health.SignalFunc(nil)
+	return health.SignalFunc(func() bool { return !time.Now().After(w.Deadline()) })
 }
 
 // Deadline answers the time by which the next pass must have ended.
 func (w *Watch) Deadline() time.Time {
-	return time.Time{}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	from := w.last
+	if from.IsZero() {
+		from = w.start
+	}
+	return from.Add(w.lease)
 }
