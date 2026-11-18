@@ -800,6 +800,62 @@ func TestCheckShell(t *testing.T) {
 	}
 }
 
+func TestCheckShellRefusesEventHandlers(t *testing.T) {
+	refused := []struct {
+		name, html, element, attr string
+	}{
+		{"onload on body", `<body onload="init()">x</body>`, "<body>", `"onload"`},
+		{"mixed-case OnClick on a button", `<button type=button OnClick='go()'>x</button>`, "<button>", `"onclick"`},
+		{"after a quoted value with no space", `<a title="x"onclick=go()>x</a>`, "<a>", `"onclick"`},
+		{"after a slash", `<img/onerror=go() src=x>`, "<img>", `"onerror"`},
+		{"after an unquoted value holding a quote", `<p title=a"b onclick=go()>x</p>`, "<p>", `"onclick"`},
+		{"upper-case element", `<DIV ONMOUSEOVER=go()>x</DIV>`, "<div>", `"onmouseover"`},
+		{"style after an unquoted value holding a quote", `<p title=a"b style=x>y</p>`, "<p>", "style"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			err := httpserver.CheckShell([]byte(tc.html))
+			if err == nil {
+				t.Fatalf("CheckShell accepted %q", tc.html)
+			}
+			if !strings.Contains(err.Error(), tc.element) || !strings.Contains(err.Error(), tc.attr) {
+				t.Errorf("CheckShell(%q) = %q, want it to name %s and %s", tc.html, err, tc.element, tc.attr)
+			}
+		})
+	}
+	passed := map[string]string{
+		"on in a quoted title":    `<button title="onclick=go()">x</button>`,
+		"on in a single-quoted":   `<p title='a" onclick=go() "b'>x</p>`,
+		"on in an unquoted value": `<p title=onclick>x</p>`,
+		"data-on":                 `<div data-on="click">x</div>`,
+		"a bare on attribute":     `<p on="x">y</p>`,
+		"on in text":              `<p>onclick=go()</p>`,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
+func TestSPARefusalNamesShellElementAndAttribute(t *testing.T) {
+	files := spaFiles()
+	files["login.html"] = `<html><body><button OnClick="go()">x</button></body></html>`
+	c := spaConfig(t, nil)
+	c.Assets = bundleTree(t, files, spaListed, spaEntries)
+	_, err := httpserver.SPA(c)
+	if err == nil {
+		t.Fatal("SPA accepted a shell with an event handler")
+	}
+	for _, want := range []string{`"login.html"`, "<button>", `"onclick"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("SPA error %q does not name %s", err, want)
+		}
+	}
+}
+
 func TestSPAErrorsResponderAnswersRefusals(t *testing.T) {
 	var codes []httpserver.ErrorCode
 	errs := func(w http.ResponseWriter, r *http.Request, status int, code httpserver.ErrorCode, msg string) {

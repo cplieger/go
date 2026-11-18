@@ -193,7 +193,9 @@ func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
 }
 
 // CheckShell refuses a shell SPA's policy would block: one holding an inline
-// script or style element or a style attribute. SPA calls it on every shell at
+// script or style element, a style attribute or an on* event-handler
+// attribute, reading attribute names as an HTML parser does. An attribute
+// error names the element and the attribute. SPA calls it on every shell at
 // start; a bundler calls it before writing one.
 func CheckShell(body []byte) error {
 	switch {
@@ -201,8 +203,25 @@ func CheckShell(body []byte) error {
 		return errors.New("holds an inline script element")
 	case len(InlineStyleHashes(body)) > 0:
 		return errors.New("holds an inline style element")
-	case hasStyleAttr(body):
-		return errors.New("holds a style attribute")
+	}
+	return checkShellAttrs(body)
+}
+
+func checkShellAttrs(html []byte) error {
+	for i := 0; i+1 < len(html); i++ {
+		if html[i] != '<' || !isASCIILetter(html[i+1]) {
+			continue
+		}
+		tag, attrs, end := scanStartTag(html, i+1)
+		for _, a := range attrs {
+			switch {
+			case a == "style":
+				return fmt.Errorf("holds a style attribute on <%s>", tag)
+			case len(a) > len("on") && strings.HasPrefix(a, "on"):
+				return fmt.Errorf("holds the event-handler attribute %q on <%s>", a, tag)
+			}
+		}
+		i = end - 1
 	}
 	return nil
 }
@@ -308,52 +327,68 @@ func writeBody(w http.ResponseWriter, r *http.Request, body []byte) {
 	}
 }
 
-// hasStyleAttr reports whether a start tag in html carries a style
-// attribute, quoted values skipped.
-func hasStyleAttr(html []byte) bool {
-	for i := 0; i+1 < len(html); i++ {
-		if html[i] != '<' || !isASCIILetter(html[i+1]) {
-			continue
-		}
-		end := openTagEnd(html, i+1)
-		if end < 0 {
-			end = len(html)
-		}
-		if hasAttr(html[i+1:end], "style") {
-			return true
-		}
-		i = end
+// scanStartTag reads the start tag whose name begins at html[from] through
+// the tokenizer states of https://html.spec.whatwg.org/multipage/parsing.html#tag-name-state,
+// returning the lowercase tag name, each lowercase attribute name, and the
+// index after the closing '>' (len(html) when input ends first).
+func scanStartTag(html []byte, from int) (tag string, attrs []string, end int) {
+	i := from
+	for i < len(html) && !isTagNameBoundary(html[i]) {
+		i++
 	}
-	return false
-}
-
-// hasAttr reports whether tag, a start tag's bytes after "<", names the
-// lowercase attribute name, ASCII case-insensitively.
-func hasAttr(tag []byte, name string) bool {
-	var quote byte
-	atName := false // the tag name comes first
-	for i := range tag {
-		switch c := tag[i]; {
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			}
-		case c == '"' || c == '\'':
-			quote, atName = c, false
+	tag = lowerASCIIString(string(html[from:i]))
+	for i < len(html) {
+		switch c := html[i]; {
+		case c == '>':
+			return tag, attrs, i + 1
 		case isASCIISpace(c) || c == '/':
-			atName = true
-		case atName:
-			if hasFoldPrefix(tag[i:], name) && attrNameEnds(tag, i+len(name)) {
-				return true
-			}
-			atName = false
+			i++
+		default:
+			var name string
+			name, i = scanAttr(html, i)
+			attrs = append(attrs, name)
 		}
 	}
-	return false
+	return tag, attrs, i
 }
 
-func attrNameEnds(tag []byte, j int) bool {
-	return j >= len(tag) || isASCIISpace(tag[j]) || tag[j] == '=' || tag[j] == '/' || tag[j] == '>'
+// scanAttr reads the attribute whose name begins at html[from] and returns
+// its lowercase name and the index after its value. A leading '=' belongs to
+// the name, and a quote ends nothing but a quoted value, as the tokenizer has it.
+func scanAttr(html []byte, from int) (name string, end int) {
+	i := from + 1
+	for i < len(html) && !isTagNameBoundary(html[i]) && html[i] != '=' {
+		i++
+	}
+	name = lowerASCIIString(string(html[from:i]))
+	i = skipASCIISpace(html, i)
+	if i == len(html) || html[i] != '=' {
+		return name, i
+	}
+	i = skipASCIISpace(html, i+1)
+	if i == len(html) {
+		return name, i
+	}
+	switch q := html[i]; q {
+	case '"', '\'':
+		if n := bytes.IndexByte(html[i+1:], q); n >= 0 {
+			return name, i + 1 + n + 1
+		}
+		return name, len(html)
+	case '>':
+		return name, i
+	}
+	for i < len(html) && !isASCIISpace(html[i]) && html[i] != '>' {
+		i++
+	}
+	return name, i
+}
+
+func skipASCIISpace(b []byte, i int) int {
+	for i < len(b) && isASCIISpace(b[i]) {
+		i++
+	}
+	return i
 }
 
 func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }

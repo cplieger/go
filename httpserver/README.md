@@ -137,6 +137,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - `ClientResolution.IgnoredPublic` judges an ignored forwarded address as `go/ssrf`'s `IsPublicAddr` does, so a shared (RFC 6598), documentation or other non-routable address no longer sets it.
 - A `StaticHandler` file with an extension outside the content-type table, such as `.jpg` or `.woff`, now answers `application/octet-stream`. Convert it to a listed format, or serve it with your own handler.
 - Code written against `v2.0.0-dev.1` or `v2.0.0-dev.2` calls `ListenAddr` where it called `OpsAddr`, with the same arguments.
+- A shell written against `v2.0.0-dev.1` or `v2.0.0-dev.2` that carries an `on…` event-handler attribute, such as `onclick`, is now refused by `SPA` and `CheckShell`. The policy already blocked the handler in the browser, so attach it from the bundle's script with `addEventListener`.
 - Code written against `v2.0.0-dev.1` wraps each `OutageConfig.Commands` string as `httpserver.OutageCommand{Run: s}`, since the field is now `[]OutageCommand`. A line that explained a command moves into its `Note`, and a line about the outage as a whole into `Notice`.
 
 ## Related projects

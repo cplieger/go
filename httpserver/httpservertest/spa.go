@@ -128,7 +128,7 @@ func (s *spaCheck) checkPages() {
 		where := "GET " + target
 		rec := s.checkFile(where, target, want, shell)
 		if err := httpserver.CheckShell(rec.Body.Bytes()); err != nil {
-			s.t.Errorf("CheckSPA: %s: the shell is refused for inline script or style: %v", where, err)
+			s.t.Errorf("CheckSPA: %s: the shell is refused: %v", where, err)
 		}
 	}
 }

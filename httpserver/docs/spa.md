@@ -128,7 +128,7 @@ default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; f
 
 `CSPAdd` may add `blob:` or `data:` to `img-src`, `font-src` and `media-src`, which then starts from `'self'`, and nothing else. `SPA` refuses another directive, another source, an empty list, and a source the directive already holds. `SPAPolicy(add)` returns the policy `SPA` writes for an addition, and the same refusal.
 
-Because the policy allows no inline script or style, `SPA` refuses at start a shell holding an inline `<script>` or `<style>` element or a `style` attribute. `CheckShell(body)` is that check, for a bundler to run before it writes a shell.
+Because the policy allows no inline script or style, `SPA` refuses at start a shell holding an inline `<script>` or `<style>` element, a `style` attribute, or an `on…` event-handler attribute such as `onload` or `onclick`, whose inline code the policy would also block. Attribute names are read as an HTML parser reads them: case-insensitively, and never inside another attribute's quoted value, so `title="onclick"` and `data-on` pass. The error names the shell, the element and the attribute. `CheckShell(body)` is that check, for a bundler to run before it writes a shell; its error names the element and the attribute, and the bundler adds the shell's name.
 
 `SPA` owns `Content-Type`, `Cache-Control`, `ETag` and `Content-Security-Policy` on its answers. `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` and HSTS stay with the app's outer `SecurityHeaders`, as on every other answer.
 

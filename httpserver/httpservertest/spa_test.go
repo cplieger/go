@@ -293,12 +293,13 @@ func TestCheckSPAFailsRefusalNotEnvelope(t *testing.T) {
 	wantFailure(t, runCheckSPA(t, h, c), "/"+httpserver.BundlePath, "envelope")
 }
 
-func TestCheckSPAFailsInlineScriptInShell(t *testing.T) {
+func TestCheckSPAFailsRefusedShell(t *testing.T) {
 	c := fixtureConfig(t)
 	for name, inline := range map[string]string{
-		"script element":  `<script>alert(1)</script>`,
-		"style element":   `<style>body{}</style>`,
-		"style attribute": `<p style="color:red">x</p>`,
+		"script element":          `<script>alert(1)</script>`,
+		"style element":           `<style>body{}</style>`,
+		"style attribute":         `<p style="color:red">x</p>`,
+		"event-handler attribute": `<button onclick="go()">x</button>`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := tamper(fixtureSPA(t, c), atPath("/library"), func(rec *httptest.ResponseRecorder) {
@@ -306,7 +307,7 @@ func TestCheckSPAFailsInlineScriptInShell(t *testing.T) {
 				rec.Body.Reset()
 				rec.Body.WriteString(body)
 			})
-			wantFailure(t, runCheckSPA(t, h, c), "GET /library", "inline")
+			wantFailure(t, runCheckSPA(t, h, c), "GET /library", "the shell is refused")
 		})
 	}
 }
