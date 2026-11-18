@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -169,6 +170,47 @@ func TestFactsOverCapDropped(t *testing.T) {
 				}
 				if n := lines.count(slog.LevelError); n != 1 {
 					t.Errorf("%d ERROR lines, want 1", n)
+				}
+			})
+		})
+	}
+}
+
+func TestEndReasonsCappedAt32(t *testing.T) {
+	reasons := func(n int) []scheduler.Reason {
+		out := make([]scheduler.Reason, n)
+		for i := range out {
+			out[i] = scheduler.Reason{Code: "missing", Subject: fmt.Sprintf("connection:%d", i)}
+		}
+		return out
+	}
+	dropped := scheduler.Reason{Code: scheduler.ReasonFactsTooLarge}
+	for _, tc := range []struct {
+		name  string
+		end   scheduler.End
+		want  []scheduler.Reason
+		error int
+	}{
+		{name: "32 reasons are kept", end: scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons(32)}, want: reasons(32)},
+		{name: "the most severe 32 of 40 are kept", end: scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons(40)}, want: reasons(32), error: 1},
+		{
+			name:  "dropped facts keep their reason within the 32",
+			end:   scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons(32), Facts: factsOf(2049)},
+			want:  append(reasons(31), dropped),
+			error: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				lines := &logLines{}
+				check := spec("check", "")
+				check.Run = func(context.Context, *scheduler.Run[payload]) scheduler.End { return tc.end }
+				r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{check}, Logger: slog.New(lines)})
+				s := r.start(t, api("check", "", "alice", payload{}))
+				synctest.Wait()
+				r.wantEnd(t, s.Job, scheduler.ResultPartial, tc.want...)
+				if n := lines.count(slog.LevelError); n != tc.error {
+					t.Errorf("%d ERROR lines, want %d", n, tc.error)
 				}
 			})
 		})

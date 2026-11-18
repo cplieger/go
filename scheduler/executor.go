@@ -220,7 +220,7 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 		case stateQueued:
 			e.dequeueLocked(en)
 		case stateRunning:
-			en.cancel()
+			e.stopLocked(en)
 		case stateAdmitting, stateEnded:
 		}
 	}
@@ -238,20 +238,31 @@ const (
 	stateEnded
 )
 
-// job is one admitted job. state, cancel and w's ownership are guarded by the
-// executor's mu; rec is the job goroutine's once the job runs.
+// job is one admitted job. state, cancel, stopped, committing, the counts and
+// w's ownership are guarded by the executor's mu; rec is guarded by recMu once
+// the job runs, which also orders its record writes.
 type job[P any] struct {
-	spec     *KindSpec[P]
-	slot     *slot
-	w        *waiter            // its take of a named slot; nil when it waits for none
-	admitted chan struct{}      // closed once its record is written or refused
-	gone     chan struct{}      // closed when it leaves the queue without running
-	cancel   context.CancelFunc // set when it runs
-	relay    relay
-	j        Job[P]
-	rec      Record
-	class    Class
-	state    jobState
+	spec        *KindSpec[P]
+	slot        *slot
+	w           *waiter            // its take of a named slot; nil when it waits for none
+	admitted    chan struct{}      // closed once its record is written or refused
+	gone        chan struct{}      // closed when it leaves the queue without running
+	cancel      context.CancelFunc // set when it runs
+	relay       relay
+	j           Job[P]
+	rec         Record
+	done, total int // Run.Progress's counts
+	recMu       sync.Mutex
+	class       Class
+	state       jobState
+	stopped     bool // its ctx was cancelled, so Commit answers false
+	committing  bool // Commit answered true, so Cancel answers ErrCommitting
+}
+
+// stopLocked cancels a running job's ctx; it then commits nothing.
+func (e *Executor[P]) stopLocked(en *job[P]) {
+	en.stopped = true
+	en.cancel()
 }
 
 // waits reports whether the job takes its kind's slot before its Run starts:
@@ -312,16 +323,18 @@ func (e *Executor[P]) begin(en *job[P]) {
 		e.observer.SlotWait(en.spec.Slot, en.class, en.slot.waited(en.w))
 	}
 	now := time.Now()
+	en.recMu.Lock()
 	en.rec.State, en.rec.StartedAt, en.rec.Phase = StateRunning, now, PhaseStarted
 	e.put(en)
-	e.emit(en, &Transition{Phase: PhaseStarted, At: now})
-	end := en.spec.Run(ctx, &Run[P]{job: en.j, class: en.class})
-	e.finish(en, end)
+	e.post(en, &Transition{Phase: PhaseStarted, At: now})
+	en.recMu.Unlock()
+	e.flush(en)
+	e.finish(en, e.guarded(ctx, en))
 }
 
 // finish writes a run job's end, frees its slot and reports the stored end.
 func (e *Executor[P]) finish(en *job[P], end End) {
-	stored, at := e.end(context.Background(), en, end)
+	stored, at := e.end(context.Background(), en, e.bounded(en, end))
 	e.mu.Lock()
 	en.state = stateEnded
 	e.removeLocked(en)
@@ -329,7 +342,10 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	if en.w != nil {
 		en.slot.drop(en.w)
 	}
-	e.emit(en, &Transition{Phase: en.rec.Phase, Result: stored.Result, At: at})
+	en.recMu.Lock()
+	phase := en.rec.Phase
+	en.recMu.Unlock()
+	e.emit(en, &Transition{Phase: phase, Result: stored.Result, At: at})
 }
 
 // end writes en's end and answers the stored one, which an end the job's own
