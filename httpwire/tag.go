@@ -46,10 +46,10 @@ var errTag = errors.New("httpwire: a tag is 16 lowercase hex characters, a dot a
 // error t is left unchanged.
 func (t *Tag) UnmarshalText(b []byte) error {
 	open, rev, ok := strings.Cut(string(b), ".")
-	if !ok || len(open) != 2*len(t.Open) || strings.ToLower(open) != open ||
-		rev == "" || strings.Trim(rev, "0123456789") != "" || rev[0] == '0' && len(rev) > 1 {
+	if !ok || len(open) != 2*len(t.Open) || strings.ToLower(open) != open || len(rev) > 1 && rev[0] == '0' {
 		return errTag
 	}
+	// ParseUint in base 10 refuses a sign, an underscore and an empty text.
 	n, err := strconv.ParseUint(rev, 10, 64)
 	if err != nil {
 		return errTag

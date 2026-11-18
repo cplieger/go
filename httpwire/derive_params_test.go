@@ -13,8 +13,13 @@ type (
 	plainInt    int64
 	badRefusal  string
 	ptrRefusal  string
-	ptrMaxBytes string
-	pageLike    struct {
+	codeRefusal string
+	// promotedRefusal has Refusal only through its embedded pointer, which
+	// its zero value holds nil.
+	promotedRefusal struct{ *codeRefusal }
+	deepRefusal     struct{ promotedRefusal }
+	ptrMaxBytes     string
+	pageLike        struct {
 		Limit itemNum `json:"limit"`
 	}
 	embedsPage struct {
@@ -36,6 +41,7 @@ func (badRefusal) Refusal() string  { return "Not-A-Code" }
 func (ptrRefusal) MaxBytes() int    { return 8 }
 func (*ptrRefusal) Refusal() string { return "ptr_code" }
 func (*ptrMaxBytes) MaxBytes() int  { return 8 }
+func (codeRefusal) Refusal() string { return "some_code" }
 
 func params(t reflect.Type) func(*httpwire.Table) {
 	return edit("jobs.get", func(ep *httpwire.Endpoint) { ep.Params = t })
@@ -87,7 +93,20 @@ func TestDeriveRefusesParamsAndQueryFields(t *testing.T) {
 		}), []string{`row "jobs.start": type httpwire_test.badRefusal answers Refusal "Not-A-Code", which is not in the code grammar`}},
 		"a Refusal on a pointer receiver": {params(reflect.TypeFor[struct {
 			ID ptrRefusal `json:"id"`
-		}]()), []string{`row "jobs.get": type httpwire_test.ptrRefusal declares Refusal on its pointer`}},
+		}]()), []string{`row "jobs.get": type httpwire_test.ptrRefusal has Refusal only through a pointer`}},
+		"a Refusal through an embedded pointer": {edit("jobs.start", func(ep *httpwire.Endpoint) {
+			ep.Request = reflect.TypeFor[struct {
+				Code promotedRefusal `json:"code"`
+			}]()
+		}), []string{`row "jobs.start": type httpwire_test.promotedRefusal has Refusal only through a pointer`}},
+		"a Refusal through a pointer embedded two levels down": {edit("jobs.start", func(ep *httpwire.Endpoint) {
+			ep.Request = reflect.TypeFor[struct {
+				Code deepRefusal `json:"code"`
+			}]()
+		}), []string{`row "jobs.start": type httpwire_test.deepRefusal has Refusal only through a pointer`}},
+		"a Cursor outside Page": {query(reflect.TypeFor[struct {
+			After httpwire.Cursor `json:"after"`
+		}]()), []string{`row "jobs.list": Query field "after" is an httpwire.Cursor, which only an embedded httpwire.Page carries`}},
 	})
 }
 

@@ -505,6 +505,12 @@ func TestListTotalOverSafeBoundIsInternalError(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"total":999999999999999`) {
 		t.Errorf("a total at the bound answered %d %q, want it served", rec.Code, rec.Body.String())
 	}
+	negative := &logSink{}
+	s = newPageStore(t, 0, httpwire.WithLogger(slog.New(negative)))
+	s.answer = func(listCall) (httpwire.List[entry], error) { return httpwire.List[entry]{Total: -1}, nil }
+	if rec = s.get("/api/items", sessionA); rec.Code != http.StatusInternalServerError || !negative.has("ERROR", "row=items.list", "total is outside") {
+		t.Errorf("a total of -1 answered %d, log %q: want the total named", rec.Code, negative.all())
+	}
 }
 
 func TestCursorOpensInAnotherSessionOfOneAccount(t *testing.T) {
@@ -829,11 +835,24 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 			listRow(tb).Query = reflect.TypeFor[struct {
 				P httpwire.Page `json:"p"`
 			}]()
-		}, []string{`row "items.list"`, "Page"}},
+		}, []string{`row "items.list"`, "Query embeds httpwire.Page"}},
 		"a List row whose Response is a slice": {func(tb *httpwire.Table) { listRow(tb).Response = reflect.TypeFor[[]entry]() }, []string{`row "items.list"`, "List[T]"}},
 		"a List row whose Response points to a List": {func(tb *httpwire.Table) {
 			listRow(tb).Response = reflect.TypeFor[*httpwire.List[entry]]()
 		}, []string{`row "items.list"`, "List[T]"}},
+		"a List row whose Response holds List as a field": {func(tb *httpwire.Table) {
+			listRow(tb).Response = reflect.TypeFor[struct {
+				L httpwire.List[entry] `json:"l"`
+			}]()
+		}, []string{`row "items.list"`, "Response is, or embeds"}},
+		"a List row whose Response embeds a pointer to List": {func(tb *httpwire.Table) {
+			listRow(tb).Response = reflect.TypeFor[struct {
+				*httpwire.List[entry]
+			}]()
+		}, []string{`row "items.list"`, "Response is, or embeds"}},
+		"a List row whose Response embeds List two levels down": {func(tb *httpwire.Table) {
+			listRow(tb).Response = reflect.TypeFor[struct{ archivedPage }]()
+		}, []string{`row "items.list"`, "Response is, or embeds"}},
 		"a List row with no Response":    {func(tb *httpwire.Table) { listRow(tb).Response = nil }, []string{`row "items.list"`, "List[T]"}},
 		"Page on a row that is not List": {func(tb *httpwire.Table) { handles(tb).Query = reflect.TypeFor[entryQuery]() }, []string{`row "handles.seal"`, "Page"}},
 		"a List answer on a row that is not List": {func(tb *httpwire.Table) {

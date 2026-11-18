@@ -35,15 +35,43 @@ var (
 	jsonUnmarshalerType = reflect.TypeFor[json.Unmarshaler]()
 )
 
-// methodOf answers t's method of interface I when t declares it on its value
-// receiver. t must not be a pointer: a value method called through a nil
-// pointer panics.
+// methodOf answers t's methods of interface I, every one taking no
+// argument, when the zero value of t answers them: never for a pointer t,
+// nor for a method promoted through a nil embedded pointer, either of which
+// panics when called.
 func methodOf[I any](t reflect.Type) (I, bool) {
+	var zero I
 	if t.Kind() == reflect.Pointer {
-		var zero I
 		return zero, false
 	}
-	return reflect.TypeAssert[I](reflect.Zero(t))
+	v := reflect.Zero(t)
+	m, ok := reflect.TypeAssert[I](v)
+	if ok && embedsPointer(t) && !answers(v, reflect.TypeFor[I]()) {
+		return zero, false
+	}
+	return m, ok
+}
+
+func embedsPointer(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	for f := range t.Fields() {
+		if f.Anonymous && (f.Type.Kind() == reflect.Pointer || embedsPointer(f.Type)) {
+			return true
+		}
+	}
+	return false
+}
+
+// answers reports whether v answers every method of i; a panic leaves ok
+// false.
+func answers(v reflect.Value, i reflect.Type) (ok bool) {
+	defer func() { _ = recover() }()
+	for m := range i.Methods() {
+		v.MethodByName(m.Name).Call(nil)
+	}
+	return true
 }
 
 func isTextType(t reflect.Type) bool { return reflect.PointerTo(t).Implements(textUnmarshalerType) }
@@ -104,8 +132,11 @@ func textFields(t reflect.Type) (fields []textField, problems []string) {
 					problems = append(problems, fmt.Sprintf("field %q is %s, outside the types a path or query value parses into: "+
 						"a TextUnmarshaler, a string type with MaxBytes, an integer type with Range, a uint64 or a bool", tf.name, f.Type))
 				}
+				if tf.typ == cursorType && !inPage {
+					problems = append(problems, fmt.Sprintf("field %q is an httpwire.Cursor, which only an embedded httpwire.Page carries", tf.name))
+				}
 				seen[tf.name] = true
-				tf.cursor = inPage && tf.typ == cursorType
+				tf.cursor = tf.typ == cursorType
 				fields = append(fields, *tf)
 			}
 		}
@@ -155,7 +186,7 @@ func refusalProblem(t reflect.Type) string {
 			return fmt.Sprintf("type %s answers Refusal %q, which is not in the code grammar", t, code)
 		}
 	} else if reflect.PointerTo(t).Implements(reflect.TypeFor[refuser]()) {
-		return fmt.Sprintf("type %s declares Refusal on its pointer receiver; declare it on the value", t)
+		return fmt.Sprintf("type %s has Refusal only through a pointer; declare it on the value", t)
 	}
 	return ""
 }

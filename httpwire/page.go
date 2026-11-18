@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"reflect"
 	"time"
@@ -133,9 +132,6 @@ func (s *sealer) seal(dir direction, payload, aad []byte) (string, error) {
 // open answers the direction and payload of a value seal made with aad no
 // longer than maxAge ago.
 func (s *sealer) open(sealed string, aad []byte, maxAge time.Duration) (dir direction, payload []byte, ok bool) {
-	if len(sealed) > maxSealed {
-		return 0, nil, false
-	}
 	ct, err := sealedText.DecodeString(sealed)
 	if err != nil {
 		return 0, nil, false
@@ -144,8 +140,9 @@ func (s *sealer) open(sealed string, aad []byte, maxAge time.Duration) (dir dire
 	if err != nil || len(pt) < sealHeader || pt[0] != sealFormat || direction(pt[1]) > backward {
 		return 0, nil, false
 	}
-	secs := binary.BigEndian.Uint64(pt[2:sealHeader])
-	if secs > math.MaxInt64 || time.Since(time.Unix(int64(secs), 0)) > maxAge {
+	// Only seal makes a plaintext that opens, and it writes a time past 1970.
+	secs := int64(binary.BigEndian.Uint64(pt[2:sealHeader])) //nolint:gosec // G115: see above
+	if time.Since(time.Unix(secs, 0)) > maxAge {
 		return 0, nil, false
 	}
 	return direction(pt[1]), pt[sealHeader:], true
@@ -214,11 +211,13 @@ func Seal(ctx context.Context, purpose string, payload []byte) (string, error) {
 // credential no longer than maxAge ago, else ErrSealed.
 func Open(ctx context.Context, purpose, sealed string, maxAge time.Duration) ([]byte, error) {
 	s := scopeOf(ctx)
-	if s == nil || s.public {
+	if s == nil {
 		return nil, ErrSealed
 	}
-	dir, payload, ok := s.api.sealer.open(sealed, additionalData(handleDomain, purpose, s.credential), maxAge)
-	if !ok || dir != forward {
+	// No handle opens on a Public row: Seal refuses one, so none is sealed
+	// to its empty credential. Only Seal seals under handleDomain, forward.
+	_, payload, ok := s.api.sealer.open(sealed, additionalData(handleDomain, purpose, s.credential), maxAge)
+	if !ok {
 		return nil, ErrSealed
 	}
 	return payload, nil

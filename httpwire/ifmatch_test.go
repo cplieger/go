@@ -169,6 +169,8 @@ func TestIfMatchBareIntegerInvalid(t *testing.T) {
 		"an empty value":        {""},
 		"one quote":             {`"`},
 		"an open quote":         {strings.TrimSuffix(good, `"`)},
+		"an apostrophe opening": {"'" + strings.TrimPrefix(good, `"`)},
+		"an apostrophe closing": {strings.TrimSuffix(good, `"`) + "'"},
 		"a quote inside":        {`"` + thisOpenHex() + `."7"`},
 		"a space inside quotes": {`" ` + strings.Trim(good, `"`) + `"`},
 	} {

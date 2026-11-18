@@ -99,6 +99,24 @@ func TestOwnAnswerRowLogsAnUndeclaredSuccessStatus(t *testing.T) {
 	})
 }
 
+func TestInformationalStatusPassesThrough(t *testing.T) {
+	api, sink := ownAnswerAPI(t, nil, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Link", "</app.css>; rel=preload")
+		w.WriteHeader(http.StatusEarlyHints)
+		w.WriteHeader(http.StatusCreated)
+	})
+	srv := httptest.NewServer(api)
+	defer srv.Close()
+	res, err := srv.Client().Post(srv.URL+"/api/archive", "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusCreated || !sink.has("ERROR", "row=archive.export", "status=201") {
+		t.Errorf("answer %d, log %v: want the final 201 written and logged as undeclared", res.StatusCode, sink.all())
+	}
+}
+
 func TestStreamRowStillFlushes(t *testing.T) {
 	var direct, controlled bool
 	var flushErr error
@@ -162,13 +180,16 @@ func TestRawWriteBodyIsCapped(t *testing.T) {
 		"a handler writing nothing": func(_ http.ResponseWriter, r *http.Request) { _, _ = io.Copy(io.Discard, r.Body) },
 	} {
 		t.Run("an unannounced body over the cap, "+name, func(t *testing.T) {
-			api, runs := rawWriteAPI(t, h)
+			api, runs := rawWriteAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Handler", "set before the read")
+				h(w, r)
+			})
 			rec := answer(api, chunked("123456789"))
 			env := envelopeOf(t, rec)
 			if rec.Code != http.StatusRequestEntityTooLarge || env.Code != "body_too_large" || *runs != 1 {
 				t.Errorf("answer %d %s, handler ran %d times", rec.Code, env.Code, *runs)
 			}
-			if rec.Header().Get("Content-Disposition") != "" || rec.Header().Get("Wire-Version") == "" {
+			if rec.Header().Get("X-Handler") != "" || rec.Header().Get("Content-Disposition") != "" || rec.Header().Get("Wire-Version") == "" {
 				t.Errorf("headers %v: want the handler's dropped and the binder's kept", rec.Header())
 			}
 		})
