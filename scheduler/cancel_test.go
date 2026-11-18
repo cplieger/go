@@ -64,8 +64,8 @@ func TestCancel(t *testing.T) {
 			}
 			synctest.Wait()
 			r.wantEnd(t, running.Job, scheduler.ResultCancelled)
-			if rec := r.rec(t, running.Job); rec.Phase != "fetched" || rec.EndedAt.IsZero() {
-				t.Errorf("cancelled record at phase %q ended %v, want ended at phase fetched", rec.Phase, rec.EndedAt)
+			if rec := r.rec(t, running.Job); rec.Phase != "fetched" || rec.Step.N != 1 || rec.EndedAt.IsZero() {
+				t.Errorf("cancelled record at phase %q step %v ended %v, want ended at phase fetched, step 1", rec.Phase, rec.Step, rec.EndedAt)
 			}
 			if committed.Load() {
 				t.Error("Commit() = true after Cancel, want false")

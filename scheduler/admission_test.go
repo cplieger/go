@@ -655,3 +655,24 @@ func TestScheduleRefuses(t *testing.T) {
 		}
 	})
 }
+
+// A Start after Run has returned writes its record ended skipped queue_full
+// and runs nothing.
+func TestStartAfterShutdownIsRefused(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r, stop := (&rig{store: memrecords.New(), log: &runLog{}}).openUntil(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("check", "")}})
+		stop()
+		if _, err := r.ex.Start(t.Context(), api("check", "", "alice", payload{})); !errors.Is(err, scheduler.ErrQueueFull) {
+			t.Errorf("Start after Run returned = %v, want ErrQueueFull", err)
+		}
+		synctest.Wait()
+		all := r.store.All()
+		if len(all) != 1 {
+			t.Fatalf("%d records, want the refused start's one", len(all))
+		}
+		r.wantEnd(t, all[0].ID, scheduler.ResultSkipped, scheduler.Reason{Code: scheduler.ReasonQueueFull})
+		if !all[0].StartedAt.IsZero() || r.log.ran(all[0].ID) {
+			t.Errorf("refused record %+v, want it never started", all[0])
+		}
+	})
+}

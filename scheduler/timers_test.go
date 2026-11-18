@@ -118,6 +118,25 @@ func TestCadenceChangeDoesNotFire(t *testing.T) {
 		})
 	})
 
+	t.Run("a change back to trigger-only stops the wakes", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("quick", "passes")}})
+			t0 := time.Now()
+			r.schedule(t, "quick", "", scheduler.Scheduled(15*time.Minute))
+			first := r.nextWake(t, "quick", "", t0, 15*time.Minute)
+			synctest.Wait()
+			r.schedule(t, "quick", "", scheduler.TriggerOnly())
+			n := len(r.wakes("quick", ""))
+			sleepUntil(r.rec(t, first.ID).EndedAt.Add(2 * time.Hour))
+			if got := len(r.wakes("quick", "")); got != n {
+				t.Errorf("%d wakes in the 2 hours after a change to trigger-only, want 0", got-n)
+			}
+			if got := r.ex.Deadline("quick", ""); !got.IsZero() {
+				t.Errorf("Deadline after a change to trigger-only = %v, want zero", got)
+			}
+		})
+	})
+
 	t.Run("scheduling the same cadence keeps the wait", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("quick", "passes")}})
@@ -438,4 +457,45 @@ func TestRefusedScheduleLeavesTheFirstSchedule(t *testing.T) {
 			t.Errorf("Deadline after a refused Schedule = %v, want %v: the refusal changed nothing, so this first Schedule counts from the last end", got, want)
 		}
 	})
+}
+
+// A daily scope whose jobs all end, ok or failed, stays fresh minute by
+// minute for 80 hours, and each wake comes an interval after the end before
+// it: a failed end with no Retry waits the interval, never the next minute.
+func TestScheduledScopeStaysFreshAcrossWakes(t *testing.T) {
+	for _, res := range []scheduler.Result{scheduler.ResultOK, scheduler.ResultFailed} {
+		t.Run("jobs that end "+string(res), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				daily := spec("daily", "passes")
+				daily.Run = func(ctx context.Context, _ *scheduler.Run[payload]) scheduler.End {
+					select {
+					case <-time.After(50 * time.Second):
+					case <-ctx.Done():
+					}
+					return scheduler.End{Result: res}
+				}
+				r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{daily}})
+				t0 := time.Now()
+				r.schedule(t, "daily", "", scheduler.Scheduled(24*time.Hour))
+				fresh := r.ex.Fresh("daily", "")
+				for minute := range 80 * 60 {
+					time.Sleep(time.Minute)
+					if !fresh.Healthy() {
+						t.Fatalf("Fresh unhealthy %d minutes into a daily scope whose jobs end %s, deadline %v", minute+1, res, r.ex.Deadline("daily", ""))
+					}
+				}
+				wakes := r.wakes("daily", "")
+				if len(wakes) != 3 {
+					t.Fatalf("%d wakes in 80 hours of a daily cadence, want 3", len(wakes))
+				}
+				base := t0
+				for i, w := range wakes {
+					if off := w.QueuedAt.Sub(base); !inBand(off, 24*time.Hour) {
+						t.Errorf("wake %d came %v after the end before it, want a day, jittered", i+1, off)
+					}
+					base = r.rec(t, w.ID).EndedAt
+				}
+			})
+		})
+	}
 }

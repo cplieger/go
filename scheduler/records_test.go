@@ -526,6 +526,15 @@ func TestPipelinesStepNOfM(t *testing.T) {
 		})
 	})
 
+	t.Run("a kind with no pipeline records no step", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			got := marks(t, []scheduler.KindSpec[payload]{spec("sweep", "")}, "sweep", scheduler.PhaseCommitting)
+			if want := []mark{at(scheduler.PhaseCommitting, 0, 0)}; !slices.Equal(got, want) {
+				t.Errorf("sweep marks %v, want %v", got, want)
+			}
+		})
+	})
+
 	t.Run("a pipeline that names started counts it as its first step", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			reeval := spec("reevaluate", "passes")
@@ -626,6 +635,39 @@ func TestRecordTimesAreTheStores(t *testing.T) {
 		}
 		if len(rec.Phases) != 1 || !rec.Phases[0].At.Equal(entered.Add(time.Second)) {
 			t.Errorf("Phases = %+v, want walking at the store's stamp %v", rec.Phases, entered.Add(time.Second))
+		}
+	})
+}
+
+// A request of another scope does not wait on a record write in flight: it
+// is admitted with its own job while the first write is held.
+func TestStartOfAnotherScopeBesideARecordWrite(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := &heldRecords{Store: memrecords.New(), entered: make(chan struct{}), hold: make(chan struct{})}
+		log := &runLog{}
+		ex := heldRig(t, g, log)
+		first := startAsync(t.Context(), ex, api("quick_check", "source:a", "alice", payload{}))
+		<-g.entered
+		second := startAsync(t.Context(), ex, api("quick_check", "source:b", "bob", payload{}))
+		synctest.Wait()
+		var b answer
+		select {
+		case b = <-second:
+		default:
+			close(g.hold)
+			t.Fatal("a start of another scope waited on the held record write, want it admitted beside it")
+		}
+		close(g.hold)
+		a := <-first
+		if a.err != nil || b.err != nil {
+			t.Fatalf("Start = (%v, %v), want both admitted", a.err, b.err)
+		}
+		if b.s.Joined || b.s.Job == a.s.Job {
+			t.Errorf("the start beside the write = %+v, first %+v; want a job of its own", b.s, a.s)
+		}
+		synctest.Wait()
+		if got := log.ids(); !slices.Contains(got, a.s.Job) || !slices.Contains(got, b.s.Job) {
+			t.Errorf("ran %v, want both jobs", got)
 		}
 	})
 }

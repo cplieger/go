@@ -324,6 +324,16 @@ func TestQuietAllEndsQueuedInterrupted(t *testing.T) {
 }
 
 func TestShutdownCancelsAndWaits(t *testing.T) {
+	for _, answered := range []scheduler.Result{scheduler.ResultOK, scheduler.ResultFailed} {
+		t.Run("a job that answers "+string(answered)+" when cut short", func(t *testing.T) {
+			shutdownCancelsAndWaits(t, answered)
+		})
+	}
+}
+
+// shutdownCancelsAndWaits cuts a running job short at shutdown, whose Run then
+// answers answered, beside a queued job.
+func shutdownCancelsAndWaits(t *testing.T, answered scheduler.Result) {
 	synctest.Test(t, func(t *testing.T) {
 		base := &rig{store: memrecords.New(), log: &runLog{}}
 		returned := make(chan time.Time, 1)
@@ -333,7 +343,7 @@ func TestShutdownCancelsAndWaits(t *testing.T) {
 			<-ctx.Done()
 			time.Sleep(2 * time.Second)
 			returned <- time.Now()
-			return scheduler.End{Result: scheduler.ResultOK}
+			return scheduler.End{Result: answered}
 		}
 		r, stop := base.openUntil(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{scan}})
 		running := r.start(t, api("scan", "source:a", "alice", payload{}))
@@ -376,6 +386,47 @@ func TestShutdownCancelsAndWaits(t *testing.T) {
 		}
 		if len(ends) != 0 {
 			t.Errorf("LastEnds after a shutdown = %v, want none: no job ended that started and finished", ends)
+		}
+	})
+}
+
+// A job in its commit step at shutdown keeps its own end, and Run waits for it.
+func TestShutdownKeepsACommittingJobsEnd(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := &rig{store: memrecords.New(), log: &runLog{}}
+		gate := make(chan struct{})
+		full := spec("full", "passes")
+		full.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+			if !run.Commit() {
+				return scheduler.End{Result: scheduler.ResultFailed}
+			}
+			<-gate
+			return scheduler.End{Result: scheduler.ResultOK}
+		}
+		r, stop := base.openUntil(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{full}})
+		s := r.start(t, api("full", "", "alice", payload{}))
+		synctest.Wait()
+
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			stop()
+		}()
+		synctest.Wait()
+		select {
+		case <-stopped:
+			t.Fatal("Run returned while a job was in its commit step, want it to wait")
+		default:
+		}
+		close(gate)
+		<-stopped
+		r.wantEnd(t, s.Job, scheduler.ResultOK)
+		ends, err := base.store.LastEnds(t.Context())
+		if err != nil {
+			t.Fatalf("LastEnds = %v", err)
+		}
+		if got := ends[scheduler.ScheduledScope{Kind: "full", Scope: ""}]; got.Result != scheduler.ResultOK {
+			t.Errorf("LastEnds[full] after a shutdown that waited out its commit = %+v, want its ok end", got)
 		}
 	})
 }
