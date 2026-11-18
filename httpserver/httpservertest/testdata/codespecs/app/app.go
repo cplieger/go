@@ -37,5 +37,7 @@ func (c *config) serve(w http.ResponseWriter, r *http.Request) {
 	hs.WriteError(w, r, http.StatusConflict, c.code, "not followed")
 	c.respond(w, r, http.StatusGone, "responder_code", "m")
 	c.deny(w, "func_type_code", "m")
+	hs.WriteErrorBody(w, http.StatusConflict, hs.NewErrorResponse(r, "constructor_code", "m"))
+	hs.WriteErrorBody(w, http.StatusConflict, hs.ErrorResponse{Code: "envelope_code"})
 	http.Error(w, "plain_error_text", http.StatusTeapot)
 }

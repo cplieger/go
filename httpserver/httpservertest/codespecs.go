@@ -19,17 +19,23 @@ import (
 )
 
 const (
-	httpserverPath = "github.com/cplieger/go/httpserver/v2"
-	errorCodeType  = "ErrorCode"
+	httpserverPath    = "github.com/cplieger/go/httpserver/v2"
+	errorCodeType     = "ErrorCode"
+	errorResponseType = "ErrorResponse"
 )
 
+// rootWriters are the httpserver functions that take an ErrorCode, with its
+// argument positions.
+var rootWriters = map[string][]int{"WriteError": {3}, "NewErrorResponse": {1}}
+
 // CheckCodeSpecs fails t unless specs holds exactly the codes the non-test Go
-// files in dir write, naming each code missing from specs and each key nothing
+// files in dir write, naming each missing from specs and each key nothing
 // writes. A code is written when a string literal, a string constant or an
-// ErrorCode conversion of one sits at an ErrorCode argument of a call (to
-// httpserver.WriteError, an ErrorResponder, or a function or func type dir
-// declares) or fills an ErrorCode field of a composite literal. A code held in
-// a variable is not followed; it is counted where its literal enters.
+// ErrorCode conversion of one is an ErrorCode argument of a call (WriteError,
+// NewErrorResponse, an ErrorResponder, or a function or func type dir declares)
+// or fills an ErrorCode field of a composite literal, including
+// ErrorResponse.Code. Build envelopes with NewErrorResponse; a literal's code
+// is still counted. A code in a variable is counted where its literal enters.
 func CheckCodeSpecs(t testing.TB, dir string, specs map[httpserver.ErrorCode]httpserver.CodeSpec) {
 	t.Helper()
 	written, err := writtenCodes(dir)
@@ -229,12 +235,14 @@ func (s *codeScan) collect(f *ast.File) {
 
 // collectFields records the codes lit gives its ErrorCode-typed fields.
 func (s *codeScan) collectFields(f *ast.File, lit *ast.CompositeLit) {
+	_, qualified := lit.Type.(*ast.SelectorExpr)
+	envelope := qualified && typeName(f, lit.Type) == errorResponseType
 	for _, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
-		if key, ok := kv.Key.(*ast.Ident); ok && s.fields[key.Name] {
+		if key, ok := kv.Key.(*ast.Ident); ok && (s.fields[key.Name] || envelope && key.Name == "Code") {
 			s.record(f, kv.Value)
 		}
 	}
@@ -247,10 +255,7 @@ func (s *codeScan) callPositions(call *ast.CallExpr, q string, imported bool) []
 		return s.funcs[fn.Name]
 	case *ast.SelectorExpr:
 		if x, ok := fn.X.(*ast.Ident); ok && imported && q != "" && x.Name == q {
-			if fn.Sel.Name == "WriteError" {
-				return []int{3}
-			}
-			return nil
+			return rootWriters[fn.Sel.Name]
 		}
 		return s.funcs[fn.Sel.Name]
 	}

@@ -64,10 +64,12 @@ type ErrorCode string
 // not internal_error, so a broken code never relabels a 400 as a server fault.
 const InvalidErrorCode ErrorCode = "invalid_error_code"
 
-// ErrorResponse is the JSON error envelope every writer in this package
-// answers. Every key is always present: RequestID is the request's id, or a
-// fresh one when its context has none, and Remediation is the code's CodeSpec
-// default, or empty for a code outside CodeSpecs.
+// ErrorResponse is the JSON error envelope. Every key is always present. In
+// one NewErrorResponse builds, and so in every one WriteError writes,
+// RequestID is the request's id, or a fresh one when its context has none,
+// and Remediation is the code's CodeSpec default, or empty for a code outside
+// CodeSpecs. A struct that embeds it by value as its first field marshals
+// flat, its four keys first and the embedder's own after.
 type ErrorResponse struct {
 	Code        ErrorCode `json:"code"`
 	Message     string    `json:"message"`
@@ -108,22 +110,21 @@ func CodeSpecs() map[ErrorCode]CodeSpec {
 
 // WriteError writes the ErrorResponse for code and msg with the given status.
 // It sets Content-Type, and X-Request-ID when the response has none, and keeps
-// every other header the caller set. r may be nil.
+// every other header the caller set. r may be nil. It is
+// WriteErrorBody(w, status, NewErrorResponse(r, code, msg)).
 //
 // WriteError ships the mechanism only; each application keeps its own code
 // taxonomy on top of it.
 func WriteError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string) {
-	resp := errorEnvelope(r, code, msg)
-	if w.Header().Get(HeaderRequestID) == "" {
-		w.Header().Set(HeaderRequestID, resp.RequestID)
-	}
-	WriteJSONStatus(w, status, resp)
+	WriteErrorBody(w, status, NewErrorResponse(r, code, msg))
 }
 
-// errorEnvelope builds the ErrorResponse for r. Every library error body, live
-// or pre-rendered by errorBodyJSON, goes through it, so the code grammar and
-// the request-id rule hold on all of them.
-func errorEnvelope(r *http.Request, code ErrorCode, msg string) ErrorResponse {
+// NewErrorResponse returns the envelope WriteError writes for code and msg: a
+// malformed code replaced by InvalidErrorCode, the code's CodeSpecs
+// remediation (empty outside CodeSpecs), and the request id from r's context,
+// else a fresh one. r may be nil. A caller may replace Remediation, or embed
+// the result in a struct of its own, before WriteErrorBody writes it.
+func NewErrorResponse(r *http.Request, code ErrorCode, msg string) ErrorResponse {
 	resp := ErrorResponse{Code: checkedErrorCode(code), Message: msg}
 	resp.Remediation = codeSpecs[resp.Code].Remediation
 	if r != nil {
@@ -133,6 +134,25 @@ func errorEnvelope(r *http.Request, code ErrorCode, msg string) ErrorResponse {
 		resp.RequestID = rand.Text()
 	}
 	return resp
+}
+
+// ErrorBody is an ErrorResponse, or a struct that embeds one by value, so an
+// application can answer its own fields beside the standard envelope.
+type ErrorBody interface{ envelope() ErrorResponse }
+
+func (e ErrorResponse) envelope() ErrorResponse { return e }
+
+// WriteErrorBody writes body as JSON with status. It sets Content-Type, and
+// X-Request-ID to the body's RequestID when the response has none, so the
+// header and the body carry one id; every other header the caller set stays.
+// The body's ErrorResponse is the caller's to build with NewErrorResponse,
+// changing Message or Remediation at most: one built otherwise is written as
+// it is, its code unchecked and no request id filled.
+func WriteErrorBody(w http.ResponseWriter, status int, body ErrorBody) {
+	if id := body.envelope().RequestID; id != "" && w.Header().Get(HeaderRequestID) == "" {
+		w.Header().Set(HeaderRequestID, id)
+	}
+	WriteJSONStatus(w, status, body)
 }
 
 // warnOnce logs one Warn per instance and swallows every later call. It exists
@@ -194,22 +214,16 @@ func validErrorCode(code ErrorCode) bool {
 // errorBodyJSON renders the body WriteError would write for r, for an API
 // that takes its body before the request runs (http.TimeoutHandler).
 func errorBodyJSON(r *http.Request, code ErrorCode, msg string) string {
-	b, _ := json.Marshal(errorEnvelope(r, code, msg)) // a struct of strings always marshals
+	b, _ := json.Marshal(NewErrorResponse(r, code, msg)) // a struct of strings always marshals
 	return string(b)
 }
 
-// ErrorResponder renders an error response body. It has the exact signature of
-// WriteError, which is its canonical instance and the library-wide default, so
-// the JSON envelope is the zero-config behavior. Middleware that emits an error
-// body (Recoverer via WithRecoverResponder, RateLimiter via
-// WithRateLimitResponder) accepts one so a non-JSON endpoint - an XML or
-// plain-text service - can keep its error body on its own
-// content type instead of the default JSON. A responder owns writing the status
-// and any headers, and is invoked only when the response has not been committed.
-//
-// A responder receives the ErrorCode as the library resolved it from its
-// caller — unvalidated, because the grammar is enforced by the JSON envelope
-// encoder and a responder rendering another content type owns its own body. A
-// responder that emits the code into a machine-readable slot should route it
-// through this package's WriteError, or check it the same way.
+// ErrorResponder renders an error response body; WriteError is its canonical
+// instance and the library-wide default. Middleware that emits an error body
+// (Recoverer via WithRecoverResponder, RateLimiter via WithRateLimitResponder)
+// takes one, so an XML or plain-text service keeps its own content type. A
+// responder writes the status and any headers, and runs only before the
+// response is committed. It receives the ErrorCode unvalidated: one that emits
+// the code in a machine-readable slot builds its body with NewErrorResponse and
+// writes it with WriteErrorBody, or checks the code the same way.
 type ErrorResponder func(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, msg string)

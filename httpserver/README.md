@@ -4,7 +4,7 @@
 
 httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy.
 
-Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `golang.org/x/net/html`, `go/ssrf` and `go/textsafe`, and is licensed under Apache-2.0.
+Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `golang.org/x/net/html`, `go/ssrf` and `go/textsafe`, plus `golang.org/x/sync` and `go/filesafe` for `imagecache`, and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -15,6 +15,7 @@ httpserver is built for a Go service on `http.ServeMux` that faces a browser or 
 - Every refusal is one JSON envelope with a code, a message, a remediation and the request id.
 - `SPA` serves only the files your bundle's manifest lists, with the policy on every answer and year-long caching for hashed assets. A stable entry, such as a service worker, keeps one URL at the root and revalidates on every load. `httpservertest.CheckSPA` checks every path in a test.
 - The access log caps the path and method it writes, and metric labels stay bounded.
+- `imagecache` serves an upstream's images from your own origin, each one's type checked against its bytes, kept in a bounded directory and answered with an ETag.
 - `New` leaves the write timeout off, so streams stay open. `Run` drains in-flight requests within a grace period, and the ops listener keeps `/healthz` answering through the drain.
 
 Consider [chi](https://github.com/go-chi/chi) for route groups and sub-routers, or [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate) for a limiter that waits instead of refusing.
@@ -100,9 +101,10 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 - Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NewKeyedRateLimiter` (`KeyedRate`, `KeyedRateLimiter`), `NoStore`.
 - Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), `AddLogAttrs` for a handler's own access-line attributes, the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`, `WithRequestID`), `StatusRecorder` and `NewStatusRecorder`.
 - Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `WithLoopbackExempt`, `WithIPLiteralHosts`, `WithHostResponder`, `WithHostAllowlistLogger` and `LogRefusal`), `CanonicalHost`, `CrossOrigin`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
-- Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorResponse`, `ErrorCode` and `ErrorResponder`, `CodeSpecs` (`CodeSpec`), `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
+- Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorResponse`, `ErrorCode` and `ErrorResponder`, `NewErrorResponse` and `WriteErrorBody` (`ErrorBody`) for an envelope with its own remediation or fields, `CodeSpecs` (`CodeSpec`), `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler` with `WithStaticCacheControl` and `WithStaticETags`, `ContentTypes`, `InlineScriptHashes`, `InlineStyleHashes`.
 - Single-page apps: `SPA` (`SPAConfig`), `Page`, `CheckPages`, `NewPageMatcher` (`PageMatcher`, `PageMatch`), `NotFound`, the manifest (`BundlePath`, `ReadBundle`, `Bundle`, `BundleEntry`, `BundleKind`), `SPAPolicy`, `CheckShell`, and `OutagePage` (`OutageConfig`, `OutageFile`, `OutageClass`, `OutageCommand`).
+- Upstream images in `imagecache`: `New` (`Options`, `Key`, `Image`, `Fetch`), `Cache.Serve`, `Forget`, `ForgetSpace`, `Shutdown`, `CodeSpecs`.
 - Test helpers in `httpservertest`: `CheckSPA`, `CheckNoUI`, `CheckCodeSpecs`.
 - Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `ListenAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`), and `Listen` and `CheckListenAddrs` over `ListenSetting`.
 
@@ -156,7 +158,8 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope and its codes, body decoding and path checks.
 - [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, content types, caching and entity-tags.
 - [Single-page apps and the outage page](docs/spa.md) covers `SPA`, its manifest, pages, policy and caching, the test helpers and `OutagePage`.
-- [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the ops listener.
+- [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the ops listener, which answers every `Host` until you list `Hosts`.
+- [Upstream images](docs/imagecache.md) covers `imagecache`: its options, what it keeps, serving and 304, its codes, eviction, restart and shutdown.
 
 ## Credits
 
