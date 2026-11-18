@@ -314,6 +314,30 @@ func TestCollectorWarnsOnceAtTheSeriesThreshold(t *testing.T) {
 	}
 }
 
+// A state set's threshold counts its label sets, as [StateSet] does, never
+// its samples: nine states over 112 label sets is 1008 samples and no warning,
+// and the warning comes at cardinalityWarnThreshold label sets.
+func TestCollectorCountsAStateSetsLabelSets(t *testing.T) {
+	states := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}
+	for _, tc := range []struct {
+		sets int
+		warn bool
+	}{{112, false}, {cardinalityWarnThreshold - 1, false}, {cardinalityWarnThreshold, true}} {
+		logs := captureDebugLogs(t)
+		d := NewStateSetDesc("outcome", "h", []string{"source", "outcome"}, states)
+		r := NewRegistry("")
+		r.MustRegister(staticCollector(func(e *Emitter) {
+			for i := range tc.sets {
+				e.EmitState(d, "a", fmt.Sprint(i))
+			}
+		}, d))
+		body(t, r)
+		if got := strings.Contains(logs.String(), "or more series"); got != tc.warn {
+			t.Errorf("%d label sets (%d samples): warned = %v, want %v:\n%s", tc.sets, tc.sets*len(states), got, tc.warn, logs)
+		}
+	}
+}
+
 func TestCollectorSanitizesLabelValues(t *testing.T) {
 	logs := captureDebugLogs(t)
 	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
