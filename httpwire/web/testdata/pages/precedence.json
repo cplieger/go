@@ -1,0 +1,88 @@
+{
+  "pages": {
+    "file": "/files/{name}",
+    "fresh": "/files/new",
+    "pair": "/a/{x}/b",
+    "tree": "/files/{rest...}"
+  },
+  "apiPrefix": "/api",
+  "cases": [
+    {
+      "path": "/files",
+      "redirect": "/files/"
+    },
+    {
+      "params": {
+        "rest": ""
+      },
+      "path": "/files/",
+      "name": "tree"
+    },
+    {
+      "params": {},
+      "path": "/files/new",
+      "name": "fresh"
+    },
+    {
+      "params": {
+        "rest": "new/"
+      },
+      "path": "/files/new/",
+      "name": "tree"
+    },
+    {
+      "params": {
+        "name": "a"
+      },
+      "path": "/files/a",
+      "name": "file"
+    },
+    {
+      "params": {
+        "rest": "a/b"
+      },
+      "path": "/files/a/b",
+      "name": "tree"
+    },
+    {
+      "params": {
+        "name": "a/b"
+      },
+      "path": "/files/a%2Fb",
+      "name": "file"
+    },
+    {
+      "params": {
+        "rest": "new/x"
+      },
+      "path": "/files/new/x",
+      "name": "tree"
+    },
+    {
+      "params": {
+        "x": "x"
+      },
+      "path": "/a/x/b",
+      "name": "pair"
+    },
+    {
+      "path": "/a/x/c"
+    },
+    {
+      "params": {
+        "x": "x/y"
+      },
+      "path": "/a/x%2Fy/b",
+      "name": "pair"
+    },
+    {
+      "path": "/a//b"
+    },
+    {
+      "path": "/"
+    },
+    {
+      "path": "/api/files"
+    }
+  ]
+}
