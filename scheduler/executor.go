@@ -53,21 +53,24 @@ type KindSpec[P any] struct {
 	OnBehalf bool // the job writes for its starting credential, so CredentialEnded stops it
 	// Proposes marks a kind whose result is a proposal: its Scope is the
 	// proposal key, expectation included, so Start answers the owner's held
-	// proposal of that scope without running again.
+	// proposal of that scope without running again, and its jobs coalesce
+	// only with the same owner's.
 	Proposes bool
 }
 
 // Job is one request for work.
 type Job[P any] struct {
 	Payload P
-	ID      ID // set by Start
-	Kind    Kind
+	// Key is a keyed start's idempotency slot, written in the record's insert
+	// so a resend after a crash answers the stored job (Start); nil otherwise.
+	Key  *Key
+	ID   ID // set by Start
+	Kind Kind
 	// Scope is the app's key for what the job covers: code grammar plus ':'
 	// and '/', at most 128 bytes ("", "connection:3", "source:sonarr").
 	Scope   string
 	Trigger Trigger
 	Owner   string // the starting credential; "" for TriggerSchedule
-	Key     *Key
 }
 
 // Config configures NewExecutor.

@@ -9,13 +9,13 @@ import (
 )
 
 // Start admits j, writing its record (a batch's with one queued line per item)
-// before it is queued. Its owner's held proposal of its scope, a queued job of
-// its scope or one covering it, or a running one of its scope inside Fresh, of
-// a proposing kind or serving a timer request, answers it instead (Joined). A
-// proposing kind's jobs coalesce per owner. It answers *RecentError, and
-// ErrQueueFull past a queue or proposal bound (the record ended skipped,
-// queue_full) and during a Hold(all) (no record); ErrStoreUnavailable when
-// the record cannot be written, ErrBatchSize, ErrUnknownKind and ErrScope.
+// before it is queued. A stored record holding j's Key, its owner's held
+// proposal of its scope, a queued job of its scope or one covering it, or a
+// running one of its scope inside Fresh, of a proposing kind or serving a
+// timer request, answers it instead (Joined), running nothing. It answers
+// *RecentError, ErrQueueFull past a queue or proposal bound (the record ended
+// skipped, queue_full) and during a Hold(all) (no record), ErrStoreUnavailable
+// when the record cannot be written, ErrBatchSize, ErrUnknownKind, ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -44,7 +44,7 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	}
 	if e.fullLocked(&en.j) || e.proposalsFullLocked(spec, &en.j) {
 		e.mu.Unlock()
-		return Started{}, e.refuse(ctx, en)
+		return e.refuse(ctx, en)
 	}
 	e.live = append(e.live, en)
 	e.waitLocked(en)
@@ -83,8 +83,16 @@ func (e *Executor[P]) matchLocked(ctx context.Context, spec *KindSpec[P], j *Job
 // admit writes the record of en, which holds its place in the bounds, and
 // queues it. A CredentialEnded during the write ends it instead, cancelled.
 func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
-	err := e.insert(ctx, en)
+	replay, err := e.insert(ctx, en)
 	e.mu.Lock()
+	if replay != "" {
+		e.unwaitLocked(en)
+		en.state = stateEnded
+		e.removeLocked(en)
+		close(en.admitted)
+		e.mu.Unlock()
+		return Started{Job: replay, Joined: true}, nil
+	}
 	stopped := err == nil && en.stopEnd != nil
 	if err == nil && !stopped && (e.closed || e.holds > 0) {
 		err = errClosed
@@ -244,35 +252,44 @@ func (e *Executor[P]) fullLocked(j *Job[P]) bool {
 	return e.closed || e.waiting >= e.maxQueued || (j.Owner != "" && e.owners[j.Owner] >= e.maxPerOwner)
 }
 
-// insert writes en's queued record and keeps the record the store answers,
-// whose QueuedAt is the store's stamp. ErrCapacity reaches the caller as it
-// is, since it names the store's bound and not a fault.
-func (e *Executor[P]) insert(ctx context.Context, en *job[P]) error {
+// insert writes en's queued record with its key and keeps the record the
+// store answers, whose QueuedAt is the store's stamp. A key a stored record
+// already holds writes nothing and answers that record's id as replay.
+// ErrCapacity reaches the caller as it is, since it names the store's bound
+// and not a fault.
+func (e *Executor[P]) insert(ctx context.Context, en *job[P]) (replay ID, err error) {
 	if en.spec.Kept == 0 {
-		return nil
+		return "", nil
 	}
-	stored, _, err := e.records.Insert(ctx, en.rec, nil)
+	stored, replayed, err := e.records.Insert(ctx, en.rec, en.j.Key)
 	if err != nil {
 		if errors.Is(err, ErrCapacity) {
-			return err
+			return "", err
 		}
-		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+		return "", fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+	}
+	if replayed {
+		return stored.ID, nil
 	}
 	en.recMu.Lock()
 	en.rec = stored
 	en.recMu.Unlock()
-	return nil
+	return "", nil
 }
 
 // refuse writes the record of a request the queue has no place for and ends
-// it skipped, queue_full.
-func (e *Executor[P]) refuse(ctx context.Context, en *job[P]) error {
-	if err := e.insert(ctx, en); err != nil {
-		return err
+// it skipped, queue_full; a replayed key answers its stored job instead.
+func (e *Executor[P]) refuse(ctx context.Context, en *job[P]) (Started, error) {
+	replay, err := e.insert(ctx, en)
+	switch {
+	case err != nil:
+		return Started{}, err
+	case replay != "":
+		return Started{Job: replay, Joined: true}, nil
 	}
 	e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
 	e.ended(ctx, en, queueFull)
-	return ErrQueueFull
+	return Started{}, ErrQueueFull
 }
 
 // ended writes the end of a job that never ran, takes it out of the live

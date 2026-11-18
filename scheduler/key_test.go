@@ -87,6 +87,24 @@ func TestKeyedStartAnswersTheStoredJob(t *testing.T) {
 		})
 	})
 
+	t.Run("a resend meeting a full queue answers the stored job", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}, MaxQueued: 1})
+			gate := make(chan struct{})
+			first := r.start(t, keyed(api("scan", "source:a", "alice", payload{Gate: gate}), "k1"))
+			synctest.Wait()
+			r.start(t, api("scan", "source:b", "bob", payload{Gate: gate}))
+			s, err := r.ex.Start(t.Context(), keyed(api("scan", "source:a", "alice", payload{}), "k1"))
+			if err != nil || s.Job != first.Job || !s.Joined {
+				t.Errorf("the resend = %+v, %v; want the first job %s, joined, nil", s, err, first.Job)
+			}
+			if all := r.store.All(); len(all) != 2 {
+				t.Errorf("%d records, want the first job's and bob's alone", len(all))
+			}
+			close(gate)
+		})
+	})
+
 	t.Run("a start under another key runs its own job", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}})

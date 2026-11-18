@@ -10,10 +10,11 @@ import (
 // The store owns the record's times: it stamps each from its own clock in the
 // write that records it, and ignores the times r carries.
 type Records interface {
-	// Insert writes a new record, stamping QueuedAt, and answers it. With a
-	// key it first looks the key up and, when a record holds it, answers that
-	// record and true without writing (a keyed resend). It answers
-	// ErrCapacity when no record may make room.
+	// Insert writes a new record holding key, stamping QueuedAt and the key's
+	// Until (QueuedAt plus its Window), and answers it. With a key it first
+	// looks the key up and, when a record holds it, answers that record and
+	// true without writing (a keyed resend). It answers ErrCapacity when no
+	// record may make room.
 	Insert(ctx context.Context, r Record, key *Key) (Record, bool, error)
 	// Put writes r over the stored record when r.Rev is newer and the stored
 	// record has not ended; otherwise it writes nothing and answers nil. It
@@ -94,8 +95,9 @@ type ScheduledScope struct {
 	Scope string
 }
 
-// Key is a start's idempotency slot: the credential, the row's name and the
-// key the client sent. Until is QueuedAt plus the row's window.
+// Key is a start's idempotency slot: the credential, the row's name, the key
+// the client sent, its request's fingerprint and the row's window. Until is
+// stamped by Records.Insert; the value a caller sets is ignored.
 type Key struct {
 	Until                time.Time
 	Credential, Row, Key string

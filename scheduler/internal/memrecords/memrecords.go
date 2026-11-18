@@ -152,8 +152,9 @@ func (s *Store) Reopen() {
 	}
 }
 
-// Insert writes r, stamping QueuedAt at the wall time. A key some record
-// already holds answers that record and true, writing nothing.
+// Insert writes r holding key, stamping QueuedAt and the key's Until at the
+// wall time. A key some record already holds answers that record and true,
+// writing nothing.
 func (s *Store) Insert(_ context.Context, r scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) { //nolint:gocritic // hugeParam: the scheduler.Records signature
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,11 +173,13 @@ func (s *Store) Insert(_ context.Context, r scheduler.Record, key *scheduler.Key
 		return scheduler.Record{}, false, scheduler.ErrCapacity
 	}
 	r = clone(&r)
+	r.QueuedAt, r.StartedAt, r.EndedAt = time.Now(), time.Time{}, time.Time{}
+	r.Key = nil
 	if key != nil {
 		k := *key
+		k.Until = r.QueuedAt.Add(k.Window)
 		r.Key = &k
 	}
-	r.QueuedAt, r.StartedAt, r.EndedAt = time.Now(), time.Time{}, time.Time{}
 	s.recs[r.ID] = r
 	s.order = append(s.order, r.ID)
 	return clone(&r), false, nil
