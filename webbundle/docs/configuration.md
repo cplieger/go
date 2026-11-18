@@ -29,7 +29,8 @@ This page lists every field of `Config`, `Entry` and `Manifest`, for a developer
 | `Name` | required | The logical name a shell uses, `/<Name>.js` or `/<Name>.css`. Letters, digits, `-`, `_` and `.`, with no leading dot |
 | `Path` | required | The source file, such as `src/main.ts` |
 | `Kind` | required | `Module`, `Classic` or `Style` |
-| `Forbid` | none | npm packages by name, or paths under `Src` by whole segments, that the entry's imports may not reach |
+| `Forbid` | none | Items the entry's imports may not reach |
+| `Allow` | none | When set, the only items the entry's imports may reach |
 
 A script entry and a style entry may share a name, since one is `/app.js` and the other `/app.css`.
 
@@ -41,7 +42,20 @@ A script entry and a style entry may share a name, since one is `/app.js` and th
 
 Classic entries build first. Every module entry then reads their URLs through the `BUNDLE_URLS` define, such as `new SharedWorker(BUNDLE_URLS.worker)` for an entry named `worker`. A classic entry read this way needs no shell to name it.
 
-`Forbid` keeps code out of an entry that must not hold it. A shared worker's entry can forbid `@cplieger/ui` and your own `src/dom` folder, so no DOM code reaches the worker. The entry's own file never counts against its `Forbid`.
+## Forbid and Allow
+
+`Forbid` keeps code out of an entry that must not hold it. A shared worker's entry can forbid `@cplieger/ui` and your own `src/dom` folder, so no DOM code reaches the worker. `Allow` holds an entry to the files it names. A script that sets the theme before the first paint blocks rendering, so its entry can allow only `@cplieger/ui/theme`, and any other file it pulls in fails the build. The entry's own file never counts against either list.
+
+Both lists take the same items:
+
+| Item | Matches |
+| --- | --- |
+| `@cplieger/ui`, `lit` | every file of that npm package |
+| `@cplieger/ui/theme` | the file an import of `@cplieger/ui/theme` resolves to, through the package's `exports`, in every installed copy of the package. A style entry resolves it as a CSS `@import` does, a script entry as an `import` statement does |
+| `src/wire` | that file or folder under `Src` and everything under it, by whole path segments, so `src/wire` does not cover `src/wirelike.ts` |
+| `./lit/core` | a path under `Src` whose first segment is also the name of an installed package |
+
+An item that exists under `Src` is a path. Any other item is a package or a file a package exports. An item that can match nothing fails the build before anything is built: an empty item or `.`, a path leaving `Src`, a path under `node_modules` (name the package instead), a package `Packages` does not match, a package file that resolves to no file or to another package's file, and a path that is also a package name, written without `./`.
 
 ## Manifest
 

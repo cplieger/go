@@ -48,7 +48,7 @@ func (b *build) readShell(name string) (shell, error) {
 	}
 	logical := map[string]int{}
 	for i, e := range b.entries {
-		logical[logicalPath(e)] = i
+		logical[logicalPath(&e)] = i
 	}
 	sh := shell{name: name, body: body, head: -1, iconRels: b.icon != ""}
 	r := shellReader{shell: &sh, entries: b.entries, logical: logical, named: map[string]bool{}}

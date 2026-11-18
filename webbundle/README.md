@@ -58,7 +58,7 @@ func main() {
 		Pages:     webui.Pages,
 		APIPrefix: "/api",
 		Entries: []webbundle.Entry{
-			{Name: "prepaint", Path: "src/prepaint.ts", Kind: webbundle.Classic},
+			{Name: "prepaint", Path: "src/prepaint.ts", Kind: webbundle.Classic, Allow: []string{"@cplieger/ui/theme"}},
 			{Name: "app", Path: "src/main.ts", Kind: webbundle.Module},
 			{Name: "app", Path: "src/app.css", Kind: webbundle.Style},
 		},

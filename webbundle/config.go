@@ -46,6 +46,7 @@ type build struct {
 	icon       string
 	shells     []string
 	entries    []Entry
+	rules      []closureRules // each entry's Forbid and Allow, by index
 	pages      []httpserver.Page
 	packages   []string
 }
@@ -93,6 +94,7 @@ func newBuild(c *Config) (*build, error) {
 		func() error { return checkDefine(c.Define) },
 		func() error { return b.checkShells(c.Pages) },
 		b.checkFiles,
+		b.checkClosureItems,
 		b.checkIcon,
 	} {
 		if err := check(); err != nil {
@@ -168,18 +170,18 @@ func (b *build) checkEntries(entries []Entry) error {
 		if err != nil {
 			return err
 		}
-		if err := checkEntryName(e); err != nil {
+		if err := checkEntryName(&e); err != nil {
 			return err
 		}
-		if err := checkEntryKind(e, p); err != nil {
+		if err := checkEntryKind(&e, p); err != nil {
 			return err
 		}
-		l := logicalPath(e)
+		l := logicalPath(&e)
 		if logical[l] {
 			return fmt.Errorf("webbundle: two entries are %s", l)
 		}
 		logical[l] = true
-		e.Path, e.Forbid = p, slices.Clone(e.Forbid)
+		e.Path, e.Forbid, e.Allow = p, slices.Clone(e.Forbid), slices.Clone(e.Allow)
 		b.entries = append(b.entries, e)
 	}
 	return nil
@@ -188,7 +190,7 @@ func (b *build) checkEntries(entries []Entry) error {
 // checkEntryName keeps a logical name one plain file name: a shell names it
 // as "/<Name>.js" or "/<Name>.css", and its hashed file is
 // assets/<Name>-<hash>.<ext>.
-func checkEntryName(e Entry) error {
+func checkEntryName(e *Entry) error {
 	if e.Name == "" {
 		return fmt.Errorf("webbundle: entry %s has no name", e.Path)
 	}
@@ -203,7 +205,7 @@ func checkEntryName(e Entry) error {
 	return nil
 }
 
-func checkEntryKind(e Entry, p string) error {
+func checkEntryKind(e *Entry, p string) error {
 	css := path.Ext(p) == cssExt
 	switch e.Kind {
 	case Module, Classic:
@@ -220,7 +222,7 @@ func checkEntryKind(e Entry, p string) error {
 	return nil
 }
 
-func logicalPath(e Entry) string {
+func logicalPath(e *Entry) string {
 	if e.Kind == Style {
 		return "/" + e.Name + cssExt
 	}

@@ -47,11 +47,19 @@ const (
 )
 
 // Entry is one bundle entry point.
+//
+// A Forbid or Allow item names an npm package ("@scope/name" or "name"), a
+// file a package exports ("@scope/name/sub", the file an import of it
+// resolves to, in every installed copy of the package), or a path under Src
+// that exists there ("./<path>" where it is also a package name), covering
+// the files under it by whole segments. The entry file is exempt from both,
+// and an item that can match no input fails the build.
 type Entry struct {
 	Name   string // the logical name: "/<Name>.js" or "/<Name>.css" in a shell
 	Path   string // the source file under Src
 	Kind   EntryKind
-	Forbid []string // packages or Src paths its imports may not reach; the entry file itself is exempt
+	Forbid []string // items its imports may not reach
+	Allow  []string // when set, the only items its imports may reach
 }
 
 // Result is what a build wrote.
@@ -110,7 +118,7 @@ func (b *build) readShells() ([]shell, []bool, error) {
 	}
 	for i, e := range b.entries {
 		if !named[i] && e.Kind != Classic {
-			return nil, nil, fmt.Errorf("webbundle: no shell names entry %q (%s)", e.Name, logicalPath(e))
+			return nil, nil, fmt.Errorf("webbundle: no shell names entry %q (%s)", e.Name, logicalPath(&e))
 		}
 	}
 	return shells, named, nil
@@ -175,7 +183,7 @@ func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
 		if e.Kind != Style {
 			continue
 		}
-		r, err := buildStyle(b.src, e, outdir, true)
+		r, err := buildStyle(b.src, &e, outdir, true)
 		if err != nil {
 			return nil, err
 		}
@@ -190,7 +198,7 @@ func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
 // path.
 func (b *build) take(eb *entriesBuilt, r built, i int) error {
 	e := b.entries[i]
-	pkgs, err := b.checkClosure(&r.meta, e)
+	pkgs, err := b.checkClosure(&r.meta, i)
 	if err != nil {
 		return err
 	}
@@ -206,7 +214,7 @@ func (b *build) buildClassicEntries(eb *entriesBuilt, outdir string) error {
 		if e.Kind != Classic {
 			continue
 		}
-		r, err := b.buildClassic(e, outdir)
+		r, err := b.buildClassic(&e, outdir)
 		if err != nil {
 			return err
 		}

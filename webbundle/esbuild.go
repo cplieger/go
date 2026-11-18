@@ -91,7 +91,7 @@ func options(src, outdir string, write bool) api.BuildOptions {
 	}
 }
 
-func entryPoint(e Entry) api.EntryPoint {
+func entryPoint(e *Entry) api.EntryPoint {
 	return api.EntryPoint{InputPath: "./" + e.Path, OutputPath: "assets/" + e.Name}
 }
 
@@ -193,7 +193,7 @@ func defines(user, urls map[string]string) (map[string]string, error) {
 }
 
 // buildClassic builds one classic entry as an IIFE with its whole closure.
-func (b *build) buildClassic(e Entry, outdir string) (built, error) {
+func (b *build) buildClassic(e *Entry, outdir string) (built, error) {
 	opts := options(b.src, outdir, true)
 	opts.EntryPointsAdvanced = []api.EntryPoint{entryPoint(e)}
 	opts.Format = api.FormatIIFE
@@ -207,7 +207,7 @@ func (b *build) buildClassic(e Entry, outdir string) (built, error) {
 func (b *build) buildModules(modules []Entry, urls map[string]string, outdir string) (built, error) {
 	opts := options(b.src, outdir, true)
 	for _, e := range modules {
-		opts.EntryPointsAdvanced = append(opts.EntryPointsAdvanced, entryPoint(e))
+		opts.EntryPointsAdvanced = append(opts.EntryPointsAdvanced, entryPoint(&e))
 	}
 	opts.Format = api.FormatESModule
 	opts.Splitting = true
@@ -221,7 +221,7 @@ func (b *build) buildModules(modules []Entry, urls map[string]string, outdir str
 
 // buildStyle builds one stylesheet, its url() files emitted as hashed
 // assets. BuildStyle runs the same options with Write off.
-func buildStyle(src string, e Entry, outdir string, write bool) (built, error) {
+func buildStyle(src string, e *Entry, outdir string, write bool) (built, error) {
 	opts := options(src, outdir, write)
 	opts.EntryPointsAdvanced = []api.EntryPoint{entryPoint(e)}
 	return runBuild(&opts, "style entry "+e.Path, true)
@@ -254,7 +254,7 @@ func BuildStyle(s Stylesheet) ([]byte, error) {
 		return nil, fmt.Errorf("webbundle: stylesheet %s is not a .css file", s.Path)
 	}
 	e := Entry{Name: strings.TrimSuffix(path.Base(p), cssExt), Path: p, Kind: Style}
-	r, err := buildStyle(abs, e, filepath.Join(abs, ".webbundle-style"), false)
+	r, err := buildStyle(abs, &e, filepath.Join(abs, ".webbundle-style"), false)
 	if err != nil {
 		return nil, err
 	}
