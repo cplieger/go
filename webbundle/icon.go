@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -384,6 +385,25 @@ func (b *build) writeIcons(t *tree) ([]byte, error) {
 	}
 	fmt.Fprintf(&links, "<link rel=\"manifest\" href=\"/%s\">\n", p)
 	return links.Bytes(), nil
+}
+
+// iconFiles lists every file under Src writeIcons copies or renders into
+// the tree: the SVGs, the committed PNGs, the manifest and its src files.
+func (b *build) iconFiles() []string {
+	var files []string
+	for _, art := range []*iconArt{b.icon, b.maskable} {
+		if art != nil {
+			files = append(files, art.svg)
+			files = append(files, slices.Collect(maps.Values(art.pngs))...)
+		}
+	}
+	if b.manifest != nil {
+		files = append(files, b.manifest.path)
+		for _, s := range b.manifest.srcs {
+			files = append(files, s.file)
+		}
+	}
+	return files
 }
 
 // writePNGs writes art's PNGs, committed or rendered, and returns their

@@ -63,6 +63,8 @@ Each of these errors ends with the chain of imports from the entry to the refuse
 - a bundled package whose `package.json` is missing, does not parse, has no version, or has a version that is not semver
 - a bundled package whose root holds no notice file
 - two installed copies of one package version whose notice files differ
+- a bundled font under `Src` with no notice file in its folder or a folder above it up to `Src`
+- a notice under `Src` whose path under `licenses/` is also a package's notice, such as one in a folder named `@scope/name@1.0.0`
 
 [The output tree](output-tree.md) describes which files are notices.
 

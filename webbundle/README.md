@@ -14,7 +14,7 @@ webbundle is built for a Go server that serves a TypeScript front end through `h
 - Syntax newer than the pinned browser versions is lowered, or the build fails naming the feature.
 - A shell with an inline script, an inline style or an event handler fails the build, so the strict Content-Security-Policy of `SPA` never blocks your page.
 - An import of a package you did not allow fails the build with the chain of imports that reached it.
-- Each bundled package's licence files ship in the tree, and a package with none fails the build.
+- Each bundled package's licence files, and those beside your own vendored files, ship in the tree; a package or a vendored font with none fails the build.
 - One SVG gives the favicon, touch icon and manifest icons.
 - A failed build leaves the last good tree in place.
 
@@ -106,13 +106,13 @@ The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/
 
 ## Licence notices
 
-`Build` copies the licence and notice files of each bundled npm package version to `licenses/<package>@<version>/` and lists every directory in `licenses/index.txt`. Ship them with one line in your Dockerfile's runtime stage:
+`Build` copies the licence and notice files of each bundled npm package version to `licenses/<package>@<version>/`, and those beside your own bundled files under `Src` (a vendored font's `fonts/LICENSE-monaspace`) to `licenses/<path under Src>`, and lists them in `licenses/index.txt`. Ship them with one line in your Dockerfile's runtime stage:
 
 ```dockerfile
 COPY --from=build /src/internal/webui/dist/licenses/ /usr/share/licenses/example-web/
 ```
 
-A bundled package whose root folder holds no `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` or `THIRD_PARTY_NOTICES` file fails the build, because shipping its code without its licence would breach it. [The output tree](docs/output-tree.md) lists which files count.
+A bundled package whose root folder holds no `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` or `THIRD_PARTY_NOTICES` file fails the build, because shipping its code without its licence would breach it. So does a font under `Src` with no such file in its folder or a folder above it. [The output tree](docs/output-tree.md) lists which files count.
 
 ## What a build refuses
 

@@ -283,3 +283,112 @@ func TestNoticesNoneBundled(t *testing.T) {
 		t.Errorf("Result.Notices = %q, want none", r.Notices)
 	}
 }
+
+// A file under Src outside node_modules ships with the notice files in its
+// folder and each folder above it up to Src, at their paths under Src; only
+// a font must have one, since a font licence such as the OFL travels with
+// every copy.
+func TestNoticesOfFilesUnderSrc(t *testing.T) {
+	t.Parallel()
+	const fontCSS = "@font-face { font-family: Mark; src: url(\"../fonts/Mark.woff2\"); }\n"
+	const font = "wOF2 fixture font bytes"
+	t.Run("FontWithItsNotice", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.css":             fontCSS,
+			"fonts/Mark.woff2":        font,
+			"fonts/LICENSE-monaspace": "monaspace licence\n",
+			"other/LICENSE":           "covers no bundled file\n",
+		})
+		r := mustBuild(t, c)
+		tree := readTree(t, c.Out)
+		if got := string(tree["licenses/fonts/LICENSE-monaspace"]); got != "monaspace licence\n" {
+			t.Errorf("licenses/fonts/LICENSE-monaspace = %q, want the font's notice", got)
+		}
+		if _, ok := tree["licenses/other/LICENSE"]; ok {
+			t.Error("the build copied other/LICENSE, which no bundled file lies under")
+		}
+		if got, want := string(tree["licenses/index.txt"]), "./fonts/LICENSE-monaspace\n@cplieger/fixture-a 1.2.3\n"; got != want {
+			t.Errorf("licenses/index.txt = %q, want %q", got, want)
+		}
+		if _, ok := readBundle(t, c.Out).Files["licenses/fonts/LICENSE-monaspace"]; !ok {
+			t.Errorf("%s does not list licenses/fonts/LICENSE-monaspace", httpserver.BundlePath)
+		}
+		if want := []string{"@cplieger/fixture-a"}; !slices.Equal(r.Notices, want) {
+			t.Errorf("Result.Notices = %q, want %q", r.Notices, want)
+		}
+	})
+	t.Run("FontCoveredFromAParentFolder", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.css":                  "@font-face { font-family: Mark; src: url(\"../vendor/mark/fonts/Mark.woff2\"); }\n",
+			"vendor/mark/fonts/Mark.woff2": font,
+			"vendor/COPYING":               "vendor copying\n",
+		})
+		mustBuild(t, c)
+		if got := string(readFile(t, c.Out, "licenses/vendor/COPYING")); got != "vendor copying\n" {
+			t.Errorf("licenses/vendor/COPYING = %q, want the vendor folder's notice", got)
+		}
+	})
+	t.Run("FontWithNone", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"src/app.css": fontCSS, "fonts/Mark.woff2": font})
+		buildRefused(t, c, "fonts/Mark.woff2", "has no LICENSE")
+	})
+	t.Run("FontWithANoticeOffItsPath", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"src/app.css": fontCSS, "fonts/Mark.woff2": font, "src/LICENSE": "covers src only\n"})
+		buildRefused(t, c, "fonts/Mark.woff2", "has no LICENSE")
+	})
+	t.Run("ScriptAndSrcRoot", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.ts":         "import { mark } from \"./vendor/mark.js\";\nmark();\n",
+			"src/vendor/mark.js": "export function mark() { console.log(\"mark\"); }\n",
+			"src/vendor/NOTICE":  "mark notice\n",
+			"LICENSE":            "app licence\n",
+		})
+		mustBuild(t, c)
+		tree := readTree(t, c.Out)
+		for name, body := range map[string]string{"licenses/src/vendor/NOTICE": "mark notice\n", "licenses/LICENSE": "app licence\n"} {
+			if got := string(tree[name]); got != body {
+				t.Errorf("%s = %q, want %q", name, got, body)
+			}
+		}
+		if got, want := string(tree["licenses/index.txt"]), "./LICENSE\n./src/vendor/NOTICE\n"; got != want {
+			t.Errorf("licenses/index.txt = %q, want %q", got, want)
+		}
+	})
+	t.Run("ScriptWithNone", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.ts":         "import { mark } from \"./vendor/mark.js\";\nmark();\n",
+			"src/vendor/mark.js": "export function mark() { console.log(\"mark\"); }\n",
+		})
+		mustBuild(t, c)
+		for name := range readTree(t, c.Out) {
+			if strings.HasPrefix(name, "licenses/") {
+				t.Errorf("the build wrote %s with no notice under Src and no package bundled", name)
+			}
+		}
+	})
+	t.Run("IconFolder", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"brand/icon.svg": fixtureMark, "brand/LICENSE": "brand licence\n"})
+		c.Icon = "brand/icon.svg"
+		mustBuild(t, c)
+		if got := string(readFile(t, c.Out, "licenses/brand/LICENSE")); got != "brand licence\n" {
+			t.Errorf("licenses/brand/LICENSE = %q, want the icon folder's notice", got)
+		}
+	})
+	t.Run("FolderNamedLikeAPackageVersion", func(t *testing.T) {
+		t.Parallel()
+		const dir = "@cplieger/fixture-a@1.2.3/"
+		c := newFixture(t, files{
+			"src/app.ts":       "import { greet } from \"@cplieger/fixture-a\";\nimport { mark } from \"../" + dir + "mark.js\";\ngreet(mark());\n",
+			dir + "mark.js":    "export function mark() { return \"mark\"; }\n",
+			dir + "LICENSE.md": "not fixture-a's licence\n",
+		})
+		buildRefused(t, c, "licenses/@cplieger/fixture-a@1.2.3/LICENSE.md")
+	})
+}

@@ -23,6 +23,7 @@ func styleFiles() files {
 `,
 		"src/parts/base.css":      ".fixture-base { font-family: Fixture, sans-serif; }\n",
 		"src/fonts/fixture.woff2": "wOF2 fixture font bytes",
+		"src/fonts/LICENSE":       "fixture font licence\n",
 		"src/img/mark.svg":        fixtureMark,
 	}
 }

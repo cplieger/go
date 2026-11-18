@@ -82,7 +82,7 @@ type Entry struct {
 type Result struct {
 	Outputs map[string]Output // every script in the tree (entries and chunks), by its path under Out; bundle.json does not record it
 	Files   []string          // every written path under Out, sorted
-	Notices []string          // every bundled npm package, sorted
+	Notices []string          // every bundled npm package, sorted; licenses/index.txt also lists the notices under Src
 }
 
 // Output is what one script of the tree holds: an app can tell a chunk
@@ -152,6 +152,7 @@ func (b *build) readShells() ([]shell, []bool, error) {
 // entriesBuilt is what building every entry into the tree gave.
 type entriesBuilt struct {
 	pkgs     packageRoots
+	own      map[string]bool // every bundled file under Src outside node_modules
 	urls     map[string]string
 	scripts  map[string]Output
 	hashed   []string // each entry's hashed path, by index
@@ -181,7 +182,10 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 			return Result{}, werr
 		}
 	}
-	if nerr := writeNotices(t, b.src, eb.pkgs); nerr != nil {
+	for _, f := range b.iconFiles() {
+		eb.own[f] = true
+	}
+	if nerr := writeNotices(t, b.src, eb.pkgs, eb.own); nerr != nil {
 		return Result{}, nerr
 	}
 	entries := make([]httpserver.BundleEntry, len(b.entries))
@@ -198,7 +202,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 // buildEntries builds the classic entries, then the module entries, then the
 // style entries into outdir.
 func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
-	eb := &entriesBuilt{pkgs: packageRoots{}, urls: map[string]string{}, scripts: map[string]Output{}, hashed: make([]string, len(b.entries))}
+	eb := &entriesBuilt{pkgs: packageRoots{}, own: map[string]bool{}, urls: map[string]string{}, scripts: map[string]Output{}, hashed: make([]string, len(b.entries))}
 	if err := b.buildClassicEntries(eb, outdir); err != nil {
 		return nil, err
 	}
@@ -224,11 +228,14 @@ func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
 // packages and hashed path.
 func (b *build) take(eb *entriesBuilt, r *built, i int) error {
 	e := b.entries[i]
-	pkgs, err := b.checkClosure(&r.meta, i)
+	pkgs, own, err := b.checkClosure(&r.meta, i)
 	if err != nil {
 		return err
 	}
 	eb.pkgs.merge(pkgs)
+	for _, f := range own {
+		eb.own[f] = true
+	}
 	name, body, ok := r.entryFile(e.Path)
 	switch {
 	case !ok:

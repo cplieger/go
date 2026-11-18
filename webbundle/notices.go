@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 const licensesDir = "licenses/"
@@ -48,34 +50,126 @@ type notice struct {
 	body []byte
 }
 
+// fontExts are the font types the bundle can hold (httpserver's font/
+// types), each of which must ship with a notice: a font licence such as the
+// OFL requires its text with every copy.
+var fontExts = fontExtensions()
+
+func fontExtensions() map[string]bool {
+	exts := map[string]bool{}
+	for ext, ct := range httpserver.ContentTypes() {
+		if strings.HasPrefix(ct, "font/") {
+			exts[strings.ToUpper(ext)] = true
+		}
+	}
+	return exts
+}
+
 // writeNotices copies the notice files of each bundled package version to
-// licenses/<package>@<version>/ and writes licenses/index.txt, one
-// "<package> <version>" line per directory, sorted. Every version gets its
-// own directory, so a bundle holding two versions of a package ships both
-// licence texts. A notice beside bundled files keeps its path inside the
-// package (fonts/LICENSE-x), since it covers those files only. A package
-// root with no notice file fails the build.
-func writeNotices(t *tree, src string, pkgs packageRoots) error {
-	if len(pkgs) == 0 {
-		return nil
+// licenses/<package>@<version>/, and those of the app's own bundled files
+// to licenses/<path under Src>, then writes licenses/index.txt: one
+// "<package> <version>" line per package directory and one "./<path under
+// Src>" line per own notice, sorted. Every version gets its own directory,
+// so a bundle holding two versions of a package ships both licence texts. A
+// notice beside bundled files keeps its path inside the package
+// (fonts/LICENSE-x), since it covers those files only. A package root with
+// no notice file, or an own font with none on its path, fails the build.
+func writeNotices(t *tree, src string, pkgs packageRoots, own map[string]bool) error {
+	owned, err := ownNotices(src, own)
+	if err != nil || len(pkgs) == 0 && len(owned) == 0 {
+		return err
 	}
 	written := map[string][]byte{}
+	index, err := writePackageNotices(t, src, pkgs, written)
+	if err != nil {
+		return err
+	}
+	for _, n := range owned {
+		p := licensesDir + n.name
+		if _, ok := written[p]; ok {
+			return fmt.Errorf("webbundle: notice %s under Src and a bundled package's notice are both %s", n.name, p)
+		}
+		if err := t.write(p, n.body, 0o644); err != nil {
+			return err
+		}
+		index = append(index, "./"+n.name)
+	}
+	slices.Sort(index)
+	index = slices.Compact(index)
+	return t.write(licensesDir+"index.txt", []byte(strings.Join(index, "\n")+"\n"), 0o644)
+}
+
+// writePackageNotices writes every package version's notices and returns
+// their index lines.
+func writePackageNotices(t *tree, src string, pkgs packageRoots, written map[string][]byte) ([]string, error) {
 	var index []string
 	for _, name := range slices.Sorted(maps.Keys(pkgs)) {
 		for _, root := range slices.Sorted(maps.Keys(pkgs[name])) {
 			version, notices, err := readNotices(name, filepath.Join(src, filepath.FromSlash(root)), pkgs[name][root])
 			if err != nil {
-				return err
+				return nil, err
 			}
 			index = append(index, name+" "+version)
 			if err := writeVersionNotices(t, name+"@"+version, notices, written); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	slices.Sort(index)
-	index = slices.Compact(index)
-	return t.write(licensesDir+"index.txt", []byte(strings.Join(index, "\n")+"\n"), 0o644)
+	return index, nil
+}
+
+// ownNotices reads the notice files in the folder of each file in own, a
+// slash path under src, and in each folder above it up to src, sorted by
+// path. A font with none on its path is refused.
+func ownNotices(src string, own map[string]bool) ([]notice, error) {
+	if len(own) == 0 {
+		return nil, nil
+	}
+	root, err := os.OpenRoot(src)
+	if err != nil {
+		return nil, fmt.Errorf("webbundle: notices under Src: %w", err)
+	}
+	defer root.Close()
+	dirs := noticeDirs{root: root, read: map[string][]notice{}}
+	for _, f := range slices.Sorted(maps.Keys(own)) {
+		covered, err := dirs.onPath(f)
+		if err != nil {
+			return nil, fmt.Errorf("webbundle: notices under Src: %w", err)
+		}
+		if !covered && fontExts[strings.ToUpper(path.Ext(f))] {
+			return nil, fmt.Errorf("webbundle: bundled font %s has no LICENSE, LICENCE, COPYING, NOTICE or THIRD_PARTY_NOTICES file in its folder or a folder above it under Src", f)
+		}
+	}
+	slices.SortFunc(dirs.all, func(a, b notice) int { return strings.Compare(a.name, b.name) })
+	return dirs.all, nil
+}
+
+// noticeDirs reads each folder's notices once.
+type noticeDirs struct {
+	root *os.Root
+	read map[string][]notice // by folder
+	all  []notice
+}
+
+// onPath reads the notices of file f's folder and of each folder above it
+// up to the root, and reports whether any of them holds one.
+func (n *noticeDirs) onPath(f string) (bool, error) {
+	covered := false
+	for d := path.Dir(f); ; d = path.Dir(d) {
+		found, ok := n.read[d]
+		if !ok {
+			var err error
+			if found, err = dirNotices(n.root, d); err != nil {
+				return false, err
+			}
+			n.read[d] = found
+			n.all = append(n.all, found...)
+		}
+		covered = covered || len(found) > 0
+		if d == "." {
+			return covered, nil
+		}
+	}
 }
 
 // writeVersionNotices writes notices under licenses/<dir>/. written holds

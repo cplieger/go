@@ -9,7 +9,7 @@ This page describes what `Build` writes to `Out`, for a developer serving it wit
 | `<shell>.html` | Each shell, with its logical paths replaced by hashed ones (each tag naming one written back with its attributes double-quoted) and, with an icon, the icon links |
 | `assets/<name>-<hash>.<ext>` | Each entry's output, the fonts and images it uses, and the icon files |
 | `assets/chunks/<name>-<hash>.js` | The code module entries share, and each dynamic `import()` |
-| `licenses/` | The licence notices of the bundled npm packages |
+| `licenses/` | The licence notices of the bundled npm packages and of the bundled files under `Src` |
 | `bundle.json` | Every file above with its SHA-256, and every entry |
 | `.gitignore` | Your committed file, kept byte for byte, when `Out` had one |
 
@@ -63,6 +63,15 @@ A notice file is a regular file whose name, upper-cased, starts with `LICENSE`, 
 `Build` reads the package root and every folder between the root and a file it bundles. A notice in such a folder covers the files beside it, so it keeps its path inside the package, such as `licenses/@cplieger/ui@1.3.0/fonts/LICENSE-atkinson-hyperlegible-next`. Only the root must hold one, and a package whose root holds none fails the build.
 
 The version comes from the package's `package.json`. A package with no version, or a version that is not semver, fails the build. A package bundled at two versions gets two directories. Two installed copies of one version, such as pnpm's copies for two sets of peers, share a directory, and fail the build when their notices differ.
+
+Your own files under `Src`, outside `node_modules`, follow the same folder rule. For each file the bundle holds, including the icon, its committed PNGs, the manifest and the files the manifest names, `Build` copies the notice files in its folder and in every folder above it up to `Src` to `licenses/<path under Src>`. Each gets one `./<path under Src>` line in `licenses/index.txt`, sorted with the package lines:
+
+```text
+./fonts/LICENSE-monaspace
+@cplieger/ui 1.3.0
+```
+
+To ship the licence of a font or a script you vendored, put its file beside it under a notice name, such as `fonts/LICENSE-monaspace`. Only a font must have one: a bundled font file under `Src` (a type `httpserver` serves as `font/`, today `.woff2`) with no notice file in its folder or a folder above it fails the build, as a package with none does, because a font licence such as the OFL requires its text with every copy.
 
 The runtime stage of your Dockerfile copies the folder beside the notices of your Go modules:
 

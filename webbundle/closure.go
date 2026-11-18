@@ -143,39 +143,51 @@ func (b *build) allowed(pkg string) bool {
 // checkClosure walks entry i's closure in m and refuses an input outside
 // Src, one from a package Config.Packages does not list, one its Forbid
 // names, or, when it has an Allow, one its Allow does not name, naming the
-// importer chain. It returns the packages the closure bundles.
-func (b *build) checkClosure(m *metafile, i int) (packageRoots, error) {
+// importer chain. It returns the packages the closure bundles and its files
+// outside node_modules.
+func (b *build) checkClosure(m *metafile, i int) (pkgs packageRoots, own []string, err error) {
 	e, rules := b.entries[i], b.rules[i]
 	from := m.closure(e.Path)
-	pkgs := packageRoots{}
+	pkgs = packageRoots{}
 	for _, in := range slices.Sorted(maps.Keys(from)) {
 		// esbuild names an input by its real path, symlinks resolved, so a
 		// link out of Src shows here as a path leaving it.
 		if !filepath.IsLocal(filepath.FromSlash(in)) {
-			return nil, fmt.Errorf("webbundle: entry %q bundles %s, which is outside Src: %s", e.Name, in, chain(from, in))
+			return nil, nil, fmt.Errorf("webbundle: entry %q bundles %s, which is outside Src: %s", e.Name, in, chain(from, in))
 		}
 		pkg, root := packageOf(in)
-		if pkg != "" {
+		if pkg == "" {
+			own = append(own, in)
+		} else {
 			if !b.allowed(pkg) {
-				return nil, fmt.Errorf("webbundle: entry %q bundles %s, which Config.Packages does not list: %s", e.Name, pkg, chain(from, in))
+				return nil, nil, fmt.Errorf("webbundle: entry %q bundles %s, which Config.Packages does not list: %s", e.Name, pkg, chain(from, in))
 			}
 			pkgs.add(pkg, root, in)
 		}
 		if in == e.Path {
 			continue
 		}
-		if f, ok := matchItem(rules.forbid, in, pkg, root); ok {
-			return nil, fmt.Errorf("webbundle: entry %q reaches %s, which its Forbid names: %s", e.Name, f.text, chain(from, in))
-		}
-		if _, ok := matchItem(rules.allow, in, pkg, root); len(rules.allow) > 0 && !ok {
-			return nil, fmt.Errorf("webbundle: entry %q bundles %s, which its Allow does not name: %s", e.Name, in, chain(from, in))
+		if err := rules.check(in, pkg, root); err != nil {
+			return nil, nil, fmt.Errorf("webbundle: entry %q %w: %s", e.Name, err, chain(from, in))
 		}
 	}
-	return pkgs, nil
+	return pkgs, own, nil
 }
 
 // closureRules is one entry's Forbid and Allow, parsed.
 type closureRules struct{ forbid, allow []closureItem }
+
+// check refuses input in, of package pkg rooted at root, when the Forbid
+// names it or an Allow does not.
+func (r *closureRules) check(in, pkg, root string) error {
+	if f, ok := matchItem(r.forbid, in, pkg, root); ok {
+		return fmt.Errorf("reaches %s, which its Forbid names", f.text)
+	}
+	if _, ok := matchItem(r.allow, in, pkg, root); len(r.allow) > 0 && !ok {
+		return fmt.Errorf("bundles %s, which its Allow does not name", in)
+	}
+	return nil
+}
 
 // closureItem is one Forbid or Allow item: a path under Src (dir), a whole
 // npm package (pkg), or one file of a package (pkg and file, the file's
