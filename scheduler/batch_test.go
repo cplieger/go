@@ -280,6 +280,53 @@ func TestBatchLinesAndResult(t *testing.T) {
 	})
 }
 
+// TestDismissSurvivesRunningBatch dismisses a running batch's review line:
+// the executor's later writes, which still hold that line in review, keep it
+// skipped, and the phase written right after the dismiss lands.
+func TestDismissSurvivesRunningBatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rejected := scheduler.Line{State: scheduler.LineReview, Reason: "arr_rejected", Facts: json.RawMessage(`{"code":400}`)}
+		step := make(chan struct{})
+		k := grab(done)
+		k.Phases = []scheduler.Phase{"send"}
+		k.Run = func(ctx context.Context, rn *scheduler.Run[payload]) scheduler.End {
+			_ = rn.Item(ctx, 0, func(context.Context) scheduler.Line { return rejected })
+			<-step
+			rn.Reached("send")
+			<-step
+			_ = rn.Item(ctx, 1, func(context.Context) scheduler.Line { return scheduler.Line{State: scheduler.LineDone} })
+			<-step
+			return scheduler.End{Result: scheduler.ResultOK}
+		}
+		r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{k}})
+		s := r.start(t, api("grab", "", "alice", payload{N: 3}))
+		synctest.Wait()
+		if err := r.store.Dismiss(t.Context(), s.Job, 0); err != nil {
+			t.Fatalf("Dismiss(line 0) = %v, want nil", err)
+		}
+		skipped := rejected
+		skipped.State = scheduler.LineSkipped
+		queued := line(scheduler.LineQueued, "")
+		lineDone := line(scheduler.LineDone, "")
+
+		step <- struct{}{}
+		synctest.Wait()
+		if got := r.rec(t, s.Job); got.Phase != "send" {
+			t.Errorf("phase after the write that follows the dismiss = %q, want send", got.Phase)
+		}
+		r.wantLines(t, s.Job, skipped, queued, queued)
+
+		step <- struct{}{}
+		synctest.Wait()
+		r.wantLines(t, s.Job, skipped, lineDone, queued)
+
+		step <- struct{}{}
+		synctest.Wait()
+		r.wantEnd(t, s.Job, scheduler.ResultPartial)
+		r.wantLines(t, s.Job, skipped, lineDone, line(scheduler.LineReview, scheduler.ReasonNotRun))
+	})
+}
+
 func TestBatchMaxItems(t *testing.T) {
 	t.Run("a count outside 1 to MaxItems is refused before any write", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {

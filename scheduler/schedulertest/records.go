@@ -23,7 +23,8 @@ func Records(t *testing.T, open func() scheduler.Records) {
 	t.Helper()
 	t.Run("insert then get", func(t *testing.T) { insertThenGet(t, open()) })
 	t.Run("a keyed resend answers the stored record", func(t *testing.T) { keyedResend(t, open()) })
-	t.Run("put writes a newer rev only", func(t *testing.T) { putNewerRev(t, open()) })
+	t.Run("put writes at the stored rev plus one", func(t *testing.T) { putNextRev(t, open()) })
+	t.Run("put keeps a dismissed line skipped", func(t *testing.T) { putKeepsDismissed(t, open()) })
 	t.Run("the store stamps the record's times", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) { storeStamps(t, open()) })
 	})
@@ -182,25 +183,40 @@ func keyedResend(t *testing.T, r scheduler.Records) {
 	}
 }
 
-func putNewerRev(t *testing.T, r scheduler.Records) {
+// putNextRev sends the same, an older and a far newer Rev: each Put lands
+// and the stored Rev moves by one.
+func putNextRev(t *testing.T, r scheduler.Records) {
 	f := &fixture{t: t, r: r}
-	rec := f.start(f.insert(f.record("scan", ""), nil))
+	queued := f.insert(f.record("scan", ""), nil)
+	rec := f.start(queued)
 	if rec.State != scheduler.StateRunning || rec.Phase != scheduler.PhaseStarted || rec.StartedAt.IsZero() {
-		t.Errorf("after a newer Put: state %q phase %q started %v; want running, started, a start time",
+		t.Errorf("after a Put: state %q phase %q started %v; want running, started, a start time",
 			rec.State, rec.Phase, rec.StartedAt)
 	}
-
-	stale := *rec
-	stale.Phase = "stale"
-	f.put(&stale) // the same Rev
-	stale.Rev--
-	f.put(&stale)
-	if got := f.get(rec.ID); got.Phase != scheduler.PhaseStarted {
-		t.Errorf("after a Put of the same and an older Rev: phase %q, want %q", got.Phase, scheduler.PhaseStarted)
+	if rec.Rev != queued.Rev+1 {
+		t.Errorf("Rev after the first Put = %d, want %d", rec.Rev, queued.Rev+1)
 	}
 
-	next := *rec
-	next.Phase, next.Rev = phaseFetch, rec.Rev+1
+	for _, c := range []struct {
+		name  string
+		phase scheduler.Phase
+		rev   uint64
+	}{
+		{name: "the same", phase: "same", rev: rec.Rev},
+		{name: "an older", phase: "older", rev: rec.Rev - 1},
+		{name: "a far newer", phase: "newer", rev: rec.Rev + 100},
+	} {
+		before := f.get(rec.ID)
+		sent := *before
+		sent.Phase, sent.Rev = c.phase, c.rev
+		f.put(&sent)
+		if got := f.get(rec.ID); got.Phase != c.phase || got.Rev != before.Rev+1 {
+			t.Errorf("after a Put of %s Rev: phase %q rev %d; want %q at rev %d", c.name, got.Phase, got.Rev, c.phase, before.Rev+1)
+		}
+	}
+
+	next := *f.get(rec.ID)
+	next.Phase = phaseFetch
 	next.Phases = []scheduler.PhaseAt{{Phase: scheduler.PhaseStarted, At: rec.StartedAt}, {Phase: phaseFetch, At: time.Now()}}
 	next.Step = struct{ N, Of int }{1, 3}
 	next.Proposal = "proposal"
@@ -299,6 +315,37 @@ func putAfterEnd(t *testing.T, r scheduler.Records) {
 	f.put(&late)
 	if got := f.get(rec.ID); got.State != scheduler.StateEnded || got.End == nil || got.Phase == phaseFetch {
 		t.Errorf("a Put after the end left state %q phase %q end %+v; want the ended record unchanged", got.State, got.Phase, got.End)
+	}
+}
+
+// putKeepsDismissed dismisses a running batch's review line, then sends two
+// Puts still holding it in review, as a writer that read the record before
+// the dismiss does: the line stays skipped and the rest of each Put lands.
+func putKeepsDismissed(t *testing.T, r scheduler.Records) {
+	f := &fixture{t: t, r: r}
+	rec := f.start(f.insert(f.record("grab", ""), nil))
+	review := scheduler.Line{State: scheduler.LineReview, Reason: "arr_rejected", Facts: json.RawMessage(`{"code":400}`)}
+	queued := scheduler.Line{State: scheduler.LineQueued}
+	rec.Lines = []scheduler.Line{review, queued, queued}
+	f.put(rec)
+	if err := r.Dismiss(t.Context(), rec.ID, 0); err != nil {
+		t.Fatalf("Dismiss(line 0) = %v, want nil", err)
+	}
+	skipped := review
+	skipped.State = scheduler.LineSkipped
+	lineDone := scheduler.Line{State: scheduler.LineDone}
+
+	for i, lines := range [][]scheduler.Line{{review, lineDone, queued}, {review, lineDone, {State: scheduler.LineReview, Reason: "not_run"}}} {
+		before := f.get(rec.ID)
+		sent := *rec
+		sent.Lines = lines
+		f.put(&sent)
+		got := f.get(rec.ID)
+		want := slices.Clone(lines)
+		want[0] = skipped
+		if !slices.EqualFunc(got.Lines, want, sameLine) || got.Rev != before.Rev+1 {
+			t.Errorf("after Put %d holding line 0 in review: lines %+v rev %d; want %+v at rev %d", i+1, got.Lines, got.Rev, want, before.Rev+1)
+		}
 	}
 }
 
