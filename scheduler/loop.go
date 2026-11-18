@@ -7,7 +7,7 @@ import (
 )
 
 // LoopOptions configures RunLoop. Interval must be positive; Jitter,
-// FirstDelay and FireOnStart are optional.
+// FirstDelay, FireOnStart and Scheduled are optional.
 type LoopOptions struct {
 	// Interval is the gap between ticks. It must be positive; RunLoop returns
 	// immediately otherwise (the built-in mode ParseInterval selects always
@@ -30,6 +30,11 @@ type LoopOptions struct {
 	// instead of waiting a full interval. Compute it from Stamp.Due to skip
 	// the startup fire when a recent run's record survived a restart.
 	FireOnStart bool
+	// Scheduled, when set, is called each time RunLoop arms its timer, with
+	// the time the job will run, for a "next run" gauge. It is called on
+	// RunLoop's goroutine after the timer is armed, so the job waits for it
+	// to return; a slow Scheduled delays the job, never the timer.
+	Scheduled func(next time.Time)
 }
 
 // RunLoop runs job on a schedule until ctx is cancelled, passing it ctx; job
