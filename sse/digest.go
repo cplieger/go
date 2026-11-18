@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/textsafe"
 )
 
