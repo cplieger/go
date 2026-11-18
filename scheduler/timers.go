@@ -19,6 +19,7 @@ const jitter = 0.10
 type timed struct {
 	watch *Watch
 	timer *time.Timer
+	check *time.Timer // fires just after the watch's deadline
 	// base is what the next wake counts from: the last moving end, the
 	// cadence change, or the start when the scope has neither.
 	base    time.Time
@@ -26,6 +27,7 @@ type timed struct {
 	cadence Cadence
 	gen     uint64 // bumped at each arm, so a superseded timer's func does nothing
 	done    bool   // base is an end whose work was done, or no end, so the wait is the interval
+	passed  bool   // the deadline passed and its ERROR line was logged
 	// fromEnds is a first Schedule in the executor's life whose base comes
 	// from Records.LastEnds, which Run has not read yet.
 	fromEnds bool
@@ -84,6 +86,7 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 		e.baseLocked(key, t)
 	}
 	e.armLocked(key, t)
+	e.watchLocked(key, t)
 	return nil
 }
 
@@ -99,6 +102,7 @@ func (e *Executor[P]) Unschedule(kind Kind, scope string) {
 func (e *Executor[P]) unscheduleLocked(key ScheduledScope) {
 	if t := e.scheduled[key]; t != nil {
 		e.stopTimerLocked(t)
+		e.unwatchLocked(key, t)
 		delete(e.scheduled, key)
 	}
 }
@@ -135,14 +139,16 @@ func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 			e.baseLocked(key, t)
 		}
 		e.armLocked(key, t)
+		e.watchLocked(key, t)
 	}
 }
 
-// baseLocked counts a first-scheduled scope from its last moving end, else
-// from the later of Run's start and its Schedule call.
+// baseLocked counts a first-scheduled scope from its last moving end, its
+// covering kinds' included, else from the later of Run's start and its
+// Schedule call.
 func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
 	t.fromEnds = false
-	if end, ok := e.ends[key]; ok {
+	if end, ok := e.lastEndLocked(key); ok {
 		t.base, t.done = end.At, workDone(end.Result)
 		t.watch.Beat(end.At)
 		return
@@ -169,10 +175,37 @@ func (e *Executor[P]) armAtLocked(key ScheduledScope, t *timed, at time.Time) {
 	t.timer = time.AfterFunc(time.Until(at), func() { e.wake(key, t, gen) })
 }
 
+// lastEndLocked answers the latest moving end that counts for key: its own,
+// or one of a kind whose Covers covers key's timer job.
+func (e *Executor[P]) lastEndLocked(key ScheduledScope) (LastEnd, bool) {
+	end, ok := e.ends[key]
+	for k, c := range e.ends {
+		if k != key && (!ok || c.At.After(end.At)) && e.coversLocked(k, key) {
+			end, ok = c, true
+		}
+	}
+	return end, ok
+}
+
+// coversLocked reports whether by's kind covers key's timer job. It asks
+// Covers with by's Kind and Scope only, which is all Records.LastEnds keeps,
+// so a deadline reads the same before and after a restart.
+func (e *Executor[P]) coversLocked(by, key ScheduledScope) bool {
+	spec := e.kinds[by.Kind]
+	return spec != nil && spec.Covers != nil &&
+		spec.Covers(Job[P]{Kind: by.Kind, Scope: by.Scope}, Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
+}
+
 // noteEndLocked records a started job's moving end at at: its scope's last
-// end, and for a scheduled scope its watch's beat and its next wake.
+// end, and for its scheduled scope and each one its kind covers, the watch's
+// beat and the next wake.
 func (e *Executor[P]) noteEndLocked(en *job[P], r Result, at time.Time) {
 	key := ScheduledScope{Kind: en.j.Kind, Scope: en.j.Scope}
+	for k, t := range e.scheduled {
+		if k != key && !t.fromEnds && e.coversLocked(key, k) {
+			e.movedLocked(k, t, at, workDone(r))
+		}
+	}
 	t := e.scheduled[key]
 	// A proposing kind's scopes are digests of unbounded keys: only a
 	// scheduled one is kept, so the map stays bounded.
@@ -182,12 +215,17 @@ func (e *Executor[P]) noteEndLocked(en *job[P], r Result, at time.Time) {
 	if have, ok := e.ends[key]; !ok || !at.Before(have.At) {
 		e.ends[key] = LastEnd{At: at, Result: r}
 	}
-	if t == nil || t.fromEnds {
-		return
+	if t != nil && !t.fromEnds {
+		e.movedLocked(key, t, at, workDone(r))
 	}
-	t.base, t.done = at, workDone(r)
+}
+
+// movedLocked counts a scheduled scope from a moving end at at.
+func (e *Executor[P]) movedLocked(key ScheduledScope, t *timed, at time.Time, done bool) {
+	t.base, t.done = at, done
 	t.watch.Beat(at)
 	e.armLocked(key, t)
+	e.watchLocked(key, t)
 }
 
 // wake submits a scheduled scope's timer request, then arms the next wake
@@ -227,10 +265,11 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	}
 }
 
-// stopTimersLocked stops every scheduled scope's timer.
+// stopTimersLocked stops every scheduled scope's timer and deadline check.
 func (e *Executor[P]) stopTimersLocked() {
 	for _, t := range e.scheduled {
 		e.stopTimerLocked(t)
+		e.stopCheckLocked(t)
 	}
 }
 

@@ -26,8 +26,11 @@ type KindSpec[P any] struct {
 	// executor.
 	Fresh func(scope string) time.Duration
 	// Covers is optional: when a job of this kind starts, each queued or
-	// yielded job it covers ends without running its own work. The executor
-	// calls it holding its lock, so it must not call the executor.
+	// yielded job it covers ends without running its own work, and its
+	// moving end moves the deadline of each scheduled scope whose timer job
+	// it covers. For that deadline it is asked with started's Kind and Scope
+	// only. The executor calls it holding its lock, so it must not call the
+	// executor.
 	Covers func(started, other Job[P]) bool
 	// Items is a batch kind's item count, read from the payload at Start;
 	// required with MaxItems > 0 and refused without it.
@@ -223,7 +226,9 @@ func (k *KindSpec[P]) check() error {
 }
 
 // Run drives the timers, slots and dispatch until ctx ends, then cancels each
-// running job and returns once every one has returned. It reads
+// running job and returns once every one has returned. A job it cut short
+// ends interrupted, unless its end committed with its work or it was in its
+// commit step, and a queued job ends interrupted without running. It reads
 // Records.LastEnds first, and no scheduled scope wakes before that read
 // answers. A second call answers an error at once.
 func (e *Executor[P]) Run(ctx context.Context) error {
@@ -247,7 +252,10 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 			e.dequeueLocked(en, End{Result: ResultInterrupted})
 			e.removeLocked(en)
 		case stateRunning:
-			e.stopLocked(en, nil)
+			// A job in its commit step finishes and keeps its own end.
+			if !en.committing && !en.returned {
+				e.stopLocked(en, End{Result: ResultInterrupted})
+			}
 		case stateAdmitting, stateEnded:
 		}
 	}
@@ -277,8 +285,8 @@ type job[P any] struct {
 	gone      chan struct{}      // closed when it leaves the queue without running
 	cancel    context.CancelFunc // set when it runs
 	startedAt time.Time          // when it took its slot
-	// stopEnd is the end a cancel or a covering start gave it, written in
-	// place of its Run's; nil when nothing stopped it or a shutdown did.
+	// stopEnd is the end a cancel, a covering start or a shutdown gave it,
+	// written in place of its Run's; nil when nothing stopped it.
 	stopEnd     *End
 	claimed     []bool    // a batch's lines an Item call has taken
 	yield       *yielding // its Yield's wait; nil when it is not yielded
@@ -299,10 +307,10 @@ type job[P any] struct {
 }
 
 // stopLocked cancels a running job's ctx; it then commits nothing and ends
-// with end, or with what its Run returns when end is nil.
-func (e *Executor[P]) stopLocked(en *job[P], end *End) {
+// with end, whatever its Run returns.
+func (e *Executor[P]) stopLocked(en *job[P], end End) {
 	en.stopped = true
-	en.stopEnd = end
+	en.stopEnd = &end
 	en.cancel()
 }
 

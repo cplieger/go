@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/cplieger/go/health/v2"
 	"github.com/cplieger/go/scheduler/v2"
 )
 
@@ -77,4 +78,17 @@ func ExampleStamp() {
 	// Output:
 	// startup run due: true
 	// due after a fresh success: false
+}
+
+// A loop that is not a job holds its own Watch: here a sweep every 15
+// seconds that is stalled after four missed passes.
+func ExampleNewWatch() {
+	w := scheduler.NewWatch(health.Lease{Interval: 15 * time.Second, Cycles: 4})
+	fresh := w.Fresh() // for a health.Check on /healthz
+
+	// After each pass whose last write committed:
+	w.Beat(time.Now())
+
+	fmt.Println(fresh.Healthy(), time.Until(w.Deadline()).Round(time.Second))
+	// Output: true 1m0s
 }

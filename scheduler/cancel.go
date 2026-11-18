@@ -46,7 +46,7 @@ func (e *Executor[P]) Cancel(ctx context.Context, id ID) (stopping bool, err err
 	case en.committing:
 		return false, ErrCommitting
 	}
-	e.stopLocked(en, &End{Result: ResultCancelled})
+	e.stopLocked(en, End{Result: ResultCancelled})
 	return true, nil
 }
 
@@ -86,7 +86,7 @@ func (e *Executor[P]) CredentialEnded(credential string) {
 		case en.state == stateQueued:
 			dequeued = append(dequeued, en)
 		case en.state == stateRunning && !en.stopped && !en.returned && !en.committing:
-			e.stopLocked(en, &end)
+			e.stopLocked(en, end)
 		}
 	}
 	for _, en := range dequeued {
