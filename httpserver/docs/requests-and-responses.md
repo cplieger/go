@@ -11,7 +11,7 @@ This page is for a developer writing handlers on httpserver. It covers the JSON 
 
 ## Errors
 
-`WriteError(w, r, status, code, msg)` writes an `ErrorResponse`. It is safe to call with a nil `r`.
+`WriteError(w, r, status, code, msg)` writes an `ErrorResponse`. It is safe to call with a nil `r`. It is `WriteErrorBody(w, status, NewErrorResponse(r, code, msg))`, the two pieces [an envelope of your own](#an-envelope-of-your-own) builds on.
 
 `ErrorResponse` has four fields, `Code`, `Message`, `Remediation` and `RequestID`, and every one is always present:
 
@@ -31,6 +31,33 @@ This page is for a developer writing handlers on httpserver. It covers the JSON 
 A code that breaks that grammar, the empty code included, is neither sent nor repaired, and it never panics. The encoder sends `InvalidErrorCode`, `invalid_error_code`, in its place and logs the bad code once per process, because this runs on an error path for every request.
 
 `ErrorResponder` is the signature of `WriteError`: `func(w, r, status, code, msg)`. `WriteError` is its default. Every middleware that writes an error body takes one through an option or an argument, and so do `SPA`, `OutagePage`, `NotFound`, `CrossOrigin` and `ListenOps`. Your app's catalog can then write its own remediation, and an endpoint that does not speak JSON can render its error on its own content type. `DecodeBody`, `RequireMethod` and `MethodNotAllowed` write through `WriteError` itself.
+
+### An envelope of your own
+
+`NewErrorResponse(r, code, msg)` returns the envelope `WriteError` would write: the code checked against the grammar, its `CodeSpecs()` remediation, and the request id from `r`'s context, else a fresh one. `WriteErrorBody(w, status, body)` writes it, sets `Content-Type`, and sets `X-Request-ID` to the body's own `request_id` when the response has none, so the header and the body never carry two different ids. Replace `Remediation` between the two calls to answer with your own advice:
+
+```go
+resp := httpserver.NewErrorResponse(r, "host_not_allowed", "this host name is not served")
+resp.Remediation = "Open the app at its configured address."
+httpserver.WriteErrorBody(w, http.StatusForbidden, resp)
+```
+
+Build the envelope with `NewErrorResponse` and change at most its `Message` or `Remediation`. `WriteErrorBody` writes the body it is given as it is, so an `ErrorResponse{…}` literal goes out with its code unchecked and no request id filled.
+
+`body` is an `ErrorBody`: an `ErrorResponse`, or a struct of yours that embeds one by value as its first field. The embedder's own fields are written after the four standard keys, in one flat object:
+
+```go
+httpserver.WriteErrorBody(w, http.StatusConflict, struct {
+	httpserver.ErrorResponse
+	Dependents []string `json:"dependents"`
+}{httpserver.NewErrorResponse(r, "has_dependents", "the item is still in use"), []string{"a", "b"}})
+```
+
+```json
+{"code":"has_dependents","message":"the item is still in use","remediation":"","request_id":"0f6c...","dependents":["a","b"]}
+```
+
+The remediation is empty here because `has_dependents` is the app's own code, outside `CodeSpecs()`; set it as above.
 
 ### The package's codes
 
@@ -52,7 +79,7 @@ A code that breaks that grammar, the empty code included, is neither sent nor re
 
 `invalid_error_code` is not in the map, because no writer in the package passes a malformed code.
 
-`httpservertest.CheckCodeSpecs(t, dir, specs)` holds a package's spec map to its source. It parses the non-test Go files in `dir`, collects every code they write, and fails naming each code written but missing from `specs` and each key nothing writes. A code is written when a string literal, a string constant or an `ErrorCode` conversion of one is passed as the `ErrorCode` argument of `WriteError`, of an `ErrorResponder`, or of a function the directory declares, or fills an `ErrorCode` field of a composite literal. A code held in a variable is counted where its literal enters. httpserver's own test runs it over the package with `CodeSpecs()`, and a library with its own codes runs it over its own directory.
+`httpservertest.CheckCodeSpecs(t, dir, specs)` holds a package's spec map to its source. It parses the non-test Go files in `dir`, collects every code they write, and fails naming each code written but missing from `specs` and each key nothing writes. A code is written when a string literal, a string constant or an `ErrorCode` conversion of one is passed as the `ErrorCode` argument of `WriteError`, of `NewErrorResponse`, of an `ErrorResponder`, or of a function the directory declares, or fills an `ErrorCode` field of a composite literal, the `Code` of an `httpserver.ErrorResponse{Code: …}` literal included. A code held in a variable is counted where its literal enters. httpserver's own test runs it over the package with `CodeSpecs()`, and a library with its own codes runs it over its own directory.
 
 ## Request bodies
 

@@ -43,7 +43,8 @@ type OpsConfig struct {
 	Setting string
 	// Addr is read through ListenAddr; blank opens nothing.
 	Addr string
-	// Hosts are the host names answered besides loopback's.
+	// Hosts, when it has a non-blank entry, are the host names or IP literals
+	// answered besides loopback's; empty answers every Host.
 	Hosts []string
 }
 
@@ -60,10 +61,11 @@ type Ops struct {
 
 // ListenOps binds the ops listener with Listen, Setting naming Addr, before it
 // returns: GET and HEAD on /healthz and /metrics only, under WithProbeLogLevel
-// and Recoverer, with a 10 s read and 30 s write timeout, refusals through
-// Errors, and a Host outside Hosts refused unless LoopbackRequest holds. A nil
-// handler is an error even with the listener off. The listener closes when ctx
-// ends before RunWithOps takes it. docs/server.md has the rest.
+// and Recoverer, with a 10 s read and 30 s write timeout, and refusals through
+// Errors. With Hosts empty every Host is answered; otherwise a Host outside
+// Hosts is refused unless LoopbackRequest holds. A nil handler is an error
+// even with the listener off. The listener closes when ctx ends before
+// RunWithOps takes it. docs/server.md has the rest.
 func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if c.Metrics == nil || c.Healthz == nil {
 		return nil, errors.New("httpserver: ListenOps needs non-nil Metrics and Healthz handlers")
@@ -109,8 +111,9 @@ func (o *Ops) Addr() net.Addr {
 	return o.ln.Addr()
 }
 
-// opsHostPolicy is the ops listener's host check. It is active even over no
-// hosts, so an empty list admits loopback alone rather than every name.
+// opsHostPolicy is the ops listener's host check, inactive over no non-blank
+// entry: /healthz and /metrics hold no secret a DNS-rebinding page could read,
+// and binding Addr to loopback is what keeps the port private.
 func opsHostPolicy(hosts []string, errs ErrorResponder, logger *slog.Logger) (*HostPolicy, error) {
 	p, invalid := ParseHostList(hosts, WithLoopbackExempt(true), WithHostResponder(errs), WithHostAllowlistLogger(logger))
 	if len(invalid) > 0 {
@@ -119,7 +122,6 @@ func opsHostPolicy(hosts []string, errs ErrorResponder, logger *slog.Logger) (*H
 		}
 		return nil, fmt.Errorf("hosts no Host can match: %q", invalid)
 	}
-	p.active = true
 	return p, nil
 }
 

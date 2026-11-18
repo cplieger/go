@@ -213,7 +213,7 @@ func TestListenOpsTimeouts(t *testing.T) {
 
 func TestListenOpsRoutesAndHostCheck(t *testing.T) {
 	c := opsConfig("127.0.0.1:0")
-	c.Hosts = []string{"ops.example"}
+	c.Hosts = []string{"ops.example", "192.0.2.10"}
 	o := listenOps(t, c)
 	stop := runOps(t, o)
 	addr := o.Addr().String()
@@ -230,6 +230,8 @@ func TestListenOpsRoutesAndHostCheck(t *testing.T) {
 		"healthz by HEAD":           {method: http.MethodHead, path: "/healthz", status: 200},
 		"metrics by HEAD":           {method: http.MethodHead, path: "/metrics", status: 200},
 		"a configured host":         {method: http.MethodGet, path: "/metrics", host: "ops.example:" + port, status: 200, body: "metrics page"},
+		"a configured IP literal":   {method: http.MethodGet, path: "/metrics", host: "192.0.2.10:" + port, status: 200, body: "metrics page"},
+		"an unlisted IP literal":    {method: http.MethodGet, path: "/metrics", host: "198.51.100.7", status: 403, code: "host_not_allowed"},
 		"localhost from loopback":   {method: http.MethodGet, path: "/healthz", host: "localhost:" + port, status: 200, body: "healthy"},
 		"::1 from loopback":         {method: http.MethodGet, path: "/healthz", host: "[::1]:" + port, status: 200, body: "healthy"},
 		"a foreign host":            {method: http.MethodGet, path: "/healthz", host: "rebind.example", status: 403, code: "host_not_allowed"},
@@ -266,6 +268,7 @@ func TestListenOpsRoutesAndHostCheck(t *testing.T) {
 
 func TestListenOpsUsesErrors(t *testing.T) {
 	c := opsConfig("127.0.0.1:0")
+	c.Hosts = []string{"ops.example"}
 	var codes []httpserver.ErrorCode
 	c.Errors = func(w http.ResponseWriter, r *http.Request, status int, code httpserver.ErrorCode, msg string) {
 		codes = append(codes, code)
@@ -621,4 +624,24 @@ func declNames(d ast.Decl) []string {
 		return names
 	}
 	return nil
+}
+
+// An ops listener with no Hosts answers every Host, a name or an IP literal,
+// whether Hosts is nil or empty.
+func TestListenOpsEmptyHostsAnswersEveryHost(t *testing.T) {
+	for name, hosts := range map[string][]string{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			c := opsConfig("127.0.0.1:0")
+			c.Hosts = hosts
+			o := listenOps(t, c)
+			stop := runOps(t, o)
+			addr := o.Addr().String()
+			for _, host := range []string{"prometheus:9090", "192.0.2.10"} {
+				if rec := opsDo(t, http.MethodGet, addr, "/metrics", host); rec.Code != http.StatusOK || rec.Body.String() != "metrics page" {
+					t.Errorf("Host %s: %d %q, want 200 metrics page", host, rec.Code, rec.Body.String())
+				}
+			}
+			_ = stop()
+		})
+	}
 }

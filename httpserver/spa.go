@@ -10,6 +10,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/cplieger/go/httpserver/v2/internal/httpfield"
 )
 
 // SPAConfig configures SPA.
@@ -311,7 +313,7 @@ func (sh *spaFile) serve(w http.ResponseWriter, r *http.Request, status int) {
 		if sh.gz.body != nil && serveGzip(w, r, sh.etag, sh.gz) {
 			return
 		}
-		if ifNoneMatch(r.Header, sh.etag) {
+		if httpfield.IfNoneMatch(r.Header, sh.etag) {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}

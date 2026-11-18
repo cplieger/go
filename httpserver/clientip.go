@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cplieger/go/httpserver/v2/internal/httpfield"
 	"github.com/cplieger/go/ssrf"
 )
 
@@ -146,9 +147,9 @@ type forwardedElement struct {
 
 func parseForwarding(h http.Header) forwarding {
 	return forwarding{
-		xff:       parseBounded(h, "X-Forwarded-For", tokenList, parseListEntry),
-		realIP:    parseBounded(h, "X-Real-Ip", tokenList, parseListEntry),
-		forwarded: parseBounded(h, "Forwarded", quotedStringList, parseForwardedElement),
+		xff:       parseBounded(h, "X-Forwarded-For", httpfield.Tokens, parseListEntry),
+		realIP:    parseBounded(h, "X-Real-Ip", httpfield.Tokens, parseListEntry),
+		forwarded: parseBounded(h, "Forwarded", httpfield.QuotedStrings, parseForwardedElement),
 	}
 }
 
@@ -181,9 +182,9 @@ func (f forwarding) public() bool {
 
 // parseBounded parses each element of h's name list with parse, or returns
 // one zero element once the list holds more than maxForwardingHops.
-func parseBounded[T any](h http.Header, name string, syntax listSyntax, parse func(string) T) []T {
+func parseBounded[T any](h http.Header, name string, syntax httpfield.Syntax, parse func(string) T) []T {
 	var elems []T
-	for elem := range fieldList(h, name, syntax) {
+	for elem := range httpfield.List(h, name, syntax) {
 		if len(elems) == maxForwardingHops {
 			var zero T
 			return []T{zero}

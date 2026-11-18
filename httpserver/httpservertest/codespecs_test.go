@@ -52,8 +52,9 @@ func record(t *testing.T, check func(testing.TB)) *recordingTB {
 const fixtureDir = "testdata/codespecs/app"
 
 var fixtureCodes = []httpserver.ErrorCode{
-	"const_code", "converted_code", "field_code", "func_type_code",
-	"literal_code", "option_code", "responder_code",
+	"const_code", "constructor_code", "converted_code", "envelope_code",
+	"field_code", "func_type_code", "literal_code", "option_code",
+	"responder_code",
 }
 
 func TestWrittenCodesFindsEachWriterShape(t *testing.T) {

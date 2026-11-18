@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/cplieger/go/httpserver/v2/internal/httpfield"
 )
 
 // StaticOption configures StaticHandler.
@@ -236,7 +238,7 @@ func serveGzip(w http.ResponseWriter, r *http.Request, etag string, gz gzAsset) 
 	// with the identity body.
 	gzEtag := `"` + strings.Trim(etag, `"`) + `-gz"`
 	h.Set("ETag", gzEtag)
-	if ifNoneMatch(r.Header, gzEtag) {
+	if httpfield.IfNoneMatch(r.Header, gzEtag) {
 		w.WriteHeader(http.StatusNotModified)
 		return true
 	}
@@ -248,19 +250,4 @@ func serveGzip(w http.ResponseWriter, r *http.Request, etag string, gz gzAsset) 
 	}
 	_, _ = w.Write(gz.body)
 	return true
-}
-
-// ifNoneMatch reports whether h's If-None-Match, over every field line, is
-// "*" as the whole field or lists an entity-tag weakly equal to etag, a
-// strong entity-tag (RFC 9110 section 13.1.2).
-func ifNoneMatch(h http.Header, etag string) bool {
-	members, wildcard := 0, false
-	for member := range fieldList(h, "If-None-Match", entityTagList) {
-		members++
-		wildcard = member == "*"
-		if strings.TrimPrefix(member, "W/") == etag {
-			return true
-		}
-	}
-	return wildcard && members == 1
 }
