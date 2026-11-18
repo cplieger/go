@@ -44,7 +44,7 @@ The page shows the total as read and marks it with the read's state and time.
 
 ## A frame's read
 
-`WithRead(r)` marks any frame as built from a read that was not whole: the frame gains `read`, a `Read`. A complete read adds nothing, so a frame built from a whole read encodes exactly as one built with no option, and every frame that existed before encodes as it did. The chart draws the frame as built and ignores `read`; the page marks the figure around it.
+`WithRead(r)` marks any frame as built from a read that was not whole: the frame gains `read`, a `Read`. A complete read that rule read does not refuse adds nothing, a zero `AsOf` included, so a frame built from a whole read encodes exactly as one built with no option, and every frame that existed before encodes as it did. A complete read with a reason, or with an `AsOf` that `time.Time` cannot write, is refused. The chart draws the frame as built and ignores `read`; the page marks the figure around it.
 
 `as_of` is a read's time, which the page words and compares, not a place on an axis. A frame's axis values, `x`, `resets`, a note's `at` and a calendar's `start`, stay numbers in the axis unit, Unix milliseconds on a time axis.
 

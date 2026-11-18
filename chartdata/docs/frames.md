@@ -60,7 +60,7 @@ Options set the optional parts of a frame. An option the frame's type cannot tak
 | `WithDomain(Range{From, To})` | `SeriesFrame`, `BinsFrame` | the span the axis covers when it is wider than the data, such as a window whose first hours hold no samples |
 | `WithOpen(open)` | `SeriesFrame`, `BinsFrame`, `CalendarFrame` | that the last column, bin or day is still filling |
 | `WithResets(at...)` | `SeriesFrame`, `BinsFrame` | the instants a restart broke the series at, strictly increasing; a line breaks there instead of joining across them |
-| `WithRead(r)` | every frame | `read`, the state of a read that was not whole; a complete read adds nothing ([Read state](read-state.md)) |
+| `WithRead(r)` | every frame | `read`, the state of a read that was not whole; a complete read that rule read does not refuse adds nothing, a zero `AsOf` included, and one with a reason or with an `AsOf` that `time.Time` cannot write is refused ([Read state](read-state.md)) |
 
 ## Refusals
 

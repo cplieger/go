@@ -1,6 +1,8 @@
 package chartdata
 
 import (
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/cplieger/go/measure/v2"
@@ -102,17 +104,12 @@ func frameRead(r *measure.Read) (*Read, error) {
 	return &Read{State: state, AsOf: asOf, Reason: r.Reason}, nil
 }
 
-// checkRead refuses what rule read refuses on both a Count and a frame's
-// read, naming each field after prefix, and returns r's state, the zero
-// one as unread, and a copy of its AsOf, nil when zero.
+// checkRead refuses what rule read refuses on a Count, a Read and a frame's
+// read, naming each field after prefix, and returns r's state, the zero one
+// as unread, and a copy of its AsOf, nil when zero.
 func checkRead(prefix string, r measure.Read) (measure.ReadState, *time.Time, error) {
-	state := r.State
-	switch state {
-	case "":
-		state = measure.ReadUnread
-	case measure.ReadComplete, measure.ReadPartial, measure.ReadBlind,
-		measure.ReadUnread, measure.ReadUnsupported, measure.ReadExcluded:
-	default:
+	state := cmp.Or(r.State, measure.ReadUnread)
+	if !slices.Contains(measure.ReadStates(), string(state)) {
 		return "", nil, refusef(RuleRead, prefix+"state", "must be one of the six read states, not %q", r.State)
 	}
 	if state == measure.ReadComplete && r.Reason != "" {
