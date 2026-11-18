@@ -5,14 +5,17 @@ import (
 	"path"
 )
 
-const htmlExt = ".html"
+const (
+	htmlExt = ".html"
+	jsExt   = ".js"
+)
 
 // contentTypes is the one table StaticHandler and SPA answer from, never
 // mime.TypeByExtension, which reads the host's registry (Windows can map .js
 // to application/javascript). .js is text/javascript per RFC 9239.
 var contentTypes = map[string]string{
 	htmlExt:        "text/html; charset=utf-8",
-	".js":          "text/javascript; charset=utf-8",
+	jsExt:          "text/javascript; charset=utf-8",
 	".mjs":         "text/javascript; charset=utf-8",
 	".css":         "text/css; charset=utf-8",
 	".json":        "application/json",

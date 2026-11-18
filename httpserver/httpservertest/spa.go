@@ -52,10 +52,13 @@ func CheckSPA(t testing.TB, h http.Handler, c httpserver.SPAConfig) { //nolint:g
 	if err != nil {
 		t.Fatalf("CheckSPA: %v", err)
 	}
-	s := &spaCheck{t: t, h: h, c: c, b: b, policy: policy, pages: pages, classic: map[string]bool{}}
+	s := &spaCheck{t: t, h: h, c: c, b: b, policy: policy, pages: pages, classic: map[string]bool{}, stable: map[string]bool{}}
 	for _, e := range b.Entries {
 		if e.Kind == httpserver.BundleClassic {
 			s.classic[e.Path] = true
+		}
+		if e.Stable {
+			s.stable[e.Path] = true
 		}
 	}
 	s.checkPages()
@@ -69,6 +72,7 @@ type spaCheck struct {
 	h       http.Handler
 	pages   *httpserver.PageMatcher
 	classic map[string]bool
+	stable  map[string]bool
 	b       httpserver.Bundle
 	policy  string
 	c       httpserver.SPAConfig
@@ -160,7 +164,7 @@ func (s *spaCheck) listed(name string) (fileWant, bool) {
 func (s *spaCheck) checkFiles() {
 	for _, name := range slices.Sorted(maps.Keys(s.b.Files)) {
 		target := escaped(name)
-		if !strings.Contains(name, "/") {
+		if !strings.Contains(name, "/") && !s.stable[name] {
 			continue
 		}
 		if _, ok := httpserver.ContentTypes()[path.Ext(name)]; !ok && strings.HasPrefix(name, "assets/") {
@@ -266,7 +270,7 @@ func refusedPath(name string) bool {
 func (s *spaCheck) checkRefusals() {
 	probes := []string{httpserver.BundlePath, ".checkspa", "assets/.checkspa", sourcemapPath(s.b)}
 	for name := range s.b.Files {
-		if !strings.Contains(name, "/") {
+		if !strings.Contains(name, "/") && !s.stable[name] {
 			probes = append(probes, name)
 		}
 	}

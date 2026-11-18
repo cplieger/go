@@ -61,24 +61,32 @@ func routes(api http.Handler, errs httpserver.ErrorResponder) (http.Handler, err
     "assets/app-3f2a91.js": "3f2a...",
     "assets/app-77d0c4.css": "77d0...",
     "assets/feed-worker-b81e.js": "b81e...",
+    "sw.js": "0d4e...",
     "licenses/THIRD_PARTY_NOTICES.txt": "51aa..."
   },
   "entries": [
     {"name": "app", "kind": "module", "path": "assets/app-3f2a91.js"},
     {"name": "app", "kind": "style", "path": "assets/app-77d0c4.css"},
-    {"name": "feed-worker", "kind": "classic", "path": "assets/feed-worker-b81e.js"}
+    {"name": "feed-worker", "kind": "classic", "path": "assets/feed-worker-b81e.js"},
+    {"name": "sw", "kind": "classic", "path": "sw.js", "stable": true}
   ]
 }
 ```
 
-`Bundle`, `BundleEntry` and `BundleKind` are its Go types, so a bundler writes the file through the same types `SPA` reads it with. An entry's kind is `module` (an ES module with shared chunks), `classic` (a self-contained script, such as a worker host or a script that runs before the first paint) or `style` (CSS). `ReadBundle(fsys)` reads and checks it, and answers found false with no error when the tree has none. It refuses:
+`Bundle`, `BundleEntry` and `BundleKind` are its Go types, so a bundler writes the file through the same types `SPA` reads it with. An entry's kind is `module` (an ES module with shared chunks), `classic` (a self-contained script, such as a worker host or a script that runs before the first paint) or `style` (CSS).
+
+An entry marked `"stable": true` keeps one URL across builds, which a service worker needs, since the browser finds its update at the URL it registered. Its path is an unhashed `.js` file at the root of the tree, such as `sw.js`, served at `/sw.js`. Every other entry's path is hashed under `assets/`. The key is left out when false.
+
+`ReadBundle(fsys)` reads and checks it, and answers found false with no error when the tree has none. It refuses:
 
 - unknown keys, or data after the object
 - a listed path that is not a regular file in the tree, or holds a segment starting with `.`
-- a file at the root that is not an `.html` shell, or a nested file outside `assets/` and `licenses/`
+- a file at the root that is neither an `.html` shell nor a stable entry's `.js` file, or a nested file outside `assets/` and `licenses/`
 - a file named `index.html` under `assets/` or `licenses/`, since `http.FileServer` redirects any path ending in `/index.html`
 - a hash that is not 64 lowercase hex digits
-- an entry with no name, an unknown kind, a path outside `assets/` or not listed, or the same logical file twice (`app` of kind `module` and `app` of kind `classic` are both `/app.js`).
+- an entry with no name, an unknown kind, a path not listed, or the same logical file twice (`app` of kind `module` and `app` of kind `classic` are both `/app.js`)
+- an entry whose path is outside `assets/`, unless it is stable
+- a stable entry whose path is not one `.js` file at the root, such as a shell, `bundle.json`, a file under `assets/` or a stylesheet.
 
 `SPA` serves only the files the manifest lists, so a stray file, a sourcemap or an earlier build's leftover is never served. It takes every ETag from the listed hashes instead of hashing the tree.
 
@@ -90,7 +98,7 @@ The first row that applies answers:
 | --- | --- |
 | A path at or under `APIPrefix`, by its raw or its cleaned path | `not_found` (404) |
 | A method other than `GET` or `HEAD` | `method_not_allowed` (405) with `Allow: GET, HEAD` |
-| A listed file under `assets/` whose extension is in the content-type table | The file through `StaticHandler`, with gzip when offered |
+| A listed file under `assets/` whose extension is in the content-type table, or a stable entry | The file through `StaticHandler`, with gzip when offered |
 | A listed notice under `licenses/` | The notice as `text/plain; charset=utf-8`, whatever its extension |
 | `/favicon.ico` | 204 with no body |
 | Any other path under `assets/` or `licenses/` once its dot segments are cleaned, the manifest, or a shell's own file name such as `/index.html` | `not_found` (404) |
@@ -98,7 +106,7 @@ The first row that applies answers:
 | A path no page matches with a segment starting with `.` | `not_found` (404) |
 | Any other path | The default shell, `index.html`, with 404, so the router draws its not-found screen |
 
-Every refusal is the error envelope written through `Errors`, with `Cache-Control: no-store` set before `Errors` runs, so no cache keeps a refusal after the build that fixes it. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
+Every refusal is the error envelope written through `Errors`, with `Cache-Control: no-store` set before `Errors` runs, so no cache keeps a refusal after the build that fixes it. A missing hashed asset or notice therefore never answers HTML. The bundle's own paths answer before the pages, so a page pattern such as `/` or `/{a}/{b}` never shadows an asset, a stable entry, a notice, the favicon or the manifest. A browser asks for `/favicon.ico` only when a shell names no icon, and the 204 keeps that out of its console.
 
 The dot-segment refusal applies to paths no page matches, so no dot-file in the tree is ever served. A page's capture is the app's to judge: under a page `/library/{id}`, `/library/.env` answers the page's shell, as the browser router matches it, and the app's own route refuses an id it does not accept. A tail page `/file/{path...}` takes every depth the same way: `/file/a/b/c.ts` and `/file/.github/x.yaml` answer its shell, and `/file` redirects to `/file/`. `/.env` and `/assets/.env` answer `not_found`.
 
@@ -144,11 +152,11 @@ In two cases the tree `html.Parse` builds is not the whole shell, and `SPA` refu
 | Answer | `Cache-Control` | `ETag` |
 | --- | --- | --- |
 | A `module` or `style` output, a chunk, a font, an image | `public, max-age=31536000, immutable` | The manifest hash |
-| A `classic` entry, a shell, a notice | `no-cache` | Bound to the policy |
+| A `classic` or stable entry, a shell, a notice | `no-cache` | Bound to the policy |
 | The default shell answered with 404 | `no-cache` | None |
 | A refusal, `ui_unbuilt` included | `no-store` | None |
 
-A file under `assets/` is named by its content hash, so it can be cached for a year. A `classic` entry is the exception, because it runs under the policy on its own response, and `SPA` writes that policy at serve time. A build that changes only the policy keeps the script's name, so a year-long cache would keep the old policy on it.
+A file under `assets/` is named by its content hash, so it can be cached for a year. A `classic` entry is the exception, because it runs under the policy on its own response, and `SPA` writes that policy at serve time. A build that changes only the policy keeps the script's name, so a year-long cache would keep the old policy on it. A stable entry's name never changes, so every load revalidates it, and a changed file or policy changes its tag.
 
 Every `no-cache` ETag is computed once at start as the first 32 hex digits of SHA-256 over the file's manifest hash, a zero byte and the policy, quoted. A changed policy therefore changes the tag, and the next revalidation answers 200 with the new header. Nothing then depends on a browser merging a 304's headers into its stored response (RFC 9111 section 4.3.4). An unchanged build and policy still costs a 304. The gzip body of each file answers under its tag plus `-gz`.
 
@@ -167,7 +175,7 @@ The `httpservertest` package holds the checks, so `httpserver` itself imports no
 `CheckSPA(t, h, c)` fails `t` unless `h` serves `c.Assets` as `SPA` built from `c` must. `h` may be the `SPA` handler alone or the app's whole handler with `SPA` at `/`. It requests:
 
 - every page at a sample path, comparing the body with its own shell and running `CheckShell` on it
-- every listed file, with and without gzip, checking its body, content type, cache policy and ETag, and for a `classic` entry or a notice the policy-bound tag
+- every listed file, with and without gzip, checking its body, content type, cache policy and ETag, and for a `classic` or stable entry or a notice the policy-bound tag
 - every unlisted file in the tree, a made-up file under `assets/` and `licenses/`, a sourcemap path, dot-files, the manifest and the shells' own file names
 - an unknown path, `/favicon.ico`, a same-origin and a cross-site `POST`, and a path under `APIPrefix`.
 
@@ -223,6 +231,6 @@ The page writes each file's `Name` and the one sentence of its `OutageClass`, ne
 
 The closing line is "Reload this page once the command finishes.", since a repair runs in the serving process. With `Restart` it is "Run the command above or restart the container, then reload this page." Each file's `Name`, the `Notice`, and each command's `Run` and `Note` go through `go/textsafe`'s single-line sanitizer, which turns control characters, line breaks, bidi controls and the Unicode line and paragraph separators into spaces. Each is then cut at 512 bytes, with `...` marking the cut. A `Notice` or `Note` left with nothing but spaces draws none.
 
-The page is rendered once, through `html/template`, with no script and no inline style. Every `GET` or `HEAD` outside `APIPrefix` answers it with 503, `Cache-Control: no-store`, `text/html` and `SPA`'s default policy. The exception is a file the manifest lists under `assets/`, which answers exactly as `SPA` serves it, so the stylesheet and the fonts and icons it loads arrive. A path at or under `APIPrefix` answers `not_found`, since the API answers its own outage, and another method answers `method_not_allowed` with `Allow: GET, HEAD`. Both refusals carry `Cache-Control: no-store`, as `SPA`'s do.
+The page is rendered once, through `html/template`, with no script and no inline style. Every `GET` or `HEAD` outside `APIPrefix` answers it with 503, `Cache-Control: no-store`, `text/html` and `SPA`'s default policy. The exception is a file the manifest lists under `assets/`, or a stable entry, which answers exactly as `SPA` serves it, so the stylesheet and the fonts and icons it loads arrive. A path at or under `APIPrefix` answers `not_found`, since the API answers its own outage, and another method answers `method_not_allowed` with `Allow: GET, HEAD`. Both refusals carry `Cache-Control: no-store`, as `SPA`'s do.
 
 `OutagePage` refuses an empty or blank `Title` or `App`, an `APIPrefix` that is not a clean path, a file `Name` or command `Run` left with nothing but spaces after cleaning, a class outside the six, a manifest `ReadBundle` refuses, and, with a built bundle, a `Style` naming no style entry.

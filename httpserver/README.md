@@ -13,7 +13,7 @@ httpserver is built for a Go service on `http.ServeMux` that faces a browser or 
 - `ResolveClient` reads `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ForwarderCheck` spots a container runtime's forwarder posing as a local client.
 - A Host allowlist stops DNS rebinding, and `CrossOrigin` refuses cross-site writes.
 - Every refusal is one JSON envelope with a code, a message, a remediation and the request id.
-- `SPA` serves only the files your bundle's manifest lists, with the policy on every answer and year-long caching for hashed assets. `httpservertest.CheckSPA` checks every path in a test.
+- `SPA` serves only the files your bundle's manifest lists, with the policy on every answer and year-long caching for hashed assets. A stable entry, such as a service worker, keeps one URL at the root and revalidates on every load. `httpservertest.CheckSPA` checks every path in a test.
 - The access log caps the path and method it writes, and metric labels stay bounded.
 - `New` leaves the write timeout off, so streams stay open. `Run` drains in-flight requests within a grace period, and the ops listener keeps `/healthz` answering through the drain.
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"path"
 	"strconv"
@@ -24,12 +25,12 @@ type SPAConfig struct {
 const immutableCache = "public, max-age=31536000, immutable"
 
 // SPA serves a single-page app's bundle (BundlePath) for GET and HEAD. A
-// listed asset answers through StaticHandler (immutable; a BundleClassic entry
-// no-cache), a notice text/plain, /favicon.ico 204, and any other path under
-// assets/ or licenses/ a refusal, whatever the pages match; then a page path
-// answers its shell, any other the default shell with 404 (no-cache). A path
-// at or under APIPrefix, a dot segment no page matches, another method and,
-// unbuilt, a page (ui_unbuilt) answer a refusal through Errors, no-store.
+// listed asset answers through StaticHandler (immutable; a BundleClassic or
+// stable entry no-cache), a notice text/plain, /favicon.ico 204, any other
+// path under assets/ or licenses/ a refusal, whatever the pages match; then a
+// page path answers its shell, any other the default shell with 404, no-cache.
+// A path at or under APIPrefix, a dot segment no page matches, another method
+// and, unbuilt, a page (ui_unbuilt) answer a refusal through Errors, no-store.
 // Every answer carries SPAPolicy's policy and every no-cache ETag binds it.
 func SPA(c SPAConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	policy, err := SPAPolicy(c.CSPAdd)
@@ -135,12 +136,17 @@ func (s *spaServer) load(fsys fs.FS, b Bundle, pages []Page) error {
 }
 
 // loadFiles keeps the notices in memory and the listed assets' handler, every
-// other listed root file being refused as a path.
+// other listed root file, a shell, being refused as a path.
 func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
+	var err error
+	if s.static, s.served, err = bundleAssets(fsys, b, s.policy); err != nil {
+		return err
+	}
 	s.refused = map[string]bool{BundlePath: true}
 	s.notices = make(map[string]*spaFile)
 	for name, hash := range b.Files {
 		switch {
+		case s.served[name]:
 		case !strings.Contains(name, "/"):
 			s.refused[name] = true
 		case strings.HasPrefix(name, "licenses/"):
@@ -149,35 +155,35 @@ func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
 			}
 		}
 	}
-	var err error
-	s.static, s.served, err = bundleAssets(fsys, b, s.policy)
-	return err
+	return nil
 }
 
-// bundleAssets is the StaticHandler for the files b lists under assets/ with
-// a content-type table extension, and those files' tree paths: the manifest
-// hash and immutable for each, a BundleClassic entry no-cache under a tag
-// bound to policy. SPA and OutagePage both serve assets through it.
+// bundleAssets is the StaticHandler for b's stable entries and the files b
+// lists under assets/ with a content-type table extension, and those files'
+// tree paths: the manifest hash and immutable for each, a BundleClassic or
+// stable entry no-cache under a tag bound to policy. SPA and OutagePage both
+// serve assets through it.
 func bundleAssets(fsys fs.FS, b Bundle, policy string) (http.Handler, map[string]bool, error) {
-	classic := make(map[string]bool)
+	stable := stablePaths(b.Entries)
+	noCache := maps.Clone(stable)
 	for _, e := range b.Entries {
 		if e.Kind == BundleClassic {
-			classic[e.Path] = true
+			noCache[e.Path] = true
 		}
 	}
 	tags := make(map[string]string)
 	served := make(map[string]bool)
 	for name, hash := range b.Files {
 		switch {
-		case !strings.HasPrefix(name, "assets/"), contentTypes[path.Ext(name)] == "":
-		case classic[name]:
+		case !stable[name] && (!strings.HasPrefix(name, "assets/") || contentTypes[path.Ext(name)] == ""):
+		case noCache[name]:
 			served[name], tags[name] = true, policyETag(hash, policy)
 		default:
 			served[name], tags[name] = true, `"`+hash+`"`
 		}
 	}
 	h, err := StaticHandler(fsys, WithStaticETags(tags), WithStaticCacheControl(func(name string) string {
-		if classic[name] {
+		if noCache[name] {
 			return "no-cache"
 		}
 		return immutableCache

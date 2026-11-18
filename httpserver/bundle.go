@@ -35,19 +35,22 @@ type Bundle struct {
 }
 
 // BundleEntry is one built entry: its logical name ("app" for "/app.js" or
-// "/app.css" in a shell), its kind and its hashed path in the tree.
+// "/app.css" in a shell), its kind and its hashed path in the tree. A Stable
+// entry keeps one URL across builds, such as a service worker's: its Path is
+// an unhashed .js file at the tree root, which SPA serves no-cache.
 type BundleEntry struct {
-	Name string     `json:"name"`
-	Kind BundleKind `json:"kind"`
-	Path string     `json:"path"`
+	Name   string     `json:"name"`
+	Kind   BundleKind `json:"kind"`
+	Path   string     `json:"path"`
+	Stable bool       `json:"stable,omitempty"`
 }
 
 // ReadBundle reads fsys's manifest; found is false with a nil error when fsys
 // is nil or holds no BundlePath (unbuilt). A manifest that does not read,
 // decode or check is an error. Each listed path is a regular file in fsys with
-// no dot segment: a root .html shell, or a file under assets/ or licenses/
-// other than index.html. Each entry's logical path is unique and its Path is a
-// listed file under assets/.
+// no dot segment: a root .html shell, a stable entry's root .js file, or a
+// file under assets/ or licenses/ other than index.html. Each entry's logical
+// path is unique and its Path is a listed file, under assets/ unless Stable.
 func ReadBundle(fsys fs.FS) (Bundle, bool, error) {
 	if fsys == nil {
 		return Bundle{}, false, nil
@@ -71,7 +74,7 @@ func ReadBundle(fsys fs.FS) (Bundle, bool, error) {
 	if b.Files == nil {
 		b.Files = map[string]string{}
 	}
-	if err := checkBundleFiles(fsys, b.Files); err != nil {
+	if err := checkBundleFiles(fsys, b.Files, stablePaths(b.Entries)); err != nil {
 		return Bundle{}, false, err
 	}
 	if err := checkBundleEntries(b); err != nil {
@@ -80,9 +83,25 @@ func ReadBundle(fsys fs.FS) (Bundle, bool, error) {
 	return b, true, nil
 }
 
-func checkBundleFiles(fsys fs.FS, files map[string]string) error {
+func stablePaths(entries []BundleEntry) map[string]bool {
+	stable := make(map[string]bool)
+	for _, e := range entries {
+		if e.Stable {
+			stable[e.Path] = true
+		}
+	}
+	return stable
+}
+
+// stablePath reports whether p is where a stable entry may sit: one .js file
+// at the tree root.
+func stablePath(p string) bool {
+	return !strings.Contains(p, "/") && path.Ext(p) == jsExt
+}
+
+func checkBundleFiles(fsys fs.FS, files map[string]string, stable map[string]bool) error {
 	for _, p := range slices.Sorted(maps.Keys(files)) {
-		if err := checkBundlePath(p); err != nil {
+		if err := checkBundlePath(p, stable[p]); err != nil {
 			return fmt.Errorf("httpserver: %s lists %q: %w", BundlePath, p, err)
 		}
 		if !sha256Hex(files[p]) {
@@ -99,7 +118,7 @@ func checkBundleFiles(fsys fs.FS, files map[string]string) error {
 	return nil
 }
 
-func checkBundlePath(p string) error {
+func checkBundlePath(p string, stable bool) error {
 	if !fs.ValidPath(p) || p == "." {
 		return errors.New("not a path in the tree")
 	}
@@ -109,8 +128,8 @@ func checkBundlePath(p string) error {
 	top, rest, nested := strings.Cut(p, "/")
 	switch {
 	case !nested:
-		if path.Ext(p) != htmlExt {
-			return errors.New("a file at the root is a shell, an .html file")
+		if path.Ext(p) != htmlExt && (!stable || !stablePath(p)) {
+			return errors.New("a file at the root is a shell, an .html file, or a stable entry's .js file")
 		}
 	case top != "assets" && top != "licenses":
 		return errors.New("a nested file is under assets/ or licenses/")
@@ -138,7 +157,9 @@ func checkBundleEntries(b Bundle) error {
 			return fmt.Errorf("httpserver: %s has an entry with no name", BundlePath)
 		case seen[logical]:
 			return fmt.Errorf("httpserver: %s names %s twice", BundlePath, logical)
-		case !strings.HasPrefix(e.Path, "assets/"):
+		case e.Stable && !stablePath(e.Path):
+			return fmt.Errorf("httpserver: %s entry %s is stable, so its path is one .js file at the root, not %q", BundlePath, logical, e.Path)
+		case !e.Stable && !strings.HasPrefix(e.Path, "assets/"):
 			return fmt.Errorf("httpserver: %s entry %s is at %q, outside assets/", BundlePath, logical, e.Path)
 		}
 		if _, ok := b.Files[e.Path]; !ok {

@@ -23,6 +23,7 @@ const (
 	fontAsset    = "assets/font-EEEE.woff2"
 	noticeFile   = "licenses/index.txt"
 	strayAsset   = "assets/stray-FFFF.js"
+	stableAsset  = "sw.js"
 )
 
 var fixturePages = []httpserver.Page{
@@ -40,6 +41,7 @@ func fixtureFiles() map[string]string {
 		"login.html": loginShell,
 		moduleAsset:  strings.Repeat("console.log('app');\n", 40),
 		classicAsset: strings.Repeat("self.onconnect = () => {};\n", 40),
+		stableAsset:  strings.Repeat("self.addEventListener('fetch', () => {});\n", 40),
 		styleAsset:   strings.Repeat("body { color: red; }\n", 40),
 		fontAsset:    "wOF2 font bytes",
 		noticeFile:   strings.Repeat("pkg 1.0.0 MIT\n", 20),
@@ -48,7 +50,7 @@ func fixtureFiles() map[string]string {
 	}
 }
 
-var fixtureListed = []string{"index.html", "login.html", moduleAsset, classicAsset, styleAsset, fontAsset, noticeFile}
+var fixtureListed = []string{"index.html", "login.html", moduleAsset, classicAsset, stableAsset, styleAsset, fontAsset, noticeFile}
 
 func fixtureTree(t *testing.T) fstest.MapFS {
 	t.Helper()
@@ -62,6 +64,7 @@ func fixtureTree(t *testing.T) fstest.MapFS {
 		Entries: []httpserver.BundleEntry{
 			{Name: "app", Kind: httpserver.BundleModule, Path: moduleAsset},
 			{Name: "worker", Kind: httpserver.BundleClassic, Path: classicAsset},
+			{Name: "sw", Kind: httpserver.BundleClassic, Path: stableAsset, Stable: true},
 			{Name: "app", Kind: httpserver.BundleStyle, Path: styleAsset},
 		},
 	}
@@ -211,6 +214,36 @@ func TestCheckSPAFailsClassicETagThatIgnoresPolicy(t *testing.T) {
 		}
 	})
 	wantFailure(t, runCheckSPA(t, h, c), "/"+classicAsset, "ETag")
+}
+
+func TestCheckSPAFailsStableEntryServedWrong(t *testing.T) {
+	sum := sha256.Sum256([]byte(fixtureFiles()[stableAsset]))
+	edits := map[string]struct {
+		edit func(*httptest.ResponseRecorder)
+		want string
+	}{
+		"immutable": {func(rec *httptest.ResponseRecorder) {
+			rec.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}, "Cache-Control"},
+		"an ETag that ignores the policy": {func(rec *httptest.ResponseRecorder) {
+			if rec.Header().Get("Content-Encoding") == "" {
+				rec.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)
+			}
+		}, "ETag"},
+		"no policy": {func(rec *httptest.ResponseRecorder) {
+			rec.Header().Del("Content-Security-Policy")
+		}, "Content-Security-Policy"},
+		"refused": {func(rec *httptest.ResponseRecorder) {
+			rec.Code = http.StatusNotFound
+		}, "status"},
+	}
+	for name, tc := range edits {
+		t.Run(name, func(t *testing.T) {
+			c := fixtureConfig(t)
+			h := tamper(fixtureSPA(t, c), atPath("/"+stableAsset), tc.edit)
+			wantFailure(t, runCheckSPA(t, h, c), "/"+stableAsset, tc.want)
+		})
+	}
 }
 
 func TestCheckSPAFailsUndeclaredCSPAddition(t *testing.T) {

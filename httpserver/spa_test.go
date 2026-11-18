@@ -375,6 +375,89 @@ func TestClassicEntryETagMovesWithPolicy(t *testing.T) {
 	}
 }
 
+// noCacheETag is the tag docs/spa.md gives a no-cache answer: the first 32
+// hex digits of SHA-256 over the manifest hash, a zero byte and the policy.
+func noCacheETag(fileHash, policy string) string {
+	return `"` + sha256Hex(fileHash + "\x00" + policy)[:32] + `"`
+}
+
+func TestSPAServesStableEntry(t *testing.T) {
+	const blobPolicy = defaultPolicy + "; media-src 'self' blob:"
+	sw := strings.Repeat("self.addEventListener('fetch', () => {});\n", 40)
+	c := spaConfig(t, nil)
+	c.Assets = stableTree(t, sw)
+	h := newSPA(t, c)
+	for _, policy := range []string{defaultPolicy, blobPolicy} {
+		t.Run("under "+policy, func(t *testing.T) {
+			pc := spaConfig(t, nil)
+			pc.Assets = stableTree(t, sw)
+			if policy == blobPolicy {
+				pc.CSPAdd = map[string][]string{"media-src": {"blob:"}}
+			}
+			ph := newSPA(t, pc)
+			rec := spaServe(ph, http.MethodGet, "/"+stableAsset)
+			if rec.Code != http.StatusOK || rec.Body.String() != sw {
+				t.Errorf("GET /%s = %d %q, want 200 and the file", stableAsset, rec.Code, rec.Body.String())
+			}
+			hdr := rec.Header()
+			if got := hdr.Get("Content-Type"); got != "text/javascript; charset=utf-8" {
+				t.Errorf("Content-Type = %q, want text/javascript; charset=utf-8", got)
+			}
+			if got := hdr.Get("Cache-Control"); got != "no-cache" {
+				t.Errorf("Cache-Control = %q, want no-cache", got)
+			}
+			if got, want := hdr.Get("ETag"), noCacheETag(sha256Hex(sw), policy); got != want {
+				t.Errorf("ETag = %q, want the policy-bound tag %q", got, want)
+			}
+			wantPolicy(t, rec, policy)
+			gz := spaServe(ph, http.MethodGet, "/"+stableAsset, "Accept-Encoding", "gzip")
+			if gz.Header().Get("Content-Encoding") != "gzip" || !bytes.Equal(gunzip(t, gz.Body.Bytes()), []byte(sw)) {
+				t.Errorf("gzip answer = %q encoded, want the file gzipped", gz.Header().Get("Content-Encoding"))
+			}
+			if got, want := gz.Header().Get("ETag"), strings.TrimSuffix(noCacheETag(sha256Hex(sw), policy), `"`)+`-gz"`; got != want {
+				t.Errorf("gzip ETag = %q, want %q", got, want)
+			}
+			wantPolicy(t, gz, policy)
+		})
+	}
+	t.Run("a stable module entry is no-cache too", func(t *testing.T) {
+		files := spaFiles()
+		files[stableAsset] = sw
+		mc := spaConfig(t, nil)
+		mc.Assets = bundleTree(t, files, append(slices.Clone(spaListed), stableAsset),
+			append(slices.Clone(spaEntries), httpserver.BundleEntry{Name: "sw", Kind: httpserver.BundleModule, Path: stableAsset, Stable: true}))
+		rec := spaServe(newSPA(t, mc), http.MethodGet, "/"+stableAsset)
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("Cache-Control = %q, want no-cache", got)
+		}
+		if got, want := rec.Header().Get("ETag"), noCacheETag(sha256Hex(sw), defaultPolicy); got != want {
+			t.Errorf("ETag = %q, want the policy-bound tag %q", got, want)
+		}
+	})
+	t.Run("the ETag changes when its bytes change", func(t *testing.T) {
+		old := spaServe(h, http.MethodGet, "/"+stableAsset).Header().Get("ETag")
+		next := sw + "self.skipWaiting();\n"
+		nc := spaConfig(t, nil)
+		nc.Assets = stableTree(t, next)
+		rec := spaServe(newSPA(t, nc), http.MethodGet, "/"+stableAsset, "If-None-Match", old)
+		if rec.Code != http.StatusOK || rec.Body.String() != next {
+			t.Errorf("If-None-Match of the old tag = %d %q, want 200 and the new file", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("ETag"); got == old || got != noCacheETag(sha256Hex(next), defaultPolicy) {
+			t.Errorf("ETag = %q after the bytes changed from the tag %q, want %q", got, old, noCacheETag(sha256Hex(next), defaultPolicy))
+		}
+	})
+	t.Run("an unchanged file revalidates", func(t *testing.T) {
+		etag := spaServe(h, http.MethodGet, "/"+stableAsset).Header().Get("ETag")
+		if rec := spaServe(h, http.MethodGet, "/"+stableAsset, "If-None-Match", etag); rec.Code != http.StatusNotModified {
+			t.Errorf("If-None-Match of the current tag: status %d, want 304", rec.Code)
+		}
+	})
+	t.Run("with no stable entry the path answers the 404 shell", func(t *testing.T) {
+		wantShell(t, spaServe(newSPA(t, spaConfig(t, nil)), http.MethodGet, "/"+stableAsset), http.StatusNotFound, indexHTML)
+	})
+}
+
 func TestSPAMissingAssetIsNotFoundEnvelope(t *testing.T) {
 	h := newSPA(t, spaConfig(t, nil))
 	for _, target := range []string{"/assets/missing-1.js", "/assets/", "/assets/sub/", "/assets", "/licenses/nope.txt", "/licenses/", "/" + moduleAsset + ".map", "/" + moduleAsset + "/x", "/assets/app.js"} {
