@@ -247,7 +247,7 @@ const (
 )
 
 // job is one admitted job. state, cancel, startedAt, stopEnd, stopped,
-// returned, committing, the counts and w's ownership are guarded by the
+// returned, committing, yield, the counts and w's ownership are guarded by the
 // executor's mu; rec, claimed and factsDropped are guarded by recMu once the
 // job runs, which also orders its record writes.
 type job[P any] struct {
@@ -261,7 +261,8 @@ type job[P any] struct {
 	// stopEnd is the end a cancel or a covering start gave it, written in
 	// place of its Run's; nil when nothing stopped it or a shutdown did.
 	stopEnd     *End
-	claimed     []bool // a batch's lines an Item call has taken
+	claimed     []bool    // a batch's lines an Item call has taken
+	yield       *yielding // its Yield's wait; nil when it is not yielded
 	relay       relay
 	j           Job[P]
 	rec         Record
@@ -358,11 +359,13 @@ func (e *Executor[P]) begin(en *job[P]) {
 }
 
 // coverLocked takes out of the queue each queued job the starting job's kind
-// covers, each to end skipped as covered by it, and answers them.
+// covers, each to end skipped as covered by it, and answers them; a yielded
+// job it covers has its wait ended.
 func (e *Executor[P]) coverLocked(en *job[P]) []*job[P] {
 	if en.spec.Covers == nil {
 		return nil
 	}
+	e.coverYieldedLocked(en)
 	var covered []*job[P]
 	for _, q := range e.live {
 		if q.state == stateQueued && en.spec.Covers(en.j, q.j) {

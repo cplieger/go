@@ -218,6 +218,75 @@ func TestYieldFreesAndRetakesSlot(t *testing.T) {
 	})
 }
 
+func TestYieldRetakeReportsSlotWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var (
+			mu    sync.Mutex
+			waits []time.Duration
+		)
+		obs := scheduler.Observer{SlotWait: func(_ string, c scheduler.Class, waited time.Duration) {
+			mu.Lock()
+			defer mu.Unlock()
+			if c == scheduler.Automatic {
+				waits = append(waits, waited)
+			}
+		}}
+		got := &order{}
+		y := &yielder{got: got, until: func(now time.Time) time.Time { return now.Add(10 * time.Minute) }}
+		r := newRig(t, scheduler.Config[payload]{Observer: obs, Kinds: []scheduler.KindSpec[payload]{y.spec("publish", "passes"), logging("quick", "passes", got)}})
+		r.start(t, timer("publish", "", payload{}))
+		synctest.Wait()
+		gate := make(chan struct{})
+		r.start(t, timer("quick", "holder", payload{Gate: gate}))
+		synctest.Wait()
+		time.Sleep(12 * time.Minute)
+		close(gate)
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		// The publish's first take, the holder's, then the publish's retake,
+		// which waited from its until at 10m to the holder's end at 12m.
+		if want := []time.Duration{0, 0, 2 * time.Minute}; !slices.Equal(waits, want) {
+			t.Errorf("automatic slot waits %v, want %v", waits, want)
+		}
+	})
+}
+
+func TestYieldEndsOnCoverWhileRetaking(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		got := &order{}
+		y := &yielder{until: func(now time.Time) time.Time { return now.Add(time.Minute) }}
+		full := logging("full", "passes", got)
+		full.Covers = func(_, other scheduler.Job[payload]) bool { return other.Kind == "reevaluate" }
+		r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{y.spec("reevaluate", "passes"), full, logging("quick", "passes", got)}})
+		p := r.start(t, timer("reevaluate", "", payload{}))
+		synctest.Wait()
+		gate := make(chan struct{})
+		r.start(t, timer("quick", "holder", payload{Gate: gate}))
+		synctest.Wait()
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		if y.returned() {
+			t.Fatal("Yield answered while another job held the slot, want it waiting for the slot")
+		}
+		fullGate := make(chan struct{})
+		f := r.start(t, api("full", "all", "alice", payload{Gate: fullGate}))
+		r.start(t, timer("quick", "after", payload{}))
+		close(gate)
+		synctest.Wait()
+		var covered *scheduler.CoveredError
+		if _, err := y.answer(); !errors.As(err, &covered) || covered.By != f.Job {
+			t.Errorf("Yield = %v while the covering job runs, want *CoveredError by %s at its start", err, f.Job)
+		}
+		close(fullGate)
+		synctest.Wait()
+		if l, want := got.list(), []string{"holder", "all", "after"}; !slices.Equal(l, want) {
+			t.Errorf("ran %q, want %q: the covered job leaves the slot to the queued work", l, want)
+		}
+		r.wantEnd(t, p.Job, scheduler.ResultSkipped, publishSuperseded)
+	})
+}
+
 func TestYieldEndsOnCover(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		y := &yielder{until: func(now time.Time) time.Time { return now.Add(6 * time.Hour) }}

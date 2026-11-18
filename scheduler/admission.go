@@ -174,7 +174,7 @@ func (e *Executor[P]) joinLocked(j *Job[P]) (s Started, admitting <-chan struct{
 func (en *job[P]) waiting() bool { return en.state == stateAdmitting || en.state == stateQueued }
 
 // answerLocked answers j from a running job of its kind and scope that no
-// cancel has stopped (rule 3):
+// cancel has stopped and that is not yielded (rule 3):
 // one that started inside the kind's Fresh window joins it, and so does a
 // timer request, which never queues a follow-up behind it. Otherwise a Fresh
 // kind refuses j with *RecentError inside the window after its scope's last
@@ -182,7 +182,7 @@ func (en *job[P]) waiting() bool { return en.state == stateAdmitting || en.state
 func (e *Executor[P]) answerLocked(spec *KindSpec[P], j *Job[P]) (s Started, ok bool, err error) {
 	var run *job[P]
 	for _, q := range e.live {
-		if q.state == stateRunning && !q.stopped && q.j.Kind == j.Kind && q.j.Scope == j.Scope &&
+		if q.state == stateRunning && !q.stopped && q.yield == nil && q.j.Kind == j.Kind && q.j.Scope == j.Scope &&
 			(run == nil || q.startedAt.After(run.startedAt)) {
 			run = q
 		}
