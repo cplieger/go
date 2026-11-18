@@ -167,6 +167,22 @@ func TestInlineHashesSurviveLengthChangingFold(t *testing.T) {
 	}
 }
 
+// A browser builds the script after the template, which html.Parse drops (see
+// TestCheckShellRefusesTemplateInForeignContent), so no hash list is complete.
+func TestInlineHashesOfAPageHTMLParseStopsIn(t *testing.T) {
+	page := []byte(`<script>a()</script><style>a{}</style><svg><foreignObject><template></template><script>b()</script>`)
+	if got := InlineScriptHashes(page); got != nil {
+		t.Errorf("InlineScriptHashes = %v, want nil", got)
+	}
+	if got := InlineStyleHashes(page); got != nil {
+		t.Errorf("InlineStyleHashes = %v, want nil", got)
+	}
+	spelled := []byte("<p>" + templateMark + "</p>" + string(page))
+	if got := InlineScriptHashes(spelled); got != nil {
+		t.Errorf("InlineScriptHashes(a page spelling templateMark) = %v, want nil", got)
+	}
+}
+
 // Scripts must not pick up style content and styles script content, on a page
 // carrying both.
 func TestInlineHashesDoNotCrossContaminate(t *testing.T) {

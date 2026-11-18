@@ -898,6 +898,79 @@ func TestCheckShellRefusesAnOpenScript(t *testing.T) {
 	}
 }
 
+// html.Parse refuses a document nested deeper than 512 open elements (its
+// doc comment), so no tree is checked and no hash is computed.
+func TestShellPastParserDepth(t *testing.T) {
+	deep := []byte("<html><body>" + strings.Repeat("<div>", 512) + "<script>x()</script><style>a{}</style>")
+	err := httpserver.CheckShell(deep)
+	if err == nil || !strings.Contains(err.Error(), "cannot be read as HTML") {
+		t.Errorf("CheckShell(512 nested <div>) = %v, want a refusal saying it cannot be read as HTML", err)
+	}
+	if got := httpserver.InlineScriptHashes(deep); got != nil {
+		t.Errorf("InlineScriptHashes(512 nested <div>) = %v, want nil", got)
+	}
+	if got := httpserver.InlineStyleHashes(deep); got != nil {
+		t.Errorf("InlineStyleHashes(512 nested <div>) = %v, want nil", got)
+	}
+	shallow := "<html><body>" + strings.Repeat("<div>", 500) + "x"
+	if err := httpserver.CheckShell([]byte(shallow)); err != nil {
+		t.Errorf("CheckShell(500 nested <div>) refused: %v", err)
+	}
+}
+
+// x/net/html v0.63.0 ignores every token after a <template> start tag that
+// arrives with an <svg> or <math> element open (parse.go inHeadIM), where a
+// browser reads on and builds the rest.
+func TestCheckShellRefusesTemplateInForeignContent(t *testing.T) {
+	refused := map[string]string{
+		"an img after a template in a foreignObject": `<svg><foreignObject><template></template><img src=x onerror=alert(1)></foreignObject></svg>`,
+		"a script after it":                          `<svg><foreignObject><template></template><script>alert(1)</script>`,
+		"a body onload after it":                     `<svg><foreignObject><template></template><body onload=alert(1)>`,
+		"an annotation-xml template":                 `<math><annotation-xml encoding="text/html"><template></template><img src=x onerror=alert(1)>`,
+		"an svg title template":                      `<svg><title><template></template><img src=x onerror=alert(1)>`,
+		"a kept div before the template":             `<svg><foreignObject><div id=keep></div><template></template><img src=x onerror=alert(1)>`,
+		"svg content read on after foreignObject":    `<svg><foreignObject><template></template><img onerror=x></foreignObject><g></g></svg>`,
+		"an upper-case template with an attribute":   `<svg><desc><TEMPLATE id=t></TEMPLATE><img onerror=x>`,
+		"a mathml text integration point":            `<math><mi><template></template><img onerror=x>`,
+	}
+	for name, html := range refused {
+		t.Run(name, func(t *testing.T) {
+			err := httpserver.CheckShell([]byte(html))
+			if err == nil {
+				t.Fatalf("CheckShell accepted %q", html)
+			}
+			if !strings.Contains(err.Error(), "<template> inside <svg> or <math>") {
+				t.Errorf("CheckShell(%q) = %q, want it to name a <template> inside <svg> or <math>", html, err)
+			}
+		})
+	}
+	t.Run("a template after an svg is read", func(t *testing.T) {
+		html := `<svg></svg><template></template><img src=x onerror=alert(1)>`
+		err := httpserver.CheckShell([]byte(html))
+		if err == nil || !strings.Contains(err.Error(), `"onerror" on <img>`) {
+			t.Errorf("CheckShell(%q) = %v, want the onerror on <img> refused", html, err)
+		}
+	})
+	passed := map[string]string{
+		"a template beside an svg icon":                    `<svg><path d="M0 0"/></svg><template id=row><p>x</p></template>`,
+		"a template in svg markup":                         `<svg><template></template></svg>`,
+		"a template tag in a comment":                      `<svg><foreignObject><!-- <template> --></foreignObject></svg>`,
+		"a template tag in a dropped duplicate attribute":  `<svg></svg><p title=x title="<template>">y</p>`,
+		"a template tag in an attribute value":             `<svg><foreignObject><div title="<template>"></div></foreignObject></svg>`,
+		"a longer tag name":                                `<svg><foreignObject><templates></templates></foreignObject></svg>`,
+		"a longer tag name beside a dropped attribute":     `<svg><foreignObject><templates></templates><p title=x title="<template>">y</p></foreignObject></svg>`,
+		"a template tag whose quote runs past a later one": `<svg></svg><p title="<template a='"><template></template>'>x</p>`,
+		"a template in a frameset document":                `<frameset><svg><desc><template></template></desc></svg></frameset>`,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
 func TestSPARefusalNamesShellElementAndAttribute(t *testing.T) {
 	files := spaFiles()
 	files["login.html"] = `<html><body><button OnClick="go()">x</button></body></html>`

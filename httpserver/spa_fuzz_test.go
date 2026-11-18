@@ -36,6 +36,9 @@ func FuzzCheckShell(f *testing.F) {
 		"<p on\x00click=x>",
 		`<script src=/a.js></script `,
 		`<style>a{}`,
+		"<body>" + strings.Repeat("<div>", 512) + "<script>x()</script>",
+		`<svg><foreignObject><template></template><img src=x onerror=alert(1)>`,
+		`<svg><foreignObject><div title="<template>"></div></foreignObject></svg>`,
 	} {
 		f.Add([]byte(s))
 	}
@@ -45,11 +48,12 @@ func FuzzCheckShell(f *testing.F) {
 		if (err == nil) != (again == nil) || err != nil && err.Error() != again.Error() {
 			t.Fatalf("CheckShell(%q) = %v, then %v", body, err, again)
 		}
+		scripts, styles := httpserver.InlineScriptHashes(body), httpserver.InlineStyleHashes(body)
 		if err == nil {
-			if h := httpserver.InlineScriptHashes(body); len(h) > 0 {
+			if len(scripts) > 0 {
 				t.Fatalf("CheckShell accepted %q, which InlineScriptHashes hashes", body)
 			}
-			if h := httpserver.InlineStyleHashes(body); len(h) > 0 {
+			if len(styles) > 0 {
 				t.Fatalf("CheckShell accepted %q, which InlineStyleHashes hashes", body)
 			}
 			return

@@ -59,6 +59,8 @@ The gzip and revalidation behaviour is not configurable.
 - a data block, whose `type` is not a script type, such as `application/json` or `text/template`
 - a `<script>` the end of the page closed, which never runs
 
+It returns nil for a page `CheckShell` refuses because `html.Parse` cannot read all of it: one nested deeper than 512 elements, or one holding a `<template>` inside `<svg>` or `<math>` (see [the SPA policy](spa.md#the-content-security-policy)). Without those hashes the policy blocks every inline script on the page.
+
 It extracts hashes from a page your app controls. It is not an HTML sanitizer.
 
 Put the tokens into your own policy string and pass it with `WithCSP`:
@@ -78,6 +80,6 @@ If your page is known to carry inline scripts, treat an empty result as a malfor
 
 `InlineStyleHashes(html)` does the same for inline `<style>` elements, so `style-src` can be hash-pinned instead of using `'unsafe-inline'`. The usual case is a loading overlay whose CSS must paint before the external stylesheet arrives.
 
-It reads the page the same way, an `<svg>` `<style>` included. It has no rule to skip external sources, because a `<style>` element always carries its content inline. A `<style>` the end of the page closed is hashed, because a browser applies it.
+It reads the page the same way, an `<svg>` `<style>` included. It has no rule to skip external sources, because a `<style>` element always carries its content inline. A `<style>` the end of the page closed is hashed, because a browser applies it. It returns nil for the same pages `InlineScriptHashes` does.
 
 A `style-src` hash does not cover inline style attributes, `style="..."`. Those are governed by `style-src-attr` and need `'unsafe-hashes'`. An app whose markup or renderer sets style attributes cannot drop `'unsafe-inline'` on these tokens alone. A renderer that sets styles through CSSOM properties writes no attribute, so it is unaffected.

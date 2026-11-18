@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"iter"
 	"slices"
 	"strings"
@@ -13,14 +15,17 @@ import (
 
 // InlineScriptHashes returns a CSP source token 'sha256-<base64>' for each
 // inline script element, HTML or SVG, in page's document as html.Parse builds
-// it, hashing the element's text as a browser does. A script a browser never
-// checks against the policy is skipped: one with a source (src on HTML, href
-// on SVG), a data block such as type="application/json", and one left open at
-// end of input. It reads pages the app controls and is not a sanitizer: a
-// script-less page yields an empty slice, which a caller whose page holds an
-// inline script treats as a broken build rather than loosening its policy.
+// it, hashing its text as a browser does. A script a browser never checks
+// against the policy is skipped: one with a source, a data block, and one left
+// open at end of input. A page CheckShell refuses as one html.Parse cannot
+// read whole yields nil, as a script-less page does, which a caller whose page
+// holds an inline script treats as a broken build rather than loosening its
+// policy. It reads pages the app controls and is not a sanitizer.
 func InlineScriptHashes(page []byte) []string {
-	doc := parseShell(page)
+	doc, err := parseShell(page)
+	if err != nil {
+		return nil
+	}
 	open := openScript(doc, page)
 	var out []string
 	for n := range shellElements(doc) {
@@ -35,10 +40,14 @@ func InlineScriptHashes(page []byte) []string {
 // or SVG, in page, as InlineScriptHashes does for scripts. A style left open
 // at end of input is hashed, since a browser applies it. It covers style
 // elements only: a style attribute needs style-src-attr, which no element
-// hash satisfies.
+// hash satisfies. It yields nil for the pages InlineScriptHashes does.
 func InlineStyleHashes(page []byte) []string {
+	doc, err := parseShell(page)
+	if err != nil {
+		return nil
+	}
 	var out []string
-	for n := range shellElements(parseShell(page)) {
+	for n := range shellElements(doc) {
 		if isInlineStyle(n) {
 			out = append(out, cspHash(childText(n)))
 		}
@@ -46,13 +55,123 @@ func InlineStyleHashes(page []byte) []string {
 	return out
 }
 
-// parseShell is page's document as html.Parse builds it with scripting on, as
-// a browser reads a page.
-func parseShell(page []byte) *html.Node {
-	// html.Parse fails only on a read error, which a bytes.Reader never
-	// returns, and it builds a document node for any input.
-	doc, _ := html.Parse(bytes.NewReader(page))
-	return doc
+// parseShell is page's document as html.Parse builds it with scripting on. It
+// fails where that tree is not the whole page: past html.Parse's 512 open
+// elements, and where html.Parse stops at a <template>.
+func parseShell(page []byte) (*html.Node, error) {
+	doc, err := html.Parse(bytes.NewReader(page))
+	if err != nil {
+		return nil, fmt.Errorf("cannot be read as HTML: %w", err)
+	}
+	if stopsAtForeignTemplate(doc, page) {
+		return nil, errors.New("holds a <template> inside <svg> or <math>, after which html.Parse drops markup a browser reads")
+	}
+	return doc, nil
+}
+
+// templateMark is text a parsed page holds wherever it is put after a
+// template start tag, unless the parser drops what follows that tag.
+const templateMark = "httpserver-template-probe"
+
+// templateProbe puts templateMark after a <template> start tag, then again
+// after closing any quoted attribute value or tag a prefix ends in.
+const templateProbe = "<template>" + templateMark + `"'>` + templateMark
+
+// stopsAtForeignTemplate reports whether html.Parse ignored the tokens after a
+// <template> start tag that came with an <svg> or <math> element open, as
+// x/net/html v0.63.0's inHeadIM does (ignoreTheRemainingTokens) and a browser
+// does not. An HTML <frameset> pops every foreign element and admits none, so
+// a document holding one never stops. Otherwise page is parsed again with
+// templateMark after each template tag past the first <svg> or <math>, and
+// only when a mark is lost is each tag probed on its own.
+func stopsAtForeignTemplate(doc *html.Node, page []byte) bool {
+	lower := lowerASCIIString(string(page))
+	from := strings.Index(lower, "<svg")
+	if m := strings.Index(lower, "<math"); m >= 0 && (from < 0 || m < from) {
+		from = m
+	}
+	if from < 0 || hasFrameset(doc) {
+		return false
+	}
+	var starts, ends []int
+	for k := from; ; k += len("<template") {
+		i := strings.Index(lower[k:], "<template")
+		if i < 0 {
+			break
+		}
+		k += i
+		if n := templateTagLen(page[k:]); n > 0 {
+			starts, ends = append(starts, k), append(ends, k+n)
+		}
+	}
+	if len(starts) == 0 || marksEveryTemplate(doc, page, ends) {
+		return false
+	}
+	for _, k := range starts {
+		if !readsPastTemplate(page[:k]) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFrameset(doc *html.Node) bool {
+	for n := range shellElements(doc) {
+		if n.Data == "frameset" && n.Namespace == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// templateTagLen is the length of the template start tag page opens with, or 0.
+func templateTagLen(page []byte) int {
+	z := html.NewTokenizer(bytes.NewReader(page))
+	if tt := z.Next(); tt == html.StartTagToken || tt == html.SelfClosingTagToken {
+		if name, _ := z.TagName(); string(name) == "template" {
+			return len(z.Raw())
+		}
+	}
+	return 0
+}
+
+// marksEveryTemplate reports whether page, with templateMark put at each
+// offset in ends, parses to a tree holding every mark. Each offset follows a
+// '>', where letters change no tokenizer state, so the tree is doc's own.
+func marksEveryTemplate(doc *html.Node, page []byte, ends []int) bool {
+	slices.Sort(ends)
+	ends = slices.Compact(ends)
+	var marked []byte
+	last := 0
+	for _, e := range ends {
+		marked = append(append(marked, page[last:e]...), templateMark...)
+		last = e
+	}
+	got, err := html.Parse(bytes.NewReader(append(marked, page[last:]...)))
+	return err == nil && templateMarks(got) == templateMarks(doc)+len(ends)
+}
+
+// readsPastTemplate reports whether html.Parse keeps text after a <template>
+// start tag placed after prefix, counting templateMark against prefix alone,
+// since a page can spell it, directly or through character references.
+func readsPastTemplate(prefix []byte) bool {
+	before, err := html.Parse(bytes.NewReader(prefix))
+	if err != nil {
+		return false
+	}
+	after, err := html.Parse(bytes.NewReader(append(slices.Clip(prefix), templateProbe...)))
+	return err == nil && templateMarks(after) > templateMarks(before)
+}
+
+func templateMarks(doc *html.Node) int {
+	n := 0
+	for d := range doc.Descendants() {
+		n += strings.Count(d.Data, templateMark)
+		for _, a := range d.Attr {
+			n += strings.Count(a.Key, templateMark) + strings.Count(a.Val, templateMark)
+		}
+	}
+	return n
 }
 
 // shellElements yields every element under doc in document order.
@@ -75,8 +194,15 @@ func shellElements(doc *html.Node) iter.Seq[*html.Node] {
 // it and an appended byte would extend it instead.
 func openScript(doc *html.Node, page []byte) *html.Node {
 	page = page[:len(page)-unfinishedTagLen(page)]
-	base := scripts(parseShell(page))
-	grown := scripts(parseShell(append(slices.Clip(page), '!')))
+	baseDoc, err := html.Parse(bytes.NewReader(page))
+	if err != nil {
+		return nil
+	}
+	grownDoc, err := html.Parse(bytes.NewReader(append(slices.Clip(page), '!')))
+	if err != nil {
+		return nil
+	}
+	base, grown := scripts(baseDoc), scripts(grownDoc)
 	for i, n := range scripts(doc) {
 		if i < len(base) && i < len(grown) && !bytes.Equal(childText(base[i]), childText(grown[i])) {
 			return n
