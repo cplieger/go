@@ -35,7 +35,7 @@ type Records interface {
 	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
 	// LastEnds answers each scheduled scope's last moving end: the end of a
 	// job that started and did not end cancelled or interrupted.
-	LastEnds(ctx context.Context) (map[Scheduled]LastEnd, error)
+	LastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error)
 }
 
 // The record states.
@@ -81,8 +81,8 @@ type LastEnd struct {
 	Result Result
 }
 
-// Scheduled names one scheduled scope.
-type Scheduled struct {
+// ScheduledScope names one scheduled scope: the key of LastEnds.
+type ScheduledScope struct {
 	Kind  Kind
 	Scope string
 }
