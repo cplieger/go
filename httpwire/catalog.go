@@ -200,6 +200,7 @@ func checkLine(s string) error {
 func (c *Catalog) WriteError(w http.ResponseWriter, r *http.Request, e *Error) {
 	h := w.Header()
 	env, status := c.envelope(r, e)
+	noteCode(w, env.Code)
 	env.RequestID = requestID(r, h)
 	if h.Get(httpserver.HeaderRequestID) != env.RequestID {
 		h.Set(httpserver.HeaderRequestID, env.RequestID)

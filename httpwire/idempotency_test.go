@@ -598,6 +598,39 @@ func TestWhatIsKept(t *testing.T) {
 	}
 }
 
+// The kept rule reads a refusal's code, not its kept body, so a refusal
+// past MaxAnswer is kept or run again by its code's NoEffect alone.
+func TestKeptRuleReadsTheCodePastMaxAnswer(t *testing.T) {
+	kf := newKeyed(t, httpwire.IdempotencyOptions{MaxAnswer: kib}, nil)
+	fields := make([]httpwire.FieldError, 10)
+	for i := range fields {
+		fields[i] = httpwire.FieldError{Path: "items[" + strconv.Itoa(i) + "]", Code: "invalid", Message: strings.Repeat("m", 200)}
+	}
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+		return jobAnswer{}, &httpwire.Error{Code: c.Body.Kind, Message: "the queue refused the items", Fields: fields}
+	}
+	for _, tc := range []struct {
+		code, resend string
+		runs         int
+	}{
+		{"queue_full", "queue_full", 2},
+		{"outcome_unknown", "idempotency_answer_too_large", 1},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			before := kf.runsOf("jobs.quick")
+			body, key := `{"kind":"`+tc.code+`","size":1}`, `"`+tc.code+`"`
+			first := kf.do(http.MethodPost, "/api/jobs/quick", body, key)
+			if codeOf(t, first) != tc.code || first.Body.Len() <= kib {
+				t.Fatalf("first answer %q of %d bytes, want %s past %d bytes", codeOf(t, first), first.Body.Len(), tc.code, kib)
+			}
+			rec := kf.do(http.MethodPost, "/api/jobs/quick", body, key)
+			if codeOf(t, rec) != tc.resend || kf.runsOf("jobs.quick")-before != tc.runs {
+				t.Errorf("resend answered %d %q after %d runs, want %q after %d", rec.Code, codeOf(t, rec), kf.runsOf("jobs.quick")-before, tc.resend, tc.runs)
+			}
+		})
+	}
+}
+
 func TestFingerprint(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
 	post := func(target, body, key string, header ...string) *httptest.ResponseRecorder {

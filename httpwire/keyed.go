@@ -235,14 +235,17 @@ func (a *API) keptAnswer(ep *Endpoint, rec *keepWriter, ended bool) (KeptAnswer,
 	if status < http.StatusBadRequest {
 		return ans, true
 	}
-	env, err := DecodeEnvelope(ans.Body)
-	if ended && (err != nil || env.Code == codeInternal || !slices.Contains(ep.Errors, env.Code)) {
+	code := rec.code
+	if code == "" {
+		if env, err := DecodeEnvelope(ans.Body); err == nil {
+			code = env.Code
+		}
+	}
+	if ended && (code == codeInternal || !slices.Contains(ep.Errors, code)) {
 		return KeptAnswer{}, false
 	}
-	if err == nil {
-		if spec, ok := a.table.Catalog.Lookup(env.Code); ok && spec.NoEffect {
-			return KeptAnswer{}, false
-		}
+	if spec, ok := a.table.Catalog.Lookup(code); ok && spec.NoEffect {
+		return KeptAnswer{}, false
 	}
 	ans.RetryAfter = rec.retryAfter
 	return ans, true
@@ -309,9 +312,12 @@ func rowDeadline(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 // keepWriter passes a run's answer through and keeps a copy of its status,
-// Content-Type, Retry-After and body up to limit bytes.
+// Content-Type, Retry-After and body up to limit bytes, and the code of a
+// refusal the catalog wrote, which the kept rule reads in place of a body
+// it may not have kept.
 type keepWriter struct {
 	http.ResponseWriter
+	code        string
 	contentType string
 	body        bytes.Buffer
 	retryAfter  time.Duration
@@ -347,3 +353,21 @@ func (w *keepWriter) Write(p []byte) (int, error) {
 }
 
 func (w *keepWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// noteCode tells the keepWriter under w, found through Unwrap, the code of
+// the refusal about to be written, unless the answer has already started.
+func noteCode(w http.ResponseWriter, code string) {
+	for w != nil {
+		if k, ok := w.(*keepWriter); ok {
+			if k.status == 0 {
+				k.code = code
+			}
+			return
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
+}

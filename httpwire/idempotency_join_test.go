@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -312,6 +313,13 @@ func TestUnknownOutcomeKeptAfterTheClientLeaves(t *testing.T) {
 		"a union code that may have acted": {func(context.Context) error {
 			return &httpwire.Error{Code: "outcome_unknown", Message: "the write was sent"}
 		}, "outcome_unknown", 1},
+		"a union code that may have acted, past MaxAnswer": {func(context.Context) error {
+			fields := make([]httpwire.FieldError, 20)
+			for i := range fields {
+				fields[i] = httpwire.FieldError{Path: "items", Code: "invalid", Message: strings.Repeat("m", 4096)}
+			}
+			return &httpwire.Error{Code: "outcome_unknown", Message: "the write was sent", Fields: fields}
+		}, "idempotency_answer_too_large", 1},
 		"a union code with no effect": {func(context.Context) error {
 			return &httpwire.Error{Code: "queue_full", Message: "the queue is full", RetryAfter: 5 * time.Second}
 		}, "", 2},

@@ -264,6 +264,63 @@ func TestKeyedRawPanicLeavesNoSpoolFile(t *testing.T) {
 	}
 }
 
+// unwrapWriter is a handler's own wrap of its writer, which keeps
+// http.ResponseController's Unwrap convention; opaqueWriter does not.
+type unwrapWriter struct{ http.ResponseWriter }
+
+func (w unwrapWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+type opaqueWriter struct{ http.ResponseWriter }
+
+// A Raw handler's refusal is kept by the code of the answer it started:
+// the code the catalog wrote through a wrap that unwraps, whatever its
+// size, else the code its kept body holds.
+func TestKeyedRawRefusalKeptByItsCode(t *testing.T) {
+	var catalog *httpwire.Catalog
+	cases := map[string]struct {
+		write  func(w http.ResponseWriter, r *http.Request)
+		status int
+		runs   int
+	}{
+		"past MaxAnswer through a wrap that unwraps": {func(w http.ResponseWriter, r *http.Request) {
+			catalog.WriteError(unwrapWriter{w}, r, &httpwire.Error{Code: "held_limit", Message: strings.Repeat("m", 2000)})
+		}, http.StatusTooManyRequests, 2},
+		"within MaxAnswer through a wrap that does not": {func(w http.ResponseWriter, r *http.Request) {
+			catalog.WriteError(opaqueWriter{w}, r, &httpwire.Error{Code: "held_limit", Message: "wait"})
+		}, http.StatusTooManyRequests, 2},
+		"a refusal of its own, then the catalog's": {func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "the upstream failed", http.StatusBadGateway)
+			catalog.WriteError(w, r, &httpwire.Error{Code: "held_limit", Message: "wait"})
+		}, http.StatusBadGateway, 1},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			runs := 0
+			h := func(w http.ResponseWriter, r *http.Request) {
+				runs++
+				_, _ = io.Copy(io.Discard, r.Body)
+				tc.write(w, r)
+			}
+			tb, bs, opts := spoolOptions(t, t.TempDir(), h, slog.New(&logSink{}))
+			catalog = tb.Catalog
+			api, err := httpwire.New(tb, bs, append(opts, httpwire.WithIdempotency(httpwire.IdempotencyOptions{MaxAnswer: kib}))...)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			for i := range 2 {
+				rec := httptest.NewRecorder()
+				api.ServeHTTP(rec, keyedRequest(http.MethodPost, "/api/import", "archive", `"k"`))
+				if rec.Code != tc.status {
+					t.Errorf("answer %d is %d %q, want %d", i, rec.Code, rec.Body, tc.status)
+				}
+			}
+			if runs != tc.runs {
+				t.Errorf("%d runs, want %d", runs, tc.runs)
+			}
+		})
+	}
+}
+
 func TestKeyedRawRefusalBeforeTheSpool(t *testing.T) {
 	sf := newSpool(t)
 	rec := sf.send("archive", "", 0)
