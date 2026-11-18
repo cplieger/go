@@ -1,6 +1,7 @@
 package webbundle
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,8 +96,8 @@ func entryPoint(e *Entry) api.EntryPoint {
 	return api.EntryPoint{InputPath: "./" + e.Path, OutputPath: "assets/" + e.Name}
 }
 
-// output is one file a build wrote, by its slash path in the tree.
-type output struct {
+// outFile is one file a build wrote, by its slash path in the tree.
+type outFile struct {
 	path     string
 	contents []byte
 }
@@ -105,7 +106,22 @@ type output struct {
 type built struct {
 	meta    metafile
 	entries map[string]string // the hashed path of each entry, by its Src path
-	outputs []output
+	scripts map[string]Output // what each script holds, by its path in the tree
+	hollow  map[string]bool   // the outputs that hold no code, by path in the tree
+	outputs []outFile
+}
+
+// entryFile returns the path in the tree and the bytes of the main output
+// of the entry at p, a slash path under Src.
+func (r *built) entryFile(p string) (name string, body []byte, ok bool) {
+	if name, ok = r.entries[p]; !ok {
+		return "", nil, false
+	}
+	i := slices.IndexFunc(r.outputs, func(o outFile) bool { return o.path == name })
+	if i < 0 {
+		return "", nil, false
+	}
+	return name, r.outputs[i].contents, true
 }
 
 // runBuild runs opts; style says whether its entries are stylesheets, since
@@ -129,13 +145,70 @@ func runBuild(opts *api.BuildOptions, what string, style bool) (built, error) {
 		if !style && path.Ext(rel) == cssExt {
 			return built{}, fmt.Errorf("webbundle: %s imports CSS, emitted as %s; a Style entry builds a stylesheet", what, rel)
 		}
-		b.outputs = append(b.outputs, output{path: rel, contents: f.Contents})
+		b.outputs = append(b.outputs, outFile{path: rel, contents: f.Contents})
 	}
 	var err error
 	if b.entries, err = entryOutputs(&b.meta, opts, style); err != nil {
 		return built{}, fmt.Errorf("webbundle: %s: %w", what, err)
 	}
+	if b.scripts, b.hollow, err = readOutputs(&b.meta, opts); err != nil {
+		return built{}, fmt.Errorf("webbundle: %s: %w", what, err)
+	}
 	return b, nil
+}
+
+// treePath turns a metafile path, relative to Src, into a slash path in the
+// tree.
+func treePath(opts *api.BuildOptions, out string) (string, error) {
+	rel, err := filepath.Rel(opts.Outdir, filepath.Join(opts.AbsWorkingDir, filepath.FromSlash(out)))
+	return filepath.ToSlash(rel), err
+}
+
+// readOutputs reads what each script output holds, and names in hollow
+// every output, script or stylesheet, that no input puts a byte in and that
+// imports nothing: esbuild still writes an IIFE's wrapper around an empty
+// script.
+func readOutputs(m *metafile, opts *api.BuildOptions) (s map[string]Output, hollow map[string]bool, err error) {
+	s, hollow = map[string]Output{}, map[string]bool{}
+	for out, o := range m.Outputs {
+		rel, rerr := treePath(opts, out)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		held, filled := holds(o.Inputs)
+		if !filled && len(o.Imports) == 0 {
+			hollow[rel] = true
+		}
+		if path.Ext(out) == jsExt {
+			s[rel] = held
+		}
+	}
+	return s, hollow, nil
+}
+
+// holds reads what an output holds from the inputs that put bytes in it,
+// and whether any does; an input that adds none (a module of types, an
+// empty one) holds nothing there.
+func holds(inputs map[string]outputInput) (held Output, filled bool) {
+	pkgs := map[string]bool{}
+	for in, use := range inputs {
+		if use.BytesInOutput == 0 {
+			continue
+		}
+		filled = true
+		if !ownInput(in) {
+			continue
+		}
+		if pkg, _ := packageOf(in); pkg != "" {
+			pkgs[pkg] = true
+		} else {
+			held.Own = true
+		}
+	}
+	if len(pkgs) > 0 {
+		held.Packages = slices.Sorted(maps.Keys(pkgs))
+	}
+	return held, filled
 }
 
 // entryOutputs maps each entry's Src path to its main output's slash path
@@ -150,11 +223,11 @@ func entryOutputs(m *metafile, opts *api.BuildOptions, style bool) (map[string]s
 		if o.EntryPoint == "" || path.Ext(out) != want {
 			continue
 		}
-		rel, err := filepath.Rel(opts.Outdir, filepath.Join(opts.AbsWorkingDir, filepath.FromSlash(out)))
+		rel, err := treePath(opts, out)
 		if err != nil {
 			return nil, err
 		}
-		entries[path.Clean(o.EntryPoint)] = filepath.ToSlash(rel)
+		entries[path.Clean(o.EntryPoint)] = rel
 	}
 	return entries, nil
 }
@@ -258,10 +331,19 @@ func BuildStyle(s Stylesheet) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	css, ok := r.entries[p]
+	name, css, ok := r.entryFile(p)
 	if !ok {
 		return nil, fmt.Errorf("webbundle: stylesheet %s built no CSS", s.Path)
 	}
-	i := slices.IndexFunc(r.outputs, func(o output) bool { return o.path == css })
-	return r.outputs[i].contents, nil
+	if r.empty(name, css) {
+		return nil, fmt.Errorf("webbundle: stylesheet %s builds an empty file", s.Path)
+	}
+	return css, nil
+}
+
+// empty reports whether the built file name, holding body, has no code:
+// only whitespace, or only bytes no input put there. An entry built to that
+// ships nothing, so it is a mistake in the entry.
+func (r *built) empty(name string, body []byte) bool {
+	return len(bytes.TrimSpace(body)) == 0 || r.hollow[name]
 }

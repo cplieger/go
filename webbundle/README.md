@@ -98,7 +98,7 @@ Commit an `Out/.gitignore` that ignores everything else in the folder, so `//go:
 
 ## API
 
-- Building: `Build` with `Config`, `Entry`, `EntryKind` (`Module`, `Classic`, `Style`), `Manifest` and `Result`, and `Engines` (`Engine`) for the pinned browser versions.
+- Building: `Build` with `Config`, `Entry`, `EntryKind` (`Module`, `Classic`, `Style`), `Manifest` and `Result` (with `Output`, what each built script holds), and `Engines` (`Engine`) for the pinned browser versions.
 - Page files: `RenderPages` and `RenderPageCorpus`.
 - One stylesheet: `BuildStyle` (`Stylesheet`) and the `cmd/style` command.
 

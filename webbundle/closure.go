@@ -26,8 +26,17 @@ type metafile struct {
 		} `json:"imports"`
 	} `json:"inputs"`
 	Outputs map[string]struct {
-		EntryPoint string `json:"entryPoint"`
+		Inputs     map[string]outputInput `json:"inputs"`
+		EntryPoint string                 `json:"entryPoint"`
+		Imports    []struct {
+			Path string `json:"path"`
+		} `json:"imports"`
 	} `json:"outputs"`
+}
+
+// outputInput is one input's share of an output.
+type outputInput struct {
+	BytesInOutput int `json:"bytesInOutput"`
 }
 
 const modulesDir = "node_modules/"

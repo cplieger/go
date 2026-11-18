@@ -50,6 +50,7 @@ Each of these errors ends with the chain of imports from the entry to the refuse
 
 - a file esbuild cannot load, such as a `url()` or an import of a `.ttf` font, named with its place in the source
 - syntax a pinned browser lacks that esbuild cannot lower, named with the feature and the browser
+- an entry whose built file holds no code: empty or only whitespace, such as a stylesheet of comments or a module of types, or a classic script whose files put nothing in it, which esbuild still wraps; a module entry that only loads a shared chunk is not empty
 - a written file whose extension `httpserver` does not serve, outside `licenses/`
 - more than 64 MiB of output
 - a built tree that `httpserver.ReadBundle` refuses, such as a notice under a package folder whose name starts with a dot, which `SPA` never serves

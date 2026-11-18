@@ -45,6 +45,10 @@ The browser versions `Engines` returns are pinned in webbundle's source. In this
 
 The hashes above are cut short, and the file holds all 64 digits. Its Go types are `httpserver.Bundle` and `httpserver.BundleEntry`, so a test can read it with `httpserver.ReadBundle`. To find the built stylesheet of the entry named `app`, take the `path` of the entry whose `name` is `app` and whose `kind` is `style`.
 
+## What each script holds
+
+`Result.Outputs` maps every script in the tree, entries and chunks, by its path under `Out`, to an `Output`: `Packages`, the sorted npm packages whose code it holds, and `Own`, whether it holds code from a file under `Src` outside `node_modules`. A file that puts no code in a script, such as a module of types, does not count. `Own` tells a chunk built only from packages from one that also holds the app's code, though both list the same packages. An app's bundle program can read it, for example to choose which chunks a service worker caches ahead. `bundle.json` does not record it, because `SPA` has no use for it.
+
 ## Licence notices
 
 For each npm package version the bundle holds, `Build` copies its notice files to `licenses/<package>@<version>/` and writes one `<package> <version>` line per directory to `licenses/index.txt`, sorted:

@@ -64,8 +64,17 @@ type Entry struct {
 
 // Result is what a build wrote.
 type Result struct {
-	Files   []string // every written path under Out, sorted
-	Notices []string // every bundled npm package, sorted
+	Outputs map[string]Output // every script in the tree (entries and chunks), by its path under Out; bundle.json does not record it
+	Files   []string          // every written path under Out, sorted
+	Notices []string          // every bundled npm package, sorted
+}
+
+// Output is what one script of the tree holds: an app can tell a chunk
+// built only from npm packages from one that also holds its own code,
+// though both list the same packages.
+type Output struct {
+	Packages []string // the npm packages whose code it holds, sorted
+	Own      bool     // whether it holds code of a file under Src outside node_modules
 }
 
 // Build builds c's tree into c.Out: the classic entries first, then the
@@ -128,6 +137,7 @@ func (b *build) readShells() ([]shell, []bool, error) {
 type entriesBuilt struct {
 	pkgs     packageRoots
 	urls     map[string]string
+	scripts  map[string]Output
 	hashed   []string // each entry's hashed path, by index
 	moduleJS []byte   // every module output's bytes, chunks included
 }
@@ -166,13 +176,13 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Files: files, Notices: slices.Sorted(maps.Keys(eb.pkgs))}, nil
+	return Result{Outputs: eb.scripts, Files: files, Notices: slices.Sorted(maps.Keys(eb.pkgs))}, nil
 }
 
 // buildEntries builds the classic entries, then the module entries, then the
 // style entries into outdir.
 func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
-	eb := &entriesBuilt{pkgs: packageRoots{}, urls: map[string]string{}, hashed: make([]string, len(b.entries))}
+	eb := &entriesBuilt{pkgs: packageRoots{}, urls: map[string]string{}, scripts: map[string]Output{}, hashed: make([]string, len(b.entries))}
 	if err := b.buildClassicEntries(eb, outdir); err != nil {
 		return nil, err
 	}
@@ -187,25 +197,31 @@ func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := b.take(eb, r, i); err != nil {
+		if err := b.take(eb, &r, i); err != nil {
 			return nil, err
 		}
 	}
 	return eb, nil
 }
 
-// take checks entry i's closure in r and records its packages and hashed
-// path.
-func (b *build) take(eb *entriesBuilt, r built, i int) error {
+// take checks entry i's closure and its built file in r, and records its
+// packages and hashed path.
+func (b *build) take(eb *entriesBuilt, r *built, i int) error {
 	e := b.entries[i]
 	pkgs, err := b.checkClosure(&r.meta, i)
 	if err != nil {
 		return err
 	}
 	eb.pkgs.merge(pkgs)
-	if eb.hashed[i] = r.entries[e.Path]; eb.hashed[i] == "" {
+	name, body, ok := r.entryFile(e.Path)
+	switch {
+	case !ok:
 		return fmt.Errorf("webbundle: entry %q built no output", e.Name)
+	case r.empty(name, body):
+		return fmt.Errorf("webbundle: %s entry %q (%s) builds an empty file", e.Kind, e.Name, e.Path)
 	}
+	eb.hashed[i] = name
+	maps.Copy(eb.scripts, r.scripts)
 	return nil
 }
 
@@ -218,7 +234,7 @@ func (b *build) buildClassicEntries(eb *entriesBuilt, outdir string) error {
 		if err != nil {
 			return err
 		}
-		if err := b.take(eb, r, i); err != nil {
+		if err := b.take(eb, &r, i); err != nil {
 			return err
 		}
 		eb.urls[e.Name] = "/" + eb.hashed[i]
@@ -245,7 +261,7 @@ func (b *build) buildModuleEntries(eb *entriesBuilt, outdir string) error {
 		return err
 	}
 	for _, i := range modules {
-		if err := b.take(eb, r, i); err != nil {
+		if err := b.take(eb, &r, i); err != nil {
 			return err
 		}
 	}
