@@ -96,7 +96,7 @@ func TestCrossSiteWriteIsRefusedBeforeTheGuard(t *testing.T) {
 	})
 	t.Run("a same-origin write passes", func(t *testing.T) {
 		o := newOrderCase(t)
-		if rec := answer(o.mustBuild(t), request(http.MethodPatch, "/api/settings", `{"name":"x"}`, "Sec-Fetch-Site", "same-origin")); rec.Code != http.StatusNoContent {
+		if rec := answer(o.mustBuild(t), request(http.MethodPatch, "/api/settings", `{"name":"x"}`, "Sec-Fetch-Site", "same-origin", "If-Match", fixtureIfMatch)); rec.Code != http.StatusNoContent {
 			t.Errorf("answer %d %q", rec.Code, rec.Body.String())
 		}
 	})

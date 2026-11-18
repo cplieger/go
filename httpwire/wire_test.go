@@ -157,8 +157,8 @@ func TestWriteWithAnotherWireVersionIsMismatch(t *testing.T) {
 		header             []string
 		status             int
 	}{
-		"a table write at this version": {http.MethodPatch, "/api/settings", `{"name":"x"}`, []string{"Wire-Version", version}, http.StatusNoContent},
-		"a table write with no pin":     {http.MethodPatch, "/api/settings", `{"name":"x"}`, nil, http.StatusNoContent},
+		"a table write at this version": {http.MethodPatch, "/api/settings", `{"name":"x"}`, []string{"Wire-Version", version, "If-Match", fixtureIfMatch}, http.StatusNoContent},
+		"a table write with no pin":     {http.MethodPatch, "/api/settings", `{"name":"x"}`, []string{"If-Match", fixtureIfMatch}, http.StatusNoContent},
 		"a table read with another pin": {http.MethodGet, "/api/jobs", "", []string{"Wire-Version", otherVersion}, http.StatusOK},
 		"a mount write at this version": {http.MethodPost, "/api/auth/keys", `{"name":"x"}`, []string{"Wire-Version", version}, http.StatusOK},
 		"a mount read with another pin": {http.MethodGet, "/api/auth/keys", "", []string{"Wire-Version", otherVersion}, http.StatusOK},

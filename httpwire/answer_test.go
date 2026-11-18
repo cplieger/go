@@ -27,7 +27,7 @@ func TestJSONRowAnswersItsPrimaryStatus(t *testing.T) {
 		"a row with no Response, 204": {http.MethodPatch, "/api/settings", `{"name":"x"}`, http.StatusNoContent, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rec := serve(api, tc.method, tc.path, tc.body)
+			rec := answer(api, request(tc.method, tc.path, tc.body, "If-Match", fixtureIfMatch))
 			if rec.Code != tc.status || rec.Body.String() != tc.want {
 				t.Errorf("answer = %d %q, want %d %q", rec.Code, rec.Body.String(), tc.status, tc.want)
 			}

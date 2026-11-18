@@ -25,7 +25,7 @@ var (
 		"idempotency_key_invalid", "idempotency_key_required", "idempotency_key_reused", "idempotency_in_flight",
 		"idempotency_store_full", "idempotency_answer_too_large", "held_limit",
 	}
-	ifMatchUnion  = []string{"if_match_required", "if_match_invalid", "stale_version"}
+	ifMatchUnion  = []string{codeIfMatchReq, codeIfMatchBad, "stale_version"}
 	writeUnion    = []string{codeWire, "cross_origin_refused"}
 	everyRowUnion = []string{codeAccounts, "maintenance", "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
 )
@@ -408,6 +408,9 @@ func (c *tableChecker) kindAndStatus(ep *Endpoint, at string) {
 	}
 	if (ep.Kind == Stream || ep.Kind == Redirect) && ep.Method != http.MethodGet {
 		c.fail("%s: a %s row is a GET", at, kind)
+	}
+	if ep.IfMatch && ep.Kind != JSON {
+		c.fail("%s: an IfMatch row is a JSON row, whose handler receives the tag in its Call", at)
 	}
 	primary := primaryStatus(ep)
 	if p := statusProblem(ep, primary); p != "" {

@@ -276,15 +276,21 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 		}
 		d.query = v
 	}
-	if ep.Request == nil {
-		return d, nil, nil
+	var b []byte
+	if ep.Request != nil {
+		var e *Error
+		if b, e = readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody)); e != nil {
+			return nil, nil, e
+		}
+		if d.body, e = a.decodeBody(b, ep); e != nil {
+			return nil, nil, e
+		}
 	}
-	b, e := readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody))
-	if e != nil {
-		return nil, nil, e
-	}
-	if d.body, e = a.decodeBody(b, ep); e != nil {
-		return nil, nil, e
+	if ep.IfMatch {
+		var e *Error
+		if d.ifMatch, e = ifMatch(r); e != nil {
+			return nil, nil, e
+		}
 	}
 	return d, b, nil
 }
@@ -515,6 +521,7 @@ func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
 			c.fail("%s: the document's %s parameter %q is no %s field", at, key.in, key.name, partOf[key.in])
 		}
 	}
+	c.ifMatchParam(at, ep, op)
 	hasBody := op.request != nil && op.request.schema != nil
 	switch {
 	case ep.Request != nil && !hasBody:
@@ -527,6 +534,27 @@ func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
 }
 
 var partOf = map[string]string{inPath: partParams, inQuery: partQuery}
+
+// ifMatchParam matches an IfMatch row with a required If-Match header
+// parameter in op, and any other row with none; header names are
+// case-insensitive (RFC 9110 section 5.1).
+func (c *newChecker) ifMatchParam(at string, ep *Endpoint, op *operation) {
+	var found []*param
+	for key, p := range op.params {
+		if key.in == inHeader && strings.EqualFold(key.name, headerIfMatch) {
+			found = append(found, p)
+		}
+	}
+	switch {
+	case !ep.IfMatch && len(found) > 0:
+		c.fail("%s: the document's operation takes an If-Match header, but the row is not IfMatch", at)
+	case !ep.IfMatch:
+	case len(found) != 1:
+		c.fail("%s: an IfMatch row's operation declares one If-Match header parameter, not %d", at, len(found))
+	case !found[0].required:
+		c.fail("%s: the document's If-Match header parameter is not required, but the row always reads one", at)
+	}
+}
 
 // fieldParams matches each field of t, decoded from the in parameters, with
 // op's parameter of its name, marking it in declared.

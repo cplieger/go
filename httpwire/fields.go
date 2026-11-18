@@ -25,6 +25,7 @@ type (
 const (
 	inPath     = "path"
 	inQuery    = "query"
+	inHeader   = "header"
 	partParams = "Params"
 	partQuery  = "Query"
 )

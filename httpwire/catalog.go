@@ -25,6 +25,8 @@ const (
 	codeBadBody     = "bad_body"
 	codeWire        = "wire_mismatch"
 	codeAccounts    = "accounts_unavailable"
+	codeIfMatchReq  = "if_match_required"
+	codeIfMatchBad  = "if_match_invalid"
 	internalMessage = "internal error"
 )
 
@@ -35,8 +37,8 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	"bad_query":                    {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
 	"body_too_large":               {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
 	"cursor_invalid":               {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},
-	"if_match_required":            {Status: http.StatusPreconditionRequired, Remediation: "Read the row, then resend with If-Match set to the tag the read returned."},
-	"if_match_invalid":             {Status: http.StatusBadRequest, Remediation: "Send If-Match as the quoted tag a read of the row returned."},
+	codeIfMatchReq:                 {Status: http.StatusPreconditionRequired, Remediation: "Read the row, then resend with If-Match set to the tag the read returned."},
+	codeIfMatchBad:                 {Status: http.StatusBadRequest, Remediation: "Send If-Match as the quoted tag a read of the row returned."},
 	"stale_version":                {Status: http.StatusPreconditionFailed, Remediation: "Read the row again, reapply the change, and resend with the new tag."},
 	codeWire:                       {Status: http.StatusConflict, Remediation: "Reload the client: the server's API changed since it loaded."},
 	"idempotency_key_invalid":      {Status: http.StatusBadRequest, Remediation: `Send the key as a quoted string: Idempotency-Key: "<key>".`},

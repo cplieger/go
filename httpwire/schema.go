@@ -211,7 +211,7 @@ func (p *parser) operation(path, method string, v any, at string) {
 	p.responses(op, m["responses"], pointer(at, "responses"))
 }
 
-var paramPlaces = []string{inPath, inQuery, "header", "cookie"}
+var paramPlaces = []string{inPath, inQuery, inHeader, "cookie"}
 
 func (p *parser) parameters(op *operation, v any, at string) {
 	list, ok := v.([]any)

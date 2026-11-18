@@ -490,6 +490,8 @@ func TestDeriveRefusesKindsAndStatuses(t *testing.T) {
 		"response on redirect":   {edit("auth.sso", func(e *httpwire.Endpoint) { e.Response = reflect.TypeFor[job]() }), []string{`row "auth.sso"`, "Response"}},
 		"stream on a POST":       {edit("live.stream", func(e *httpwire.Endpoint) { e.Method = http.MethodPost }), []string{`row "live.stream"`, "GET"}},
 		"redirect on a POST":     {edit("auth.sso", func(e *httpwire.Endpoint) { e.Method = http.MethodPost }), []string{`row "auth.sso"`, "GET"}},
+		"IfMatch on raw":         {edit("archive.export", func(e *httpwire.Endpoint) { e.IfMatch = true }), []string{`row "archive.export"`, "IfMatch"}},
+		"IfMatch on stream":      {edit("live.stream", func(e *httpwire.Endpoint) { e.IfMatch = true }), []string{`row "live.stream"`, "IfMatch"}},
 		"JSON 205":               {edit("jobs.start", func(e *httpwire.Endpoint) { e.Status = http.StatusResetContent }), []string{`row "jobs.start"`, "205"}},
 		"JSON 300":               {edit("jobs.start", func(e *httpwire.Endpoint) { e.Status = http.StatusMultipleChoices }), []string{`row "jobs.start"`, "300"}},
 		"JSON 204 with a body":   {edit("jobs.start", func(e *httpwire.Endpoint) { e.Status = http.StatusNoContent }), []string{`row "jobs.start"`, "204"}},

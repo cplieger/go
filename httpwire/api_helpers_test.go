@@ -44,6 +44,10 @@ func editDoc(t *testing.T, f func(paths map[string]any)) []byte {
 	return b
 }
 
+// fixtureIfMatch is an If-Match the fixture's IfMatch row takes; its
+// handler compares no tag.
+const fixtureIfMatch = `"0000000000000000.0"`
+
 // fixtureGuard admits everyone; it carries the fixture guard's codes.
 type fixtureGuard struct{}
 

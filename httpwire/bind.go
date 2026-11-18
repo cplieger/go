@@ -12,6 +12,9 @@ type Call[P, Q, B any] struct {
 	Params P
 	Query  Q
 	Body   B
+	// IfMatch is the tag an IfMatch row's If-Match named; the zero Tag on
+	// any other row.
+	IfMatch Tag
 }
 
 // Handler is a JSON row's handler. Its error is answered through the row's
@@ -91,6 +94,7 @@ type Binding struct {
 // or nil for its zero value.
 type decoded struct {
 	params, query, body any
+	ifMatch             Tag
 }
 
 // Bind binds a JSON row: P, Q and B are its Params, Query and Request types
@@ -113,6 +117,7 @@ func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
 		if v, ok := d.body.(B); ok {
 			c.Body = v
 		}
+		c.IfMatch = d.ifMatch
 		r, err := h(ctx, c)
 		if s, ok := any(r).(statusAnswer); ok && isStatus {
 			code, body := s.answer()
