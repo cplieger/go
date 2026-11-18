@@ -107,17 +107,24 @@ const (
 
 // bounded answers end within its bounds, logging each cut at ERROR: reasons
 // past the 32 most severe are dropped, and facts that are not a JSON object of
-// at most 2 KiB are dropped for the reason facts_too_large, kept within the 32.
+// at most 2 KiB are dropped for the reason facts_too_large, kept within the 32
+// and added once for the end's facts and its lines' alike.
 func (e *Executor[P]) bounded(en *job[P], end End) End {
 	if n := len(end.Reasons); n > maxReasons {
 		e.log.Error("job end reasons dropped", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
 			"reasons", n, "kept", maxReasons)
 		end.Reasons = end.Reasons[:maxReasons]
 	}
+	en.recMu.Lock()
+	dropped := en.factsDropped
+	en.recMu.Unlock()
 	if len(end.Facts) > 0 && !validFacts(end.Facts) {
 		e.log.Error("job end facts dropped", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
 			"bytes", len(end.Facts), "reason", ReasonFactsTooLarge)
 		end.Facts = nil
+		dropped = true
+	}
+	if dropped && !slices.ContainsFunc(end.Reasons, func(r Reason) bool { return r.Code == ReasonFactsTooLarge }) {
 		kept := end.Reasons[:min(len(end.Reasons), maxReasons-1)]
 		end.Reasons = append(slices.Clone(kept), Reason{Code: ReasonFactsTooLarge})
 	}

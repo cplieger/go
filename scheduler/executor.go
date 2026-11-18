@@ -239,8 +239,9 @@ const (
 )
 
 // job is one admitted job. state, cancel, stopped, committing, the counts and
-// w's ownership are guarded by the executor's mu; rec is guarded by recMu once
-// the job runs, which also orders its record writes.
+// w's ownership are guarded by the executor's mu; rec, claimed and
+// factsDropped are guarded by recMu once the job runs, which also orders its
+// record writes.
 type job[P any] struct {
 	spec        *KindSpec[P]
 	slot        *slot
@@ -248,6 +249,7 @@ type job[P any] struct {
 	admitted    chan struct{}      // closed once its record is written or refused
 	gone        chan struct{}      // closed when it leaves the queue without running
 	cancel      context.CancelFunc // set when it runs
+	claimed     []bool             // a batch's lines an Item call has taken
 	relay       relay
 	j           Job[P]
 	rec         Record
@@ -257,6 +259,9 @@ type job[P any] struct {
 	state       jobState
 	stopped     bool // its ctx was cancelled, so Commit answers false
 	committing  bool // Commit answered true, so Cancel answers ErrCommitting
+	// factsDropped is a line's facts dropped, so the end carries
+	// facts_too_large.
+	factsDropped bool
 }
 
 // stopLocked cancels a running job's ctx; it then commits nothing.
@@ -351,6 +356,7 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 // end writes en's end and answers the stored one, which an end the job's own
 // commit wrote wins over, and its time.
 func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (End, time.Time) {
+	end = e.closeLines(en, end)
 	if en.spec.Kept == 0 {
 		return end, time.Now()
 	}

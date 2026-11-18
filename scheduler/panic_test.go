@@ -133,6 +133,9 @@ func TestItemPanicEndsBatch(t *testing.T) {
 						t.Errorf("line %d = %v on an ended batch, want an end state", i, l)
 					}
 				}
+				if l := rec.Lines[1]; l.State != scheduler.LineReview || l.Reason != scheduler.ReasonRunPanicked {
+					t.Errorf("line 1 = %v, want review run_panicked: the item that broke", l)
+				}
 				if l := rec.Lines[2]; l.State != scheduler.LineReview || l.Reason != scheduler.ReasonNotRun {
 					t.Errorf("line 2 = %v, want review not_run", l)
 				}
