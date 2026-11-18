@@ -24,6 +24,7 @@ type timed struct {
 	// cadence change, or the start when the scope has neither.
 	base    time.Time
 	since   time.Time    // the Schedule call that added it
+	changed time.Time    // the last cadence change; zero for a first Schedule
 	lease   health.Lease // the kind's Watch, or {every, Cycles: 3}
 	cadence Cadence
 	gen     uint64 // bumped at each arm, so a superseded timer's func does nothing
@@ -34,14 +35,14 @@ type timed struct {
 	fromEnds bool
 }
 
-// Schedule sets the live cadence of one scheduled scope of kind. A changed
-// cadence restarts the wait and the deadline from the change and fires
-// nothing at it; the same cadence changes neither, and TriggerOnly has
-// Unschedule's effect. The first Schedule of a scope counts both from its last
-// moving end in Records.LastEnds, else from the later of Run's start and the
-// call. Before changing anything it refuses an unknown kind (ErrUnknownKind),
-// a scope outside its grammar (ErrScope) and a new scope past 64
-// (ErrTooManyScopes; re-scheduling one never counts).
+// Schedule sets one scheduled scope's live cadence. A changed cadence, from
+// TriggerOnly included, counts the wait and the deadline from the change until
+// the next moving end, firing nothing at it; the same cadence changes neither,
+// and TriggerOnly has Unschedule's effect. A scope's first Schedule in the
+// executor's life counts both from its last moving end in Records.LastEnds,
+// else from the later of Run's start and the call. Before changing anything it
+// refuses an unknown kind (ErrUnknownKind), a scope outside its grammar
+// (ErrScope) and a new scope past 64 (ErrTooManyScopes).
 func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	spec, ok := e.kinds[kind]
 	switch {
@@ -54,7 +55,9 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	key := ScheduledScope{Kind: kind, Scope: scope}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	_, again := e.seen[key]
 	if !scheduled {
+		e.seen[key] = struct{}{}
 		e.unscheduleLocked(key)
 		return nil
 	}
@@ -65,21 +68,20 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	if t == nil && len(e.scheduled) >= maxScheduled {
 		return ErrTooManyScopes
 	}
+	e.seen[key] = struct{}{}
 	lease := health.Lease{Interval: every, Cycles: 3}
 	if spec.Watch != nil {
 		lease = *spec.Watch
 	}
 	now := time.Now()
-	_, again := e.seen[key]
 	if t == nil {
 		t = &timed{since: now, fromEnds: !again}
 		e.scheduled[key] = t
-		e.seen[key] = struct{}{}
 	} else {
 		t.fromEnds = false
 	}
 	if !t.fromEnds {
-		t.base, t.done = now, true
+		t.base, t.done, t.changed = now, true, now
 	}
 	t.cadence = c
 	t.lease = lease
@@ -152,20 +154,28 @@ func (e *Executor[P]) lastEnds(ctx context.Context) map[ScheduledScope]LastEnd {
 	return ends
 }
 
-// baseLocked counts a scope from its last moving end, its covering kinds'
-// included, else from the later of countFrom and its Schedule call.
+// baseLocked counts a scope from the later of its last moving end, its
+// covering kinds' included, and its last cadence change. With no end it
+// counts from the latest of countFrom, its Schedule call and that change.
 func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
 	t.fromEnds = false
-	if end, ok := e.lastEndLocked(key); ok {
+	end, ok := e.lastEndLocked(key)
+	if ok && !end.At.Before(t.changed) {
 		t.base, t.done = end.At, workDone(end.Result)
 		t.watch.Beat(end.At)
 		return
 	}
-	t.base, t.done = t.since, true
-	if e.countFrom.After(t.since) {
-		t.base = e.countFrom
-		t.watch.from(e.countFrom)
+	from := t.changed
+	if !ok {
+		from = t.since
+		for _, at := range []time.Time{t.changed, e.countFrom} {
+			if at.After(from) {
+				from = at
+			}
+		}
 	}
+	t.base, t.done = from, true
+	t.watch.from(from)
 }
 
 // armLocked sets t's timer to its base plus the cadence's wait, jittered.

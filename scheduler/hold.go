@@ -10,14 +10,14 @@ import (
 // holdWait is how long Hold(all) waits for the running jobs it cancelled.
 const holdWait = 10 * time.Second
 
-// Hold quiets the executor for maintenance. With all, it stops the timers,
-// ends each queued job interrupted, drops the held proposals and cancels each
-// running or yielded job, which ends interrupted unless it is in its commit
-// step, and answers once they have ended or 10 seconds have passed; Start
-// answers ErrQueueFull with no record until resume, which re-reads
-// Records.LastEnds and counts each scheduled scope and Fresh window from it.
-// Without all nothing changes. An ended ctx, or one ending in the wait,
-// answers its error and holds nothing; resume is safe to call twice.
+// Hold quiets the executor for maintenance. With all, it stops the timers, ends
+// each queued job interrupted, drops the held proposals, cancels each running
+// or yielded job, which ends interrupted unless in its commit step, and answers
+// once they have ended or 10 seconds have passed. Start answers ErrQueueFull
+// with no record until resume, which re-reads Records.LastEnds and counts each
+// Fresh window and scheduled scope from it, or from a later cadence change.
+// Without all nothing changes. An ended ctx, or one ending in the wait, answers
+// its error and holds nothing; resume is safe to call twice.
 func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan
 
 // resume ends one hold. The last one re-reads the last ends, since the file
 // they came from may have been replaced, and rebuilds the Fresh windows and
-// every scheduled scope's count from them.
+// every scheduled scope's count from them (baseLocked).
 func (e *Executor[P]) resume(ctx context.Context) {
 	e.mu.Lock()
 	e.holds--

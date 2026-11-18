@@ -94,6 +94,30 @@ func TestCadenceChangeDoesNotFire(t *testing.T) {
 		})
 	})
 
+	t.Run("a change from trigger-only counts from the change, not the last end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{slowWakes("quick", "passes")}})
+			r.schedule(t, "quick", "", scheduler.TriggerOnly())
+			ran := r.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			lastEnd := r.rec(t, ran.Job).EndedAt
+			sleepUntil(lastEnd.Add(4 * time.Hour))
+			changed := time.Now()
+			r.schedule(t, "quick", "", scheduler.Scheduled(15*time.Minute))
+			synctest.Wait()
+			if got, want := r.ex.Deadline("quick", ""), changed.Add(45*time.Minute); !got.Equal(want) {
+				t.Errorf("Deadline after a change from trigger-only = %v, want %v (the change plus three 15-minute intervals)", got, want)
+			}
+			if !r.ex.Fresh("quick", "").Healthy() {
+				t.Error("Fresh unhealthy right after a change from trigger-only, want healthy")
+			}
+			if n := len(r.wakes("quick", "")); n != 0 {
+				t.Errorf("%d timer records at a change from trigger-only, want 0: a change fires nothing", n)
+			}
+			r.nextWake(t, "quick", "", changed, 15*time.Minute)
+		})
+	})
+
 	t.Run("scheduling the same cadence keeps the wait", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("quick", "passes")}})
@@ -392,5 +416,26 @@ func TestScheduledScopesBound(t *testing.T) {
 			t.Errorf("Deadline of a scope scheduled into the freed place = %v, want %v", got, want)
 		}
 		r.nextWake(t, "refresh", "connection:64", added, time.Hour)
+	})
+}
+
+func TestRefusedScheduleLeavesTheFirstSchedule(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("refresh", "")}})
+		ran := r.start(t, api("refresh", "connection:64", "alice", payload{}))
+		synctest.Wait()
+		lastEnd := r.rec(t, ran.Job).EndedAt
+		for i := range 64 {
+			r.schedule(t, "refresh", fmt.Sprintf("connection:%d", i), scheduler.Scheduled(24*time.Hour))
+		}
+		sleepUntil(lastEnd.Add(time.Hour))
+		if err := r.ex.Schedule("refresh", "connection:64", scheduler.Scheduled(time.Hour)); !errors.Is(err, scheduler.ErrTooManyScopes) {
+			t.Fatalf("Schedule(a 65th scope) = %v, want ErrTooManyScopes", err)
+		}
+		r.ex.Unschedule("refresh", "connection:0")
+		r.schedule(t, "refresh", "connection:64", scheduler.Scheduled(24*time.Hour))
+		if got, want := r.ex.Deadline("refresh", "connection:64"), lastEnd.Add(72*time.Hour); !got.Equal(want) {
+			t.Errorf("Deadline after a refused Schedule = %v, want %v: the refusal changed nothing, so this first Schedule counts from the last end", got, want)
+		}
 	})
 }

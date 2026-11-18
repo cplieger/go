@@ -67,6 +67,23 @@ func spec(kind scheduler.Kind, slot string) scheduler.KindSpec[payload] {
 	return scheduler.KindSpec[payload]{Kind: kind, Slot: slot, Kept: time.Hour}
 }
 
+// slowWakes is spec with a Run whose scheduled jobs take an hour, so a wake
+// fired by mistake cannot move a deadline back ahead with its own end before
+// a test reads it.
+func slowWakes(kind scheduler.Kind, slot string) scheduler.KindSpec[payload] {
+	s := spec(kind, slot)
+	s.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+		if r.Job().Trigger == scheduler.TriggerSchedule {
+			select {
+			case <-time.After(time.Hour):
+			case <-ctx.Done():
+			}
+		}
+		return scheduler.End{Result: scheduler.ResultOK}
+	}
+	return s
+}
+
 type rig struct {
 	ex    *scheduler.Executor[payload]
 	store *memrecords.Store

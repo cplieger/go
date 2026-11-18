@@ -164,6 +164,36 @@ func TestQuietAllEndsQueuedInterrupted(t *testing.T) {
 		})
 	})
 
+	t.Run("resume keeps a cadence change made since the last end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{slowWakes("quick", "passes")}})
+			r.schedule(t, "quick", "", scheduler.Scheduled(6*time.Hour))
+			ran := r.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			sleepUntil(r.rec(t, ran.Job).EndedAt.Add(4 * time.Hour))
+			changed := time.Now()
+			r.schedule(t, "quick", "", scheduler.Scheduled(15*time.Minute))
+			sleepUntil(changed.Add(time.Minute))
+			resume, err := r.ex.Hold(t.Context(), true)
+			if err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", err)
+			}
+			resume()
+			synctest.Wait()
+			if n := len(r.wakes("quick", "")); n != 0 {
+				t.Errorf("%d timer records at resume, want 0: the wait counts from the change", n)
+			}
+			sleepUntil(changed.Add(10 * time.Minute))
+			if got, want := r.ex.Deadline("quick", ""), changed.Add(45*time.Minute); !got.Equal(want) {
+				t.Errorf("Deadline after resume = %v, want %v (the change plus three 15-minute intervals)", got, want)
+			}
+			if !r.ex.Fresh("quick", "").Healthy() {
+				t.Error("Fresh unhealthy after resume inside the new cadence's lease, want healthy")
+			}
+			r.nextWake(t, "quick", "", changed, 15*time.Minute)
+		})
+	})
+
 	t.Run("a job that does not return is waited for 10 seconds", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			release := make(chan struct{})
