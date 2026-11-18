@@ -21,7 +21,7 @@ c, err := chartdata.CountOf(&open, read) // read is prev.Cut(measure.ReadPartial
 | Field | Holds |
 | --- | --- |
 | `value` | the last whole read's value, `null` before the first whole read |
-| `state` | one of `complete`, `partial`, `blind`, `unread`, `unsupported` and `excluded`; the zero `Read` is `unread` |
+| `state` | one of `complete`, `partial`, `blind`, `unread`, `unsupported` and `excluded`; a zero `measure.Read` given to `CountOf` or `ReadOf` is `unread` |
 | `as_of` | the last whole read's instant, an RFC 3339 string with its fraction as `time.Time`'s JSON writes it, `null` before the first whole read |
 | `reason` | the app's code for why the read is not whole, left out when empty |
 

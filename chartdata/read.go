@@ -14,7 +14,8 @@ const MaxReasonBytes = 64
 // Count is an API row's figure for a count read elsewhere: the last whole
 // read's value and time, and how the latest read went. Value and AsOf are
 // both null before the first whole read, and both set after it. Build it
-// with CountOf: the zero Count's state is empty, which no decoder takes.
+// with CountOf: the zero Count's state is empty, which the generated
+// decoders refuse.
 type Count struct {
 	// Value is the last whole read's value, never a later cut read's.
 	Value *float64          `json:"value"`
@@ -59,8 +60,8 @@ func CountOf(last *float64, r measure.Read) (Count, error) {
 
 // Read is how a read went, on the wire: beside a figure that is not a
 // count, such as a list's total, and as a frame's read when the read was not
-// whole. Build it with ReadOf: the zero Read's state is empty, which no
-// decoder takes.
+// whole. Build it with ReadOf: the zero Read's state is empty, which the
+// generated decoders refuse.
 type Read struct {
 	State measure.ReadState `json:"state"`
 	// AsOf is the last whole read's instant, an RFC 3339 string; null
