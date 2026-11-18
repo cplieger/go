@@ -1,0 +1,417 @@
+package webbundle
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"path"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/cplieger/go/httpserver/v2"
+	"github.com/evanw/esbuild/pkg/api"
+)
+
+// Engine is a browser engine and the oldest version of it a bundle runs on.
+type Engine struct {
+	Name    string // "chrome", "firefox" or "safari"
+	Version string // the engine's version, as "157" or "27"
+}
+
+// supportFloor is the fleet's browser support floor, bumped with esbuild.
+// esbuild's esnext target would ship syntax one of them lacks unchanged.
+var supportFloor = []Engine{
+	{Name: "chrome", Version: "157"},
+	{Name: "firefox", Version: "160"},
+	{Name: "safari", Version: "27"},
+}
+
+// Engines returns the browser engines and versions Build and BuildStyle
+// target: syntax one of them lacks is lowered, or the build fails naming the
+// feature and the engine. A test that needs the support floor reads it here.
+func Engines() []Engine { return slices.Clone(supportFloor) }
+
+var esbuildEngine = map[string]api.EngineName{
+	"chrome":  api.EngineChrome,
+	"firefox": api.EngineFirefox,
+	"safari":  api.EngineSafari,
+}
+
+func engines() []api.Engine {
+	out := make([]api.Engine, len(supportFloor))
+	for i, e := range supportFloor {
+		out[i] = api.Engine{Name: esbuildEngine[e.Name], Version: e.Version}
+	}
+	return out
+}
+
+// fileLoaders sets esbuild's file loader, which esbuild configures for no
+// font or image type, on every font and image extension httpserver serves,
+// so a url() or an import of one is emitted as a hashed asset; no dataurl
+// loader is set, so none is inlined. Any other extension has no loader and
+// fails the build naming the file.
+func fileLoaders() map[string]api.Loader {
+	loaders := map[string]api.Loader{}
+	for ext, ct := range httpserver.ContentTypes() {
+		if strings.HasPrefix(ct, "font/") || strings.HasPrefix(ct, "image/") {
+			loaders[ext] = api.LoaderFile
+		}
+	}
+	return loaders
+}
+
+// options is what every entry's build shares. outdir is where esbuild
+// places the outputs; every path written under it is relative, so the bytes
+// do not depend on it.
+func options(src, outdir string, write bool) api.BuildOptions {
+	return api.BuildOptions{
+		AbsWorkingDir: src,
+		Outdir:        outdir,
+		Write:         write,
+		Bundle:        true,
+		Metafile:      true,
+		EntryNames:    "[dir]/[name]-[hash]",
+		ChunkNames:    "assets/chunks/[name]-[hash]",
+		AssetNames:    "assets/[name]-[hash]",
+		// Without a public path a script's import of an asset is a URL
+		// relative to the tree root, which a page at /a/b resolves under /a/.
+		PublicPath:        "/",
+		Loader:            fileLoaders(),
+		Engines:           engines(),
+		MinifyWhitespace:  true,
+		MinifyIdentifiers: true,
+		MinifySyntax:      true,
+		// A sourcemap would publish the sources to anyone who reaches the
+		// port, and every built file is served.
+		Sourcemap: api.SourceMapNone,
+		Charset:   api.CharsetUTF8,
+		LogLevel:  api.LogLevelSilent,
+	}
+}
+
+func entryPoint(e *Entry) api.EntryPoint {
+	return api.EntryPoint{InputPath: "./" + e.Path, OutputPath: "assets/" + e.Name}
+}
+
+// outFile is one file a build wrote, by its slash path in the tree.
+type outFile struct {
+	path     string
+	contents []byte
+}
+
+// built is one esbuild run's result.
+type built struct {
+	opts    *api.BuildOptions // the run's options, which place its metafile paths in the tree
+	meta    metafile
+	entries map[string]string // the built path of each entry, by its Src path
+	scripts map[string]Output // what each script holds, by its path in the tree
+	hollow  map[string]bool   // the outputs that hold no code, by path in the tree
+	outputs []outFile
+}
+
+// entryFile returns the path in the tree and the bytes of the main output
+// of the entry at p, a slash path under Src.
+func (r *built) entryFile(p string) (name string, body []byte, ok bool) {
+	if name, ok = r.entries[p]; !ok {
+		return "", nil, false
+	}
+	i := slices.IndexFunc(r.outputs, func(o outFile) bool { return o.path == name })
+	if i < 0 {
+		return "", nil, false
+	}
+	return name, r.outputs[i].contents, true
+}
+
+// runBuild runs opts; style says whether its entries are stylesheets, since
+// a script build that emits CSS (a script importing a stylesheet) would ship
+// a file no shell links.
+func runBuild(opts *api.BuildOptions, what string, style bool) (built, error) {
+	r := api.Build(*opts)
+	if len(r.Errors) > 0 {
+		return built{}, fmt.Errorf("webbundle: %s: %s", what, messages(r.Errors))
+	}
+	b := built{opts: opts}
+	if err := json.Unmarshal([]byte(r.Metafile), &b.meta); err != nil {
+		return built{}, fmt.Errorf("webbundle: %s: esbuild's metafile: %w", what, err)
+	}
+	for _, f := range r.OutputFiles {
+		rel, err := filepath.Rel(opts.Outdir, f.Path)
+		if err != nil || !filepath.IsLocal(rel) {
+			return built{}, fmt.Errorf("webbundle: %s: esbuild wrote %s, outside the tree", what, f.Path)
+		}
+		rel = filepath.ToSlash(rel)
+		if !style && path.Ext(rel) == cssExt {
+			return built{}, fmt.Errorf("webbundle: %s imports CSS, emitted as %s; a Style entry builds a stylesheet", what, rel)
+		}
+		b.outputs = append(b.outputs, outFile{path: rel, contents: f.Contents})
+	}
+	var err error
+	if b.entries, err = entryOutputs(&b.meta, opts, style); err != nil {
+		return built{}, fmt.Errorf("webbundle: %s: %w", what, err)
+	}
+	if b.scripts, b.hollow, err = readOutputs(&b.meta, opts); err != nil {
+		return built{}, fmt.Errorf("webbundle: %s: %w", what, err)
+	}
+	return b, nil
+}
+
+// treePath turns a metafile path, relative to Src, into a slash path in the
+// tree.
+func treePath(opts *api.BuildOptions, out string) (string, error) {
+	rel, err := filepath.Rel(opts.Outdir, filepath.Join(opts.AbsWorkingDir, filepath.FromSlash(out)))
+	return filepath.ToSlash(rel), err
+}
+
+// readOutputs reads what each script output holds, and names in hollow
+// every output, script or stylesheet, that no input puts a byte in and that
+// imports nothing: esbuild still writes an IIFE's wrapper around an empty
+// script.
+func readOutputs(m *metafile, opts *api.BuildOptions) (s map[string]Output, hollow map[string]bool, err error) {
+	s, hollow = map[string]Output{}, map[string]bool{}
+	for out, o := range m.Outputs {
+		rel, rerr := treePath(opts, out)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		held, filled := holds(o.Inputs)
+		if !filled && len(o.Imports) == 0 {
+			hollow[rel] = true
+		}
+		if path.Ext(out) == jsExt {
+			s[rel] = held
+		}
+	}
+	return s, hollow, nil
+}
+
+// holds reads what an output holds from the inputs that put bytes in it,
+// and whether any does; an input that adds none (a module of types, an
+// empty one) holds nothing there.
+func holds(inputs map[string]outputInput) (held Output, filled bool) {
+	pkgs := map[string]bool{}
+	for in, use := range inputs {
+		if use.BytesInOutput == 0 {
+			continue
+		}
+		filled = true
+		if !ownInput(in) {
+			continue
+		}
+		if pkg, _ := packageOf(in); pkg != "" {
+			pkgs[pkg] = true
+		} else {
+			held.Own = true
+		}
+	}
+	if len(pkgs) > 0 {
+		held.Packages = slices.Sorted(maps.Keys(pkgs))
+	}
+	return held, filled
+}
+
+// entryOutputs maps each entry's Src path to its main output's slash path
+// in the tree: its script, or its stylesheet for a style build.
+func entryOutputs(m *metafile, opts *api.BuildOptions, style bool) (map[string]string, error) {
+	want := jsExt
+	if style {
+		want = cssExt
+	}
+	entries := map[string]string{}
+	for out, o := range m.Outputs {
+		if o.EntryPoint == "" || path.Ext(out) != want {
+			continue
+		}
+		rel, err := treePath(opts, out)
+		if err != nil {
+			return nil, err
+		}
+		entries[path.Clean(o.EntryPoint)] = rel
+	}
+	return entries, nil
+}
+
+func messages(msgs []api.Message) string {
+	lines := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		if l := m.Location; l != nil {
+			lines = append(lines, fmt.Sprintf("%s:%d:%d: %s", l.File, l.Line, l.Column+1, m.Text))
+			continue
+		}
+		lines = append(lines, m.Text)
+	}
+	return strings.Join(lines, "; ")
+}
+
+// defines adds one dotted define per classic entry to the user's defines,
+// so a module's BUNDLE_URLS.<name> inlines that URL alone and the
+// unread-classic check sees which entries a module reads. esbuild matches
+// BUNDLE_URLS["<name>"] and BUNDLE_URLS?.<name> to the same define. Every
+// other read of BUNDLE_URLS becomes unreadURLs, which refuseUnreadURLs
+// finds in the output.
+func defines(user, urls map[string]string) (map[string]string, error) {
+	d := make(map[string]string, len(user)+len(urls)+1)
+	maps.Copy(d, user)
+	d[bundleURLs] = unreadURLs
+	for name, u := range urls {
+		q, err := json.Marshal(u)
+		if err != nil {
+			return nil, err
+		}
+		d[bundleURLs+"."+name] = string(q)
+	}
+	return d, nil
+}
+
+// unreadURLs is the global BUNDLE_URLS is defined to beside its members: a
+// name no source writes, so its presence in an output is a read of
+// BUNDLE_URLS that no member define replaced.
+const unreadURLs = "__webbundle_BUNDLE_URLS_read_by_name_only__"
+
+// refuseUnreadURLs refuses an entry of r whose outputs still read
+// BUNDLE_URLS: a computed key, a whole-object read (Object.values, a
+// spread) or a member no classic entry declares. names are the classic
+// entries.
+func refuseUnreadURLs(r *built, entries []Entry, names []string) error {
+	marker := []byte(unreadURLs)
+	for i := range entries {
+		e := &entries[i]
+		for _, out := range r.meta.loaded(e) {
+			rel, err := treePath(r.opts, out)
+			if err != nil {
+				return err
+			}
+			j := slices.IndexFunc(r.outputs, func(o outFile) bool { return o.path == rel })
+			if j < 0 {
+				return fmt.Errorf("webbundle: %s is in esbuild's metafile but not in its output", rel)
+			}
+			if !bytes.Contains(r.outputs[j].contents, marker) {
+				continue
+			}
+			if e.Kind == Classic {
+				return fmt.Errorf("webbundle: classic entry %q reads BUNDLE_URLS, which only a module entry reads", e.Name)
+			}
+			return fmt.Errorf("webbundle: module entry %q reads BUNDLE_URLS other than as %s", e.Name, dottedReads(names))
+		}
+	}
+	return nil
+}
+
+// dottedReads names the reads BUNDLE_URLS allows, one per classic entry.
+func dottedReads(names []string) string {
+	if len(names) == 0 {
+		return "BUNDLE_URLS.<name> of a classic entry, and the build has none"
+	}
+	reads := make([]string, len(names))
+	for i, n := range slices.Sorted(slices.Values(names)) {
+		reads[i] = bundleURLs + "." + n
+	}
+	return strings.Join(reads, " or ")
+}
+
+// buildClassic builds one classic entry as an IIFE with its whole closure.
+func (b *build) buildClassic(e *Entry, outdir string) (built, error) {
+	opts := options(b.src, outdir, true)
+	opts.EntryPointsAdvanced = []api.EntryPoint{entryPoint(e)}
+	if e.URL != "" {
+		opts.EntryPointsAdvanced[0].OutputPath = strings.TrimSuffix(strings.TrimPrefix(e.URL, "/"), jsExt)
+		opts.EntryNames = "[name]"
+	}
+	opts.Format = api.FormatIIFE
+	d, err := defines(b.define, nil)
+	if err != nil {
+		return built{}, err
+	}
+	opts.Define = d
+	r, err := runBuild(&opts, "classic entry "+e.Name, false)
+	if err != nil {
+		return built{}, err
+	}
+	if err := refuseUnreadURLs(&r, []Entry{*e}, nil); err != nil {
+		return built{}, err
+	}
+	return r, nil
+}
+
+// buildModules builds every module entry in one ESM run, so code two of them
+// import lands once in a shared chunk; urls is each classic entry's served
+// path by name, read through BUNDLE_URLS.
+func (b *build) buildModules(modules []Entry, urls map[string]string, outdir string) (built, error) {
+	opts := options(b.src, outdir, true)
+	for _, e := range modules {
+		opts.EntryPointsAdvanced = append(opts.EntryPointsAdvanced, entryPoint(&e))
+	}
+	opts.Format = api.FormatESModule
+	opts.Splitting = true
+	d, err := defines(b.define, urls)
+	if err != nil {
+		return built{}, err
+	}
+	opts.Define = d
+	r, err := runBuild(&opts, "module entries", false)
+	if err != nil {
+		return built{}, err
+	}
+	if err := refuseUnreadURLs(&r, modules, slices.Collect(maps.Keys(urls))); err != nil {
+		return built{}, err
+	}
+	return r, nil
+}
+
+// buildStyle builds one stylesheet, its url() files emitted as hashed
+// assets. BuildStyle runs the same options with Write off.
+func buildStyle(src string, e *Entry, outdir string, write bool) (built, error) {
+	opts := options(src, outdir, write)
+	opts.EntryPointsAdvanced = []api.EntryPoint{entryPoint(e)}
+	return runBuild(&opts, "style entry "+e.Path, true)
+}
+
+// Stylesheet names one CSS file for [BuildStyle].
+type Stylesheet struct {
+	Src  string // the static-src root, as Config.Src
+	Path string // the CSS file, a slash path under Src
+}
+
+// BuildStyle returns s.Path bundled exactly as a Style entry is (the pinned
+// engines, the file loaders, the assets/<name>-<hash> names, minified), and
+// writes nothing. A test passes it where it needs one stylesheet's built text
+// without a whole Build.
+func BuildStyle(s Stylesheet) ([]byte, error) {
+	if s.Src == "" {
+		return nil, errors.New("webbundle: Stylesheet.Src is empty")
+	}
+	abs, err := srcDir("Stylesheet.Src", s.Src)
+	if err != nil {
+		return nil, err
+	}
+	b := &build{src: abs}
+	p, err := b.srcFile("stylesheet", s.Path)
+	if err != nil {
+		return nil, err
+	}
+	if path.Ext(p) != cssExt {
+		return nil, fmt.Errorf("webbundle: stylesheet %s is not a .css file", s.Path)
+	}
+	e := Entry{Name: strings.TrimSuffix(path.Base(p), cssExt), Path: p, Kind: Style}
+	r, err := buildStyle(abs, &e, filepath.Join(abs, ".webbundle-style"), false)
+	if err != nil {
+		return nil, err
+	}
+	name, css, ok := r.entryFile(p)
+	if !ok {
+		return nil, fmt.Errorf("webbundle: stylesheet %s built no CSS", s.Path)
+	}
+	if r.empty(name, css) {
+		return nil, fmt.Errorf("webbundle: stylesheet %s builds an empty file", s.Path)
+	}
+	return css, nil
+}
+
+// empty reports whether the built file name, holding body, has no code:
+// only whitespace, or only bytes no input put there. An entry built to that
+// ships nothing, so it is a mistake in the entry.
+func (r *built) empty(name string, body []byte) bool {
+	return len(bytes.TrimSpace(body)) == 0 || r.hollow[name]
+}

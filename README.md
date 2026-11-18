@@ -54,6 +54,7 @@ Nothing here imports a cplieger repository outside this one.
 | Module | What it does |
 | --- | --- |
 | [`wiregen`](wiregen) | Generates TypeScript types, validating JSON decoders, a typed HTTP client and an OpenAPI 3.1 document from your Go structs and endpoint table, so your TypeScript front end checks every payload your Go server sends. |
+| [`webbundle`](webbundle) | Builds your single-page app's web bundle at build time with esbuild: content-hashed scripts and stylesheets, shells that name them, licence notices, icons and the manifest `httpserver` serves. |
 
 ## Disclaimer
 
