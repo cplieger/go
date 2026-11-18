@@ -4,8 +4,9 @@
 // masked type nor a reviewed non-secret field. [SecretNamed] checks wire
 // types by name, where every title and path is text: it reports a text field
 // named like a credential. [Leak] checks a printer's output for a secret's
-// text, its HMAC pad forms, their hex or base64, and the text's JSON string
-// form. Import it only from _test.go files.
+// text and its HMAC pad forms as the standard library's printers write them
+// (fmt, strconv quoting, encoding/json, hex and base64). Import it only from
+// _test.go files.
 package maskedtest
 
 import (
@@ -13,8 +14,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cplieger/go/masked"
@@ -30,9 +33,11 @@ type Allow struct {
 	Types []reflect.Type
 	// Fields are reviewed non-secret fields, each written as its declaring
 	// type's name, a dot and the field name: "example.com/app.User.Email". A
-	// named type's name is its import path, a dot and its name, so two
-	// packages sharing a package name stay apart; an unnamed type's is its
-	// reflect.Type.String.
+	// named type is named by its import path, a dot and its name; an unnamed
+	// struct with an unexported field by that field's import path, a dot and
+	// its reflect.Type.String; any other unnamed type by its String. Two
+	// function-local types of one name in one package share a name, as do two
+	// unnamed structs whose field types differ only in import path.
 	Fields []string
 }
 
@@ -157,10 +162,18 @@ func (w *walker) report(it item, what string) {
 }
 
 // typeName names t as [Allow.Fields] documents. reflect.Type.String uses the
-// short package name, which two packages can share.
+// short package name, which two packages can share, and omits the package of
+// an unnamed struct's unexported fields, which makes two such types distinct.
 func typeName(t reflect.Type) string {
 	if t.Name() != "" && t.PkgPath() != "" {
 		return t.PkgPath() + "." + t.Name()
+	}
+	if t.Kind() == reflect.Struct {
+		for f := range t.Fields() {
+			if !f.IsExported() {
+				return f.PkgPath + "." + t.String()
+			}
+		}
 	}
 	return t.String()
 }
@@ -175,14 +188,32 @@ func isInteger(k reflect.Kind) bool {
 	}
 }
 
-// forms returns text, its hex in both cases, and every run of base64
-// characters, standard and URL alphabets, that text alone determines at each
-// of the three byte offsets it can start at inside a longer encoded value.
-// A padded or longer encoding of text contains one of them.
+// forms returns text as [Leak] lists it. Each quoted or bracketed form is
+// kept without its quotes or brackets: that interior is also inside a
+// longer value printed the same way.
 func forms(text string) []string {
-	h := hex.EncodeToString([]byte(text))
+	b := []byte(text)
+	h := hex.EncodeToString(b)
 	out := []string{text, h, strings.ToUpper(h)}
-	for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+	for _, verb := range []string{"%s", "%v", "%x", "%X"} {
+		out = append(out, fmt.Sprintf(verb, text))
+	}
+	for _, verb := range []string{"%x", "%X"} {
+		out = append(out, fmt.Sprintf(verb, b))
+	}
+	for _, w := range []string{
+		strconv.Quote(text), strconv.QuoteToASCII(text), strconv.QuoteToGraphic(text),
+		jsonString(text, true), jsonString(text, false),
+	} {
+		out = append(out, unwrap(w))
+	}
+	for _, verb := range []string{"%q", "%+q", "%#q", "%#v"} {
+		out = append(out, unwrap(fmt.Sprintf(verb, text)))
+	}
+	for _, verb := range []string{"%v", "%d", "%#v"} {
+		out = append(out, unwrap(fmt.Sprintf(verb, b)))
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
 		for offset := range 3 {
 			encoded := enc.EncodeToString(append(make([]byte, offset), text...))
 			// A character covers 6 bits: skip those that hold a prefix bit and
@@ -196,10 +227,32 @@ func forms(text string) []string {
 	return out
 }
 
+// unwrap strips the quotes, backquotes or brackets a printer puts around a
+// value: "x", `x`, [1 2] and []byte{0x1, 0x2}.
+func unwrap(s string) string {
+	for _, w := range [][2]string{{`"`, `"`}, {"`", "`"}, {"[]byte{", "}"}, {"[", "]"}} {
+		if len(s) >= len(w[0])+len(w[1]) && strings.HasPrefix(s, w[0]) && strings.HasSuffix(s, w[1]) {
+			return s[len(w[0]) : len(s)-len(w[1])]
+		}
+	}
+	return s
+}
+
+// jsonString returns text as encoding/json writes it, quoted, with HTML
+// escaping on (json.Marshal) or off (log/slog's JSON handler).
+func jsonString(text string, escapeHTML bool) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(escapeHTML)
+	// A string always encodes, and a strings.Builder never fails a write.
+	_ = enc.Encode(text)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 // KeyForms returns the forms of key a printer can show: key itself, and
 // key XOR 0x36 and XOR 0x5c, the inner and outer pads a crypto/hmac value
-// caches (RFC 2104 section 2), each in clear, hex and base64. A key longer
-// than sha256.BlockSize also gets the pads of its SHA-256 hash, which
+// caches (RFC 2104 section 2), each as [Leak] lists. A key longer than
+// sha256.BlockSize also gets the pads of its SHA-256 hash, which
 // HMAC-SHA-256 uses in its place.
 func KeyForms(key string) []string {
 	out := forms(key)
@@ -217,35 +270,23 @@ func KeyForms(key string) []string {
 			out = append(out, forms(string(b))...)
 		}
 	}
-	return out
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
-// Leak reports whether got contains text in any form [KeyForms] returns
-// (clear, hex, base64) or in its JSON string form, as encoding/json writes it
-// inside a string with or without HTML escaping. text must not be empty
-// (every string contains it), and a text of a few bytes has base64 runs
-// short enough to match by chance.
+// Leak reports whether got contains text or a [KeyForms] pad form as the
+// standard library's printers write a string or []byte holding it: fmt's
+// %s %v %q %+q %#q %#v %x %X of the string and %v %d %#v %x %X of the
+// []byte, strconv's Quote, QuoteToASCII and QuoteToGraphic, encoding/json
+// with HTML escaping on and off, hex in both cases, and std, URL, raw std and
+// raw URL base64 at each byte offset. A quoted or bracketed form is searched
+// without its quotes or brackets, so it is found inside a longer value. text
+// must not be empty, and a text of a few bytes can match by chance.
 func Leak(got, text string) bool {
-	for _, f := range slices.Concat(KeyForms(text), jsonForms(text)) {
+	for _, f := range KeyForms(text) {
 		if strings.Contains(got, f) {
 			return true
 		}
 	}
 	return false
-}
-
-// jsonForms returns text as encoding/json writes it, without the quotes, with
-// HTML escaping on (json.Marshal) and off (log/slog's JSON handler).
-func jsonForms(text string) []string {
-	out := make([]string, 0, 2)
-	for _, escapeHTML := range []bool{true, false} {
-		var b strings.Builder
-		enc := json.NewEncoder(&b)
-		enc.SetEscapeHTML(escapeHTML)
-		// A string always encodes, and a strings.Builder never fails a write.
-		_ = enc.Encode(text)
-		quoted := strings.TrimSuffix(b.String(), "\n")
-		out = append(out, quoted[1:len(quoted)-1])
-	}
-	return out
 }

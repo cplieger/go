@@ -1,11 +1,18 @@
 package maskedtest
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -89,7 +96,7 @@ func TestUnmasked(t *testing.T) {
 			pkg + "kinds.ids: holds an integer sequence ([]int64)",
 			pkg + "kinds.schedule: holds an integer sequence ([60]uint32)",
 			pkg + "kinds.str: holds a string (string)",
-			"struct { s string }.s: holds a string (string)",
+			pkg + "struct { s string }.s: holds a string (string)",
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("Unmasked() =\n%q\nwant\n%q", got, want)
@@ -107,8 +114,8 @@ func TestUnmasked(t *testing.T) {
 		t.Parallel()
 		got := Unmasked(Allow{}, reflect.TypeFor[struct{ a, b words }]())
 		want := []string{
-			"struct { a maskedtest.words; b maskedtest.words }.a: holds a string (string)",
-			"struct { a maskedtest.words; b maskedtest.words }.b: holds a string (string)",
+			pkg + "struct { a maskedtest.words; b maskedtest.words }.a: holds a string (string)",
+			pkg + "struct { a maskedtest.words; b maskedtest.words }.b: holds a string (string)",
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("Unmasked() = %q, want %q", got, want)
@@ -190,6 +197,75 @@ func TestLeak(t *testing.T) {
 				t.Errorf("%s: Leak(%q) = %t, want %t", tc.name, tc.got, got, tc.want)
 			}
 		}
+		// encoding/json writes a control byte as \u0001 and U+2028 as \u2028
+		// whether HTML escaping is on or off.
+		if got := `{"msg":"ctl\u0001-ls\u2028"}`; !Leak(got, "ctl\x01-ls\u2028") {
+			t.Errorf("control_and_line_separator: Leak(%q) = false, want true", got)
+		}
+	})
+	t.Run("printers", func(t *testing.T) {
+		t.Parallel()
+		// A quote, a backslash, <, a control byte and U+2028: each is escaped
+		// by some printer below. other differs from secret in the middle.
+		const secret, other = "pa\"ss\\wo<rd\x01\u2028é", "pa\"ss\\WO<rd\x01\u2028é"
+		printf := func(verb string) func(string) string {
+			return func(s string) string { return fmt.Sprintf(verb, s) }
+		}
+		printfBytes := func(verb string) func(string) string {
+			return func(s string) string { return fmt.Sprintf(verb, []byte(s)) }
+		}
+		jsonOut := func(escapeHTML bool) func(string) string {
+			return func(s string) string {
+				var b strings.Builder
+				enc := json.NewEncoder(&b)
+				enc.SetEscapeHTML(escapeHTML)
+				if err := enc.Encode(map[string]string{"v": s}); err != nil {
+					t.Fatalf("Encode() error = %v", err)
+				}
+				return b.String()
+			}
+		}
+		slogOut := func(handler func(io.Writer) slog.Handler) func(string) string {
+			return func(s string) string {
+				var b strings.Builder
+				slog.New(handler(&b)).Info("login", "v", s)
+				return b.String()
+			}
+		}
+		b64 := func(enc *base64.Encoding) func(string) string {
+			return func(s string) string { return enc.EncodeToString([]byte(s)) }
+		}
+		printers := map[string]func(string) string{
+			"%s": printf("%s"), "%v": printf("%v"), "%q": printf("%q"), "%+q": printf("%+q"),
+			"%#q": printf("%#q"), "%#v": printf("%#v"), "%x": printf("%x"), "%X": printf("%X"),
+			"bytes %v": printfBytes("%v"), "bytes %d": printfBytes("%d"), "bytes %#v": printfBytes("%#v"),
+			"bytes %x": printfBytes("%x"), "bytes %X": printfBytes("%X"),
+			"field %v":               func(s string) string { return fmt.Sprintf("%v", struct{ b []byte }{[]byte(s)}) },
+			"field %#v":              func(s string) string { return fmt.Sprintf("%#v", struct{ b []byte }{[]byte(s)}) },
+			"strconv.Quote":          strconv.Quote,
+			"strconv.QuoteToASCII":   strconv.QuoteToASCII,
+			"strconv.QuoteToGraphic": strconv.QuoteToGraphic,
+			"json":                   jsonOut(true),
+			"json_no_html_escape":    jsonOut(false),
+			"slog_text":              slogOut(func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) }),
+			"slog_json":              slogOut(func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) }),
+			"hex":                    func(s string) string { return hex.EncodeToString([]byte(s)) },
+			"upper_hex":              func(s string) string { return strings.ToUpper(hex.EncodeToString([]byte(s))) },
+			"base64_std":             b64(base64.StdEncoding),
+			"base64_url":             b64(base64.URLEncoding),
+			"base64_raw_std":         b64(base64.RawStdEncoding),
+			"base64_raw_url":         b64(base64.RawURLEncoding),
+		}
+		for name, render := range printers {
+			for _, s := range []string{secret, "login " + secret + " failed"} {
+				if got := render(s); !Leak(got, secret) {
+					t.Errorf("%s: Leak(%q) = false, want true", name, got)
+				}
+			}
+			if got := render("login " + other + " failed"); Leak(got, secret) {
+				t.Errorf("%s of other text: Leak(%q) = true, want false", name, got)
+			}
+		}
 	})
 	for name, size := range map[string]int{"hmac_pads": 32, "hmac_pads_long_key": sha256.BlockSize + 1} {
 		t.Run(name, func(t *testing.T) {
@@ -213,6 +289,13 @@ func TestLeak(t *testing.T) {
 			}
 			if Leak(hex.EncodeToString(unrelated)+base64.StdEncoding.EncodeToString(unrelated), string(key)) {
 				t.Errorf("Leak(an unrelated %d-byte value, key) = true, want false", size)
+			}
+			// %v prints the pads a crypto/hmac value caches as decimal byte lists.
+			if got := fmt.Sprintf("%v", hmac.New(sha256.New, key)); !Leak(got, string(key)) {
+				t.Errorf("Leak(%%v of an HMAC, key) = false, want true: %s", got)
+			}
+			if got := fmt.Sprintf("%v", hmac.New(sha256.New, unrelated)); Leak(got, string(key)) {
+				t.Errorf("Leak(%%v of an HMAC under an unrelated key, key) = true, want false: %s", got)
 			}
 		})
 	}

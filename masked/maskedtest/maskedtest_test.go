@@ -94,4 +94,20 @@ func TestChecksKeyByImportPath(t *testing.T) {
 			t.Errorf("SecretNamed() =\n%q\nwant\n%q", got, want)
 		}
 	})
+	t.Run("unnamed_struct", func(t *testing.T) {
+		t.Parallel()
+		// Both types are struct { token string } to reflect.Type.String.
+		roots := []reflect.Type{reflect.TypeOf(one.Settings), reflect.TypeOf(two.Settings)}
+		oneLine := fixture + "one/config.struct { token string }.token"
+		twoLine := fixture + "two/config.struct { token string }.token: holds a string (string)"
+		got := maskedtest.Unmasked(maskedtest.Allow{}, roots...)
+		want := []string{oneLine + ": holds a string (string)", twoLine}
+		if !slices.Equal(got, want) {
+			t.Errorf("Unmasked() =\n%q\nwant\n%q", got, want)
+		}
+		got = maskedtest.Unmasked(maskedtest.Allow{Fields: []string{oneLine}}, roots...)
+		if want := []string{twoLine}; !slices.Equal(got, want) {
+			t.Errorf("Unmasked(allowing one) =\n%q\nwant\n%q", got, want)
+		}
+	})
 }

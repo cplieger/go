@@ -6,3 +6,7 @@ package config
 type Box struct {
 	Token string `json:"token"`
 }
+
+// Settings has an unnamed struct type with an unexported field, which
+// reflect.Type.String writes alike in both fixture packages.
+var Settings = struct{ token string }{token: "two"}
