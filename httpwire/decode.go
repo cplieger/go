@@ -164,6 +164,10 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 		return codeMalformed, "given more than once"
 	}
 	fv := qv.FieldByIndex(f.index)
+	if f.cursor {
+		fv.SetString(given[0])
+		return "", ""
+	}
 	if f.pointer {
 		fv.Set(reflect.New(f.typ))
 		fv = fv.Elem()

@@ -3,6 +3,8 @@ package httpwire
 import (
 	"bytes"
 	"cmp"
+	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +26,7 @@ type API struct {
 	mux     *http.ServeMux
 	logger  *slog.Logger
 	schema  *Schema
+	sealer  *sealer
 	version string
 	o       options
 }
@@ -50,10 +53,11 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	bound := c.bindings(bs)
 	c.options()
 	schema := c.document()
+	s := c.sealer()
 	if len(c.errs) > 0 {
 		return nil, errors.Join(c.errs...)
 	}
-	a := &API{table: d, logger: o.logger, schema: schema, version: WireVersion(o.schema), o: o, mux: http.NewServeMux()}
+	a := &API{table: d, logger: o.logger, schema: schema, sealer: s, version: WireVersion(o.schema), o: o, mux: http.NewServeMux()}
 	for i := range d.Endpoints {
 		ep := &d.Endpoints[i]
 		a.mux.Handle(ep.Method+" "+ep.Path, &route{a.rowHandler(ep, bound[ep.Name])})
@@ -144,9 +148,7 @@ func (a *API) rowHandler(ep *Endpoint, b *Binding) http.Handler {
 	if admitsKey(ep.Access.Class) {
 		h = a.keyRate(h)
 	}
-	if ep.Access.Class != Public {
-		h = a.principal(ep, h)
-	}
+	h = a.scoped(ep, h)
 	if a.o.guard != nil {
 		h = a.o.guard.Wrap(ep, h)
 	}
@@ -286,13 +288,24 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 			return nil, nil, e
 		}
 	}
+	if e := a.decodeLast(r, ep, d); e != nil {
+		return nil, nil, e
+	}
+	return d, b, nil
+}
+
+// decodeLast reads what follows the body: If-Match, then the cursor.
+func (a *API) decodeLast(r *http.Request, ep *Endpoint, d *decoded) *Error {
 	if ep.IfMatch {
 		var e *Error
 		if d.ifMatch, e = ifMatch(r); e != nil {
-			return nil, nil, e
+			return e
 		}
 	}
-	return d, b, nil
+	if ep.List {
+		return a.openPage(r, ep, d)
+	}
+	return nil
 }
 
 // clientFloor refuses a request whose client header names a version below
@@ -310,21 +323,24 @@ func (a *API) clientFloor(next http.Handler) http.Handler {
 	})
 }
 
-// principal refuses, as the wiring bug it is, an admitted request whose
-// credential or cursor owner answers "", so nothing is ever bound to "".
-func (a *API) principal(ep *Endpoint, next http.Handler) http.Handler {
+// scoped carries the admitted request's credential and cursor owner in its
+// context, refusing, as the wiring bug it is, a row whose class is not
+// Public where either answers "", so nothing is ever bound to "".
+func (a *API) scoped(ep *Endpoint, next http.Handler) http.Handler {
+	public := ep.Access.Class == Public
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, fn := range []struct {
-			get  func(*http.Request) string
-			name string
-		}{{a.o.credential, "WithCredential"}, {a.o.cursorOwner, "WithCursorOwner"}} {
-			if fn.get(r) == "" {
-				a.log().ErrorContext(r.Context(), "httpwire: "+fn.name+" answered \"\" for an admitted request on a row whose class is not Public", "row", ep.Name)
-				a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
-				return
+		s := &scope{sealer: a.sealer, public: public}
+		if !public {
+			s.credential, s.owner = a.o.credential(r), a.o.cursorOwner(r)
+			for _, got := range []struct{ value, name string }{{s.credential, "WithCredential"}, {s.owner, "WithCursorOwner"}} {
+				if got.value == "" {
+					a.log().ErrorContext(r.Context(), "httpwire: "+got.name+" answered \"\" for an admitted request on a row whose class is not Public", "row", ep.Name)
+					a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
+					return
+				}
 			}
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), scopeKey{}, s)))
 	})
 }
 
@@ -469,6 +485,22 @@ func (c *newChecker) floor() {
 	case f != nil && (f.Below == nil || f.Message == nil):
 		c.fail("WithClientFloor needs both Below and Message")
 	}
+}
+
+// sealer builds the cursor sealer under WithCursorKey's key, else a random
+// one.
+func (c *newChecker) sealer() *sealer {
+	var key [32]byte
+	if c.o.cursorKey != nil {
+		key = *c.o.cursorKey
+	} else {
+		_, _ = rand.Read(key[:])
+	}
+	s, err := newSealer(key)
+	if err != nil {
+		c.fail("the cursor key: %w", err)
+	}
+	return s
 }
 
 // document parses WithSchema's document and matches its operations with

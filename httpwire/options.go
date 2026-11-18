@@ -20,6 +20,7 @@ type options struct {
 	outage      func() string
 	hold        func(http.Handler) http.Handler
 	floor       *ClientFloor
+	cursorKey   *[32]byte
 	logger      *slog.Logger
 	spoolDir    string
 	schema      []byte

@@ -76,6 +76,7 @@ type textField struct {
 	index    []int
 	pointer  bool
 	optional bool // a pointer, omitempty or omitzero: a query may leave it out
+	cursor   bool // a Page's Cursor, which only opening it checks
 }
 
 // textFields lists struct t's fields by wire name, an embedded struct's
@@ -85,8 +86,8 @@ func textFields(t reflect.Type) (fields []textField, problems []string) {
 		return nil, []string{fmt.Sprintf("%s is not a struct", t)}
 	}
 	seen := map[string]bool{}
-	var walk func(t reflect.Type, at []int)
-	walk = func(t reflect.Type, at []int) {
+	var walk func(t reflect.Type, at []int, inPage bool)
+	walk = func(t reflect.Type, at []int, inPage bool) {
 		for f := range t.Fields() {
 			index := append(append([]int(nil), at...), f.Index...)
 			tf, embedded, problem := textFieldOf(&f, index)
@@ -94,7 +95,7 @@ func textFields(t reflect.Type) (fields []textField, problems []string) {
 			case problem != "":
 				problems = append(problems, problem)
 			case embedded:
-				walk(f.Type, index)
+				walk(f.Type, index, f.Type == pageType)
 			case tf == nil:
 			case seen[tf.name]:
 				problems = append(problems, fmt.Sprintf("field %q is declared twice", tf.name))
@@ -104,11 +105,12 @@ func textFields(t reflect.Type) (fields []textField, problems []string) {
 						"a TextUnmarshaler, a string type with MaxBytes, an integer type with Range, a uint64 or a bool", tf.name, f.Type))
 				}
 				seen[tf.name] = true
+				tf.cursor = inPage && tf.typ == cursorType
 				fields = append(fields, *tf)
 			}
 		}
 	}
-	walk(t, nil)
+	walk(t, nil, false)
 	return fields, problems
 }
 

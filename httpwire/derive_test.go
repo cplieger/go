@@ -62,7 +62,7 @@ func jobOwner() *httpwire.Owner {
 	}
 }
 
-func fixtureCatalog(t *testing.T) *httpwire.Catalog {
+func fixtureCatalog(t testing.TB) *httpwire.Catalog {
 	t.Helper()
 	c := httpwire.NewCatalog()
 	for code, status := range map[string]int{

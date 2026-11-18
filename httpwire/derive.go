@@ -136,7 +136,7 @@ func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount boo
 	u.addIf(ep.Kind == Raw && write, "body_too_large")
 	u.addIf(ep.Query != nil, "bad_query")
 	u.addIf(ep.IfMatch, ifMatchUnion...)
-	u.addIf(ep.List, "cursor_invalid")
+	u.addIf(ep.List, codeCursor)
 	u.addIf(ep.Keyed, keyedUnion...)
 	u.addIf(!ep.Keyed, "idempotency_key_unsupported")
 	u.addIf(write, writeUnion...)
@@ -299,6 +299,9 @@ func (c *tableChecker) row(r rowRef, names map[string]*Endpoint) {
 	c.changes(ep, at)
 	c.events(ep, at)
 	c.personActions(ep, at)
+	for _, p := range listProblems(ep) {
+		c.fail("%s: %s", at, p)
+	}
 	if r.mount && len(ep.Owners) > 0 {
 		c.fail("%s: a mount row's Owners are never consulted, since its handler answers its own codes", at)
 	}

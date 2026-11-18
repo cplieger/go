@@ -12,9 +12,18 @@ type Call[P, Q, B any] struct {
 	Params P
 	Query  Q
 	Body   B
+	list   *listCursor
+	// Position is the position a List row's cursor sealed; nil on the first
+	// page. See SealNext and SealPrev.
+	Position []byte
 	// IfMatch is the tag an IfMatch row's If-Match named; the zero Tag on
 	// any other row.
 	IfMatch Tag
+	// Limit is a List row's page size.
+	Limit int
+	// Backward marks a List row's prev_cursor: answer the Limit rows ending
+	// just before Position, in list order.
+	Backward bool
 }
 
 // Handler is a JSON row's handler. Its error is answered through the row's
@@ -94,7 +103,11 @@ type Binding struct {
 // or nil for its zero value.
 type decoded struct {
 	params, query, body any
+	list                *listCursor
+	position            []byte
 	ifMatch             Tag
+	limit               int
+	backward            bool
 }
 
 // Bind binds a JSON row: P, Q and B are its Params, Query and Request types
@@ -118,6 +131,7 @@ func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
 			c.Body = v
 		}
 		c.IfMatch = d.ifMatch
+		c.Position, c.Backward, c.Limit, c.list = d.position, d.backward, d.limit, d.list
 		r, err := h(ctx, c)
 		if s, ok := any(r).(statusAnswer); ok && isStatus {
 			code, body := s.answer()

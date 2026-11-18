@@ -28,6 +28,14 @@ func (a *API) writeAnswer(w http.ResponseWriter, r *http.Request, ep *Endpoint, 
 		w.WriteHeader(code)
 		return
 	}
+	if ep.List {
+		var problem string
+		if body, problem = checkedPage(body); problem != "" {
+			a.log().ErrorContext(r.Context(), "httpwire: a List row answered an inconsistent page", "row", ep.Name, "problem", problem)
+			a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
+			return
+		}
+	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
 		a.log().ErrorContext(r.Context(), "httpwire: a handler's answer does not encode as JSON", "row", ep.Name, "error", err)
