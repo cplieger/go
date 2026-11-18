@@ -9,14 +9,14 @@ import (
 // holdWait is how long Hold(all) waits for the running jobs it cancelled.
 const holdWait = 10 * time.Second
 
-// Hold quiets the executor for maintenance. With all, it stops the timers, ends
-// each queued job interrupted, drops the held proposals, cancels each running
-// or yielded job, which ends interrupted unless in its commit step, and answers
-// once they have ended or 10 seconds have passed. Start answers ErrQueueFull
-// with no record until resume, which re-reads Records.LastEnds, retried as at
-// Run's start, and counts each Fresh window and scheduled scope from it, or
-// from a later cadence change. Without all nothing changes. An ended ctx, or one ending in the wait, answers
-// its error and holds nothing; resume is safe to call twice.
+// Hold quiets the executor for maintenance. With all, it stops the timers,
+// ends each queued job interrupted, drops the held proposals and cancels each
+// running or yielded job (interrupted unless committing), answering once they
+// ended or 10 seconds passed. Start answers ErrQueueFull, writing no record,
+// until resume re-reads Records.LastEnds (retried as at Run's start) and
+// counts each Fresh window and scheduled scope from it, or a later cadence
+// change; resume is safe to call twice. Without all nothing changes. A ctx
+// ended before or during the wait answers its error and holds nothing.
 func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

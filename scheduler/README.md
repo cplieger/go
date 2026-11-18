@@ -124,8 +124,9 @@ if err != nil {
 }
 go func() { _ = ex.Run(ctx) }()
 
-// Every 6 hours, and 15 minutes after a failed run.
-_ = ex.Schedule("refresh", "", scheduler.Scheduled(6*time.Hour).Retry(15*time.Minute))
+// Every 6 hours, and 15 minutes after a failed run; savedAt is when the
+// settings row holding this cadence was saved.
+_ = ex.Schedule("refresh", "", scheduler.Scheduled(6*time.Hour).Retry(15*time.Minute), savedAt)
 
 // A person's press, from an API handler.
 started, err := ex.Start(ctx, scheduler.Job[payload]{
