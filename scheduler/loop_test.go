@@ -259,12 +259,12 @@ func TestRunLoopReportsEachArmedFire(t *testing.T) {
 	t.Parallel()
 	const interval = 10 * time.Millisecond
 	cases := []struct {
-		name       string
-		opts       LoopOptions
-		firstMin   time.Duration
-		firstMax   time.Duration // exclusive; firstMin+1 for an exact first delay
-		gapMin     time.Duration
-		gapMax     time.Duration // exclusive
+		name     string
+		opts     LoopOptions
+		firstMin time.Duration
+		firstMax time.Duration // exclusive; firstMin+1 for an exact first delay
+		gapMin   time.Duration
+		gapMax   time.Duration // exclusive
 	}{
 		{
 			name:     "fire on start reports the start",
