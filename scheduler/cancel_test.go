@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 
 	"github.com/cplieger/go/scheduler/v2"
+	"github.com/cplieger/go/scheduler/v2/internal/memrecords"
 )
 
 func TestCancel(t *testing.T) {
@@ -156,5 +157,41 @@ func TestCredentialEndedStopsOnBehalfOnly(t *testing.T) {
 			t.Error("alice's queued grab ran, want it ended without running")
 		}
 		close(gate)
+	})
+}
+
+// A job whose record is still being written when its credential ends never
+// runs: its admission ends it as the credential's end would have.
+func TestCredentialEndedDuringAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := &heldRecords{Store: memrecords.New(), entered: make(chan struct{}), hold: make(chan struct{})}
+		grab := spec("grab", "arr")
+		grab.OnBehalf = true
+		r := (&rig{store: g.Store, log: &runLog{}}).open(t, scheduler.Config[payload]{
+			Kinds:   []scheduler.KindSpec[payload]{grab},
+			Records: g,
+		})
+		started := startAsync(t.Context(), r.ex, api("grab", "a", "alice", payload{}))
+		<-g.entered
+		r.ex.CredentialEnded("alice")
+		close(g.hold)
+		a := <-started
+		synctest.Wait()
+		if a.err != nil || a.s.Job == "" {
+			t.Fatalf("Start = (%+v, %v), want the admitted job with a nil error", a.s, a.err)
+		}
+		if r.log.ran(a.s.Job) {
+			t.Error("the grab ran after its credential ended, want it ended without running")
+		}
+		r.wantEnd(t, a.s.Job, scheduler.ResultCancelled, scheduler.Reason{Code: scheduler.ReasonCredentialEnded})
+		if rec := r.rec(t, a.s.Job); !rec.StartedAt.IsZero() {
+			t.Errorf("record StartedAt = %v, want zero for a job that never started", rec.StartedAt)
+		}
+		if n := len(r.ex.Live()); n != 0 {
+			t.Errorf("%d live jobs, want none", n)
+		}
+		if stopping, err := r.ex.Cancel(t.Context(), a.s.Job); stopping || err != nil {
+			t.Errorf("Cancel after the credential's end = (%t, %v), want (false, nil) as a repeat cancel", stopping, err)
+		}
 	})
 }

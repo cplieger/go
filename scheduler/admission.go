@@ -81,20 +81,30 @@ func (e *Executor[P]) matchLocked(ctx context.Context, spec *KindSpec[P], j *Job
 }
 
 // admit writes the record of en, which holds its place in the bounds, and
-// queues it.
+// queues it. A CredentialEnded during the write ends it instead, cancelled.
 func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 	err := e.insert(ctx, en)
 	e.mu.Lock()
-	if err == nil && (e.closed || e.holds > 0) {
+	stopped := err == nil && en.stopEnd != nil
+	if err == nil && !stopped && (e.closed || e.holds > 0) {
 		err = errClosed
 	}
-	if err != nil {
+	if err != nil || stopped {
 		e.unwaitLocked(en)
 		en.state = stateEnded
-		e.removeLocked(en)
+		if !stopped {
+			// A stopped job stays live, so a Cancel finds it, until ended
+			// has written its end.
+			e.removeLocked(en)
+		}
 		close(en.admitted)
 		e.mu.Unlock()
-		if errors.Is(err, errClosed) {
+		switch {
+		case stopped:
+			e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
+			e.ended(ctx, en, *en.stopEnd)
+			return Started{Job: en.j.ID}, nil
+		case errors.Is(err, errClosed):
 			e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
 			e.ended(ctx, en, queueFull)
 			return Started{}, ErrQueueFull

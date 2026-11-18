@@ -68,9 +68,10 @@ func (e *Executor[P]) cancelledBefore(ctx context.Context, id ID) (stopping bool
 	return false, ErrNotCancellable
 }
 
-// CredentialEnded stops each queued or running job of an OnBehalf kind that
-// credential started: it ends cancelled with reason credential_ended. A job
-// in its commit step completes.
+// CredentialEnded stops each job of an OnBehalf kind that credential
+// started: it ends cancelled with reason credential_ended, and one not yet
+// running, its record being written included, never runs. A job in its
+// commit step completes.
 func (e *Executor[P]) CredentialEnded(credential string) {
 	if credential == "" {
 		return
@@ -83,6 +84,10 @@ func (e *Executor[P]) CredentialEnded(credential string) {
 			continue
 		}
 		switch {
+		case en.state == stateAdmitting:
+			// admit ends it once its record is written.
+			stop := end
+			en.stopEnd = &stop
 		case en.state == stateQueued:
 			dequeued = append(dequeued, en)
 		case en.state == stateRunning && !en.stopped && !en.returned && !en.committing:
