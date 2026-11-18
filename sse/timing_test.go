@@ -89,7 +89,8 @@ func TestTiming_goConstantsMatchContract(t *testing.T) {
 }
 
 // TestTiming_goModRequires pins the module's dependency footprint: httpserver and
-// textsafe at runtime, both stdlib-only, and rapid for the property tests.
+// textsafe at runtime, the ssrf and urlform httpserver brings, and rapid for the
+// property tests.
 func TestTiming_goModRequires(t *testing.T) {
 	raw, err := os.ReadFile("go.mod")
 	if err != nil {
@@ -110,7 +111,14 @@ func TestTiming_goModRequires(t *testing.T) {
 			got = append(got, strings.Fields(line)[0])
 		}
 	}
-	want := []string{"github.com/cplieger/go/httpserver", "github.com/cplieger/go/textsafe", "pgregory.net/rapid"}
+	slices.Sort(got)
+	want := []string{
+		"github.com/cplieger/go/httpserver/v2",
+		"github.com/cplieger/go/ssrf",
+		"github.com/cplieger/go/textsafe",
+		"github.com/cplieger/go/urlform",
+		"pgregory.net/rapid",
+	}
 	if !slices.Equal(got, want) {
 		t.Errorf("go.mod requires = %q, want exactly %q", got, want)
 	}

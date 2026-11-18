@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // The scope limits a client must agree with, so they are fixed rather than

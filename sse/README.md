@@ -4,7 +4,7 @@
 
 sse keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client.
 
-A native `EventSource` cannot tell a silent stream from a dead one, so a tab that slept can silently stop updating. The sse hub and client replace the cursors, heartbeats and resync code you would write around that. The Go module has two dependencies from the same repository, [httpserver](https://github.com/cplieger/go/tree/main/httpserver) and [textsafe](https://github.com/cplieger/go/tree/main/textsafe), which use only the standard library. The TypeScript package has no runtime dependencies. Both are Apache-2.0.
+A native `EventSource` cannot tell a silent stream from a dead one, so a tab that slept can silently stop updating. The sse hub and client replace the cursors, heartbeats and resync code you would write around that. The Go module depends on [httpserver](https://github.com/cplieger/go/tree/main/httpserver) and [textsafe](https://github.com/cplieger/go/tree/main/textsafe) from the same repository. httpserver brings that repository's [ssrf](https://github.com/cplieger/go/tree/main/ssrf) and [urlform](https://github.com/cplieger/go/tree/main/urlform), and all four otherwise use only the standard library. The TypeScript package has no runtime dependencies. Both are Apache-2.0.
 
 ## Why use it
 
@@ -126,7 +126,7 @@ The client needs Chrome 98, Firefox 97 or Safari 15.4 or later. `SharedWorker` i
 - The browser client's parse loop follows [eventsource-parser](https://github.com/rexxars/eventsource-parser).
 - The silence watchdog's `max(3 × keepalive, 15s)` follows [Yaffle/EventSource](https://github.com/Yaffle/EventSource).
 - The client's version map follows IMAP CONDSTORE, [RFC 7162](https://www.rfc-editor.org/rfc/rfc7162). A new epoch discards every cached version, as a `UIDVALIDITY` change does.
-- The Go module's JSON error responses come from [httpserver](https://github.com/cplieger/go/tree/main/httpserver), a module by the same author that uses only the standard library.
+- The Go module's JSON error responses come from [httpserver](https://github.com/cplieger/go/tree/main/httpserver), a module by the same author.
 
 ## Contributing
 
