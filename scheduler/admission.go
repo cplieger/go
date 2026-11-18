@@ -9,13 +9,13 @@ import (
 )
 
 // Start admits j, writing its record (a batch's with one queued line per item)
-// before it is queued. A queued job of its kind and scope or one covering it,
-// or a running one of its scope that started inside the kind's Fresh window,
-// answers it instead (Joined); a running one answers a timer request. It
-// answers *RecentError under Fresh after a recent end, ErrQueueFull past a
-// queue bound (the record ended skipped, queue_full), ErrStoreUnavailable when
-// the record cannot be written, ErrBatchSize for an item count outside 1 to
-// MaxItems, ErrUnknownKind and ErrScope.
+// before it is queued. Its owner's held proposal of its scope, a queued job of
+// its scope or one covering it, or a running one of its scope inside Fresh, of
+// a proposing kind or serving a timer request, answers it instead (Joined). A
+// proposing kind's jobs coalesce per owner. It answers *RecentError, and
+// ErrQueueFull past a queue or proposal bound (the record ended skipped,
+// queue_full); ErrStoreUnavailable when the record cannot be written,
+// ErrBatchSize, ErrUnknownKind and ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -31,6 +31,10 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 
 	e.mu.Lock()
 	for {
+		if s, ok := e.heldLocked(spec, &en.j); ok {
+			e.mu.Unlock()
+			return s, nil
+		}
 		s, admitting, ok := e.joinLocked(&en.j)
 		if ok {
 			e.mu.Unlock()
@@ -51,7 +55,7 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 		e.mu.Unlock()
 		return s, err
 	}
-	if e.fullLocked(&en.j) {
+	if e.fullLocked(&en.j) || e.proposalsFullLocked(spec, &en.j) {
 		e.mu.Unlock()
 		return Started{}, e.refuse(ctx, en)
 	}
@@ -158,7 +162,7 @@ func (e *Executor[P]) joinLocked(j *Job[P]) (s Started, admitting <-chan struct{
 		return Started{Job: q.j.ID, Position: q.position(), Joined: true}, nil, true
 	}
 	for _, q := range e.live {
-		if q.waiting() && q.j.Kind == j.Kind && q.j.Scope == j.Scope {
+		if q.waiting() && q.sameScope(j) {
 			return match(q)
 		}
 	}
@@ -170,26 +174,33 @@ func (e *Executor[P]) joinLocked(j *Job[P]) (s Started, admitting <-chan struct{
 	return Started{}, nil, false
 }
 
+// sameScope reports whether the job is of j's kind and scope, and of j's
+// owner for a proposing kind, whose proposal is its owner's.
+func (en *job[P]) sameScope(j *Job[P]) bool {
+	return en.j.Kind == j.Kind && en.j.Scope == j.Scope && (!en.spec.Proposes || en.j.Owner == j.Owner)
+}
+
 // waiting reports whether the job is admitting or queued.
 func (en *job[P]) waiting() bool { return en.state == stateAdmitting || en.state == stateQueued }
 
 // answerLocked answers j from a running job of its kind and scope that no
 // cancel has stopped and that is not yielded (rule 3):
 // one that started inside the kind's Fresh window joins it, and so does a
-// timer request, which never queues a follow-up behind it. Otherwise a Fresh
+// timer request, which never queues a follow-up behind it, and a proposing
+// kind's, whose scope holds its expectation. Otherwise a Fresh
 // kind refuses j with *RecentError inside the window after its scope's last
 // moving end (rule 4). ok false and a nil error leave j to be queued.
 func (e *Executor[P]) answerLocked(spec *KindSpec[P], j *Job[P]) (s Started, ok bool, err error) {
 	var run *job[P]
 	for _, q := range e.live {
-		if q.state == stateRunning && !q.stopped && q.yield == nil && q.j.Kind == j.Kind && q.j.Scope == j.Scope &&
+		if q.state == stateRunning && !q.stopped && q.yield == nil && q.sameScope(j) &&
 			(run == nil || q.startedAt.After(run.startedAt)) {
 			run = q
 		}
 	}
 	now := time.Now()
 	if run != nil {
-		if j.Trigger == TriggerSchedule || (spec.Fresh != nil && now.Sub(run.startedAt) < spec.Fresh(j.Scope)) {
+		if j.Trigger == TriggerSchedule || spec.Proposes || (spec.Fresh != nil && now.Sub(run.startedAt) < spec.Fresh(j.Scope)) {
 			return Started{Job: run.j.ID, Joined: true}, true, nil
 		}
 		return Started{}, false, nil

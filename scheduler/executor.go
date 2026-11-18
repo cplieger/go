@@ -127,12 +127,13 @@ type Executor[P any] struct {
 	owners  map[string]int // waiting jobs per credential
 	// recent is when each Fresh kind's scope may run again after its last
 	// moving end (rule 4); an entry goes once its time has passed.
-	recent   map[ScheduledScope]time.Time
-	ready    chan struct{} // closed by Run
-	observer Observer
-	live     []*job[P] // admitting, queued and running jobs, in admission order
-	wg       sync.WaitGroup
-	mu       sync.Mutex
+	recent    map[ScheduledScope]time.Time
+	proposals map[ProposalID]*proposal
+	ready     chan struct{} // closed by Run
+	observer  Observer
+	live      []*job[P] // admitting, queued and running jobs, in admission order
+	wg        sync.WaitGroup
+	mu        sync.Mutex
 
 	maxQueued, maxPerOwner int
 	waiting                int
@@ -160,6 +161,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		slots:       map[string]*slot{},
 		owners:      map[string]int{},
 		recent:      map[ScheduledScope]time.Time{},
+		proposals:   map[ProposalID]*proposal{},
 		ready:       make(chan struct{}),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
@@ -251,8 +253,8 @@ const (
 )
 
 // job is one admitted job. state, cancel, startedAt, stopEnd, stopped,
-// returned, committing, yield, the counts and w's ownership are guarded by the
-// executor's mu; rec, claimed and factsDropped are guarded by recMu once the
+// returned, committing, yield, proposal, the counts and w's ownership are
+// guarded by the executor's mu; rec, claimed and factsDropped are guarded by recMu once the
 // job runs, which also orders its record writes.
 type job[P any] struct {
 	spec      *KindSpec[P]
@@ -267,6 +269,7 @@ type job[P any] struct {
 	stopEnd     *End
 	claimed     []bool    // a batch's lines an Item call has taken
 	yield       *yielding // its Yield's wait; nil when it is not yielded
+	proposal    *proposal // its Run.Propose's; nil until it proposes
 	relay       relay
 	j           Job[P]
 	rec         Record
@@ -399,6 +402,7 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	if en.spec.Fresh != nil && moving(stored.Result) {
 		e.noteRecentLocked(en, at)
 	}
+	e.keepLocked(en, at)
 	e.mu.Unlock()
 	if en.w != nil {
 		en.slot.drop(en.w)

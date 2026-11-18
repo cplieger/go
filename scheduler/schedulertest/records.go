@@ -184,10 +184,14 @@ func putNewerRev(t *testing.T, r scheduler.Records) {
 	next.Phase, next.Rev = phaseFetch, rec.Rev+1
 	next.Phases = []scheduler.PhaseAt{{Phase: scheduler.PhaseStarted, At: rec.StartedAt}, {Phase: phaseFetch, At: time.Now()}}
 	next.Step = struct{ N, Of int }{1, 3}
+	next.Proposal = "proposal"
 	f.put(&next)
 	got := f.get(rec.ID)
 	if got.Phase != phaseFetch || got.Step.N != 1 || got.Step.Of != 3 || len(got.Phases) != 2 || got.Phases[1].Phase != phaseFetch {
 		t.Errorf("after a phase Put: phase %q step %+v phases %+v; want fetch, 1 of 3, two phases", got.Phase, got.Step, got.Phases)
+	}
+	if got.Proposal != next.Proposal {
+		t.Errorf("after a Put naming a proposal: Proposal %q, want %q", got.Proposal, next.Proposal)
 	}
 }
 
