@@ -105,6 +105,8 @@ type keyedFixture struct {
 	keys    []httpwire.IdempotencyKey
 	events  []httpwire.IdempotencyEvent
 	holds   int
+	held    int  // requests inside the hold now
+	holdCap int  // past it the hold answers held_limit; 0 is no cap
 	refuse  bool // the hold answers held_limit
 	mu      sync.Mutex
 }
@@ -137,12 +139,20 @@ func (kf *keyedFixture) hold(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		kf.mu.Lock()
 		kf.holds++
-		refuse := kf.refuse
+		refuse := kf.refuse || kf.holdCap > 0 && kf.held >= kf.holdCap
+		if !refuse {
+			kf.held++
+		}
 		kf.mu.Unlock()
 		if refuse {
 			kf.catalog.WriteError(w, r, &httpwire.Error{Code: "held_limit", Message: "too many held requests", RetryAfter: 5 * time.Second})
 			return
 		}
+		defer func() {
+			kf.mu.Lock()
+			kf.held--
+			kf.mu.Unlock()
+		}()
 		next.ServeHTTP(w, r)
 	})
 }

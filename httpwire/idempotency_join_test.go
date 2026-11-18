@@ -111,6 +111,40 @@ func TestJoinWaiterOverTheHoldCapAnswersHeldLimit(t *testing.T) {
 	})
 }
 
+func TestJoinPastTheHoldCapAnswersHeldLimitAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
+		kf.mu.Lock()
+		kf.holdCap = 8
+		kf.mu.Unlock()
+		release, first := blockedClaimant(t, kf)
+		recs := make([]*httptest.ResponseRecorder, 8)
+		var wg sync.WaitGroup
+		for i := range recs {
+			wg.Go(func() { recs[i] = kf.quickJob(`"j"`) })
+		}
+		synctest.Wait()
+		start := time.Now()
+		rec := kf.quickJob(`"j"`)
+		if rec.Code != http.StatusTooManyRequests || codeOf(t, rec) != "held_limit" || rec.Header().Get("Retry-After") != "5" {
+			t.Errorf("the ninth waiter answered %d %s Retry-After %q, want 429 held_limit with Retry-After 5", rec.Code, rec.Body, rec.Header().Get("Retry-After"))
+		}
+		if waited := time.Since(start); waited != 0 {
+			t.Errorf("the ninth waiter waited %v, want an answer at once", waited)
+		}
+		close(release)
+		wg.Wait()
+		for i, rec := range append(recs, first()) {
+			if rec.Code != http.StatusOK || rec.Body.String() != quickOne {
+				t.Errorf("request %d answered %d %q, want the run's answer", i, rec.Code, rec.Body)
+			}
+		}
+		if kf.runsOf("jobs.quick") != 1 {
+			t.Errorf("%d runs, want 1", kf.runsOf("jobs.quick"))
+		}
+	})
+}
+
 func TestJoinWaiterWhoseClientLeftAnswersNothing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
