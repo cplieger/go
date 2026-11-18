@@ -91,7 +91,9 @@ func WithClientFloor(f ClientFloor) Option {
 }
 
 // WithSpoolDir names the private directory a Keyed Raw row's body is spooled
-// in; New requires it for such a row.
+// in; New requires it for such a row. New removes the regular files in dir
+// named httpwire-spool-*, which a crash left, and nothing else; it refuses a
+// dir it cannot read.
 func WithSpoolDir(dir string) Option {
 	return func(o *options) { o.spoolDir = dir }
 }

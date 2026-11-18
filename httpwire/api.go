@@ -62,6 +62,11 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	if len(c.errs) > 0 {
 		return nil, errors.Join(c.errs...)
 	}
+	if o.spoolDir != "" {
+		if err := cleanSpool(o.spoolDir); err != nil {
+			return nil, fmt.Errorf("httpwire: WithSpoolDir: %w", err)
+		}
+	}
 	a := &API{
 		table: d, logger: o.logger, schema: schema, sealer: s, version: WireVersion(o.schema), o: o, mux: http.NewServeMux(),
 		idem: newKeyedRuns(o.idem, lim, d),
@@ -201,13 +206,42 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 		switch {
 		case body != nil:
 			r.Body = io.NopCloser(bytes.NewReader(body))
+		case capped && ep.Keyed:
+			a.runSpooled(w, aw, r, b, d, limit)
+			return
 		case capped:
 			aw.body = &cappedBody{ReadCloser: http.MaxBytesReader(w, r.Body, int64(limit)), limit: limit}
 			r.Body = aw.body
 		}
-		b.handler.ServeHTTP(aw, r)
-		aw.finish()
+		a.runOwn(aw, r, b, d)
 	})
+}
+
+// runSpooled runs a Keyed Raw write over its spooled body, which the
+// fingerprint covers through its digest. The spool file is removed when
+// the handler returns, a panic included.
+func (a *API) runSpooled(w http.ResponseWriter, aw *answerWriter, r *http.Request, b *Binding, d *decoded, limit int) {
+	f, digest, e := a.spool(w, r, aw.ep, limit)
+	if f != nil {
+		defer a.unspool(r, f)
+	}
+	if e != nil {
+		a.table.Catalog.WriteError(w, r, e)
+		return
+	}
+	d.rawBody, r.Body = digest, io.NopCloser(f)
+	a.runOwn(aw, r, b, d)
+}
+
+// runOwn runs a Raw or Stream handler, once per Idempotency-Key on a Keyed
+// row.
+func (a *API) runOwn(aw *answerWriter, r *http.Request, b *Binding, d *decoded) {
+	if aw.ep.Keyed {
+		a.keyed(aw, r, aw.ep, d, b.handler.ServeHTTP)
+	} else {
+		b.handler.ServeHTTP(aw, r)
+	}
+	aw.finish()
 }
 
 // runJSON runs a JSON row's handler and writes its answer, once per

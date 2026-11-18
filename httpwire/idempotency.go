@@ -215,7 +215,8 @@ func fingerprint(row string, d *decoded) ([32]byte, error) {
 	part, err := json.Marshal(struct {
 		Params, Query, Body any
 		IfMatch             string
-	}{addressed(d.params), addressed(d.query), addressed(d.body), d.ifMatch.String()})
+		RawBody             []byte `json:",omitempty"`
+	}{addressed(d.params), addressed(d.query), addressed(d.body), d.ifMatch.String(), d.rawBody})
 	if err != nil {
 		return [32]byte{}, err
 	}

@@ -106,6 +106,7 @@ type decoded struct {
 	list                *listCursor
 	key                 string
 	position            []byte
+	rawBody             []byte // a Keyed Raw row's body digest
 	ifMatch             Tag
 	limit               int
 	backward            bool
