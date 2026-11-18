@@ -17,6 +17,7 @@ type options struct {
 	keyOf       func(*http.Request) (string, bool)
 	credential  func(*http.Request) string
 	cursorOwner func(*http.Request) string
+	outage      func() string
 	hold        func(http.Handler) http.Handler
 	floor       *ClientFloor
 	logger      *slog.Logger
@@ -106,4 +107,14 @@ func WithFeed(f interface {
 // to slog.Default() as it is when the line is written.
 func WithLogger(l *slog.Logger) Option {
 	return func(o *options) { o.logger = l }
+}
+
+// WithOutage reports, per request, which file cannot open: "accounts",
+// "store" or "" when both are open. While it names one, every row not
+// marked DuringOutage answers accounts_unavailable or store_unavailable
+// before its guard runs; a mount is refused only while the accounts file is
+// out. Any other answer is a wiring bug, answered internal_error. nil is
+// no outage.
+func WithOutage(fn func() string) Option {
+	return func(o *options) { o.outage = fn }
 }

@@ -235,3 +235,39 @@ func TestATypeEmbeddingStatusIsAPlainBody(t *testing.T) {
 		t.Errorf("answer = %d %q, want the primary 200 with the whole value", rec.Code, rec.Body.String())
 	}
 }
+
+func TestHeldRowAnswers200And204(t *testing.T) {
+	for name, tc := range map[string]struct {
+		answer      httpwire.Status[nudge]
+		status      int
+		body, ctype string
+	}{
+		"a nudge at 200":           {httpwire.Answer(http.StatusOK, nudge{At: 7}), http.StatusOK, "{\"at\":7}\n", "application/json"},
+		"the wait's end at 204":    {httpwire.Answer(http.StatusNoContent, nudge{}), http.StatusNoContent, "", ""},
+		"a 204 drops a given body": {httpwire.Answer(http.StatusNoContent, nudge{At: 9}), http.StatusNoContent, "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newCase(t)
+			held := 0
+			c.opts["hold"] = httpwire.WithHold(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					held++
+					next.ServeHTTP(w, r)
+				})
+			})
+			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+				return tc.answer, nil
+			})
+			rec := serve(c.mustBuild(t), http.MethodGet, "/api/events/wait", "")
+			if rec.Code != tc.status || rec.Body.String() != tc.body || rec.Header().Get("Content-Type") != tc.ctype {
+				t.Errorf("answer %d %q %q, want %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String(), tc.status, tc.ctype, tc.body)
+			}
+			if held != 1 {
+				t.Errorf("held %d times, want once", held)
+			}
+			if rec.Header().Get("Wire-Version") != httpwire.WireVersion(apiDoc(t)) || rec.Header().Get(httpserver.HeaderRequestID) == "" {
+				t.Errorf("headers %v, want Wire-Version and X-Request-Id", rec.Header())
+			}
+		})
+	}
+}

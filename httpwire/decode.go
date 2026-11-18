@@ -184,7 +184,7 @@ func readBody(r *http.Request, limit int) ([]byte, *Error) {
 	case err != nil:
 		return nil, &Error{Code: codeBadBody, Message: "the body could not be read"}
 	case len(b) > limit:
-		return nil, &Error{Code: "body_too_large", Message: "the body is over " + strconv.Itoa(limit) + " bytes"}
+		return nil, tooLarge(limit)
 	}
 	return b, nil
 }

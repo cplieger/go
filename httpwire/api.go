@@ -20,11 +20,12 @@ import (
 // API serves one checked table under its Prefix. It is safe for concurrent
 // use.
 type API struct {
-	table  *Table
-	mux    *http.ServeMux
-	logger *slog.Logger
-	schema *Schema
-	o      options
+	table   *Table
+	mux     *http.ServeMux
+	logger  *slog.Logger
+	schema  *Schema
+	version string
+	o       options
 }
 
 // New checks t against its bindings and options and builds its API. Its
@@ -52,14 +53,14 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	if len(c.errs) > 0 {
 		return nil, errors.Join(c.errs...)
 	}
-	a := &API{table: d, logger: o.logger, schema: schema, o: o, mux: http.NewServeMux()}
+	a := &API{table: d, logger: o.logger, schema: schema, version: WireVersion(o.schema), o: o, mux: http.NewServeMux()}
 	for i := range d.Endpoints {
 		ep := &d.Endpoints[i]
 		a.mux.Handle(ep.Method+" "+ep.Path, &route{a.rowHandler(ep, bound[ep.Name])})
 	}
 	for _, m := range d.Mounts {
 		for i := range m.Rows {
-			a.mux.Handle(m.Rows[i].Method+" "+m.Rows[i].Path, &route{m.Handler})
+			a.mux.Handle(m.Rows[i].Method+" "+m.Rows[i].Path, &route{a.mountHandler(&m.Rows[i], m.Handler)})
 		}
 	}
 	return a, nil
@@ -73,8 +74,11 @@ func (a *API) Table() *Table { return cloneTable(a.table) }
 type route struct{ http.Handler }
 
 // ServeHTTP answers a row, or method_not_allowed with Allow when the path
-// is a row's under another method, or not_found.
+// is a row's under another method, or not_found. Every answer carries
+// Wire-Version and the request's X-Request-Id.
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(headerWireVersion, a.version)
+	r = withRequestID(w, r)
 	if h, _ := a.mux.Handler(r); isRoute(h) {
 		a.mux.ServeHTTP(w, r)
 		return
@@ -85,6 +89,21 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.table.Catalog.WriteError(w, r, &Error{Code: codeNotFound, Message: "no route matches the path"})
+}
+
+// withRequestID gives the answer and r's context one request id: the
+// context's, else a valid inbound X-Request-Id, else a fresh one.
+func withRequestID(w http.ResponseWriter, r *http.Request) *http.Request {
+	id := httpserver.RequestIDFromContext(r.Context())
+	if httpserver.ValidRequestID(id) {
+		w.Header().Set(httpserver.HeaderRequestID, id)
+		return r
+	}
+	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
+		id = httpserver.NewRequestID()
+	}
+	w.Header().Set(httpserver.HeaderRequestID, id)
+	return r.WithContext(httpserver.WithRequestID(r.Context(), id))
 }
 
 func isRoute(h http.Handler) bool {
@@ -110,11 +129,15 @@ func (a *API) allowed(r *http.Request) string {
 }
 
 // rowHandler is ep's handler under the binder's order: the cross-origin
-// check on a write, the client floor, the guard, the principal's credential,
-// the key rate, the held-request cap, then decoding and the handler. So a
-// refused principal is never decoded and a key over its rate costs no decode.
+// check on a write, the client floor, the outage, the guard, the principal's
+// credential, the key rate, the held-request cap, then the wire version on
+// a write, decoding and the handler. So a refused principal is never
+// decoded and a key over its rate costs no decode.
 func (a *API) rowHandler(ep *Endpoint, b *Binding) http.Handler {
 	h := a.decoded(ep, b)
+	if isWrite(ep.Method) {
+		h = a.wireCheck(h)
+	}
 	if ep.Held {
 		h = a.o.hold(h)
 	}
@@ -127,6 +150,9 @@ func (a *API) rowHandler(ep *Endpoint, b *Binding) http.Handler {
 	if a.o.guard != nil {
 		h = a.o.guard.Wrap(ep, h)
 	}
+	if a.o.outage != nil && !ep.DuringOutage {
+		h = a.outage(false, h)
+	}
 	if a.o.floor != nil {
 		h = a.clientFloor(h)
 	}
@@ -136,29 +162,99 @@ func (a *API) rowHandler(ep *Endpoint, b *Binding) http.Handler {
 	return h
 }
 
-// decoded decodes ep's parts and runs its binding. A Raw or Stream handler
-// reads the request itself, so its parts are checked and its JSON body, if
-// any, handed back unread.
+// decoded decodes ep's parts and runs its binding, reading the feed
+// position before the handler so a change it commits is seen as newer. A
+// Raw or Stream handler reads the request itself, so its parts are checked,
+// its JSON body, if any, handed back unread, and a Raw write's other body
+// held to the row's cap.
 func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
+	own := b.kind != bindJSON
+	capped := own && ep.Kind == Raw && isWrite(ep.Method) && ep.Request == nil
+	limit := cmp.Or(ep.MaxBody, a.table.MaxBody)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		d, body, e := a.decode(r, ep)
+		if e == nil && capped && r.ContentLength > int64(limit) {
+			e = tooLarge(limit)
+		}
 		if e != nil {
 			a.table.Catalog.WriteError(w, r, e)
 			return
 		}
-		if b.kind != bindJSON {
-			if body != nil {
-				r.Body = io.NopCloser(bytes.NewReader(body))
+		aw := &answerWriter{ResponseWriter: w, a: a, r: r, ep: ep, own: own}
+		if len(ep.Changes) > 0 {
+			aw.position = a.o.feed.Position(r, ep.Changes)
+		}
+		if !own {
+			code, answer, err := b.run(r.Context(), d)
+			if err != nil {
+				a.writeError(aw, r, ep, err)
+				return
 			}
-			b.handler.ServeHTTP(w, r)
+			a.writeAnswer(aw, r, ep, code, answer)
 			return
 		}
-		code, answer, err := b.run(r.Context(), d)
-		if err != nil {
-			a.writeError(w, r, ep, err)
+		switch {
+		case body != nil:
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		case capped:
+			aw.body = &cappedBody{ReadCloser: http.MaxBytesReader(w, r.Body, int64(limit)), limit: limit}
+			r.Body = aw.body
+		}
+		b.handler.ServeHTTP(aw, r)
+		aw.finish()
+	})
+}
+
+// wireCheck refuses a write built for another wire version; a request that
+// names none passes.
+func (a *API) wireCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, v := range r.Header.Values(headerWireVersion) {
+			if v != a.version {
+				a.table.Catalog.WriteError(w, r, &Error{Code: codeWire, Message: "the request was built for another version of this API"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// mountHandler is a mount row's wrap, outside the mount's own guard: the
+// client floor, the accounts outage, and the wire version on a write. Each
+// refusal runs nothing and names nothing about the principal.
+func (a *API) mountHandler(ep *Endpoint, h http.Handler) http.Handler {
+	if isWrite(ep.Method) {
+		h = a.wireCheck(h)
+	}
+	if a.o.outage != nil {
+		h = a.outage(true, h)
+	}
+	if a.o.floor != nil {
+		h = a.clientFloor(h)
+	}
+	return h
+}
+
+// outage answers for the file WithOutage names; a mount serves sign-in
+// while only the store is out.
+func (a *API) outage(mount bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch file := a.o.outage(); file {
+		case "":
+		case "accounts":
+			a.table.Catalog.WriteError(w, r, &Error{Code: codeAccounts, Message: "the account store cannot open"})
+			return
+		case "store":
+			if !mount {
+				a.table.Catalog.WriteError(w, r, &Error{Code: "store_unavailable", Message: "the data store cannot open"})
+				return
+			}
+		default:
+			a.log().ErrorContext(r.Context(), `httpwire: WithOutage answered a file other than "accounts" or "store"`, "file", file)
+			a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
 			return
 		}
-		a.writeAnswer(w, r, ep, code, answer)
+		next.ServeHTTP(w, r)
 	})
 }
 

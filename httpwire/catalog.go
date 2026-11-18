@@ -23,6 +23,8 @@ const (
 	codeInternal    = "internal_error"
 	codeNotFound    = "not_found"
 	codeBadBody     = "bad_body"
+	codeWire        = "wire_mismatch"
+	codeAccounts    = "accounts_unavailable"
 	internalMessage = "internal error"
 )
 
@@ -36,7 +38,7 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	"if_match_required":            {Status: http.StatusPreconditionRequired, Remediation: "Read the row, then resend with If-Match set to the tag the read returned."},
 	"if_match_invalid":             {Status: http.StatusBadRequest, Remediation: "Send If-Match as the quoted tag a read of the row returned."},
 	"stale_version":                {Status: http.StatusPreconditionFailed, Remediation: "Read the row again, reapply the change, and resend with the new tag."},
-	"wire_mismatch":                {Status: http.StatusConflict, Remediation: "Reload the client: the server's API changed since it loaded."},
+	codeWire:                       {Status: http.StatusConflict, Remediation: "Reload the client: the server's API changed since it loaded."},
 	"idempotency_key_invalid":      {Status: http.StatusBadRequest, Remediation: `Send the key as a quoted string: Idempotency-Key: "<key>".`},
 	"idempotency_key_required":     {Status: http.StatusBadRequest, Remediation: `Resend with an Idempotency-Key header: Idempotency-Key: "<key>".`},
 	"idempotency_key_unsupported":  {Status: http.StatusBadRequest, Remediation: "Resend without the Idempotency-Key header; this endpoint does not take one."},
@@ -48,7 +50,7 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	"held_limit":                   {Status: http.StatusTooManyRequests, Remediation: "Wait for an open request or stream to end, then retry.", NoEffect: true},
 	"person_required":              {Status: http.StatusForbidden, Remediation: "Do this from a signed-in session; an API key cannot."},
 	"store_unavailable":            {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
-	"accounts_unavailable":         {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
+	codeAccounts:                   {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
 	"maintenance":                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
 }
 

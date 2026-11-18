@@ -26,8 +26,8 @@ var (
 		"idempotency_store_full", "idempotency_answer_too_large", "held_limit",
 	}
 	ifMatchUnion  = []string{"if_match_required", "if_match_invalid", "stale_version"}
-	writeUnion    = []string{"wire_mismatch", "cross_origin_refused"}
-	everyRowUnion = []string{"accounts_unavailable", "maintenance", "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
+	writeUnion    = []string{codeWire, "cross_origin_refused"}
+	everyRowUnion = []string{codeAccounts, "maintenance", "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
 )
 
 var (
