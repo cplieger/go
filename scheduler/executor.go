@@ -152,6 +152,7 @@ type Executor[P any] struct {
 	// scope with no last end counts from it.
 	countFrom time.Time
 	ready     chan struct{} // closed by Run
+	stop      chan struct{} // closed once Run's context ended
 	kick      chan struct{} // a Live count changed; relayMoves drains it
 	observer  Observer
 	live      []*job[P] // admitting, queued and running jobs, in admission order
@@ -160,9 +161,11 @@ type Executor[P any] struct {
 
 	maxQueued, maxPerOwner int
 	waiting                int
-	holds                  int // Hold(all) calls not yet resumed
+	holds                  int    // Hold(all) calls not yet resumed
+	readGen                uint64 // moved by each hold, so a superseded retryResume stops
 	started, closed        bool
 	endsRead               bool // Run has read Records.LastEnds, so timers may be armed
+	stale                  bool // the last resume's LastEnds read has not answered yet
 }
 
 // NewExecutor checks cfg and answers an executor that does nothing until Run.
@@ -191,6 +194,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		seen:        map[ScheduledScope]struct{}{},
 		ends:        map[ScheduledScope]LastEnd{},
 		ready:       make(chan struct{}),
+		stop:        make(chan struct{}),
 		kick:        make(chan struct{}, 1),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
@@ -253,8 +257,10 @@ func checkPhases(phases []Phase) error {
 // running job and returns once every one has returned. A job it cut short
 // ends interrupted, unless its end committed with its work or it was in its
 // commit step, and a queued job ends interrupted without running. It reads
-// Records.LastEnds first, and no scheduled scope wakes before that read
-// answers. A second call answers an error at once.
+// Records.LastEnds first, retrying a failed read after 1, 2, 4 and 8 minutes
+// and then every 15; no scheduled scope wakes before a read answers, and
+// each deadline counts from Run's start meanwhile. A second call answers an
+// error at once.
 func (e *Executor[P]) Run(ctx context.Context) error {
 	e.mu.Lock()
 	if e.started {
@@ -274,6 +280,7 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 	<-ctx.Done()
 	e.mu.Lock()
 	e.closed = true
+	close(e.stop)
 	e.stopTimersLocked()
 	var dequeued []*job[P]
 	for _, en := range slices.Clone(e.live) {

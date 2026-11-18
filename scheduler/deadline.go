@@ -41,10 +41,10 @@ func (e *Executor[P]) Deadline(kind Kind, scope string) time.Time {
 
 // watchLocked logs t's deadline once at ERROR when it has passed and once at
 // INFO when it is ahead again, and checks it again just after it passes.
-// Nothing is checked when armableLocked answers false.
+// Nothing is checked when watchableLocked answers false.
 func (e *Executor[P]) watchLocked(key ScheduledScope, t *timed) {
 	e.stopCheckLocked(t)
-	if !e.armableLocked() {
+	if !e.watchableLocked() {
 		return
 	}
 	d := t.watch.Deadline()

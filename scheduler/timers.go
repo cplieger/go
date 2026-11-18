@@ -38,12 +38,11 @@ type timed struct {
 // Schedule sets one scheduled scope's live cadence. A changed cadence, from
 // TriggerOnly included, counts the wait and the deadline from the change until
 // the next moving end, firing nothing at it; the same cadence changes neither,
-// and TriggerOnly has Unschedule's effect. A scope's first Schedule in the
-// executor's life counts both from its last moving end in Records.LastEnds,
-// else from the later of Run's start and the call. Before changing anything it
-// refuses an unknown kind (ErrUnknownKind), a scope outside its grammar
-// (ErrScope), a lease whose Duration() is 0 (ErrLease) and a new scope past 64
-// (ErrTooManyScopes).
+// and TriggerOnly has Unschedule's effect. A first Schedule in the executor's
+// life counts both from the last moving end in Records.LastEnds, else from the
+// later of Run's start and the call. It refuses, changing nothing, an unknown
+// kind (ErrUnknownKind), a scope outside its grammar (ErrScope), a zero lease
+// (ErrLease) and a new scope past 64 (ErrTooManyScopes).
 func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	spec, ok := e.kinds[kind]
 	switch {
@@ -138,10 +137,22 @@ func (e *Executor[P]) stopTimerLocked(t *timed) {
 	}
 }
 
-// readEnds loads Records.LastEnds once Run starts, then sets the base of
-// each scope first scheduled before it and arms every timer.
+// readEnds reads Records.LastEnds once Run starts, retrying a failed read
+// on readBackoff until one answers or ctx ends, then sets the base of each
+// scope first scheduled before it and arms every timer. Until a read answers
+// no timer is armed and each deadline counts from start.
 func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
-	ends := e.lastEnds(ctx)
+	ends, err := e.lastEnds(ctx)
+	for n := 1; err != nil; n++ {
+		if n == 1 {
+			e.countFromStart(start)
+		}
+		e.log.Error("last job ends not read; scheduled scopes wait for a read", "err", err, "retry_in", readBackoff(n))
+		if !pause(ctx.Done(), readBackoff(n)) {
+			return
+		}
+		ends, err = e.lastEnds(ctx)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for key, end := range ends {
@@ -159,18 +170,52 @@ func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 	}
 }
 
-// lastEnds reads Records.LastEnds; a failed read is logged and answers none,
-// so each scope counts from now.
-func (e *Executor[P]) lastEnds(ctx context.Context) map[ScheduledScope]LastEnd {
+// countFromStart counts each scope first scheduled before Run's start from
+// the later of its Schedule call and start, while no LastEnds read has
+// answered, and checks each deadline.
+func (e *Executor[P]) countFromStart(start time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.countFrom = start
+	for key, t := range e.scheduled {
+		if t.fromEnds {
+			from := t.since
+			if start.After(from) {
+				from = start
+			}
+			t.watch.from(from)
+		}
+		e.watchLocked(key, t)
+	}
+}
+
+// lastEnds reads Records.LastEnds; an executor with no Records has none.
+func (e *Executor[P]) lastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error) {
 	if e.records == nil {
-		return nil
+		return nil, nil
 	}
-	ends, err := e.records.LastEnds(ctx)
-	if err != nil {
-		e.log.Error("last job ends not read; scheduled scopes count from now", "err", err)
-		return nil
+	return e.records.LastEnds(ctx)
+}
+
+// readBackoff answers the wait before the n-th retry of a failed
+// Records.LastEnds read: 1, 2, 4 and 8 minutes, then every 15.
+func readBackoff(n int) time.Duration {
+	if n > 4 {
+		return 15 * time.Minute
 	}
-	return ends
+	return time.Minute << (n - 1)
+}
+
+// pause waits d and reports true, or false when stop is closed first.
+func pause(stop <-chan struct{}, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-stop:
+		return false
+	}
 }
 
 // baseLocked counts a scope from the later of its last moving end, its
@@ -198,8 +243,7 @@ func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
 }
 
 // armLocked sets t's timer to its base plus the cadence's wait, jittered.
-// Nothing is armed before Run has read the last ends, during a Hold(all) or
-// after Run ended.
+// Nothing is armed while armableLocked answers false.
 func (e *Executor[P]) armLocked(key ScheduledScope, t *timed) {
 	e.armAtLocked(key, t, t.base.Add(JitteredDelay(t.cadence.wait(t.done), jitter)))
 }
@@ -311,8 +355,16 @@ func (e *Executor[P]) stopTimersLocked() {
 	}
 }
 
-// armableLocked reports whether timers and deadline checks may be set.
-func (e *Executor[P]) armableLocked() bool { return e.endsRead && !e.closed && e.holds == 0 }
+// armableLocked reports whether timers may be set: a LastEnds read answered
+// since Run's start and the last resume, and no hold is open.
+func (e *Executor[P]) armableLocked() bool {
+	return e.endsRead && !e.stale && !e.closed && e.holds == 0
+}
+
+// watchableLocked reports whether deadline checks may be set. They run while
+// a LastEnds read fails, since each deadline counts from the start or the
+// resume meanwhile.
+func (e *Executor[P]) watchableLocked() bool { return e.started && !e.closed && e.holds == 0 }
 
 // workDone reports whether an end did its work, so the next wake waits the
 // interval and not Retry's d.

@@ -609,7 +609,8 @@ func TestLastEndsReadRetried(t *testing.T) {
 			synctest.Wait()
 			lastEnd := before.rec(t, ran.Job).EndedAt
 			stop()
-			sleepUntil(lastEnd.Add(25 * time.Hour))
+			// Past the 24-hour wait's jitter band, so the scope is overdue.
+			sleepUntil(lastEnd.Add(27 * time.Hour))
 
 			base.store.Fail(memrecords.OpLastEnds, errDown)
 			start := time.Now()
@@ -642,8 +643,16 @@ func TestLastEndsReadRetried(t *testing.T) {
 				at    time.Duration
 				calls int
 			}{
-				{0, 1}, {time.Minute - time.Second, 1}, {time.Minute, 2}, {3*time.Minute - time.Second, 2}, {3 * time.Minute, 3},
-				{7 * time.Minute, 4}, {15 * time.Minute, 5}, {30*time.Minute - time.Second, 5}, {30 * time.Minute, 6}, {45 * time.Minute, 7},
+				{0, 1},
+				{time.Minute - time.Second, 1},
+				{time.Minute, 2},
+				{3*time.Minute - time.Second, 2},
+				{3 * time.Minute, 3},
+				{7 * time.Minute, 4},
+				{15 * time.Minute, 5},
+				{30*time.Minute - time.Second, 5},
+				{30 * time.Minute, 6},
+				{45 * time.Minute, 7},
 			} {
 				sleepUntil(start.Add(tc.at))
 				if n := store.Count(memrecords.OpLastEnds); n != tc.calls {
@@ -727,26 +736,26 @@ func TestLastEndsReadRetried(t *testing.T) {
 		})
 	})
 
-	t.Run("a hold during a resume's retry ends that retry", func(t *testing.T) {
+	t.Run("a later hold ends an earlier resume's retry", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}})
 			_, resume := heldAfterAnEnd(t, r, "source:t")
 			r.store.Fail(memrecords.OpLastEnds, errDown)
 			resume()
+			calls := r.store.Count(memrecords.OpLastEnds)
+			time.Sleep(10 * time.Second)
 			resume, err := r.ex.Hold(t.Context(), true)
 			if err != nil {
 				t.Fatalf("Hold(all) = %v, want nil", err)
 			}
-			calls := r.store.Count(memrecords.OpLastEnds)
-			time.Sleep(20 * time.Minute)
-			synctest.Wait()
-			if n := r.store.Count(memrecords.OpLastEnds); n != calls {
-				t.Errorf("LastEnds calls during a hold = %d, want %d: the hold ends the earlier resume's retry", n, calls)
-			}
-			r.store.Fail(memrecords.OpLastEnds, nil)
+			time.Sleep(10 * time.Second)
+			resumed := time.Now()
 			resume()
-			if n := r.store.Count(memrecords.OpLastEnds); n != calls+1 {
-				t.Errorf("LastEnds calls after the next resume = %d, want %d", n, calls+1)
+			sleepUntil(resumed.Add(15 * time.Minute))
+			// The second resume's own read, then its retries at 1, 3, 7 and 15
+			// minutes; the first resume's retry, due at 1 minute, never reads.
+			if n := r.store.Count(memrecords.OpLastEnds); n != calls+5 {
+				t.Errorf("LastEnds calls 15 minutes after the second resume = %d, want %d: one retry, the earlier resume's ended", n, calls+5)
 			}
 		})
 	})

@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"maps"
 	"sync"
 	"time"
 )
@@ -14,9 +13,9 @@ const holdWait = 10 * time.Second
 // each queued job interrupted, drops the held proposals, cancels each running
 // or yielded job, which ends interrupted unless in its commit step, and answers
 // once they have ended or 10 seconds have passed. Start answers ErrQueueFull
-// with no record until resume, which re-reads Records.LastEnds and counts each
-// Fresh window and scheduled scope from it, or from a later cadence change.
-// Without all nothing changes. An ended ctx, or one ending in the wait, answers
+// with no record until resume, which re-reads Records.LastEnds, retried as at
+// Run's start, and counts each Fresh window and scheduled scope from it, or
+// from a later cadence change. Without all nothing changes. An ended ctx, or one ending in the wait, answers
 // its error and holds nothing; resume is safe to call twice.
 func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err error) {
 	if err := ctx.Err(); err != nil {
@@ -56,6 +55,7 @@ func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err er
 // ends the caller writes, and each running job's finished channel.
 func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan struct{}) {
 	e.holds++
+	e.readGen++ // ends a retryResume of an earlier resume
 	e.stopTimersLocked()
 	clear(e.proposals)
 	for _, en := range e.live {
@@ -78,17 +78,24 @@ func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan
 
 // resume ends one hold. The last one re-reads the last ends, since the file
 // they came from may have been replaced, and rebuilds the Fresh windows and
-// every scheduled scope's count from them (baseLocked).
+// every scheduled scope's count from them (resumeEndsLocked). A failed read
+// arms no timer and counts each deadline from now until retryResume's read
+// answers.
 func (e *Executor[P]) resume(ctx context.Context) {
 	e.mu.Lock()
 	e.holds--
 	if e.holds > 0 || !e.endsRead {
-		// readEnds arms the timers once Run has read the ends.
+		if e.holds == 0 {
+			// readEnds is still retrying: the deadline checks go on meanwhile.
+			for key, t := range e.scheduled {
+				e.watchLocked(key, t)
+			}
+		}
 		e.mu.Unlock()
 		return
 	}
 	e.mu.Unlock()
-	ends := e.lastEnds(ctx)
+	ends, err := e.lastEnds(ctx)
 	now := time.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -96,18 +103,72 @@ func (e *Executor[P]) resume(ctx context.Context) {
 		return
 	}
 	e.ends = map[ScheduledScope]LastEnd{}
-	maps.Copy(e.ends, ends)
 	clear(e.recent)
+	e.countFrom = now
+	for _, t := range e.scheduled {
+		t.watch = NewWatch(t.lease)
+	}
+	if err == nil {
+		e.resumeEndsLocked(ends)
+		return
+	}
+	e.stale = true
+	e.log.Error("last job ends not read at resume; scheduled scopes wait for a read", "err", err, "retry_in", readBackoff(1))
+	for key, t := range e.scheduled {
+		e.watchLocked(key, t)
+	}
+	if !e.closed {
+		e.wg.Add(1)
+		go e.retryResume(ctx, e.readGen)
+	}
+}
+
+// retryResume retries a resume's failed LastEnds read on readBackoff until
+// one answers, Run ends or a later hold supersedes it (readGen moved).
+func (e *Executor[P]) retryResume(ctx context.Context, gen uint64) {
+	defer e.wg.Done()
+	for n := 1; pause(e.stop, readBackoff(n)); n++ {
+		if !e.resumeCurrent(gen) {
+			return
+		}
+		ends, err := e.lastEnds(ctx)
+		e.mu.Lock()
+		current := e.readGen == gen && e.holds == 0 && !e.closed
+		if current && err == nil {
+			e.resumeEndsLocked(ends)
+		}
+		e.mu.Unlock()
+		if !current || err == nil {
+			return
+		}
+		e.log.Error("last job ends not read at resume; scheduled scopes wait for a read", "err", err, "retry_in", readBackoff(n+1))
+	}
+}
+
+func (e *Executor[P]) resumeCurrent(gen uint64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.readGen == gen && e.holds == 0 && !e.closed
+}
+
+// resumeEndsLocked takes a resume's LastEnds read: each scope keeps the later
+// of its read end and one noted since the resume, the Fresh windows open
+// from the read ends, and every scheduled scope is counted again
+// (baseLocked) and armed.
+func (e *Executor[P]) resumeEndsLocked(ends map[ScheduledScope]LastEnd) {
+	now := time.Now()
 	for key, end := range ends {
+		if have, ok := e.ends[key]; !ok || end.At.After(have.At) {
+			e.ends[key] = end
+		}
 		if spec := e.kinds[key.Kind]; spec != nil && spec.Fresh != nil {
-			if until := end.At.Add(spec.Fresh(key.Scope)); until.After(now) {
+			if until := end.At.Add(spec.Fresh(key.Scope)); until.After(now) && until.After(e.recent[key]) {
 				e.recent[key] = until
 			}
 		}
 	}
-	e.countFrom = now
+	e.stale = false
 	for key, t := range e.scheduled {
-		t.watch = NewWatch(t.lease)
 		e.baseLocked(key, t)
 		e.armLocked(key, t)
 		e.watchLocked(key, t)
