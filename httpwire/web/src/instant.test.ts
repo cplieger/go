@@ -22,12 +22,19 @@ describe("parseInstant", () => {
     expect(parseInstant("2026-11-17T10:00:05.123456789Z")).toBe(
       parseInstant("2026-11-17T10:00:05.123Z"),
     );
+    expect(parseInstant("2026-11-17T10:00:05.05Z")).toBe(BASE + 50);
+    expect(parseInstant("2026-11-17T10:00:05.006Z")).toBe(BASE + 6);
+    expect(parseInstant("2026-11-17T10:00:05.05Z")).toBeGreaterThan(
+      parseInstant("2026-11-17T10:00:05.006Z"),
+    );
+    expect(parseInstant("2026-11-17T10:00:05.1239Z")).toBe(BASE + 123);
   });
 
   it("reads an offset as that many hours and minutes ahead of UTC", () => {
     expect(parseInstant("2026-11-17T10:00:05.1+01:00")).toBe(
       parseInstant("2026-11-17T10:00:05.1Z") - HOUR,
     );
+    expect(parseInstant("2026-11-17T10:00:05.1+01:00")).toBe(Date.UTC(2026, 10, 17, 9, 0, 5, 100));
     expect(parseInstant("2026-11-17T04:30:05-05:30")).toBe(BASE);
     expect(parseInstant("2026-11-18T09:59:05+23:59")).toBe(BASE);
     expect(parseInstant("2026-11-17T10:00:05-00:00")).toBe(BASE);
@@ -41,6 +48,8 @@ describe("parseInstant", () => {
 
   it("answers the calendar's ends and its leap days", () => {
     expect(parseInstant("0000-01-01T00:00:00Z")).toBe(FIRST);
+    // Date.UTC reads year 1 as 1901, so a parser built on it fails here.
+    expect(parseInstant("0001-01-01T00:00:00Z")).toBe(-62135596800000);
     expect(parseInstant("9999-12-31T23:59:59.999999999Z")).toBe(LAST + 999);
     expect(parseInstant("2024-02-29T00:00:00Z")).toBe(Date.UTC(2024, 1, 29));
     expect(parseInstant("2000-02-29T00:00:00Z")).toBe(Date.UTC(2000, 1, 29));
