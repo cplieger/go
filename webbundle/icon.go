@@ -9,9 +9,11 @@ import (
 	"image/png"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -139,7 +141,7 @@ func (b *build) checkArt(field, name string, purpose IconPurpose, committed map[
 	if err != nil {
 		return nil, fmt.Errorf("webbundle: %s %s: %w", field, p, err)
 	}
-	if _, bad := readIcon(svg); bad != nil {
+	if _, _, bad := readIcon(svg); bad != nil {
 		return nil, fmt.Errorf("webbundle: %s %s: %w; commit its PNGs as Config.IconPNGs instead", field, p, bad)
 	}
 	return art, nil
@@ -176,11 +178,8 @@ const svgRoot = "svg"
 // iconElements are the SVG elements oksvg draws; anything else (text, a
 // filter, a mask, a clip path, an image) would be dropped from the render,
 // so the icon is refused instead.
-var iconElements = []string{
-	svgRoot, "g", "defs", "use", "title", "desc",
-	"path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
-	"linearGradient", "radialGradient", "stop",
-}
+var iconElements = slices.Concat([]string{svgRoot, "defs", "title", "desc"}, transformable,
+	[]string{"linearGradient", "radialGradient", "stop"})
 
 // iconPaint are the presentation properties oksvg applies, as attributes or
 // in a style attribute.
@@ -190,48 +189,97 @@ var iconPaint = []string{
 	"stroke-dasharray", "stroke-dashoffset", "opacity",
 }
 
-// iconGeometry are the other attributes oksvg reads; transform is left out
-// because oksvg draws a stroke under one at its untransformed width.
+// iconGeometry are the other attributes oksvg reads.
 var iconGeometry = []string{
-	"xmlns", "version", "id", "viewBox", "href",
+	nsXMLNS, "version", "id", "viewBox", "href",
 	"x", "y", "width", "height", "rx", "ry", "cx", "cy", "r", "fx", "fy",
 	"x1", "y1", "x2", "y2", "d", "points", "offset", "stop-color", "stop-opacity",
 	"gradientTransform", "gradientUnits", "spreadMethod",
 }
 
 // checkIconSVG refuses an element or attribute oksvg would not draw as a
-// browser does, and returns the byte offset just after the root's "<svg".
+// browser does, and returns the edits that make oksvg draw svg as SVG does:
+// SVG's initial stroke values on the root, a rounded rect as a path of arcs
+// and each transform as a matrix.
 // oksvg's strict mode refuses only an unknown element outside defs, and it
 // ignores an attribute it does not read.
-func checkIconSVG(svg []byte) (int, error) {
+func checkIconSVG(svg []byte) ([]svgEdit, error) {
 	dec := xml.NewDecoder(bytes.NewReader(svg))
-	depth, root := 0, -1
+	w := svgWalk{svg: svg, root: -1}
 	for {
-		at := dec.InputOffset()
+		at := int(dec.InputOffset())
 		tok, err := dec.Token()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			if err := checkIconElement(t, depth); err != nil {
-				return 0, err
-			}
-			if depth == 0 {
-				root = rootEnd(svg, int(at))
-			}
-			depth++
-		case xml.EndElement:
-			depth--
+		if err := w.token(tok, at, int(dec.InputOffset())); err != nil {
+			return nil, err
 		}
 	}
-	if root < 0 {
-		return 0, errors.New("no <svg> element written as <svg")
+	if w.root < 0 {
+		return nil, errors.New("no <svg> element written as <svg")
 	}
-	return root, nil
+	return w.edits, nil
+}
+
+// svgWalk collects checkIconSVG's edits token by token.
+type svgWalk struct {
+	svg     []byte
+	edits   []svgEdit
+	renamed []bool // per open element, whether its tag becomes <path>
+	root    int
+}
+
+func (w *svgWalk) token(tok xml.Token, at, end int) error {
+	raw := w.svg[at:end]
+	switch t := tok.(type) {
+	case xml.StartElement:
+		if len(w.renamed) == 0 {
+			if w.root = rootEnd(w.svg, at); w.root >= 0 {
+				w.edits = append(w.edits, svgEdit{text: svgInitial, from: w.root, to: w.root})
+			}
+		}
+		e, rename, err := startEdits(raw, at, t, len(w.renamed))
+		if err != nil {
+			return err
+		}
+		w.edits, w.renamed = append(w.edits, e...), append(w.renamed, rename)
+	case xml.EndElement:
+		if w.renamed[len(w.renamed)-1] {
+			if e := endTagEdit(raw, at); e != nil {
+				w.edits = append(w.edits, *e)
+			}
+		}
+		w.renamed = w.renamed[:len(w.renamed)-1]
+	}
+	return nil
+}
+
+// startEdits checks the start tag raw at offset at and returns its edits,
+// reporting whether it is renamed to <path>.
+func startEdits(raw []byte, at int, t xml.StartElement, depth int) ([]svgEdit, bool, error) {
+	if err := checkIconElement(t, depth); err != nil {
+		return nil, false, err
+	}
+	var edits []svgEdit
+	r, err := rectEdit(raw, at, t)
+	if err != nil {
+		return nil, false, err
+	}
+	if r != nil {
+		edits = append(edits, *r)
+	}
+	e, err := transformEdit(raw, at, t)
+	if err != nil {
+		return nil, false, err
+	}
+	if e != nil {
+		edits = append(edits, *e)
+	}
+	return edits, r != nil, nil
 }
 
 // rootEnd is the offset after "<svg" when the root start tag at at is
@@ -252,7 +300,7 @@ func checkIconElement(t xml.StartElement, depth int) error {
 		return fmt.Errorf("the root element is <%s>, not <svg>", name)
 	}
 	for _, a := range t.Attr {
-		if a.Name.Space == "xmlns" {
+		if a.Name.Space == nsXMLNS {
 			continue
 		}
 		if err := checkIconAttr(name, a.Name.Local, a.Value); err != nil {
@@ -271,6 +319,17 @@ func checkIconAttr(elem, name, value string) error {
 			return fmt.Errorf("the renderer draws only the nonzero %s, not <%s %s=%q>", name, elem, name, value)
 		}
 		return nil
+	case name == attrTransform:
+		if !slices.Contains(transformable, elem) {
+			return fmt.Errorf("the renderer cannot draw <%s transform>", elem)
+		}
+		if _, err := parseTransform(value); err != nil {
+			return fmt.Errorf("<%s>: %w", elem, err)
+		}
+		return nil
+	case name == "gradientUnits" && value == "userSpaceOnUse":
+		// rasterx places such a gradient in device pixels, not the viewBox.
+		return fmt.Errorf("the renderer cannot draw <%s gradientUnits=%q>; use objectBoundingBox", elem, value)
 	case name == "opacity" && (elem == "g" || elem == svgRoot || elem == "use"):
 		// A group's opacity composites the group once; oksvg multiplies it
 		// into each shape, which differs wherever shapes overlap.
@@ -285,7 +344,10 @@ func checkIconAttr(elem, name, value string) error {
 func checkIconStyle(elem, style string) error {
 	for decl := range strings.SplitSeq(style, ";") {
 		k, v, _ := strings.Cut(decl, ":")
-		if k = strings.TrimSpace(k); k != "" {
+		if k = strings.TrimSpace(k); k == attrTransform {
+			return fmt.Errorf("the renderer cannot draw transform in <%s style>; set the transform attribute", elem)
+		}
+		if k != "" {
 			if err := checkIconAttr(elem, k, strings.TrimSpace(v)); err != nil {
 				return err
 			}
@@ -299,36 +361,61 @@ func checkIconStyle(elem, style string) error {
 // Set on the root, an icon's own value on any element still wins.
 const svgInitial = ` stroke-width="1" stroke-linejoin="miter"`
 
-// readIcon checks and parses an icon with SVG's initial stroke values.
-func readIcon(svg []byte) (*oksvg.SvgIcon, error) {
-	at, err := checkIconSVG(svg)
+// readIcon checks and parses an icon, returning with it each path's stroke
+// scale: the factor its transform scales lengths by.
+func readIcon(svg []byte) (*oksvg.SvgIcon, []float64, error) {
+	edits, err := checkIconSVG(svg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	withInitial := slices.Concat(svg[:at], []byte(svgInitial), svg[at:])
-	icon, err := oksvg.ReadIconStream(bytes.NewReader(withInitial), oksvg.StrictErrorMode)
+	icon, err := oksvg.ReadIconStream(bytes.NewReader(applyEdits(svg, edits)), oksvg.StrictErrorMode)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if icon.ViewBox.W <= 0 || icon.ViewBox.W != icon.ViewBox.H {
-		return nil, fmt.Errorf("its viewBox is %gx%g, not square", icon.ViewBox.W, icon.ViewBox.H)
+		return nil, nil, fmt.Errorf("its viewBox is %gx%g, not square", icon.ViewBox.W, icon.ViewBox.H)
 	}
-	return icon, nil
+	scales := make([]float64, len(icon.SVGPaths))
+	for i := range icon.SVGPaths {
+		if scales[i], err = strokeScale(&icon.SVGPaths[i]); err != nil {
+			return nil, nil, err
+		}
+	}
+	return icon, scales, nil
+}
+
+// strokeScale is the factor p's transform scales lengths by, refusing a
+// stroke under a transform that scales directions unequally (a skew or
+// scale(2 1)), which no single stroke width draws.
+func strokeScale(p *oksvg.SvgPath) (float64, error) {
+	// oksvg keeps a path's transform and stroke paint unexported.
+	style := reflect.ValueOf(&p.PathStyle).Elem()
+	mv, liner := style.FieldByName("mAdder").FieldByName("M"), style.FieldByName("linerColor")
+	if mv.Type() != reflect.TypeFor[rasterx.Matrix2D]() || liner.Kind() != reflect.Interface {
+		return 0, errors.New("the renderer's path transform is unreadable")
+	}
+	f := func(n string) float64 { return mv.FieldByName(n).Float() }
+	a, b, c, d := f("A"), f("B"), f("C"), f("D")
+	cols, dot := a*a+b*b-(c*c+d*d), a*c+b*d
+	if !liner.IsNil() && (math.Abs(cols) > 1e-9*(a*a+b*b) || math.Abs(dot) > 1e-9*(a*a+b*b)) {
+		return 0, errors.New("the renderer cannot draw a stroke under a skew or a scale unequal in x and y")
+	}
+	return math.Sqrt(math.Abs(a*d - b*c)), nil
 }
 
 // renderIcon draws svg at size px square as PNG bytes.
 func renderIcon(svg []byte, size int) ([]byte, error) {
-	icon, err := readIcon(svg)
+	icon, scales, err := readIcon(svg)
 	if err != nil {
 		return nil, err
 	}
 	icon.SetTarget(0, 0, float64(size), float64(size))
 	// oksvg hands the dasher stroke widths and dashes in device pixels while
-	// it scales the path, so a stroke would keep its viewBox width
+	// it transforms the path, so a stroke would keep its user-space width
 	// (https://github.com/srwiley/oksvg/pull/54, unmerged).
-	k := float64(size) / icon.ViewBox.W
 	for i := range icon.SVGPaths {
 		p := &icon.SVGPaths[i]
+		k := float64(size) / icon.ViewBox.W * scales[i]
 		p.LineWidth *= k
 		p.DashOffset *= k
 		p.Dash = slices.Clone(p.Dash)

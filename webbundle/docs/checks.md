@@ -72,6 +72,7 @@ Each of these errors ends with the chain of imports from the entry to the refuse
 
 - an SVG the renderer cannot draw as a browser does, naming the element or attribute, such as `<text>`
 - a root that is not `<svg>`, or a `viewBox` that is not square
+- a `transform` the SVG grammar does not read, a singular one, two on one element, or a stroke under a skew or a scale unequal in x and y
 - an `IconPNGs` map that holds a purpose other than `PurposeAny` and `PurposeMaskable`, lacks one of a purpose's sizes (32, 180, 192 and 512 for `PurposeAny`, 192 and 512 for `PurposeMaskable`), holds another size, or names a file that is not a PNG of its size
 
 [Icons](icons.md) lists what the renderer draws.

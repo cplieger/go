@@ -22,13 +22,16 @@ import (
 	"github.com/cplieger/go/webbundle"
 )
 
-// The rendered seed icons must match the reference renders within these
-// bounds: at most iconChannelTolerance of 255 per channel on at least
-// iconWithinShare of the pixels, and no channel off by more than
-// iconPixelLimit. The references are unraid-templates' icons/seadex-scout.png
-// and icons/subflux.png at 6f1cdbd, which scripts/icons.py renders from
-// icons/src/*.svg (the copies in testdata/icons) through cairosvg. Measured
-// at 512 px: seadex-scout 99.82% within 8 and worst 46, subflux 99.93% and 43.
+// The rendered icons in testdata/icons must match their cairosvg renders
+// within these bounds: at most iconChannelTolerance of 255 per channel on at
+// least iconWithinShare of the pixels, and no channel off by more than
+// iconPixelLimit. seadex-scout and subflux are unraid-templates' icons at
+// 6f1cdbd, rendered by its scripts/icons.py through cairosvg; marotte is
+// marotte's static/favicon.svg at 1da7e83ca and transformed holds each
+// transform form, both rendered by resvg 0.45.1 (`resvg -w 512 -h 512`),
+// since cairosvg bends two corners of a rounded rect. Measured at 512 px:
+// seadex-scout 99.82% within 8 and worst 46, subflux 99.93% and 43,
+// marotte 99.52% and 63, transformed 99.71% and 43.
 const (
 	iconChannelTolerance = 8
 	iconWithinShare      = 0.995
@@ -177,7 +180,7 @@ func TestIconRefusesShellWithIconLink(t *testing.T) {
 
 func TestIconRenderMatchesReference(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"seadex-scout", "subflux"} {
+	for _, name := range []string{"seadex-scout", "subflux", "marotte", "transformed"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			c := newFixture(t, files{"icon.svg": seedIcon(t, name+".svg")})
@@ -195,7 +198,7 @@ func TestIconRenderMatchesReference(t *testing.T) {
 			within, worst, total := 0, 0, 0
 			for y := want.Bounds().Min.Y; y < want.Bounds().Max.Y; y++ {
 				for x := want.Bounds().Min.X; x < want.Bounds().Max.X; x++ {
-					d := channelDelta(color.NRGBAModel.Convert(got.At(x, y)).(color.NRGBA), color.NRGBAModel.Convert(want.At(x, y)).(color.NRGBA))
+					d := channelDelta(got.At(x, y), want.At(x, y))
 					total++
 					worst = max(worst, d)
 					if d <= iconChannelTolerance {
@@ -212,10 +215,14 @@ func TestIconRenderMatchesReference(t *testing.T) {
 	}
 }
 
-func channelDelta(a, b color.NRGBA) int {
+// channelDelta compares premultiplied channels, as the pixels composite: a
+// nearly transparent edge pixel's colour weighs as little as its alpha.
+func channelDelta(a, b color.Color) int {
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
 	d := 0
-	for _, pair := range [][2]uint8{{a.R, b.R}, {a.G, b.G}, {a.B, b.B}, {a.A, b.A}} {
-		d = max(d, abs(int(pair[0])-int(pair[1])))
+	for _, pair := range [][2]uint32{{ar, br}, {ag, bg}, {ab, bb}, {aa, ba}} {
+		d = max(d, abs(int(pair[0]>>8)-int(pair[1]>>8)))
 	}
 	return d
 }
@@ -242,7 +249,20 @@ func TestIconRefusesWhatTheRendererCannotDraw(t *testing.T) {
 	cases := []struct{ name, svg, want string }{
 		{name: "Mask", svg: open + `<mask id="m"><rect width="8" height="8"/></mask><rect width="64" height="64"/></svg>`, want: "mask"},
 		{name: "Image", svg: open + `<image href="a.png" width="64" height="64"/></svg>`, want: "image"},
-		{name: "Transform", svg: open + `<g transform="scale(2)"><path d="M0 0H8" stroke="#fff"/></g></svg>`, want: "transform"},
+		{name: "TransformOnRoot", svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" transform="scale(2)"><rect width="8" height="8"/></svg>`, want: "<svg transform>"},
+		{name: "TransformOnGradient", svg: open + `<defs><linearGradient id="a" transform="scale(2)"><stop offset="0" stop-color="#fff"/></linearGradient></defs><rect width="64" height="64" fill="url(#a)"/></svg>`, want: "<linearGradient transform>"},
+		{name: "TransformInStyle", svg: open + `<g style="transform: scale(2)"><rect width="8" height="8"/></g></svg>`, want: "transform"},
+		{name: "TransformTwice", svg: open + `<g xmlns:a="urn:a" a:transform="scale(2)" transform="scale(3)"><rect width="8" height="8"/></g></svg>`, want: "two transform"},
+		{name: "TransformUnknownFunction", svg: open + `<g transform="spin(4)"><rect width="8" height="8"/></g></svg>`, want: `"spin(4)"`},
+		{name: "TransformArgumentCount", svg: open + `<g transform="translate(1 2) scale(1 2 3)"><rect width="8" height="8"/></g></svg>`, want: "scale"},
+		{name: "TransformNoArgument", svg: open + `<g transform="scale()"><rect width="8" height="8"/></g></svg>`, want: "scale"},
+		{name: "TransformUnclosed", svg: open + `<g transform="translate(1 2"><rect width="8" height="8"/></g></svg>`, want: "transform"},
+		{name: "TransformTrailingText", svg: open + `<g transform="scale(2) x"><rect width="8" height="8"/></g></svg>`, want: "transform"},
+		{name: "TransformSingular", svg: open + `<g transform="scale(0)"><rect width="8" height="8"/></g></svg>`, want: "transform"},
+		{name: "StrokeUnderNonUniformScale", svg: open + `<g transform="scale(2 1)"><path d="M0 0H8" stroke="#fff"/></g></svg>`, want: "stroke"},
+		{name: "StrokeUnderSkew", svg: open + `<g stroke="#fff"><path transform="skewX(20)" d="M0 0H8"/></g></svg>`, want: "stroke"},
+		{name: "StrokeUnderUsedSkew", svg: open + `<defs><path id="p" d="M0 0H8" stroke="#fff"/></defs><use href="#p" transform="matrix(1 0 .5 1 0 0)"/></svg>`, want: "stroke"},
+		{name: "UserSpaceGradient", svg: open + `<defs><linearGradient id="a" gradientUnits="userSpaceOnUse" x2="64"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient></defs><rect width="64" height="64" fill="url(#a)"/></svg>`, want: "userSpaceOnUse"},
 		{name: "FilterAttribute", svg: open + `<rect width="64" height="64" filter="url(#f)"/></svg>`, want: "filter"},
 		{name: "FilterInStyle", svg: open + `<rect width="64" height="64" style="fill: #fff; filter: blur(1px)"/></svg>`, want: "filter"},
 		{name: "Class", svg: open + `<rect class="mark" width="64" height="64"/></svg>`, want: "class"},
@@ -295,6 +315,89 @@ func TestIconStrokeWidthInitialValue(t *testing.T) {
 			t.Errorf("row %d outside a 1-unit stroke has alpha %d, want 0", y, a)
 		}
 	}
+}
+
+// A stroke's width is in the user space of its element, so a transform
+// scales it (https://www.w3.org/TR/SVG2/painting.html#StrokeWidth): each
+// case draws a 1-unit stroke along y=32, 8 px at 512 px for a 64-unit viewBox.
+func TestIconStrokeUnderTransform(t *testing.T) {
+	t.Parallel()
+	const open = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">`
+	cases := []struct{ name, body string }{
+		{name: "GroupScaleOneArgument", body: `<g transform="scale(0.5)"><path d="M0 64H128" stroke="#fff" stroke-width="2"/></g>`},
+		{name: "ShapeMatrix", body: `<path transform="matrix(2 0 0 2 0 -32)" d="M0 32H32" stroke="#fff" stroke-width="0.5"/>`},
+		{name: "NestedGroups", body: `<g transform="scale(2)"><g transform="translate(0 -8) scale(0.25)"><path d="M0 96H128" stroke="#fff" stroke-width="2"/></g></g>`},
+		{name: "RotateAboutAPoint", body: `<g transform="rotate(90 32 32)"><path d="M32 0V64" stroke="#fff"/></g>`},
+		{name: "TranslateOneArgument", body: `<g transform="translate(3)"><path d="M0 32H64" stroke="#fff"/></g>`},
+		{name: "Use", body: `<defs><path id="l" d="M0 64H128" stroke="#fff" stroke-width="2"/></defs><use href="#l" transform="scale(.5)"/>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFixture(t, files{"icon.svg": open + tc.body + `</svg>`})
+			c.Icon = "icon.svg"
+			mustBuild(t, c)
+			img := decodePNG(t, readFile(t, c.Out, pngsBySize(t, c.Out, readBundle(t, c.Out))[512]))
+			alpha := func(y int) uint8 { return color.NRGBAModel.Convert(img.At(200, y)).(color.NRGBA).A }
+			for _, y := range []int{253, 258} {
+				if a := alpha(y); a != 255 {
+					t.Errorf("row %d inside the stroke has alpha %d, want 255", y, a)
+				}
+			}
+			for _, y := range []int{250, 261} {
+				if a := alpha(y); a != 0 {
+					t.Errorf("row %d outside a 1-unit stroke has alpha %d, want 0", y, a)
+				}
+			}
+		})
+	}
+}
+
+// A rounded <rect> follows SVG's radius rules
+// (https://www.w3.org/TR/SVG2/geometry.html#RX): a missing rx or ry takes
+// the other's value, and each is clamped to half the side. On a 64-unit
+// square at 512 px, a 16-unit radius leaves (8, 8) empty and fills (40, 40);
+// a radius clamped to 32 is a circle, which leaves (40, 40) empty, and on a
+// 64x32 rect clamped radii draw a 256x128 px ellipse.
+func TestIconRoundedRect(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, rect    string
+		empty, filled [][2]int
+	}{
+		{name: "OnlyRX", rect: `<rect width="64" height="64" rx="16" fill="#fff"/>`, empty: [][2]int{{8, 8}}, filled: [][2]int{{40, 40}, {256, 2}}},
+		{name: "OnlyRY", rect: `<rect width="64" height="64" ry="16" fill="#fff"/>`, empty: [][2]int{{8, 8}}, filled: [][2]int{{40, 40}, {256, 2}}},
+		{name: "EndTag", rect: `<rect width="64" height="64" rx="16" ry="16" fill="#fff"></rect>`, empty: [][2]int{{8, 8}}, filled: [][2]int{{40, 40}, {256, 2}}},
+		{name: "Clamped", rect: `<rect width="64" height="64" rx="40" fill="#fff"/>`, empty: [][2]int{{8, 8}, {40, 40}}, filled: [][2]int{{256, 2}, {256, 256}}},
+		{name: "ClampedToAnEllipse", rect: `<rect y="16" width="64" height="32" rx="40" fill="#fff"/>`, empty: [][2]int{{20, 140}, {8, 136}}, filled: [][2]int{{256, 132}, {40, 200}, {500, 256}}},
+		{name: "Offset", rect: `<rect x="32" y="32" width="32" height="32" rx="8" fill="#fff"/>`, empty: [][2]int{{260, 260}, {100, 100}}, filled: [][2]int{{300, 300}, {384, 258}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFixture(t, files{"icon.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` + tc.rect + `</svg>`})
+			c.Icon = "icon.svg"
+			mustBuild(t, c)
+			img := decodePNG(t, readFile(t, c.Out, pngsBySize(t, c.Out, readBundle(t, c.Out))[512]))
+			alpha := func(p [2]int) uint8 { return color.NRGBAModel.Convert(img.At(p[0], p[1])).(color.NRGBA).A }
+			for _, p := range tc.empty {
+				if a := alpha(p); a != 0 {
+					t.Errorf("pixel %v has alpha %d, want 0", p, a)
+				}
+			}
+			for _, p := range tc.filled {
+				if a := alpha(p); a != 255 {
+					t.Errorf("pixel %v has alpha %d, want 255", p, a)
+				}
+			}
+		})
+	}
+	t.Run("NegativeRadius", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"icon.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="-4"/></svg>`})
+		c.Icon = "icon.svg"
+		buildRefused(t, c, "icon.svg", `rx="-4"`)
+	})
 }
 
 // committedPNGs adds a solid PNG to tree for each key, drawn at the size

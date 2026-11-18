@@ -83,10 +83,12 @@ The PNGs are rendered in Go by [oksvg](https://github.com/srwiley/oksvg) and [ra
 - The elements are `g`, `defs`, `use`, `title`, `desc`, `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `linearGradient`, `radialGradient` and `stop`.
 - Paint is set by fills, strokes with their caps, joins, miter limits and dashes, and opacity on a shape, as attributes or in a `style` attribute.
 - Fills use the `nonzero` rule.
+- A `transform` attribute on `g`, `use` or a shape holds `matrix`, `translate`, `scale`, `rotate`, `skewX` and `skewY` functions. Stroke widths and dashes scale with it, as SVG's do. A stroke under a skew, or under a scale that differs in x and y, has no single width, so it fails the build; a fill under one draws.
+- A gradient's `gradientUnits` is `objectBoundingBox`, the default.
 
-So `<text>`, a filter, a mask, a clip path, an embedded image, a `transform` attribute, a `class` attribute, the `evenodd` rule and `opacity` on a group each fail the build, naming the element or attribute. Where oksvg's defaults differ from SVG's, `Build` applies SVG's stroke width of 1 and miter join.
+So `<text>`, a filter, a mask, a clip path, an embedded image, a `transform` on `<svg>` or a gradient or in a `style` attribute, a singular transform, a `class` attribute, the `evenodd` rule, a `userSpaceOnUse` gradient and `opacity` on a group each fail the build, naming the element or attribute. Where oksvg's defaults differ from SVG's, `Build` applies SVG's stroke width of 1 and miter join, gives a `rect` with only `rx` or `ry` the other at the same value and clamps both to half its sides, and draws a rounded `rect`'s corners as arcs, since rasterx's own rounded rectangle is off by up to 73 of 255 at its corners.
 
-webbundle's tests render two icons drawn with a filled rectangle, arcs and round-capped strokes at 512 px. Each matches its cairosvg render within 8 of 255 on each channel for at least 99.5% of pixels, and no channel is off by more than 64.
+webbundle's tests render four icons at 512 px: two drawn with a filled rectangle, arcs and round-capped strokes, marotte's favicon (a rounded rectangle and a translated, scaled group) and one using each transform function on groups, shapes and `use`. Each matches its reference render within 8 of 255 on each channel, compared premultiplied by alpha, for at least 99.5% of pixels, and no channel is off by more than 64. The first two references come from cairosvg and the other two from resvg, since cairosvg bends two corners of a rounded rectangle. The renderer is less exact on a wide stroked circle and a diagonal round-capped dash: up to 87 of 255 on under 20 edge pixels at 512 px, with or without a transform.
 
 ## Committed PNGs
 
