@@ -27,6 +27,7 @@ func TestUnmaskedFindsPlainField(t *testing.T) {
 	k := masked.NewSecret("k")
 	fixture := upstream{Name: "n", Token: "t", Key: k, Backup: &k, Keys: []masked.Secret{k}, Since: time.Unix(1, 0)}
 	allow := maskedtest.Allow{
+		Masked: []reflect.Type{reflect.TypeFor[masked.Secret]()},
 		Fields: []string{"maskedtest_test.upstream.Name"},
 		Types:  []reflect.Type{reflect.TypeFor[time.Time]()},
 	}
@@ -37,15 +38,21 @@ func TestUnmaskedFindsPlainField(t *testing.T) {
 	}
 }
 
+// vault stands in for a caller's own masked type.
+type vault struct{}
+
 func TestUnmaskedFailsStaleAllow(t *testing.T) {
 	t.Parallel()
 	allow := maskedtest.Allow{
+		Masked: []reflect.Type{reflect.TypeFor[vault](), reflect.TypeFor[masked.Secret]()},
 		Fields: []string{"maskedtest_test.upstream.Gone"},
 		Types:  []reflect.Type{reflect.TypeFor[time.Time]()},
 	}
 	got := maskedtest.Unmasked(allow, reflect.TypeFor[struct{ n int }]())
 	want := []string{
+		"allow entry masked.Secret: reached by no root",
 		"allow entry maskedtest_test.upstream.Gone: reached by no root",
+		"allow entry maskedtest_test.vault: reached by no root",
 		"allow entry time.Time: reached by no root",
 	}
 	if !slices.Equal(got, want) {

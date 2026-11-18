@@ -115,6 +115,7 @@ func TestUnmasked(t *testing.T) {
 		got := Unmasked(allow, reflect.TypeFor[struct{ n int }]())
 		want := []string{
 			"allow entry maskedtest.kinds.reviewed: reached by no root",
+			"allow entry maskedtest.masker: reached by no root",
 			"allow entry time.Time: reached by no root",
 		}
 		if !slices.Equal(got, want) {

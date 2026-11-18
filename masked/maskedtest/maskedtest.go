@@ -19,7 +19,7 @@ import (
 type Allow struct {
 	// Masked are the caller's own masked types, whose own tests pin that
 	// they hold no text in clear. masked.Secret is always masked and need
-	// not be listed. An entry no root reaches is not reported.
+	// not be listed.
 	Masked []reflect.Type
 	// Types are reviewed non-secret types, such as time.Time.
 	Types []reflect.Type
@@ -35,9 +35,9 @@ var secretType = reflect.TypeFor[masked.Secret]()
 // per field that can carry text: a string, an integer slice or array (a
 // []byte, an expanded key schedule), or an interface, whose dynamic value the
 // type does not fix. Masked types, allowed types and allowed fields are not
-// entered; an entry of a.Types or a.Fields no root reached is reported, so
-// none goes stale. Funcs, chans and unsafe pointers pass: every printer
-// shows an address. A test fails when the result is not empty.
+// entered; an allow entry no root reached is reported, so none goes stale.
+// Funcs, chans and unsafe pointers pass: every printer shows an address.
+// A test fails when the result is not empty.
 func Unmasked(a Allow, roots ...reflect.Type) []string {
 	w := walker{
 		allow: a,
@@ -50,7 +50,7 @@ func Unmasked(a Allow, roots ...reflect.Type) []string {
 	}
 	w.run()
 	names := slices.Clone(a.Fields)
-	for _, t := range a.Types {
+	for _, t := range slices.Concat(a.Masked, a.Types) {
 		names = append(names, t.String())
 	}
 	for _, name := range names {
@@ -97,11 +97,11 @@ func (w *walker) run() {
 			continue
 		}
 		w.seen[it] = true
-		if it.t == secretType || slices.Contains(w.allow.Masked, it.t) {
+		if slices.Contains(w.allow.Masked, it.t) || slices.Contains(w.allow.Types, it.t) {
+			w.used[it.t.String()] = true
 			continue
 		}
-		if slices.Contains(w.allow.Types, it.t) {
-			w.used[it.t.String()] = true
+		if it.t == secretType {
 			continue
 		}
 		w.check(it)
