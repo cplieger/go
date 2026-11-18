@@ -4,9 +4,8 @@
 // masked type nor a reviewed non-secret field. [SecretNamed] checks wire
 // types by name, where every title and path is text: it reports a text field
 // named like a credential. [Leak] checks a printer's output for a secret's
-// text and its HMAC pad forms as the standard library's encoders write them
-// into a log line, an error or a response. Import it only from _test.go
-// files.
+// text and its HMAC pad forms as a listed set of standard-library encoders
+// writes them. Import it only from _test.go files.
 package maskedtest
 
 import (
@@ -36,10 +35,10 @@ type Allow struct {
 	Types []reflect.Type
 	// Fields are reviewed non-secret fields, each written as its declaring
 	// type's name, a dot and the field name: "example.com/app.User.Email". A
-	// type is named as reflect.Type.String writes it, with each named type and
-	// unexported field qualified by its import path instead of its package
-	// name: "struct { T example.com/app.Tok }". Two function-local types of
-	// one name in one package share a name.
+	// type is named as reflect.Type.String writes it, with each named type,
+	// unexported field and unexported method qualified by its import path
+	// instead of its package name: "struct { T example.com/app.Tok }". Two
+	// function-local types of one name in one package share a name.
 	Fields []string
 }
 
@@ -166,8 +165,7 @@ func (w *walker) report(it item, what string) {
 // typeName names t as [Allow.Fields] documents. reflect.Type.String uses the
 // short package name, which two packages can share, and omits the package of
 // an unnamed struct's unexported fields, which makes two such types distinct.
-// Func, chan and interface types keep String: no field is reported inside
-// one. The recursion ends because an unnamed type is never its own element.
+// The recursion ends because an unnamed type is never its own element.
 func typeName(t reflect.Type) string {
 	if t.Name() != "" {
 		if t.PkgPath() == "" {
@@ -185,27 +183,95 @@ func typeName(t reflect.Type) string {
 	case reflect.Map:
 		return "map[" + typeName(t.Key()) + "]" + typeName(t.Elem())
 	case reflect.Struct:
-		fields := make([]string, 0, t.NumField())
-		for f := range t.Fields() {
-			field := typeName(f.Type)
-			switch {
-			case !f.IsExported():
-				field = f.PkgPath + "." + f.Name + " " + field
-			case !f.Anonymous:
-				field = f.Name + " " + field
-			default:
-			}
-			if f.Tag != "" {
-				field += " " + strconv.Quote(string(f.Tag))
-			}
-			fields = append(fields, field)
-		}
-		if len(fields) == 0 {
-			return "struct {}"
-		}
-		return "struct { " + strings.Join(fields, "; ") + " }"
+		return structName(t)
+	case reflect.Chan:
+		return chanName(t)
+	case reflect.Func:
+		return "func" + signature(t)
+	case reflect.Interface:
+		return interfaceName(t)
 	default:
 		return t.String()
+	}
+}
+
+func structName(t reflect.Type) string {
+	fields := make([]string, 0, t.NumField())
+	for f := range t.Fields() {
+		field := typeName(f.Type)
+		switch {
+		case f.Anonymous:
+		case !f.IsExported():
+			field = f.PkgPath + "." + f.Name + " " + field
+		default:
+			field = f.Name + " " + field
+		}
+		if f.Tag != "" {
+			field += " " + strconv.Quote(string(f.Tag))
+		}
+		fields = append(fields, field)
+	}
+	if len(fields) == 0 {
+		return "struct {}"
+	}
+	return "struct { " + strings.Join(fields, "; ") + " }"
+}
+
+func interfaceName(t reflect.Type) string {
+	methods := make([]string, 0, t.NumMethod())
+	for m := range t.Methods() {
+		name := m.Name
+		if m.PkgPath != "" {
+			name = m.PkgPath + "." + name
+		}
+		methods = append(methods, name+signature(m.Type))
+	}
+	if len(methods) == 0 {
+		return "interface {}"
+	}
+	return "interface { " + strings.Join(methods, "; ") + " }"
+}
+
+func chanName(t reflect.Type) string {
+	elem := typeName(t.Elem())
+	switch t.ChanDir() {
+	case reflect.RecvDir:
+		return "<-chan " + elem
+	case reflect.SendDir:
+		return "chan<- " + elem
+	default:
+		// reflect brackets a receive-only element: chan <-chan T would parse
+		// as <-chan (chan T).
+		if e := t.Elem(); e.Name() == "" && e.Kind() == reflect.Chan && e.ChanDir() == reflect.RecvDir {
+			elem = "(" + elem + ")"
+		}
+		return "chan " + elem
+	}
+}
+
+// signature writes a func type's parameters and results as reflect does,
+// after the func keyword or a method name.
+func signature(t reflect.Type) string {
+	in := make([]string, 0, t.NumIn())
+	for i := range t.NumIn() {
+		if t.IsVariadic() && i == t.NumIn()-1 {
+			in = append(in, "..."+typeName(t.In(i).Elem()))
+			continue
+		}
+		in = append(in, typeName(t.In(i)))
+	}
+	out := make([]string, 0, t.NumOut())
+	for o := range t.Outs() {
+		out = append(out, typeName(o))
+	}
+	sig := "(" + strings.Join(in, ", ") + ")"
+	switch len(out) {
+	case 0:
+		return sig
+	case 1:
+		return sig + " " + out[0]
+	default:
+		return sig + " (" + strings.Join(out, ", ") + ")"
 	}
 }
 
@@ -245,7 +311,10 @@ func forms(text string) []string {
 		out = append(out, unwrap(fmt.Sprintf(verb, b)))
 	}
 	out = append(out, url.QueryEscape(text), url.PathEscape(text), (&url.URL{Path: text}).EscapedPath(),
-		html.EscapeString(text), htmlText(text))
+		url.User(text).String(), (&url.URL{Fragment: text}).EscapedFragment(), html.EscapeString(text))
+	for _, page := range htmlPages {
+		out = append(out, page.render(text))
+	}
 	// The padded encodings' output contains these runs.
 	for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
 		for offset := range 3 {
@@ -285,15 +354,34 @@ func jsonString(text string, escapeHTML bool) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-var htmlPage = template.Must(template.New("text").Parse("{{.}}"))
+// htmlPage writes a text into one html/template context between prefix and
+// suffix.
+type htmlPage struct {
+	tmpl           *template.Template
+	prefix, suffix string
+}
 
-// htmlText returns text as html/template writes it in HTML text, which also
-// escapes + and NUL, unlike html.EscapeString.
-func htmlText(text string) string {
+func newHTMLPage(prefix, suffix string) htmlPage {
+	return htmlPage{template.Must(template.New("page").Parse(prefix + "{{.}}" + suffix)), prefix, suffix}
+}
+
+// htmlPages are html/template's HTML text, which escapes + and NUL unlike
+// html.EscapeString, and its URL attribute before and after a ? or #, which
+// write %xx in lower case. The URL contexts follow a / or a ?, since a URL's
+// first characters are also filtered for a scheme.
+var htmlPages = []htmlPage{
+	newHTMLPage("", ""),
+	newHTMLPage(`<a href="/`, `">`),
+	newHTMLPage(`<a href="?`, `">`),
+}
+
+// render returns text as p's context writes it.
+func (p htmlPage) render(text string) string {
 	var b strings.Builder
 	// A string always executes, and a strings.Builder never fails a write.
-	_ = htmlPage.Execute(&b, text)
-	return b.String()
+	_ = p.tmpl.Execute(&b, text)
+	out := strings.TrimPrefix(b.String(), p.prefix)
+	return strings.TrimSuffix(out, p.suffix)
 }
 
 // KeyForms returns the forms of key a printer can show: key itself, and
@@ -321,14 +409,14 @@ func KeyForms(key string) []string {
 	return slices.Compact(out)
 }
 
-// Leak reports whether got holds text or a [KeyForms] pad form as each
-// standard-library encoder whose output reaches a log, an error or a response
-// writes a string or []byte holding it: fmt's string and []byte verbs, strconv
-// quoting, encoding/json with HTML escaping on and off, hex in both cases, std,
-// URL, raw std and raw URL base64 at each byte offset, net/url query and path
-// escaping, html.EscapeString and html/template. A quoted or bracketed form is
-// also searched bare. Any other encoder is the caller's to check. text must not
-// be empty, and a text of a few bytes can match by chance.
+// Leak reports whether got holds text or a [KeyForms] pad form as fmt's string
+// and []byte verbs, strconv quoting, encoding/json with and without HTML
+// escaping, hex, base64 (std, URL, raw std, raw URL) at any byte offset, net/url
+// query, path, userinfo and fragment escaping, html.EscapeString, or
+// html/template in HTML text or a URL attribute writes it, a quoted or
+// bracketed form also bare. Leak checks these forms only. For any other
+// encoding, call Leak with the encoded text, such as base32's. text must not be
+// empty, and a text of a few bytes can match by chance.
 func Leak(got, text string) bool {
 	for _, f := range KeyForms(text) {
 		if strings.Contains(got, f) {

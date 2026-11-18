@@ -3,6 +3,7 @@ package maskedtest_test
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,56 @@ func TestChecksKeyByImportPath(t *testing.T) {
 		got = maskedtest.Unmasked(maskedtest.Allow{Fields: []string{oneLine}}, roots...)
 		if want := []string{twoLine}; !slices.Equal(got, want) {
 			t.Errorf("Unmasked(allowing one) =\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("func_chan_interface", func(t *testing.T) {
+		t.Parallel()
+		// reflect.Type.String writes each pair alike: func(config.Tok) and so on.
+		const oneTok, twoTok = fixture + "one/config.Tok", fixture + "two/config.Tok"
+		for _, tc := range []struct {
+			name, oneLine, twoLine string
+			roots                  []reflect.Type
+		}{
+			{
+				name: "func",
+				roots: []reflect.Type{reflect.TypeFor[struct {
+					F func(one.Tok, ...one.Tok) one.Tok
+					S string
+				}](), reflect.TypeFor[struct {
+					F func(two.Tok, ...two.Tok) two.Tok
+					S string
+				}]()},
+				oneLine: "struct { F func(" + oneTok + ", ..." + oneTok + ") " + oneTok + "; S string }.S: holds a string (string)",
+				twoLine: "struct { F func(" + twoTok + ", ..." + twoTok + ") " + twoTok + "; S string }.S: holds a string (string)",
+			},
+			{
+				name: "chan",
+				roots: []reflect.Type{reflect.TypeFor[struct {
+					C <-chan one.Tok
+					S string
+				}](), reflect.TypeFor[struct {
+					C <-chan two.Tok
+					S string
+				}]()},
+				oneLine: "struct { C <-chan " + oneTok + "; S string }.S: holds a string (string)",
+				twoLine: "struct { C <-chan " + twoTok + "; S string }.S: holds a string (string)",
+			},
+			{
+				name:    "interface",
+				roots:   []reflect.Type{reflect.TypeFor[struct{ I interface{ M(one.Tok) } }](), reflect.TypeFor[struct{ I interface{ M(two.Tok) } }]()},
+				oneLine: "struct { I interface { M(" + oneTok + ") } }.I: holds an interface (interface { M(config.Tok) })",
+				twoLine: "struct { I interface { M(" + twoTok + ") } }.I: holds an interface (interface { M(config.Tok) })",
+			},
+		} {
+			got := maskedtest.Unmasked(maskedtest.Allow{}, tc.roots...)
+			if want := []string{tc.oneLine, tc.twoLine}; !slices.Equal(got, want) {
+				t.Errorf("%s: Unmasked() =\n%q\nwant\n%q", tc.name, got, want)
+			}
+			allowed, _, _ := strings.Cut(tc.oneLine, ": ")
+			got = maskedtest.Unmasked(maskedtest.Allow{Fields: []string{allowed}}, tc.roots...)
+			if want := []string{tc.twoLine}; !slices.Equal(got, want) {
+				t.Errorf("%s: Unmasked(allowing one) =\n%q\nwant\n%q", tc.name, got, want)
+			}
 		}
 	})
 	t.Run("unnamed_root", func(t *testing.T) {
