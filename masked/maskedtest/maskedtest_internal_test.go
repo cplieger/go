@@ -171,6 +171,26 @@ func TestLeak(t *testing.T) {
 			t.Errorf("%s: Leak(%q) = %t, want %t", tc.name, tc.got, got, tc.want)
 		}
 	}
+	t.Run("json_string", func(t *testing.T) {
+		t.Parallel()
+		// encoding/json escapes " and \ and, unless HTML escaping is off as
+		// in log/slog's JSON handler, writes <, > and & as \u003c, \u003e and
+		// \u0026.
+		const escaped = `pa"ss<wo>rd&\`
+		for _, tc := range []struct {
+			name, got string
+			want      bool
+		}{
+			{name: "marshal", got: `{"password":"pa\"ss\u003cwo\u003erd\u0026\\"}`, want: true},
+			{name: "no_html_escape", got: `{"password":"pa\"ss<wo>rd&\\"}`, want: true},
+			{name: "inside_a_longer_string", got: `{"msg":"login pa\"ss\u003cwo\u003erd\u0026\\ failed"}`, want: true},
+			{name: "other_text", got: `{"password":"pa\"ss\u003cwo\u003erd\u0026/"}`, want: false},
+		} {
+			if got := Leak(tc.got, escaped); got != tc.want {
+				t.Errorf("%s: Leak(%q) = %t, want %t", tc.name, tc.got, got, tc.want)
+			}
+		}
+	})
 	for name, size := range map[string]int{"hmac_pads": 32, "hmac_pads_long_key": sha256.BlockSize + 1} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

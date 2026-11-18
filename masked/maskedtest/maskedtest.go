@@ -4,14 +4,15 @@
 // masked type nor a reviewed non-secret field. [SecretNamed] checks wire
 // types by name, where every title and path is text: it reports a text field
 // named like a credential. [Leak] checks a printer's output for a secret's
-// text, its HMAC pad forms, and their hex or base64. Import it only from
-// _test.go files.
+// text, its HMAC pad forms, their hex or base64, and the text's JSON string
+// form. Import it only from _test.go files.
 package maskedtest
 
 import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -219,14 +220,32 @@ func KeyForms(key string) []string {
 	return out
 }
 
-// Leak reports whether got contains text in any form [KeyForms] returns.
-// text must not be empty (every string contains it), and a text of a few
-// bytes has base64 runs short enough to match by chance.
+// Leak reports whether got contains text in any form [KeyForms] returns
+// (clear, hex, base64) or in its JSON string form, as encoding/json writes it
+// inside a string with or without HTML escaping. text must not be empty
+// (every string contains it), and a text of a few bytes has base64 runs
+// short enough to match by chance.
 func Leak(got, text string) bool {
-	for _, f := range KeyForms(text) {
+	for _, f := range slices.Concat(KeyForms(text), jsonForms(text)) {
 		if strings.Contains(got, f) {
 			return true
 		}
 	}
 	return false
+}
+
+// jsonForms returns text as encoding/json writes it, without the quotes, with
+// HTML escaping on (json.Marshal) and off (log/slog's JSON handler).
+func jsonForms(text string) []string {
+	out := make([]string, 0, 2)
+	for _, escapeHTML := range []bool{true, false} {
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(escapeHTML)
+		// A string always encodes, and a strings.Builder never fails a write.
+		_ = enc.Encode(text)
+		quoted := strings.TrimSuffix(b.String(), "\n")
+		out = append(out, quoted[1:len(quoted)-1])
+	}
+	return out
 }
