@@ -4,7 +4,9 @@
   "description": "Server-Sent Events hub and client that resume from an exact cursor and reconcile after sleep",
   "license": "Apache-2.0",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/feed/worker.ts"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cplieger/go.git",
@@ -26,7 +28,8 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./feed": "./src/feed/index.ts"
+    "./feed": "./src/feed/index.ts",
+    "./feed/worker": "./src/feed/worker.ts"
   },
   "files": [
     "src/",
@@ -67,12 +70,14 @@
     "@vitest/browser": "5.1.0",
     "@vitest/browser-playwright": "5.1.0",
     "@vitest/coverage-v8": "5.1.0",
+    "esbuild": "0.28.2",
     "eslint": "10.15.0",
     "eventsource-parser": "4.1.3",
     "fast-check": "4.10.2",
     "knip": "6.45.1",
     "playwright": "1.65.1",
     "prettier": "3.10.1",
+    "rolldown": "1.2.19",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "8.72.2",
     "vitest": "5.1.0"

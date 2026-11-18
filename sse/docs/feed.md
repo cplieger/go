@@ -54,6 +54,8 @@ This is enough because a seed at revision R is taken before its read. A commit a
 
 A full read the client asks for through `stale()` is **re-reading** until the promise `stale()` returned settles, and nothing else ends it. Frames during the read only mark the subscription, so it never has two reads in flight. At the settling, the newest seed the read gave is checked once against the floor. A read that settles with no seed has failed: its next full read waits on the stream's reconnect curve, a `listening` frame of its source retries it at once, and its next seed resets the curve.
 
+The feed paints nothing while a read is in flight. A sink that shows a loading skeleton while `stale()` reads wraps that read in `skeletonTiming` from `@cplieger/ui/skeleton` itself, so a fast read never flashes one.
+
 ## Every path to a seed and a stream position
 
 | Path | Where the floors come from | What covers the seed |
@@ -80,7 +82,17 @@ A full read the client asks for through `stale()` is **re-reading** until the pr
 
 ## Sharing one stream between tabs
 
-In a worker script, pass `retainListening` as `createWorkerHost`'s `retain` option. It folds every frame the host's stream delivers into one retained `listening` frame: a new epoch replaces its source's entry, the same epoch keeps each kind's higher floor, and a `changed` frame raises the floors it names. The host posts the retained frame to each tab inside the attach, before any later frame, and clears it when the connection ends. A frame that fails the parse marks the retained frame as lost track, so a tab attaching to it reconnects once.
+`@cplieger/sse/feed/worker` is a ready `SharedWorker` script for an app whose stream carries only the feed, so such an app writes no worker. It opens one stream for every tab, at the root-relative path in its URL's `stream` query parameter, and throws a `RangeError` naming the parameter when it is missing or names no root-relative path, so no stream opens on a default. Its host takes no revalidation, because each connection's `listening` frame carries what a reconnect needs.
+
+The app lists the entry as a `Classic` entry of `go/webbundle`, whose `Path` is the package's file under the static-src root:
+
+```go
+webbundle.Entry{Name: "feed_worker", Path: "node_modules/@cplieger/sse/src/feed/worker.ts", Kind: webbundle.Classic}
+```
+
+`createFeed`'s `stream` option, given in place of `reconnect`, takes the stream's path and the entry's served URL, `BUNDLE_URLS.feed_worker`. It opens the `SharedWorker` at that URL with the path set as its `stream` query parameter, and throws a `RangeError` for a URL that does not parse, has a fragment or has its own `stream` parameter. A tab with no `SharedWorker` opens its own stream at the path. Its `onLifecycle` receives the tab's lifecycle records either way, so the app hears `state` for its connection status and `auth_lost` for a credential the server no longer takes.
+
+An app whose stream also carries its own events, or whose `revalidate` has work outside the feed, writes its own worker script instead, and passes `retainListening` as `createWorkerHost`'s `retain` option. It folds every frame the host's stream delivers into one retained `listening` frame: a new epoch replaces its source's entry, the same epoch keeps each kind's higher floor, and a `changed` frame raises the floors it names. The host posts the retained frame to each tab inside the attach, before any later frame, and clears it when the connection ends. A frame that fails the parse marks the retained frame as lost track, so a tab attaching to it reconnects once.
 
 ## The lockstep rule
 

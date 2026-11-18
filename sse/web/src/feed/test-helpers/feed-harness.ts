@@ -195,7 +195,7 @@ export interface Harness {
   readonly wires: string[];
 }
 
-export function harness(over: Partial<FeedOptions<Rows>> = {}): Harness {
+export function harness(over: Partial<Omit<FeedOptions<Rows>, "stream">> = {}): Harness {
   const calls: CatchUpCall[] = [];
   const wires: string[] = [];
   const reconnect = vi.fn<() => void>();

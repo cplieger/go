@@ -1,13 +1,32 @@
 import { jitter } from "../reducer.js";
 import type { Frame } from "../stream.js";
+import { createStream } from "../stream.js";
+import { type SharedWorkerLike, type TabAttachment, attachToWorker } from "../tab.js";
 import { DEFAULT_TIMING } from "../timing.js";
-import type { CatchUp, ChangesAnswer, Feed, FeedOptions, FeedSink, Subscription } from "./types.js";
+import { createVersionMap } from "../versions.js";
+import { rootPath } from "./stream-path.js";
+import type {
+  CatchUp,
+  ChangesAnswer,
+  Feed,
+  FeedOptions,
+  FeedSink,
+  FeedStream,
+  Subscription,
+} from "./types.js";
 import { FEED_VERSION, FeedVersionMismatch } from "./version.js";
 import type { ChangedFrame, ListeningFrame } from "./wire.js";
 import { parseChanged, parseListening, parsePosition, validKind, validSource } from "./wire.js";
 
 const DEFAULT_COALESCE_MS = 50;
 const MAX_COALESCE_MS = 1_000;
+/** One name for every tab: the worker URL, which carries the stream path, tells feeds apart. */
+const WORKER_NAME = "@cplieger/sse/feed";
+/**
+ * Not the document's base: createFeed may run with none, and the sentinel has no query or
+ * fragment, so the check sees only what the worker string carries.
+ */
+const ENTRY_CHECK_BASE = "https://feed.invalid";
 
 interface Watermark {
   readonly epoch: string;
@@ -58,10 +77,70 @@ type ByKind<T> = Readonly<Record<string, readonly T[] | undefined>>;
 const own = <T>(table: ByKind<T>, kind: string): readonly T[] =>
   (Object.hasOwn(table, kind) ? table[kind] : undefined) ?? [];
 
+type SharedWorkerCtor = new (
+  url: string,
+  options: { readonly name: string; readonly type: WorkerType },
+) => SharedWorkerLike;
+
+// webbundle writes neither a fragment nor a stream parameter, so either means a misconfigured
+// entry URL; refused rather than repaired.
+function checkWorker(worker: string): void {
+  let url: URL;
+  try {
+    url = new URL(worker, ENTRY_CHECK_BASE);
+  } catch {
+    throw new RangeError(`createFeed: stream worker "${worker}" is not a URL`);
+  }
+  // An empty fragment leaves `hash` empty.
+  if (url.href.includes("#")) {
+    throw new RangeError(`createFeed: stream worker "${worker}" has a fragment`);
+  }
+  if (url.searchParams.has("stream")) {
+    throw new RangeError(`createFeed: stream worker "${worker}" has its own "stream" parameter`);
+  }
+}
+
+// The fallback takes no revalidation, as the entry's host takes none: the listening frame decides.
+function attachStream(s: FeedStream, onFrame: (frame: Frame) => boolean): TabAttachment {
+  const type = s.type ?? "classic";
+  const onLifecycle = s.onLifecycle === undefined ? {} : { onLifecycle: s.onLifecycle };
+  return attachToWorker({
+    spawn: () => {
+      // Both exist only in a page, as SharedWorker is exposed to Window alone
+      // (https://html.spec.whatwg.org/multipage/workers.html#sharedworker), and attachToWorker
+      // spawns only where SharedWorker is present.
+      const page = globalThis as unknown as {
+        readonly SharedWorker: SharedWorkerCtor;
+        readonly document: { readonly baseURI: string };
+      };
+      const url = new URL(s.worker, page.document.baseURI);
+      url.searchParams.set("stream", s.path);
+      return new page.SharedWorker(url.href, { name: WORKER_NAME, type });
+    },
+    fallback() {
+      const versions = createVersionMap();
+      const headers: Record<string, string> = {};
+      const stream = createStream({
+        url: s.path,
+        versions,
+        headers,
+        onFrame,
+        ...onLifecycle,
+        revalidate: () => Promise.resolve(),
+      });
+      return { stream, versions, headers };
+    },
+    onFrame,
+    ...onLifecycle,
+  });
+}
+
 /**
  * Builds the change feed of one tab. Throws `FeedVersionMismatch` when `o.feedVersion` is not
- * `FEED_VERSION`, then `RangeError` for a `coalesceMs` outside 0 to 1,000 or a kind, source or
- * logged name outside its grammar.
+ * `FEED_VERSION`, then `RangeError` for a `coalesceMs` outside 0 to 1,000, a kind, source or
+ * logged name outside its grammar, a `stream.path` that is not root-relative, or a `stream.worker`
+ * that is not a URL or has a fragment or its own `stream` parameter. With `stream`, it attaches the
+ * tab before it returns.
  */
 export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>): Feed<R> {
   type CatchUpResult = Awaited<ReturnType<CatchUp<R>>>;
@@ -71,6 +150,12 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
   const coalesceMs = o.coalesceMs ?? DEFAULT_COALESCE_MS;
   if (!(coalesceMs >= 0 && coalesceMs <= MAX_COALESCE_MS)) {
     throw new RangeError(`createFeed: coalesceMs ${String(coalesceMs)} is not 0 to 1,000`);
+  }
+  if (o.stream !== undefined && !rootPath(o.stream.path)) {
+    throw new RangeError(`createFeed: stream path "${o.stream.path}" is not a root-relative path`);
+  }
+  if (o.stream !== undefined) {
+    checkWorker(o.stream.worker);
   }
   for (const name of o.logged) {
     if (!validSource(name)) {
@@ -116,6 +201,13 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     capMs: o.timing?.capMs ?? DEFAULT_TIMING.capMs,
   };
   const random = o.random ?? Math.random;
+  let attachment: TabAttachment | null = null;
+  const reconnect =
+    o.stream === undefined
+      ? o.reconnect
+      : () => {
+          attachment?.reconnect();
+        };
 
   // The wait after the nth consecutive failure: the stream runtime's reconnect delay for attempt n.
   function backoff(n: number): number {
@@ -415,7 +507,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     lostTrack = new Set([...(lostTrack ?? []), ...known]);
     forget();
     if (first) {
-      callApp(o.reconnect);
+      callApp(reconnect);
     }
     throw new Error(`feed: ${reason}`);
   }
@@ -537,7 +629,25 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     }
   }
 
+  function onFrame(frame: Frame): boolean {
+    if (frame.type === "changed") {
+      onChangedData(frame.data);
+      return true;
+    }
+    if (frame.type === "listening") {
+      onListeningData(frame.data);
+      return true;
+    }
+    return false;
+  }
+
+  if (o.stream !== undefined) {
+    attachment = attachStream(o.stream, onFrame);
+  }
+
   return {
+    attachment,
+    onFrame,
     watch(kind, sink, seed): Subscription {
       const src = kindSource.get(kind);
       if (src === undefined) {
@@ -576,17 +686,6 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
           }
         },
       };
-    },
-    onFrame(frame: Frame): boolean {
-      if (frame.type === "changed") {
-        onChangedData(frame.data);
-        return true;
-      }
-      if (frame.type === "listening") {
-        onListeningData(frame.data);
-        return true;
-      }
-      return false;
     },
     onListening(source, listener) {
       let set = listeners.get(source);
