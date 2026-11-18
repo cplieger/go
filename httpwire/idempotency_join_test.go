@@ -301,6 +301,55 @@ func TestCommitAfterTheDeadline(t *testing.T) {
 	})
 }
 
+// A handler that names a code of its row's union after its client left has
+// decided the answer itself, so the kept rule reads that code's NoEffect;
+// an answer the binder wrote for a context error is never kept.
+func TestUnknownOutcomeKeptAfterTheClientLeaves(t *testing.T) {
+	cases := map[string]struct {
+		answer   func(ctx context.Context) error
+		wantCode string
+		wantRuns int
+	}{
+		"a union code that may have acted": {func(context.Context) error {
+			return &httpwire.Error{Code: "outcome_unknown", Message: "the write was sent"}
+		}, "outcome_unknown", 1},
+		"a union code with no effect": {func(context.Context) error {
+			return &httpwire.Error{Code: "queue_full", Message: "the queue is full", RetryAfter: 5 * time.Second}
+		}, "", 2},
+		"the context's own error": {func(ctx context.Context) error { return ctx.Err() }, "", 2},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
+				leave := make(chan struct{})
+				kf.quick = func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+					if c.Body.Kind != "leave" {
+						return jobAnswer{ID: "again"}, nil
+					}
+					close(leave)
+					<-ctx.Done()
+					return jobAnswer{}, tc.answer(ctx)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				go func() {
+					<-leave
+					cancel()
+				}()
+				body := `{"kind":"leave","size":1}`
+				kf.api.ServeHTTP(httptest.NewRecorder(), keyedRequest(http.MethodPost, "/api/jobs/quick", body, `"k"`).WithContext(ctx))
+				kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+					return jobAnswer{ID: "again"}, nil
+				}
+				rec := kf.do(http.MethodPost, "/api/jobs/quick", body, `"k"`)
+				if got := codeOf(t, rec); got != tc.wantCode || kf.runsOf("jobs.quick") != tc.wantRuns {
+					t.Errorf("resend answered %d %q after %d runs, want code %q after %d runs", rec.Code, got, kf.runsOf("jobs.quick"), tc.wantCode, tc.wantRuns)
+				}
+			})
+		})
+	}
+}
+
 // txStore is a store whose answers the handler commits with its work;
 // Save writes nothing.
 type txStore struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -194,7 +195,7 @@ func (a *API) runClaim(w http.ResponseWriter, r *http.Request, ep *Endpoint, k I
 	defer cancel()
 	rec := &keepWriter{ResponseWriter: w, limit: a.idem.lim.maxAnswer}
 	run(rec, r.WithContext(context.WithValue(ctx, idemCallKey{}, &idemCall{key: k, fp: c.fp})))
-	ans, keep := a.keptAnswer(rec, ctx.Err() != nil)
+	ans, keep := a.keptAnswer(ep, rec, ctx.Err() != nil)
 	if !keep {
 		return
 	}
@@ -228,9 +229,11 @@ func (a *API) logOversize(r *http.Request, ep *Endpoint) {
 }
 
 // keptAnswer applies the kept rule to a run's answer: a success, and a
-// refusal whose code has NoEffect false, unless the handler's context had
-// ended, when an error may be a rollback the resend must run again.
-func (a *API) keptAnswer(rec *keepWriter, ended bool) (KeptAnswer, bool) {
+// refusal whose code has NoEffect false. Once the handler's context had
+// ended, a refusal the binder wrote for it (internal_error, or a code
+// outside the row's union) may be a rollback the resend must run again, so
+// only a code the handler chose from its union is kept.
+func (a *API) keptAnswer(ep *Endpoint, rec *keepWriter, ended bool) (KeptAnswer, bool) {
 	status := cmpStatus(rec.status)
 	ans := KeptAnswer{Status: status, ContentType: rec.contentType, Body: rec.body.Bytes(), Oversize: rec.over}
 	if rec.over {
@@ -239,10 +242,11 @@ func (a *API) keptAnswer(rec *keepWriter, ended bool) (KeptAnswer, bool) {
 	if status < http.StatusBadRequest {
 		return ans, true
 	}
-	if ended {
+	env, err := DecodeEnvelope(ans.Body)
+	if ended && (err != nil || env.Code == codeInternal || !slices.Contains(ep.Errors, env.Code)) {
 		return KeptAnswer{}, false
 	}
-	if env, err := DecodeEnvelope(ans.Body); err == nil {
+	if err == nil {
 		if spec, ok := a.table.Catalog.Lookup(env.Code); ok && spec.NoEffect {
 			return KeptAnswer{}, false
 		}
