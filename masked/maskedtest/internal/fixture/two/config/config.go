@@ -21,10 +21,3 @@ var Embedded = struct {
 	string
 	S string
 }{string: "e", S: "s"}
-
-// Iface holds an interface with an unexported method, whose method set
-// differs between the two fixture packages.
-var Iface = struct {
-	I interface{ m() }
-	S string
-}{I: nil, S: "i"}

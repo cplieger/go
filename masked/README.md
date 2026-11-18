@@ -70,7 +70,7 @@ func TestNoCredentialOnTheWire(t *testing.T) {
         Fields: map[maskedtest.Field]string{
             {In: reflect.TypeFor[api.Release](), Name: "ReleaseKey"}: "a release's identity, not a credential",
         },
-        Enums:  []reflect.Type{reflect.TypeFor[api.TokenState]()},
+        Enums: []reflect.Type{reflect.TypeFor[api.TokenState]()},
     }
     if found := maskedtest.SecretNamed(allow, reflect.TypeFor[api.Release](), reflect.TypeFor[api.Session]()); len(found) > 0 {
         t.Errorf("credential-named wire fields:\n%s", strings.Join(found, "\n"))

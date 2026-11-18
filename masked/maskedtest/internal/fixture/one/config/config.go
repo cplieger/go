@@ -22,8 +22,8 @@ var Embedded = struct {
 	S string
 }{string: "e", S: "s"}
 
-// Iface holds an interface with an unexported method, whose method set
-// differs between the two fixture packages.
+// Iface holds an interface with an unexported method, which a report line
+// qualifies by this package's import path.
 var Iface = struct {
 	I interface{ m() }
 	S string

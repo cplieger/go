@@ -191,10 +191,11 @@ func (w *walker) report(it item, what string) {
 }
 
 // typeName names t for a report line, which a person reads: as
-// reflect.Type.String writes it, with each named type, unexported field and
-// unexported method qualified by its import path, since two packages can
-// share a short name. It owes no uniqueness (an embedded alias and two
-// function-local types of one name read alike): an allow entry matches by
+// reflect.Type.String writes it, with each named type, each unexported field
+// that is not embedded and each unexported method qualified by its import
+// path, since two packages can share a short name. It owes no uniqueness (an
+// embedded predeclared type or alias, and two function-local types of one
+// name, read alike): an allow entry matches by
 // identity. The recursion ends because an unnamed type is never its own
 // element.
 func typeName(t reflect.Type) string {
