@@ -247,9 +247,10 @@ func messages(msgs []api.Message) string {
 
 // defines adds one dotted define per classic entry to the user's defines,
 // so a module's BUNDLE_URLS.<name> inlines that URL alone and the
-// unread-classic check sees which entries a module reads. Every other read
-// of BUNDLE_URLS becomes unreadURLs, which refuseUnreadURLs finds in the
-// output.
+// unread-classic check sees which entries a module reads. esbuild matches
+// BUNDLE_URLS["<name>"] and BUNDLE_URLS?.<name> to the same define. Every
+// other read of BUNDLE_URLS becomes unreadURLs, which refuseUnreadURLs
+// finds in the output.
 func defines(user, urls map[string]string) (map[string]string, error) {
 	d := make(map[string]string, len(user)+len(urls)+1)
 	maps.Copy(d, user)
@@ -270,8 +271,9 @@ func defines(user, urls map[string]string) (map[string]string, error) {
 const unreadURLs = "__webbundle_BUNDLE_URLS_read_by_name_only__"
 
 // refuseUnreadURLs refuses an entry of r whose outputs still read
-// BUNDLE_URLS: a whole-object read (Object.values, a spread, a bracket) or a
-// member no classic entry declares. names are the classic entries.
+// BUNDLE_URLS: a computed key, a whole-object read (Object.values, a
+// spread) or a member no classic entry declares. names are the classic
+// entries.
 func refuseUnreadURLs(r *built, entries []Entry, names []string) error {
 	marker := []byte(unreadURLs)
 	for i := range entries {
@@ -282,7 +284,10 @@ func refuseUnreadURLs(r *built, entries []Entry, names []string) error {
 				return err
 			}
 			j := slices.IndexFunc(r.outputs, func(o outFile) bool { return o.path == rel })
-			if j < 0 || !bytes.Contains(r.outputs[j].contents, marker) {
+			if j < 0 {
+				return fmt.Errorf("webbundle: %s is in esbuild's metafile but not in its output", rel)
+			}
+			if !bytes.Contains(r.outputs[j].contents, marker) {
 				continue
 			}
 			if e.Kind == Classic {

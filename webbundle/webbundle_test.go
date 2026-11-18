@@ -172,8 +172,8 @@ new SharedWorker(BUNDLE_URLS.feed_worker);
 	}
 }
 
-// BUNDLE_URLS.<name> is the one read: any other read of BUNDLE_URLS would
-// see every classic entry's URL, or none, at run time.
+// A read of BUNDLE_URLS by a classic entry's name is the one read: any other
+// would see every classic entry's URL, or none, at run time.
 func TestBuildRefusesBundleURLsReadOtherThanByName(t *testing.T) {
 	t.Parallel()
 	worker := files{"src/worker.js": "self.addEventListener(\"connect\", () => {});\n"}
@@ -199,6 +199,25 @@ func TestBuildRefusesBundleURLsReadOtherThanByName(t *testing.T) {
 			c.Entries = append(c.Entries, webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic})
 			buildRefused(t, c, `"app"`, "BUNDLE_URLS.worker")
 			outMissing(t, c.Out)
+		})
+	}
+	for _, tc := range []struct{ name, read string }{
+		{name: "QuotedBracket", read: `BUNDLE_URLS["worker"]`},
+		{name: "OptionalChain", read: "BUNDLE_URLS?.worker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := files{"src/app.ts": "declare const BUNDLE_URLS: { worker: string };\nnew SharedWorker(" + tc.read + ");\n"}
+			maps.Copy(fs, worker)
+			c := newFixture(t, fs)
+			c.Entries = append(c.Entries, webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic})
+			mustBuild(t, c)
+			b := readBundle(t, c.Out)
+			url := "/" + entryPath(t, b, "worker", webbundle.Classic)
+			app := loadedJS(t, c.Out, entryPath(t, b, "app", webbundle.Module))
+			if !bytes.Contains(app, []byte(strconv.Quote(url))) {
+				t.Errorf("the module entry does not read %s as %q:\n%s", tc.read, url, app)
+			}
 		})
 	}
 	t.Run("ClassicEntry", func(t *testing.T) {

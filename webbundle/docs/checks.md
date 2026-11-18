@@ -41,15 +41,16 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 
 ## Imports
 
-`Build` reads esbuild's record of every file each entry pulls in, and refuses:
+`Build` reads esbuild's record of every file each entry pulls in, and refuses the following. Each of these errors ends with the chain of imports from the entry to the refused file.
 
 - a file outside `Src`, reached by an import, an `@import` or a `url()`, or through a symbolic link whose target leaves `Src`; a link that stays inside `Src`, such as a pnpm package folder linked into `node_modules/.pnpm`, is followed. This holds for every file an entry imports, used or not
 - a file from an npm package that `Packages` does not match
 - a file an entry's `Forbid` names, or, when the entry has an `Allow`, a file its `Allow` does not name; the items are those of [Forbid and Allow](configuration.md#forbid-and-allow)
-- a script entry that imports CSS
-- a module entry, or a chunk it loads, that reads `BUNDLE_URLS` other than as `BUNDLE_URLS.<name>` of a classic entry, such as `Object.values(BUNDLE_URLS)`, and a classic entry that reads `BUNDLE_URLS` at all
 
-Each of these errors ends with the chain of imports from the entry to the refused file.
+It also refuses:
+
+- a script entry that imports CSS. The error names the build, a classic entry's or the module entries', and the CSS file it emitted
+- a module entry, or a chunk it loads, that reads `BUNDLE_URLS` other than by a classic entry's name, and a classic entry that reads `BUNDLE_URLS` at all. `BUNDLE_URLS.<name>` is the documented read, and esbuild resolves `BUNDLE_URLS["<name>"]` and `BUNDLE_URLS?.<name>` to the same one URL. A computed key, a whole-object read such as `Object.values(BUNDLE_URLS)`, a spread and a name no classic entry has fail. The error names the entry and the reads it may use
 
 `Packages`, `Forbid` and `Allow` judge only the files whose code an entry ships: those that put a byte in the entry's built file or in a file it loads, such as a shared chunk or the chunk of a dynamic `import()`, and the fonts and images its `url()` and imports write as assets. A file the entry imports but whose code esbuild drops, such as a module whose exports go unused or one that only passes another's exports on, counts for nothing, and its notice is not copied.
 
