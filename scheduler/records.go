@@ -59,7 +59,9 @@ type Record struct {
 	Trigger Trigger
 	Owner   string
 	State   string // StateQueued, StateRunning or StateEnded
-	Phase   Phase
+	// Proposal is the id a Proposes kind's Run.Propose held; "" otherwise.
+	Proposal ProposalID
+	Phase    Phase
 
 	Payload json.RawMessage
 	Phases  []PhaseAt // each distinct phase reached with its first time, at most 32

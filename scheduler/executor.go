@@ -47,6 +47,10 @@ type KindSpec[P any] struct {
 	Kept     time.Duration
 	MaxItems int  // a batch kind's most items per job, 1 to 500; 0 for a kind that is not a batch
 	OnBehalf bool // the job writes for its starting credential, so CredentialEnded stops it
+	// Proposes marks a kind whose result is a proposal: its Scope is the
+	// proposal key, expectation included, so Start answers the owner's held
+	// proposal of that scope without running again.
+	Proposes bool
 }
 
 // Job is one request for work.

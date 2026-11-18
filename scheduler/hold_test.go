@@ -74,6 +74,28 @@ func TestQuietAllEndsQueuedInterrupted(t *testing.T) {
 		})
 	})
 
+	t.Run("held proposals are dropped", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			p := &proposals{}
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{p.spec("")}})
+			first := r.start(t, api("align", "file:1/expect:7", "alice", payload{}))
+			synctest.Wait()
+			resume, err := r.ex.Hold(t.Context(), true)
+			if err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", err)
+			}
+			if _, ok := r.ex.Proposal("alice", p.id(first.Job)); ok {
+				t.Error("Proposal after Hold(all) = held, want dropped")
+			}
+			resume()
+			again := r.start(t, api("align", "file:1/expect:7", "alice", payload{}))
+			synctest.Wait()
+			if again.Joined || again.Job == first.Job || !p.runLog.ran(again.Job) {
+				t.Errorf("Start of the dropped proposal's scope after resume = %+v, want a new job that ran", again)
+			}
+		})
+	})
+
 	t.Run("resume counts each wait from the scope's last end", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}})

@@ -13,6 +13,7 @@ var (
 	ErrCovered       = errors.New("scheduler: covered by a job that started") // matched through *CoveredError
 	ErrYieldTooLong  = errors.New("scheduler: yield more than 24 hours ahead")
 	ErrBatchSize     = errors.New("scheduler: batch item count outside 1 to MaxItems") // Start; the wire refuses the count first
+	ErrProposed      = errors.New("scheduler: job already proposed")                   // Run.Propose a second time in one job
 
 	ErrQueueFull        = errors.New("scheduler: queue full")               // queue_full
 	ErrCapacity         = errors.New("scheduler: no room for a record")     // job_capacity; Records.Insert
