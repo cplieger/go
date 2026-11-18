@@ -89,7 +89,8 @@ func unreadableSecretFile(cause error) error {
 // secret is that file's content with at most one trailing line ending removed,
 // read through one handle and capped at 1 MiB; otherwise it is KEY as set. An
 // unset or empty result is a *MissingError and a blank file ErrBlankSecretFile.
-// Errors carry the key, never the value. Secret is SecretWithSource without the
+// Errors carry the key, and the KEY_FILE path for a rejected, unreadable or
+// blank file, never the file's content. Secret is SecretWithSource without the
 // channel.
 func Secret(key Key) (masked.Secret, error) {
 	v, _, err := SecretWithSource(key)

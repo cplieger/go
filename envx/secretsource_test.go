@@ -60,12 +60,7 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 	})
 }
 
-// TestSecretWithSource_file_channel_returns_the_value_as_written pins the asymmetry this
-// package used to carry: the env channel returns os.Getenv verbatim while the file
-// channel ran strings.TrimSpace, so one credential resolved to two different secrets
-// depending on how it was delivered. A consumer that validates a credential verbatim was
-// handed a silently rewritten value. Only a single trailing line ending — the artifact of
-// storing a value in a file at all — is removed now.
+// The file channel answers the value as written, minus one trailing line ending, so it agrees with KEY.
 func TestSecretWithSource_file_channel_returns_the_value_as_written(t *testing.T) {
 	for name, tc := range map[string]struct {
 		content string

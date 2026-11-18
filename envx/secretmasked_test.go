@@ -23,30 +23,32 @@ func TestSecretAnswersMasked(t *testing.T) {
 		},
 	}
 	for name, get := range getters {
-		t.Run(name+"/env channel", func(t *testing.T) {
-			t.Setenv("ENVX_MASKED", text)
-			t.Setenv("ENVX_MASKED_FILE", "")
-			checkMasked(t, get, text)
-		})
-		t.Run(name+"/file channel", func(t *testing.T) {
-			p := filepath.Join(t.TempDir(), "secret")
-			if err := os.WriteFile(p, []byte(text+"\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("ENVX_MASKED", "from-env")
-			t.Setenv("ENVX_MASKED_FILE", p)
-			checkMasked(t, get, text)
-		})
-		t.Run(name+"/failure answers the zero Secret", func(t *testing.T) {
-			t.Setenv("ENVX_MASKED", text)
-			t.Setenv("ENVX_MASKED_FILE", filepath.Join(t.TempDir(), "absent"))
-			v, err := get("ENVX_MASKED")
-			if err == nil {
-				t.Fatal("err = nil for an absent secret file, want an error")
-			}
-			if !v.IsZero() {
-				t.Error("value is not the zero Secret on an error")
-			}
+		t.Run(name, func(t *testing.T) {
+			t.Run("env channel", func(t *testing.T) {
+				t.Setenv("ENVX_MASKED", text)
+				t.Setenv("ENVX_MASKED_FILE", "")
+				checkMasked(t, get, text)
+			})
+			t.Run("file channel", func(t *testing.T) {
+				p := filepath.Join(t.TempDir(), "secret")
+				if err := os.WriteFile(p, []byte(text+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("ENVX_MASKED", "from-env")
+				t.Setenv("ENVX_MASKED_FILE", p)
+				checkMasked(t, get, text)
+			})
+			t.Run("failure answers the zero Secret", func(t *testing.T) {
+				t.Setenv("ENVX_MASKED", text)
+				t.Setenv("ENVX_MASKED_FILE", filepath.Join(t.TempDir(), "absent"))
+				v, err := get("ENVX_MASKED")
+				if err == nil {
+					t.Fatal("err = nil for an absent secret file, want an error")
+				}
+				if !v.IsZero() {
+					t.Error("value is not the zero Secret on an error")
+				}
+			})
 		})
 	}
 }

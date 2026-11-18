@@ -13,7 +13,7 @@ envx is built for Go services in containers, configured by compose or Kubernetes
 - `Bool`, `Int` and `Duration` return your default for an unset, empty or malformed value. A malformed one also logs a warning through `slog.Default()` naming the variable.
 - A key name no variable can have, such as `APP LISTEN`, panics on first read. Otherwise the getter would return its default forever.
 - `Require` returns a typed error, so startup can report every missing variable at once.
-- `Secret` reads `KEY_FILE` before `KEY`, caps the file at 1 MB and returns the value as a `masked.Secret`, which no error, log line, JSON body or debug dump shows.
+- `Secret` reads `KEY_FILE` before `KEY`, caps the file at 1 MiB and returns the value as a `masked.Secret`, which no error, log line, JSON body or debug dump shows.
 
 Consider [caarlos0/env](https://github.com/caarlos0/env) if you want your whole config parsed into a tagged struct, with float, slice, map and custom-type parsers.
 
