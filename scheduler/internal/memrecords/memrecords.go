@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ type Store struct {
 	calls    map[Op]int
 	order    []scheduler.ID
 	ended    []scheduler.ID // in the order their ends were written
+	log      *slog.Logger
 	capacity int
 	mu       sync.Mutex
 }
@@ -62,7 +64,15 @@ func New() *Store {
 		recs:  map[scheduler.ID]scheduler.Record{},
 		fail:  map[Op]error{},
 		calls: map[Op]int{},
+		log:   slog.Default(),
 	}
+}
+
+// Logger sets where EndIn logs.
+func (s *Store) Logger(l *slog.Logger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.log = l
 }
 
 // Fail makes every later call of op answer err without touching the store;
@@ -114,7 +124,7 @@ func (s *Store) EndIn(id scheduler.ID, e scheduler.End) error {
 	if !ok || r.State != scheduler.StateRunning {
 		return ErrNotRunning
 	}
-	r.Lines, e = scheduler.CloseLines(r.Lines, e)
+	r.Lines, e, _ = scheduler.CloseEnd(r.Lines, e)
 	s.end(&r, e)
 	return nil
 }

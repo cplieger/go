@@ -241,8 +241,7 @@ func TestBatchLinesAndResult(t *testing.T) {
 		})
 	})
 
-	t.Run("an item's facts over 2 KiB are dropped", func(t *testing.T) {
-		dropped := scheduler.Reason{Code: scheduler.ReasonFactsTooLarge}
+	t.Run("an item's facts over 2 KiB are dropped, the end unchanged", func(t *testing.T) {
 		for _, tc := range []struct {
 			name  string
 			facts json.RawMessage
@@ -269,7 +268,7 @@ func TestBatchLinesAndResult(t *testing.T) {
 						}
 						return
 					}
-					r.wantEnd(t, s.Job, scheduler.ResultOK, dropped)
+					r.wantEnd(t, s.Job, scheduler.ResultOK)
 					r.wantLines(t, s.Job, lineDone)
 					if n := lines.count(slog.LevelError); n != 1 {
 						t.Errorf("%d ERROR lines, want 1", n)
@@ -432,27 +431,71 @@ func TestBatchMaxItems(t *testing.T) {
 	})
 }
 
-func TestCloseLines(t *testing.T) {
+func TestCloseEnd(t *testing.T) {
+	dropped := scheduler.Reason{Code: scheduler.ReasonFactsTooLarge}
 	t.Run("answers a copy and leaves the lines it was given", func(t *testing.T) {
 		in := []scheduler.Line{line(scheduler.LineDone, ""), line(scheduler.LineQueued, "")}
-		got, end := scheduler.CloseLines(in, scheduler.End{Result: scheduler.ResultOK})
+		got, end, cut := scheduler.CloseEnd(in, scheduler.End{Result: scheduler.ResultOK})
 		if want := []scheduler.Line{line(scheduler.LineDone, ""), line(scheduler.LineReview, scheduler.ReasonNotRun)}; !slices.EqualFunc(got, want, sameLine) {
 			t.Errorf("lines %v, want %v", got, want)
 		}
-		if end.Result != scheduler.ResultPartial {
-			t.Errorf("result %s, want partial", end.Result)
+		if end.Result != scheduler.ResultPartial || cut != (scheduler.Cut{}) {
+			t.Errorf("result %s cut %+v, want partial and nothing cut", end.Result, cut)
 		}
 		if in[1].State != scheduler.LineQueued {
 			t.Errorf("the given line 1 reads %s, want it left queued", in[1].State)
 		}
 	})
-	t.Run("no lines answers the end unchanged", func(t *testing.T) {
-		in := scheduler.End{Result: scheduler.ResultOK, Reasons: []scheduler.Reason{{Code: "slow"}}, Facts: json.RawMessage(`{"n":1}`)}
-		lines, end := scheduler.CloseLines(nil, in)
-		if len(lines) != 0 || end.Result != scheduler.ResultOK || !slices.Equal(end.Reasons, in.Reasons) || string(end.Facts) != `{"n":1}` {
-			t.Errorf("CloseLines(nil, ok) = %v, %+v; want no lines and %+v", lines, end, in)
+	t.Run("no lines answers an end within its bounds unchanged", func(t *testing.T) {
+		in := scheduler.End{Result: scheduler.ResultOK, Reasons: missing(32), Facts: factsOf(2048)}
+		lines, end, cut := scheduler.CloseEnd(nil, in)
+		if len(lines) != 0 || end.Result != scheduler.ResultOK || !slices.Equal(end.Reasons, in.Reasons) ||
+			string(end.Facts) != string(in.Facts) || cut != (scheduler.Cut{}) {
+			t.Errorf("CloseEnd(nil, ok) = %v, %s with %d reasons, %d bytes of facts, cut %+v; want no lines, the end as given and nothing cut",
+				lines, end.Result, len(end.Reasons), len(end.Facts), cut)
 		}
 	})
+	for _, tc := range []struct {
+		name string
+		in   scheduler.End
+		want []scheduler.Reason
+		cut  scheduler.Cut
+	}{
+		{
+			name: "the 32 most severe of 40 reasons are kept",
+			in:   scheduler.End{Result: scheduler.ResultPartial, Reasons: missing(40)},
+			want: missing(32), cut: scheduler.Cut{Reasons: 8},
+		},
+		{
+			name: "facts over 2 KiB are dropped for facts_too_large within the 32",
+			in:   scheduler.End{Result: scheduler.ResultPartial, Reasons: missing(40), Facts: factsOf(3072)},
+			want: append(missing(31), dropped), cut: scheduler.Cut{Reasons: 9, FactsBytes: 3072},
+		},
+		{
+			name: "facts that are not an object are dropped",
+			in:   scheduler.End{Result: scheduler.ResultPartial, Reasons: missing(1), Facts: json.RawMessage(`[1,2]`)},
+			want: append(missing(1), dropped), cut: scheduler.Cut{FactsBytes: 5},
+		},
+		{
+			name: "a facts_too_large already kept is not added twice",
+			in:   scheduler.End{Result: scheduler.ResultPartial, Reasons: []scheduler.Reason{dropped}, Facts: factsOf(2049)},
+			want: []scheduler.Reason{dropped}, cut: scheduler.Cut{FactsBytes: 2049},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			given := slices.Clone(tc.in.Reasons)
+			_, end, cut := scheduler.CloseEnd(nil, tc.in)
+			if !slices.Equal(end.Reasons, tc.want) || cut != tc.cut {
+				t.Errorf("reasons %v cut %+v, want %v and %+v", end.Reasons, cut, tc.want, tc.cut)
+			}
+			if tc.cut.FactsBytes > 0 && end.Facts != nil {
+				t.Errorf("facts of %d bytes, want dropped", len(end.Facts))
+			}
+			if !slices.Equal(tc.in.Reasons, given) {
+				t.Errorf("the given reasons read %v, want them left as %v", tc.in.Reasons, given)
+			}
+		})
+	}
 }
 
 func sameLine(a, b scheduler.Line) bool {

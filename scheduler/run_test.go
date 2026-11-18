@@ -177,16 +177,52 @@ func TestFactsOverCapDropped(t *testing.T) {
 			})
 		})
 	}
+
+	t.Run("an end written in the job's commit is cut alike", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var r *rig
+			lines := &logLines{}
+			check := spec("check", "")
+			check.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+				if !run.Commit() {
+					t.Error("Commit = false for a job nobody cancelled")
+				}
+				committed := scheduler.End{Result: scheduler.ResultPartial, Reasons: []scheduler.Reason{budget}, Facts: factsOf(3072)}
+				if err := r.store.EndIn(run.Job().ID, committed); err != nil {
+					t.Errorf("EndIn = %v", err)
+				}
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			seen := &transitions{}
+			log := slog.New(lines)
+			r = newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{check}, Logger: log, Observer: seen.observer()})
+			r.store.Logger(log)
+			s := r.start(t, api("check", "", "alice", payload{}))
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultPartial, budget, dropped)
+			if rec := r.rec(t, s.Job); rec.End != nil && len(rec.End.Facts) != 0 {
+				t.Errorf("Facts = %d bytes, want dropped", len(rec.End.Facts))
+			}
+			if trs := seen.of(s.Job); len(trs) == 0 || trs[len(trs)-1].Result != scheduler.ResultPartial {
+				t.Errorf("transitions %v, want the last to report the stored partial", trs)
+			}
+			if n := lines.count(slog.LevelError); n != 1 {
+				t.Errorf("%d ERROR lines, want the store's 1", n)
+			}
+		})
+	})
+}
+
+// missing answers n distinct reasons, most severe first.
+func missing(n int) []scheduler.Reason {
+	out := make([]scheduler.Reason, n)
+	for i := range out {
+		out[i] = scheduler.Reason{Code: "missing", Subject: fmt.Sprintf("connection:%d", i)}
+	}
+	return out
 }
 
 func TestEndReasonsCappedAt32(t *testing.T) {
-	reasons := func(n int) []scheduler.Reason {
-		out := make([]scheduler.Reason, n)
-		for i := range out {
-			out[i] = scheduler.Reason{Code: "missing", Subject: fmt.Sprintf("connection:%d", i)}
-		}
-		return out
-	}
 	dropped := scheduler.Reason{Code: scheduler.ReasonFactsTooLarge}
 	for _, tc := range []struct {
 		name  string
@@ -194,12 +230,12 @@ func TestEndReasonsCappedAt32(t *testing.T) {
 		want  []scheduler.Reason
 		error int
 	}{
-		{name: "32 reasons are kept", end: scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons(32)}, want: reasons(32)},
-		{name: "the most severe 32 of 40 are kept", end: scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons(40)}, want: reasons(32), error: 1},
+		{name: "32 reasons are kept", end: scheduler.End{Result: scheduler.ResultPartial, Reasons: missing(32)}, want: missing(32)},
+		{name: "the most severe 32 of 40 are kept", end: scheduler.End{Result: scheduler.ResultPartial, Reasons: missing(40)}, want: missing(32), error: 1},
 		{
 			name:  "dropped facts keep their reason within the 32",
-			end:   scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons(32), Facts: factsOf(2049)},
-			want:  append(reasons(31), dropped),
+			end:   scheduler.End{Result: scheduler.ResultPartial, Reasons: missing(32), Facts: factsOf(2049)},
+			want:  append(missing(31), dropped),
 			error: 1,
 		},
 	} {

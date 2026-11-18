@@ -3,7 +3,9 @@ package schedulertest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/scheduler/v2"
@@ -13,13 +15,14 @@ import (
 type EndInFunc func(ctx context.Context, id scheduler.ID, e scheduler.End) error
 
 // EndIn runs the own-commit end's contract against the stores open answers,
-// one new empty store per case: the end closes a batch's open lines as
-// scheduler.CloseLines does, a later Records.End keeps it, and a record that
-// is not running is refused with nothing written.
+// one new empty store per case: the end is closed by scheduler.CloseEnd, its
+// batch's open lines and its bounds alike, a later Records.End keeps it, and
+// a record that is not running is refused with nothing written.
 func EndIn(t *testing.T, open func() (scheduler.Records, EndInFunc)) {
 	t.Helper()
 	t.Run("an end closes the open lines", func(t *testing.T) { endInCloses(t, open) })
 	t.Run("an ok end over ended lines", func(t *testing.T) { endInEnded(t, open) })
+	t.Run("an end past its bounds is cut", func(t *testing.T) { endInCut(t, open) })
 	t.Run("a later end keeps it", func(t *testing.T) {
 		r, endIn := open()
 		endInKept(t, r, endIn)
@@ -98,6 +101,26 @@ func endInEnded(t *testing.T, open func() (scheduler.Records, EndInFunc)) {
 			}
 			wantLines(t, got.Lines, scheduler.Line{State: scheduler.LineDone}, tc.line)
 		})
+	}
+}
+
+func endInCut(t *testing.T, open func() (scheduler.Records, EndInFunc)) {
+	reasons := make([]scheduler.Reason, 40)
+	for i := range reasons {
+		reasons[i] = scheduler.Reason{Code: "missing", Subject: fmt.Sprintf("connection:%d", i)}
+	}
+	facts := json.RawMessage(`{"k":"` + strings.Repeat("a", 3072-len(`{"k":""}`)) + `"}`)
+	r, endIn := open()
+	f := &fixture{t: t, r: r}
+	rec := f.running()
+	got := f.endIn(endIn, rec.ID, scheduler.End{Result: scheduler.ResultPartial, Reasons: reasons, Facts: facts})
+	want := append(slices.Clone(reasons[:31]), scheduler.Reason{Code: scheduler.ReasonFactsTooLarge})
+	if got.End == nil {
+		t.Fatal("no end stored")
+	}
+	if len(got.End.Facts) != 0 || !slices.Equal(got.End.Reasons, want) {
+		t.Errorf("end with %d bytes of facts and reasons %v, want no facts and the 31 most severe reasons then facts_too_large",
+			len(got.End.Facts), got.End.Reasons)
 	}
 }
 

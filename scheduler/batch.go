@@ -11,7 +11,7 @@ import (
 // It answers ctx's error once the job is cancelled, ErrUnknownLine for an i
 // outside the batch, and nil, running nothing, for a line already taken. A
 // panic in fn or a line that is not an end ends the batch failed, the line in
-// review, both with run_panicked. At the job's end CloseLines closes the
+// review, both with run_panicked. At the job's end CloseEnd closes the
 // lines still open.
 func (r *Run[P]) Item(ctx context.Context, i int, fn func(ctx context.Context) Line) error {
 	en, e := r.en, r.e
@@ -119,13 +119,8 @@ func (e *Executor[P]) setLine(en *job[P], i int, l Line) {
 	e.put(en)
 }
 
-// CloseLines is a batch's close at its end: each line still queued or
-// running goes to review with reason not_run, or cancelled or interrupted for
-// such an end, and an ok end answers partial when any line is then skipped or
-// in review. It answers a copy and leaves lines as they are; with no lines it
-// answers end unchanged. A store's own-commit end calls it, as the executor
-// does for an end it writes.
-func CloseLines(lines []Line, end End) ([]Line, End) {
+// closeBatch is CloseEnd's close of a batch's lines.
+func closeBatch(lines []Line, end End) ([]Line, End) {
 	lines = slices.Clone(lines)
 	reason := ReasonNotRun
 	switch end.Result {
@@ -150,12 +145,12 @@ func CloseLines(lines []Line, end End) ([]Line, End) {
 
 func lineOpen(l Line) bool { return l.State == LineQueued || l.State == LineRunning }
 
-// closeLines applies CloseLines to en's record, writing it when a line
+// closeLines applies CloseEnd to en's record, writing it when a line
 // moved, and answers the batch's end.
 func (e *Executor[P]) closeLines(en *job[P], end End) End {
 	en.recMu.Lock()
 	defer en.recMu.Unlock()
-	closed, end := CloseLines(en.rec.Lines, end)
+	closed, end, _ := CloseEnd(en.rec.Lines, end)
 	if slices.ContainsFunc(en.rec.Lines, lineOpen) {
 		en.rec.Lines = closed
 		e.put(en)

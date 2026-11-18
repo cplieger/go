@@ -109,6 +109,15 @@ const (
 	maxFacts   = 2048
 )
 
+// Cut is what CloseEnd dropped from an end, zero when nothing was.
+type Cut struct{ Reasons, FactsBytes int }
+
+// CloseEnd closes an end.
+func CloseEnd(lines []Line, end End) ([]Line, End, Cut) {
+	lines, end = closeBatch(lines, end)
+	return lines, end, Cut{}
+}
+
 // bounded answers end within its bounds, logging each cut at ERROR: reasons
 // past the 32 most severe are dropped, and facts that are not a JSON object of
 // at most 2 KiB are dropped for the reason facts_too_large, kept within the 32

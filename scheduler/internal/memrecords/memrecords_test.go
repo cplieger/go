@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ func TestRecordsContract(t *testing.T) {
 func TestEndInContract(t *testing.T) {
 	schedulertest.EndIn(t, func() (scheduler.Records, schedulertest.EndInFunc) {
 		s := memrecords.New()
+		s.Logger(slog.New(slog.DiscardHandler))
 		return s, func(_ context.Context, id scheduler.ID, e scheduler.End) error { return s.EndIn(id, e) }
 	})
 }
