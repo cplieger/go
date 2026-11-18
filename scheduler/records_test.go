@@ -152,6 +152,85 @@ func TestUnrecordedEndFreesTheJob(t *testing.T) {
 	})
 }
 
+// The executor writes a batch's lines before its end, since Records.End
+// writes only the end: a line write the store refuses leaves no end, so the
+// store's next open closes the lines and the end together.
+func TestUnwrittenLinesLeaveTheEndUnwritten(t *testing.T) {
+	lineDone, queued := line(scheduler.LineDone, ""), line(scheduler.LineQueued, "")
+	itemDone := func(context.Context) scheduler.Line { return lineDone }
+
+	t.Run("open lines the store refuses to close write no end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			lines := &logLines{}
+			seen := &transitions{}
+			gate := make(chan struct{})
+			k := grab(done)
+			k.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+				_ = r.Item(ctx, 0, itemDone)
+				<-gate
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{
+				Kinds:    []scheduler.KindSpec[payload]{k},
+				Logger:   slog.New(lines),
+				Observer: seen.observer(),
+			})
+			s := r.start(t, api("grab", "", "alice", payload{N: 3}))
+			synctest.Wait()
+			r.store.Fail(memrecords.OpPut, errors.New("disk full"))
+			close(gate)
+			synctest.Wait()
+
+			if rec := r.rec(t, s.Job); rec.State != scheduler.StateRunning || rec.End != nil {
+				t.Errorf("record %s %v after an unwritten close, want it running with no end", rec.State, rec.End)
+			}
+			r.wantLines(t, s.Job, lineDone, queued, queued)
+			if n := r.store.Count(memrecords.OpEnd); n != 0 {
+				t.Errorf("End called %d times, want none after the lines' write failed", n)
+			}
+			if got := lines.text(slog.LevelError); len(got) != 1 {
+				t.Errorf("ERROR lines %q, want one naming the unwritten record", got)
+			}
+			if ends := ended(seen.of(s.Job)); !slices.Equal(ends, []scheduler.Result{scheduler.ResultPartial}) {
+				t.Errorf("Observer told the ends %v, want the closed end partial", ends)
+			}
+
+			after := r.store.Crash()
+			after.Reopen()
+			interrupted := line(scheduler.LineReview, scheduler.ReasonInterrupted)
+			(&rig{store: after}).wantLines(t, s.Job, lineDone, interrupted, interrupted)
+			(&rig{store: after}).wantEnd(t, s.Job, scheduler.ResultInterrupted)
+		})
+	})
+
+	t.Run("a line write the store refused is written again before the end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			faulted, cleared := make(chan struct{}), make(chan struct{})
+			k := grab(done)
+			k.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+				_ = r.Item(ctx, 0, itemDone)
+				<-faulted
+				_ = r.Item(ctx, 1, itemDone)
+				<-cleared
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{k}, Logger: slog.New(&logLines{})})
+			s := r.start(t, api("grab", "", "alice", payload{N: 2}))
+			synctest.Wait()
+			r.store.Fail(memrecords.OpPut, errors.New("disk full"))
+			close(faulted)
+			synctest.Wait()
+			r.wantLines(t, s.Job, lineDone, queued)
+			r.store.Fail(memrecords.OpPut, nil)
+			close(cleared)
+			synctest.Wait()
+
+			r.wantEnd(t, s.Job, scheduler.ResultOK)
+			r.wantLines(t, s.Job, lineDone, lineDone)
+		})
+	})
+}
+
 // heldRecords holds the first Insert until hold closes, answering fail
 // from it when fail is set.
 type heldRecords struct {

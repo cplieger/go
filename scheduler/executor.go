@@ -320,8 +320,8 @@ const (
 
 // job is one admitted job. state, cancel, startedAt, stopEnd, stopped,
 // returned, committing, yield, proposal, the counts and w's ownership are
-// guarded by the executor's mu; rec and claimed are guarded by recMu once the
-// job runs, which also orders its record writes.
+// guarded by the executor's mu; rec, claimed and unwritten are guarded by
+// recMu once the job runs, which also orders its record writes.
 type job[P any] struct {
 	spec      *KindSpec[P]
 	slot      *slot
@@ -348,6 +348,7 @@ type job[P any] struct {
 	returned    bool // its Run returned, so a cancel has nothing left to stop
 	committing  bool // Commit answered true, so Cancel answers ErrCommitting
 	inserted    bool // its admission wrote its record and queued it
+	unwritten   bool // its last record write failed
 }
 
 // stopLocked cancels a running job's ctx; it then commits nothing and ends
@@ -490,9 +491,13 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 
 // end writes en's end and answers the stored one, which an end the job's own
 // commit wrote wins over, and its time. kept is false when the store refused
-// the write, leaving the record open for its next open to mark.
+// the write of the end or of its closed lines, leaving the record open for
+// its next open to mark.
 func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (stored End, at time.Time, kept bool) {
-	end = e.closeEnd(en, end)
+	end, written := e.closeEnd(en, end)
+	if !written {
+		return end, time.Now(), false
+	}
 	if en.spec.Kept == 0 {
 		return end, time.Now(), true
 	}
@@ -504,12 +509,15 @@ func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (stored End,
 	return *rec.End, rec.EndedAt, true
 }
 
-// put writes the job's record after a change.
+// put writes the job's record after a change and logs a failed write, which
+// leaves the record unwritten until a later put lands.
 func (e *Executor[P]) put(en *job[P]) {
 	if en.spec.Kept == 0 {
 		return
 	}
-	if err := e.records.Put(context.Background(), en.rec); err != nil {
+	err := e.records.Put(context.Background(), en.rec)
+	en.unwritten = err != nil
+	if err != nil {
 		e.log.Error("job record not written", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID, "err", err)
 	}
 }

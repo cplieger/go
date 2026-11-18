@@ -143,9 +143,11 @@ func closeBatch(lines []Line, end End) ([]Line, End) {
 
 func lineOpen(l Line) bool { return l.State == LineQueued || l.State == LineRunning }
 
-// closeEnd applies CloseEnd to en's record, writing it when a line moved,
-// logs what it cut and answers the end.
-func (e *Executor[P]) closeEnd(en *job[P], end End) End {
+// closeEnd applies CloseEnd to en's record, logs what it cut and answers the
+// end. It writes the record when a line moved or its last write failed, and
+// written is false when that write fails: Records.End writes only the end, so
+// an end written over it would keep stale open lines no open revisits.
+func (e *Executor[P]) closeEnd(en *job[P], end End) (_ End, written bool) {
 	en.recMu.Lock()
 	defer en.recMu.Unlock()
 	closed, end, cut := CloseEnd(en.rec.Lines, end)
@@ -153,9 +155,10 @@ func (e *Executor[P]) closeEnd(en *job[P], end End) End {
 		e.log.Error("job run end cut to its bounds", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
 			"reasons_dropped", cut.Reasons, "facts_bytes", cut.FactsBytes)
 	}
-	if slices.ContainsFunc(en.rec.Lines, lineOpen) {
-		en.rec.Lines = closed
-		e.put(en)
+	if !slices.ContainsFunc(en.rec.Lines, lineOpen) && !en.unwritten {
+		return end, true
 	}
-	return end
+	en.rec.Lines = closed
+	e.put(en)
+	return end, !en.unwritten
 }
