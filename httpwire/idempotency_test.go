@@ -27,6 +27,7 @@ type (
 	}
 	jobBody struct {
 		Kind string `json:"kind"`
+		Note string `json:"note,omitempty"`
 		Size int    `json:"size"`
 	}
 	jobAnswer struct {
@@ -512,6 +513,12 @@ func TestFingerprint(t *testing.T) {
 	})
 	t.Run("the same body spelled otherwise", func(t *testing.T) {
 		rec := post("/api/jobs/quick", "{ \"size\" : 1,\n\"kind\":\"\\u0061\" }", `"f"`)
+		if rec.Code != http.StatusOK || rec.Body.String() != first.Body.String() || kf.runsOf("jobs.quick") != 1 {
+			t.Errorf("answer %d %s after %d runs, want the replay", rec.Code, rec.Body, kf.runsOf("jobs.quick"))
+		}
+	})
+	t.Run("an optional member sent as the value its absence decodes to", func(t *testing.T) {
+		rec := post("/api/jobs/quick", `{"kind":"a","size":1,"note":""}`, `"f"`)
 		if rec.Code != http.StatusOK || rec.Body.String() != first.Body.String() || kf.runsOf("jobs.quick") != 1 {
 			t.Errorf("answer %d %s after %d runs, want the replay", rec.Code, rec.Body, kf.runsOf("jobs.quick"))
 		}

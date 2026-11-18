@@ -18,6 +18,9 @@
           "kind": {
             "type": "string"
           },
+          "note": {
+            "type": "string"
+          },
           "size": {
             "type": "integer"
           }

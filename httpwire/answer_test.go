@@ -135,6 +135,7 @@ func TestMapErrorAnswersHandlerErrors(t *testing.T) {
 		"a sentinel, with its own text": {fmt.Errorf("read /var/lib/app/jobs/abc: %w", errJobMissing), http.StatusNotFound, "job_missing", "job missing"},
 		"a second sentinel on one code": {errRunMissing, http.StatusNotFound, "job_missing", "run missing"},
 		"a later owner's sentinel":      {fmt.Errorf("run: %w", errJobsDown), http.StatusServiceUnavailable, "jobs_down", "jobs down"},
+		"two owners' sentinels at once": {errors.Join(errJobsDown, errJobMissing), http.StatusNotFound, "job_missing", "job missing"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			api, _ := errorAPI(t, tc.err)
