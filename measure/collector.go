@@ -525,8 +525,8 @@ func (c *Collector) run(ctx context.Context) ([]Family, error) {
 	fams := make([]Family, 0, len(c.descs))
 	for _, d := range c.descs {
 		byKey := e.samples[d]
-		if len(byKey) >= cardinalityWarnThreshold {
-			e.problems[problemKey{d.name, problemCardinality}] = len(byKey)
+		if n := d.seriesCount(len(byKey)); n >= cardinalityWarnThreshold {
+			e.problems[problemKey{d.name, problemCardinality}] = n
 		}
 		samples := make([]Sample, 0, len(byKey))
 		for _, s := range byKey {
@@ -731,4 +731,16 @@ func renderLabels(labels []Label) string {
 		sb.WriteByte('"')
 	}
 	return sb.String()
+}
+
+// seriesCount is the number of label sets a family of that many samples holds,
+// the count the series threshold judges: one per sample, except a state set's,
+// whose declared states give each label set one sample per state. A [StateSet]
+// counts the same way, so both sides warn at the same number of certificates,
+// paths or whatever else the labels name.
+func (d *Desc) seriesCount(samples int) int {
+	if d.meta.kind == KindStateSet && len(d.meta.states) > 0 {
+		return samples / len(d.meta.states)
+	}
+	return samples
 }
