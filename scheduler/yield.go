@@ -22,10 +22,10 @@ type yielding struct {
 // Yield frees the job's slot, keeps its record running at its phase and waits
 // for until or a Wake, then takes the slot back after any waiting Interactive
 // job and ahead of Automatic and Batch ones. It answers nil once the slot is
-// the job's again, *CoveredError when a job that covers it started, ctx's
-// error on a cancel, and ErrYieldTooLong, still holding the slot, for an until
-// more than 24 hours ahead. A job of a kind with no slot only waits, and so
-// does a batch's Run, whose items take the slot.
+// the job's again, *CoveredError when a job that covers it started before any
+// cancel, ctx's error on a cancel, and ErrYieldTooLong, still holding the
+// slot, for an until more than 24 hours ahead. A job of a kind with no slot
+// only waits, and so does a batch's Run, whose items take the slot.
 func (r *Run[P]) Yield(ctx context.Context, until time.Time) error {
 	if time.Until(until) > maxYield {
 		return ErrYieldTooLong
@@ -50,8 +50,11 @@ func (r *Run[P]) Yield(ctx context.Context, until time.Time) error {
 	case <-y.covered:
 		return e.unyield(en, nil)
 	case <-ctx.Done():
-		_ = e.unyield(en, nil)
-		return ctx.Err()
+	}
+	// select picks at random among ready arms, so a timer or Wake ready
+	// together with a cancel must not answer nil.
+	if ctx.Err() != nil {
+		return e.cancelled(ctx, en, nil)
 	}
 	if !en.waits() {
 		return e.unyield(en, nil)
@@ -61,9 +64,9 @@ func (r *Run[P]) Yield(ctx context.Context, until time.Time) error {
 	case <-w.ready:
 	case <-y.covered:
 	case <-ctx.Done():
-		en.slot.drop(w)
-		_ = e.unyield(en, nil)
-		return ctx.Err()
+	}
+	if ctx.Err() != nil {
+		return e.cancelled(ctx, en, w)
 	}
 	err := e.unyield(en, w)
 	if err == nil && e.observer.SlotWait != nil {
@@ -92,6 +95,18 @@ func (e *Executor[P]) unyield(en *job[P], w *waiter) error {
 		en.slot.drop(w)
 	}
 	return &CoveredError{By: by}
+}
+
+// cancelled ends en's wait once its context ended, giving up w, and answers
+// ctx's error, or *CoveredError when a covering start came before the cancel.
+func (e *Executor[P]) cancelled(ctx context.Context, en *job[P], w *waiter) error {
+	if w != nil {
+		en.slot.drop(w)
+	}
+	if err := e.unyield(en, nil); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // Wake brings a yielded job's return to its slot forward to now, which Live

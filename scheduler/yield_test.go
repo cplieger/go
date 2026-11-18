@@ -442,3 +442,37 @@ func TestYieldCancelled(t *testing.T) {
 		})
 	})
 }
+
+func TestYieldAfterCancelAnswersCtxErr(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var ex *scheduler.Executor[payload]
+		var answers []error
+		publish := spec("publish", "passes")
+		publish.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+			if stopping, err := ex.Cancel(ctx, run.Job().ID); err != nil || !stopping {
+				t.Errorf("Cancel(own job) = (%t, %v), want stopping", stopping, err)
+			}
+			for range 200 {
+				answers = append(answers, run.Yield(ctx, time.Now()))
+			}
+			return scheduler.End{Result: scheduler.ResultOK}
+		}
+		r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{publish, spec("quick", "passes")}})
+		ex = r.ex
+		p := r.start(t, timer("publish", "", payload{}))
+		synctest.Wait()
+		wrong := 0
+		for _, err := range answers {
+			if !errors.Is(err, context.Canceled) {
+				wrong++
+			}
+		}
+		if len(answers) != 200 || wrong != 0 {
+			t.Errorf("%d of %d Yields with until passed after a cancel answered other than context.Canceled", wrong, len(answers))
+		}
+		r.wantEnd(t, p.Job, scheduler.ResultCancelled)
+		q := r.start(t, timer("quick", "", payload{}))
+		synctest.Wait()
+		r.wantEnd(t, q.Job, scheduler.ResultOK)
+	})
+}

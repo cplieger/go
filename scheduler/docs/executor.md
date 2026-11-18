@@ -76,7 +76,7 @@ A `Start` with the same owner, kind and scope as a held proposal answers that pr
 
 - A request for its kind and scope is served as if no job of that scope ran, so a waiting job never stops the next scheduled one.
 - A job that starts and covers it ends the wait with `*CoveredError` naming the covering job (`errors.Is(err, ErrCovered)` holds), and the yielded `Run` returns its own end.
-- A cancel, `CredentialEnded`, `Hold` or shutdown cancels its context, and `Yield` answers the context's error.
+- A cancel, `CredentialEnded`, `Hold` or shutdown cancels its context, and `Yield` answers the context's error, even when its `until` or a `Wake` came at the same moment; only a cover that started before the cancel still answers `*CoveredError`.
 
 An `until` more than 24 hours ahead answers `ErrYieldTooLong` and the job keeps its slot. A job of a kind with no slot, and a batch's `Run`, only wait. `Wake` answers false for an id that is not yielded.
 
