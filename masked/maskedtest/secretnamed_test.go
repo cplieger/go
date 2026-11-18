@@ -100,9 +100,9 @@ func TestSecretNamed(t *testing.T) {
 	t.Run("allowed_with_reason", func(t *testing.T) {
 		t.Parallel()
 		allow := maskedtest.NameAllow{
-			Fields: map[string]string{
-				pkg + "releaseItem.ReleaseKey": "a release's identity: its tracker and torrent id",
-				pkg + "feedKeyCreated.Key":     "a new feed key, shown once to the owner who created it",
+			Fields: map[maskedtest.Field]string{
+				{In: reflect.TypeFor[releaseItem](), Name: "ReleaseKey"}: "a release's identity: its tracker and torrent id",
+				{In: reflect.TypeFor[feedKeyCreated](), Name: "Key"}:     "a new feed key, shown once to the owner who created it",
 			},
 		}
 		got := maskedtest.SecretNamed(allow, reflect.TypeOf(release), reflect.TypeOf(created), nil)
@@ -146,16 +146,19 @@ func TestSecretNamed(t *testing.T) {
 	t.Run("stale_allow", func(t *testing.T) {
 		t.Parallel()
 		allow := maskedtest.NameAllow{
-			Fields: map[string]string{
-				pkg + "releaseItem.Gone":       "a field that was removed",
-				pkg + "releaseItem.Title":      "a field whose name is no credential's",
-				pkg + "feedKeyCreated.Key":     "",
-				pkg + "releaseItem.ReleaseKey": "a release's identity",
+			Fields: map[maskedtest.Field]string{
+				{In: reflect.TypeFor[releaseItem](), Name: "Gone"}:       "a field that was removed",
+				{In: reflect.TypeFor[releaseItem](), Name: "Title"}:      "a field whose name is no credential's",
+				{In: reflect.TypeFor[feedKeyCreated](), Name: "Key"}:     "",
+				{In: reflect.TypeFor[releaseItem](), Name: "ReleaseKey"}: "a release's identity",
+				{Name: "Lost"}: "a field of no type",
 			},
-			Enums: []reflect.Type{reflect.TypeFor[state](), reflect.TypeFor[time.Month]()},
+			Enums: []reflect.Type{reflect.TypeFor[state](), reflect.TypeFor[time.Month](), nil},
 		}
 		got := maskedtest.SecretNamed(allow, reflect.TypeOf(release), reflect.TypeOf(created), reflect.TypeOf(kinded))
 		want := []string{
+			"allow entry <nil>.Lost: names no credential-named text field a root reaches",
+			"allow entry <nil>: excludes no credential-named field a root reaches",
 			"allow entry " + pkg + "feedKeyCreated.Key: has no reason",
 			"allow entry " + pkg + "releaseItem.Gone: names no credential-named text field a root reaches",
 			"allow entry " + pkg + "releaseItem.Title: names no credential-named text field a root reaches",

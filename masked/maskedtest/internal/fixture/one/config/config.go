@@ -14,3 +14,17 @@ var Settings = struct{ token string }{token: "one"}
 // Tok is a named text type: reflect.Type.String writes struct{ T Tok } alike
 // in both fixture packages.
 type Tok string
+
+// Embedded embeds a predeclared type: reflect.Type.String writes it alike in
+// both fixture packages, yet the two types differ.
+var Embedded = struct {
+	string
+	S string
+}{string: "e", S: "s"}
+
+// Iface holds an interface with an unexported method, whose method set
+// differs between the two fixture packages.
+var Iface = struct {
+	I interface{ m() }
+	S string
+}{I: nil, S: "i"}

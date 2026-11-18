@@ -13,12 +13,11 @@ var credentialName = regexp.MustCompile(`key|token|secret|password|passkey`)
 
 // NameAllow is what [SecretNamed] accepts.
 type NameAllow struct {
-	// Fields are reviewed credential-named text fields, written as in
-	// [Allow.Fields] ("example.com/app/api.Copy.ReleaseKey"), each mapped to
-	// the reason it is allowed: it carries no credential, or one shown once
-	// on purpose. An entry is stale when it names no credential-named text
-	// field a root reaches.
-	Fields map[string]string
+	// Fields are reviewed credential-named text fields, each mapped to the
+	// reason it is allowed: it carries no credential, or one shown once on
+	// purpose. An entry is stale when it names no credential-named text field
+	// a root reaches.
+	Fields map[Field]string
 	// Enums are string types whose values are a fixed set, not free text.
 	// An enum is stale when it excludes no credential-named field a root
 	// reaches.
@@ -37,41 +36,36 @@ func SecretNamed(a NameAllow, roots ...reflect.Type) []string {
 	n := namer{
 		allow:  a,
 		walked: make(map[reflect.Type]bool),
-		fields: make(map[string]bool),
+		fields: make(map[Field]bool),
 		enums:  make(map[reflect.Type]bool),
-		found:  make(map[string]bool),
+		found:  make(map[finding]bool),
 	}
 	for _, r := range roots {
 		if r != nil {
 			n.walk(r)
 		}
 	}
-	for id, reason := range a.Fields {
+	for f, reason := range a.Fields {
 		if strings.TrimSpace(reason) == "" {
-			n.found["allow entry "+id+": has no reason"] = true
+			n.found[finding{f, "allow entry " + fieldLabel(f) + ": has no reason"}] = true
 		}
-		if !n.fields[id] {
-			n.found["allow entry "+id+": names no credential-named text field a root reaches"] = true
+		if !n.fields[f] {
+			n.found[finding{f, "allow entry " + fieldLabel(f) + ": names no credential-named text field a root reaches"}] = true
 		}
 	}
 	for _, e := range a.Enums {
 		if !n.enums[e] {
-			n.found["allow entry "+typeName(e)+": excludes no credential-named field a root reaches"] = true
+			n.found[finding{e, "allow entry " + typeName(e) + ": excludes no credential-named field a root reaches"}] = true
 		}
 	}
-	out := make([]string, 0, len(n.found))
-	for line := range n.found {
-		out = append(out, line)
-	}
-	slices.Sort(out)
-	return out
+	return lines(n.found)
 }
 
 type namer struct {
 	walked map[reflect.Type]bool
-	fields map[string]bool
+	fields map[Field]bool
 	enums  map[reflect.Type]bool
-	found  map[string]bool
+	found  map[finding]bool
 	allow  NameAllow
 }
 
@@ -117,11 +111,11 @@ func (n *namer) field(t reflect.Type, f *reflect.StructField) {
 	// The name goes first: holdsText marks an enum reached, and only a
 	// credential-named field's exclusion keeps an enum entry from going stale.
 	if credentialName.MatchString(strings.ToLower(name)) && n.holdsText(f.Type, make(map[reflect.Type]bool)) {
-		id := typeName(t) + "." + f.Name
-		if _, ok := n.allow.Fields[id]; ok {
-			n.fields[id] = true
+		field := Field{In: t, Name: f.Name}
+		if _, ok := n.allow.Fields[field]; ok {
+			n.fields[field] = true
 		} else {
-			n.found[id+": json name "+strconv.Quote(name)+" holds text ("+f.Type.String()+")"] = true
+			n.found[finding{field, fieldLabel(field) + ": json name " + strconv.Quote(name) + " holds text (" + f.Type.String() + ")"}] = true
 		}
 	}
 	n.walk(f.Type)

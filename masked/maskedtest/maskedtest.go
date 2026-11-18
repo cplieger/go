@@ -33,53 +33,80 @@ type Allow struct {
 	Masked []reflect.Type
 	// Types are reviewed non-secret types, such as time.Time.
 	Types []reflect.Type
-	// Fields are reviewed non-secret fields, each written as its declaring
-	// type's name, a dot and the field name: "example.com/app.User.Email". A
-	// type is named as reflect.Type.String writes it, with each named type,
-	// unexported field and unexported method qualified by its import path
-	// instead of its package name: "struct { T example.com/app.Tok }". Two
-	// function-local types of one name in one package share a name.
-	Fields []string
+	// Fields are reviewed non-secret fields.
+	Fields []Field
+}
+
+// Field names one struct field by its declaring type and its Go field name,
+// for an embedded field the name Go gives it: the embedded type's name, or
+// the alias's for a type embedded through an alias. An allow entry matches
+// by type identity and name, so it silences no other field, however alike
+// two types print, and a renamed field leaves it stale:
+//
+//	maskedtest.Field{In: reflect.TypeFor[app.Config](), Name: "Email"}
+type Field struct {
+	In   reflect.Type
+	Name string
 }
 
 var secretType = reflect.TypeFor[masked.Secret]()
 
 // Unmasked walks each root's type graph through struct fields (unexported
-// included), pointers, slices, arrays and maps, and returns, sorted, one line
-// per field that can carry text: a string, an integer slice or array (a
-// []byte, an expanded key schedule), or an interface, whose dynamic value the
-// type does not fix. Masked types, allowed types and allowed fields are not
-// entered; an allow entry no root reached is reported, so none goes stale.
-// Funcs, chans and unsafe pointers pass: every printer shows an address.
-// Nil roots are skipped. A test fails when the result is not empty.
+// included), pointers, slices, arrays and maps, and returns, sorted, one
+// readable line per field that can carry text: a string, an integer slice or
+// array (a []byte, a key schedule), or an interface. Masked types, allowed
+// types and allowed fields are not entered; an allow entry no root reached
+// is reported. Funcs, chans and unsafe pointers pass: every printer shows an
+// address. Nil roots are skipped. A test fails when the result is not empty.
 func Unmasked(a Allow, roots ...reflect.Type) []string {
 	w := walker{
-		allow: a,
-		used:  make(map[string]bool),
-		seen:  make(map[item]bool),
-		found: make(map[string]bool),
+		allow:      a,
+		usedTypes:  make(map[reflect.Type]bool),
+		usedFields: make(map[Field]bool),
+		seen:       make(map[item]bool),
+		found:      make(map[finding]bool),
 	}
 	for _, r := range roots {
 		if r != nil {
-			w.queue = append(w.queue, item{t: r, owner: typeName(r)})
+			w.queue = append(w.queue, item{t: r, owner: Field{In: r}})
 		}
 	}
 	w.run()
-	names := slices.Clone(a.Fields)
-	for _, t := range slices.Concat(a.Masked, a.Types) {
-		names = append(names, typeName(t))
-	}
-	for _, name := range names {
-		if !w.used[name] {
-			w.found["allow entry "+name+": reached by no root"] = true
+	for _, f := range a.Fields {
+		if !w.usedFields[f] {
+			w.found[finding{f, "allow entry " + fieldLabel(f) + ": reached by no root"}] = true
 		}
 	}
-	out := make([]string, 0, len(w.found))
-	for line := range w.found {
-		out = append(out, line)
+	for _, t := range slices.Concat(a.Masked, a.Types) {
+		if !w.usedTypes[t] {
+			w.found[finding{t, "allow entry " + typeName(t) + ": reached by no root"}] = true
+		}
+	}
+	return lines(w.found)
+}
+
+// finding is one report line about subject, a [Field] or a reflect.Type, so
+// two subjects whose lines read alike are both reported.
+type finding struct {
+	subject any
+	line    string
+}
+
+func lines(found map[finding]bool) []string {
+	out := make([]string, 0, len(found))
+	for f := range found {
+		out = append(out, f.line)
 	}
 	slices.Sort(out)
 	return out
+}
+
+// fieldLabel names f in a report line; a root's owner has no Name.
+func fieldLabel(f Field) string {
+	if f.Name == "" {
+		return typeName(f.In)
+	}
+	return typeName(f.In) + "." + f.Name
 }
 
 // item is one type to check on behalf of owner, the struct field (or root)
@@ -87,15 +114,16 @@ func Unmasked(a Allow, roots ...reflect.Type) []string {
 // so the verdict on a field does not depend on the route that reached it.
 type item struct {
 	t     reflect.Type
-	owner string
+	owner Field
 }
 
 type walker struct {
-	used  map[string]bool
-	seen  map[item]bool
-	found map[string]bool
-	queue []item
-	allow Allow
+	usedTypes  map[reflect.Type]bool
+	usedFields map[Field]bool
+	seen       map[item]bool
+	found      map[finding]bool
+	queue      []item
+	allow      Allow
 }
 
 // run drains the queue, checking each item once, which ends every type
@@ -107,14 +135,14 @@ func (w *walker) run() {
 		it := w.queue[0]
 		w.queue = w.queue[1:]
 		if it.t.Kind() == reflect.Struct {
-			it.owner = ""
+			it.owner = Field{}
 		}
 		if w.seen[it] {
 			continue
 		}
 		w.seen[it] = true
 		if slices.Contains(w.allow.Masked, it.t) || slices.Contains(w.allow.Types, it.t) {
-			w.used[typeName(it.t)] = true
+			w.usedTypes[it.t] = true
 			continue
 		}
 		if it.t == secretType {
@@ -126,12 +154,12 @@ func (w *walker) run() {
 
 func (w *walker) fields(t reflect.Type) {
 	for f := range t.Fields() {
-		name := typeName(t) + "." + f.Name
-		if slices.Contains(w.allow.Fields, name) {
-			w.used[name] = true
+		field := Field{In: t, Name: f.Name}
+		if slices.Contains(w.allow.Fields, field) {
+			w.usedFields[field] = true
 			continue
 		}
-		w.queue = append(w.queue, item{t: f.Type, owner: name})
+		w.queue = append(w.queue, item{t: f.Type, owner: field})
 	}
 }
 
@@ -159,14 +187,20 @@ func (w *walker) check(it item) {
 }
 
 func (w *walker) report(it item, what string) {
-	w.found[it.owner+": holds "+what+" ("+it.t.String()+")"] = true
+	w.found[finding{it.owner, fieldLabel(it.owner) + ": holds " + what + " (" + it.t.String() + ")"}] = true
 }
 
-// typeName names t as [Allow.Fields] documents. reflect.Type.String uses the
-// short package name, which two packages can share, and omits the package of
-// an unnamed struct's unexported fields, which makes two such types distinct.
-// The recursion ends because an unnamed type is never its own element.
+// typeName names t for a report line, which a person reads: as
+// reflect.Type.String writes it, with each named type, unexported field and
+// unexported method qualified by its import path, since two packages can
+// share a short name. It owes no uniqueness (an embedded alias and two
+// function-local types of one name read alike): an allow entry matches by
+// identity. The recursion ends because an unnamed type is never its own
+// element.
 func typeName(t reflect.Type) string {
+	if t == nil {
+		return "<nil>"
+	}
 	if t.Name() != "" {
 		if t.PkgPath() == "" {
 			return t.Name()
@@ -241,7 +275,7 @@ func chanName(t reflect.Type) string {
 		return "chan<- " + elem
 	default:
 		// reflect brackets a receive-only element: chan <-chan T would parse
-		// as <-chan (chan T).
+		// as chan<- (chan T).
 		if e := t.Elem(); e.Name() == "" && e.Kind() == reflect.Chan && e.ChanDir() == reflect.RecvDir {
 			elem = "(" + elem + ")"
 		}

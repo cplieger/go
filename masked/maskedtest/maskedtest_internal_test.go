@@ -21,8 +21,8 @@ import (
 	"unsafe"
 )
 
-// pkg is this package's import path, which names its types in an allow entry
-// and a reported line.
+// pkg is this package's import path, which names its types in a reported
+// line.
 const pkg = "github.com/cplieger/go/masked/maskedtest."
 
 // masker stands in for a masked type: Unmasked must not enter it.
@@ -62,7 +62,7 @@ func TestUnmasked(t *testing.T) {
 	t.Parallel()
 	allow := Allow{
 		Masked: []reflect.Type{reflect.TypeFor[masker]()},
-		Fields: []string{pkg + "kinds.reviewed"},
+		Fields: []Field{{In: reflect.TypeFor[kinds](), Name: "reviewed"}},
 		Types:  []reflect.Type{reflect.TypeFor[time.Time]()},
 	}
 	t.Run("kinds", func(t *testing.T) {
@@ -126,15 +126,14 @@ func TestUnmasked(t *testing.T) {
 	})
 	t.Run("embedded_unexported", func(t *testing.T) {
 		t.Parallel()
-		// An embedded field is named by its type alone, as reflect writes it.
+		// An embedded field's type is written alone, as reflect writes it.
 		root := reflect.TypeFor[struct{ words }]()
-		field := "struct { " + pkg + "words }.words"
 		got := Unmasked(Allow{}, root)
-		if want := []string{field + ": holds a string (string)"}; !slices.Equal(got, want) {
+		if want := []string{"struct { " + pkg + "words }.words: holds a string (string)"}; !slices.Equal(got, want) {
 			t.Errorf("Unmasked() = %q, want %q", got, want)
 		}
-		if got := Unmasked(Allow{Fields: []string{field}}, root); len(got) != 0 {
-			t.Errorf("Unmasked(allowing %s) = %q, want none", field, got)
+		if got := Unmasked(Allow{Fields: []Field{{In: root, Name: "words"}}}, root); len(got) != 0 {
+			t.Errorf("Unmasked(allowing words) = %q, want none", got)
 		}
 	})
 	t.Run("stale_allow", func(t *testing.T) {
@@ -145,6 +144,14 @@ func TestUnmasked(t *testing.T) {
 			"allow entry " + pkg + "masker: reached by no root",
 			"allow entry time.Time: reached by no root",
 		}
+		if !slices.Equal(got, want) {
+			t.Errorf("Unmasked() = %q, want %q", got, want)
+		}
+	})
+	t.Run("nil_allow_entries", func(t *testing.T) {
+		t.Parallel()
+		got := Unmasked(Allow{Masked: []reflect.Type{nil}, Fields: []Field{{Name: "Gone"}}}, reflect.TypeFor[struct{ n int }]())
+		want := []string{"allow entry <nil>.Gone: reached by no root", "allow entry <nil>: reached by no root"}
 		if !slices.Equal(got, want) {
 			t.Errorf("Unmasked() = %q, want %q", got, want)
 		}
