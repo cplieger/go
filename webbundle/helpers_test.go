@@ -234,3 +234,23 @@ func hashedName(base string) *regexp.Regexp {
 	ext := path.Ext(base)
 	return regexp.MustCompile(`^assets/` + regexp.QuoteMeta(strings.TrimSuffix(base, ext)) + `-[A-Za-z0-9]+` + regexp.QuoteMeta(ext) + `$`)
 }
+
+// symlink makes link, a slash path under root, a symbolic link to target.
+func symlink(t testing.TB, root, target, link string) {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(link))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.FromSlash(target), p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// outMissing fails t when out exists: a refused first build writes no tree.
+func outMissing(t testing.TB, out string) {
+	t.Helper()
+	if _, err := os.Lstat(out); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a refused build left %s (Lstat: %v)", out, err)
+	}
+}

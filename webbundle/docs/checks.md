@@ -9,7 +9,7 @@ This page lists every case `Build` refuses, for a developer reading one of its e
 - an empty `Src` or `Out`, a `Src` that is not a folder, an `Out` that exists and is not a folder, or an `Out` and a `Src` that overlap
 - more than 32 entries, or two entries with one logical path, such as two module entries named `app`
 - an entry with no name, a name starting with a dot, or a name holding anything but letters, digits, `-`, `_` and `.`
-- an entry whose file is not a regular file under `Src`, a style entry that is not a `.css` file, a module or classic entry that is, or an unknown kind
+- an entry whose file is not a regular file under `Src`, or is a symbolic link to a file outside `Src`, a style entry that is not a `.css` file, a module or classic entry that is, or an unknown kind
 - a `Define` value that is not JSON, or a `Define` of `BUNDLE_URLS` or under it
 - `Shells` without `index.html`, a shell that is not an `.html` file at the root of `Src`, a shell listed twice, or a page whose `Shell` is not in `Shells`
 - a `PagesFile` or `PageCorpusFile` outside `Src`, or a `Packages` pattern `path.Match` rejects
@@ -38,6 +38,7 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 
 `Build` reads esbuild's record of every file each entry pulls in, and refuses:
 
+- a file outside `Src`, reached by an import, an `@import` or a `url()`, or through a symbolic link whose target leaves `Src`; a link that stays inside `Src`, such as a pnpm package folder linked into `node_modules/.pnpm`, is followed
 - a file from an npm package that `Packages` does not match
 - a file from a package an entry's `Forbid` names, or under a `Src` path its `Forbid` names, matched by whole path segments, so `src/wire` does not cover `src/wirelike.ts`
 - a script entry that imports CSS
@@ -50,6 +51,7 @@ Each of these errors ends with the chain of imports from the entry to the refuse
 - syntax a pinned browser lacks that esbuild cannot lower, named with the feature and the browser
 - a written file whose extension `httpserver` does not serve, outside `licenses/`
 - more than 64 MiB of output
+- a built tree that `httpserver.ReadBundle` refuses, such as a notice under a package folder whose name starts with a dot, which `SPA` never serves
 
 ## Licence notices
 

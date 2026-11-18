@@ -501,3 +501,31 @@ func prefixed(prefix string, tree map[string][]byte) map[string][]byte {
 	}
 	return out
 }
+
+// Build reads its tree as httpserver.SPA will before swapping it in: a
+// package's notice under a dot-directory would be listed at a path SPA
+// never serves.
+func TestBuildRefusesTreeSPACannotRead(t *testing.T) {
+	t.Parallel()
+	const pkg = "node_modules/@cplieger/fixture-a/"
+	c := newFixture(t, files{
+		pkg + "package.json":   `{"name": "@cplieger/fixture-a", "version": "1.2.3", "type": "module", "main": ".dist/index.js"}`,
+		pkg + ".dist/index.js": "export function greet(to) { console.log(\"hello\", to); }\n",
+		pkg + ".dist/LICENSE":  "fixture-a dist licence\n",
+	})
+	buildRefused(t, c, ".dist/LICENSE", "httpserver")
+	outMissing(t, c.Out)
+}
+
+// Out named through a symlink into Src would replace a directory of Src.
+func TestBuildRefusesOutInsideSrcThroughALink(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, nil)
+	link := filepath.Join(filepath.Dir(c.Src), "src-link")
+	if err := os.Symlink(c.Src, link); err != nil {
+		t.Fatal(err)
+	}
+	c.Out = filepath.Join(link, "static")
+	buildRefused(t, c, "overlap")
+	outMissing(t, filepath.Join(c.Src, "static"))
+}

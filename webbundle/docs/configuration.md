@@ -20,7 +20,7 @@ This page lists every field of `Config`, `Entry` and `Manifest`, for a developer
 | `IconPNGs` | none | Committed PNGs by size, used instead of rendering the icon |
 | `Manifest` | none | The web app manifest. It needs `Icon` |
 
-`Src` and `Out` may be relative to the working directory. `Build` runs `httpserver.NewPageMatcher` over `Pages` and `APIPrefix`, so an empty prefix or a page at or under it fails the build.
+`Src` and `Out` may be relative to the working directory. Symbolic links in them are resolved before `Build` checks that `Out` sits beside `Src`. An entry's path may run through a symbolic link, such as a pnpm package folder, as long as its target is under `Src`. `Build` runs `httpserver.NewPageMatcher` over `Pages` and `APIPrefix`, so an empty prefix or a page at or under it fails the build.
 
 ## Entry
 

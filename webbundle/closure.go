@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -124,13 +125,18 @@ func (b *build) allowed(pkg string) bool {
 	return slices.ContainsFunc(b.packages, func(p string) bool { ok, _ := path.Match(p, pkg); return ok })
 }
 
-// checkClosure walks e's closure in m and refuses an input from a package
-// Config.Packages does not list, or one e.Forbid names, naming the importer
-// chain. It returns the packages the closure bundles.
+// checkClosure walks e's closure in m and refuses an input outside Src, one
+// from a package Config.Packages does not list, or one e.Forbid names,
+// naming the importer chain. It returns the packages the closure bundles.
 func (b *build) checkClosure(m *metafile, e Entry) (packageRoots, error) {
 	from := m.closure(e.Path)
 	pkgs := packageRoots{}
 	for _, in := range slices.Sorted(maps.Keys(from)) {
+		// esbuild names an input by its real path, symlinks resolved, so a
+		// link out of Src shows here as a path leaving it.
+		if !filepath.IsLocal(filepath.FromSlash(in)) {
+			return nil, fmt.Errorf("webbundle: entry %q bundles %s, which is outside Src: %s", e.Name, in, chain(from, in))
+		}
 		pkg, root := packageOf(in)
 		if pkg != "" {
 			if !b.allowed(pkg) {

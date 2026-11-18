@@ -57,22 +57,22 @@ func newBuild(c *Config) (*build, error) {
 	if c.Out == "" {
 		return nil, errors.New("webbundle: Config.Out is empty")
 	}
-	src, err := filepath.Abs(c.Src)
+	src, err := srcDir("Config.Src", c.Src)
 	if err != nil {
-		return nil, fmt.Errorf("webbundle: Config.Src: %w", err)
+		return nil, err
 	}
 	out, err := filepath.Abs(c.Out)
 	if err != nil {
 		return nil, fmt.Errorf("webbundle: Config.Out: %w", err)
 	}
+	if info, lerr := os.Lstat(out); lerr == nil && !info.IsDir() {
+		return nil, fmt.Errorf("webbundle: Config.Out %q is not a directory", c.Out)
+	}
+	if out, err = resolveExisting(out); err != nil {
+		return nil, fmt.Errorf("webbundle: Config.Out: %w", err)
+	}
 	if within(src, out) || within(out, src) {
 		return nil, fmt.Errorf("webbundle: Config.Out %q and Config.Src %q overlap; Out is replaced whole, so it sits beside Src", c.Out, c.Src)
-	}
-	if info, err := os.Stat(src); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("webbundle: Config.Src %q is not a directory", c.Src)
-	}
-	if info, err := os.Lstat(out); err == nil && !info.IsDir() {
-		return nil, fmt.Errorf("webbundle: Config.Out %q is not a directory", c.Out)
 	}
 	b := &build{
 		src:        src,
@@ -100,6 +100,42 @@ func newBuild(c *Config) (*build, error) {
 		}
 	}
 	return b, nil
+}
+
+// srcDir returns Src absolute with every symlink resolved: esbuild names
+// each input by its real path relative to its working directory, so a
+// symlink in Src's own path would put every input outside it.
+func srcDir(field, name string) (string, error) {
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		return "", fmt.Errorf("webbundle: %s: %w", field, err)
+	}
+	if info, serr := os.Stat(abs); serr != nil || !info.IsDir() {
+		return "", fmt.Errorf("webbundle: %s %q is not a directory", field, name)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("webbundle: %s: %w", field, err)
+	}
+	return resolved, nil
+}
+
+// resolveExisting resolves the symlinks of p's longest existing prefix and
+// joins the rest back, so a p that does not exist yet still compares with
+// resolved paths.
+func resolveExisting(p string) (string, error) {
+	for d := p; ; d = filepath.Dir(d) {
+		resolved, err := filepath.EvalSymlinks(d)
+		switch {
+		case err == nil:
+			rest, rerr := filepath.Rel(d, p)
+			return filepath.Join(resolved, rest), rerr
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", err
+		case filepath.Dir(d) == d:
+			return p, nil
+		}
+	}
 }
 
 // within reports whether p is dir or inside it.
@@ -244,13 +280,17 @@ func (b *build) checkFiles() error {
 }
 
 // srcFile checks that name, a slash path, is a regular file under Src and
-// returns it cleaned.
+// returns its slash path under Src with every symlink resolved, the path
+// esbuild's metafile names it by (a pnpm package directory is a symlink into
+// node_modules/.pnpm). A symlink leading out of Src is refused: its bytes
+// would ship.
 func (b *build) srcFile(what, name string) (string, error) {
 	clean := path.Clean(filepath.ToSlash(name))
 	if name == "" || !filepath.IsLocal(filepath.FromSlash(clean)) {
 		return "", fmt.Errorf("webbundle: %s %q is not a path under Src", what, name)
 	}
-	info, err := os.Stat(filepath.Join(b.src, filepath.FromSlash(clean)))
+	full := filepath.Join(b.src, filepath.FromSlash(clean))
+	info, err := os.Stat(full)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", fmt.Errorf("webbundle: %s %s does not exist under Src", what, name)
@@ -259,5 +299,13 @@ func (b *build) srcFile(what, name string) (string, error) {
 	case !info.Mode().IsRegular():
 		return "", fmt.Errorf("webbundle: %s %s is not a regular file", what, name)
 	}
-	return clean, nil
+	resolved, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return "", fmt.Errorf("webbundle: %s %s: %w", what, name, err)
+	}
+	rel, err := filepath.Rel(b.src, resolved)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("webbundle: %s %s is a link to %s, outside Src", what, name, resolved)
+	}
+	return filepath.ToSlash(rel), nil
 }

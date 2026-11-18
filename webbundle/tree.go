@@ -123,8 +123,10 @@ func (t *tree) keepGitignore() error {
 
 // manifest writes bundle.json, listing every file in the tree but itself and
 // .gitignore with its SHA-256, and returns every file's path, sorted. It
-// refuses a tree over maxOutput and a file outside licenses/ whose extension
-// httpserver does not serve (SPA serves every notice as text).
+// refuses a tree over maxOutput, a file outside licenses/ whose extension
+// httpserver does not serve (SPA serves every notice as text), and a tree
+// httpserver.ReadBundle refuses, so Build never swaps in one SPA cannot
+// serve.
 func (t *tree) manifest(entries []httpserver.BundleEntry) ([]string, error) {
 	files := map[string]string{}
 	var total int64
@@ -159,6 +161,9 @@ func (t *tree) manifest(entries []httpserver.BundleEntry) ([]string, error) {
 	}
 	if err := t.write(httpserver.BundlePath, b.Bytes(), 0o644); err != nil {
 		return nil, err
+	}
+	if _, _, err := httpserver.ReadBundle(t.root.FS()); err != nil {
+		return nil, fmt.Errorf("webbundle: httpserver.SPA would refuse the built tree: %w", err)
 	}
 	names := append(slices.Collect(maps.Keys(files)), httpserver.BundlePath)
 	slices.Sort(names)

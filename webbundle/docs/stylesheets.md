@@ -23,7 +23,7 @@ These are the font and image types `httpserver` serves. A `url()` or an import o
 
 ## One stylesheet alone
 
-`BuildStyle` builds one CSS file exactly as a style entry is built, with the same browser versions, file types, hashed names and minification, and returns its text without writing anything. Its output is byte for byte the style entry's file for the same input.
+`BuildStyle` builds one CSS file exactly as a style entry is built, with the same browser versions, file types, hashed names and minification, and returns its text without writing anything. Its output is byte for byte the style entry's file for the same input. The path may run through a pnpm package folder's symbolic link, as in the command below, and like a style entry it fails on a file outside `Src`.
 
 A TypeScript test that compares the app's CSS with a design system's sheet can get that sheet's built text from the `cmd/style` command, at the webbundle version your `go.mod` pins:
 

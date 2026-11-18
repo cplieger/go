@@ -239,11 +239,11 @@ type Stylesheet struct {
 // without a whole Build.
 func BuildStyle(s Stylesheet) ([]byte, error) {
 	if s.Src == "" {
-		return nil, errors.New("webbundle: BuildStyle: Src is empty")
+		return nil, errors.New("webbundle: Stylesheet.Src is empty")
 	}
-	abs, err := filepath.Abs(s.Src)
+	abs, err := srcDir("Stylesheet.Src", s.Src)
 	if err != nil {
-		return nil, fmt.Errorf("webbundle: BuildStyle: %w", err)
+		return nil, err
 	}
 	b := &build{src: abs}
 	p, err := b.srcFile("stylesheet", s.Path)
