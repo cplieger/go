@@ -72,6 +72,8 @@ type SeriesFrame struct {
 	Notes  []FrameNote `json:"notes,omitempty"`
 	// Open says the last column is still filling.
 	Open bool `json:"open,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // BinsFrame is series of values over bins from X1 to X2, drawn as rects or
@@ -92,6 +94,8 @@ type BinsFrame struct {
 	Notes  []FrameNote `json:"notes,omitempty"`
 	// Open says the last bin is still filling.
 	Open bool `json:"open,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // CategoriesFrame is a value per category in each series, drawn as bars,
@@ -105,6 +109,8 @@ type CategoriesFrame struct {
 	Series []FrameSeries `json:"series"`
 	Refs   []FrameRef    `json:"refs,omitempty"`
 	Notes  []FrameNote   `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameBoxes is one series of a BoxesFrame: each category's five numbers,
@@ -131,6 +137,8 @@ type BoxesFrame struct {
 	Series []FrameBoxes `json:"series"`
 	Refs   []FrameRef   `json:"refs,omitempty"`
 	Notes  []FrameNote  `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameUnits are a PointsFrame's units, one per measure.
@@ -160,6 +168,8 @@ type PointsFrame struct {
 	Series []FramePoints `json:"series"`
 	Refs   []FrameRef    `json:"refs,omitempty"`
 	Notes  []FrameNote   `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameGridAxis is one axis of a GridFrame: exactly one of its categories'
@@ -180,6 +190,8 @@ type GridFrame struct {
 	Values [][]*float64  `json:"values"`
 	Refs   []FrameRef    `json:"refs,omitempty"`
 	Notes  []FrameNote   `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // CalendarFrame is a value per calendar day, drawn as a calendar heatmap.
@@ -198,6 +210,8 @@ type CalendarFrame struct {
 	Start  int64       `json:"start"`
 	// Open says the last day is still running.
 	Open bool `json:"open,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameTreePart is a part of a TreeFrame's whole: 0 or more, or null for no
@@ -224,6 +238,8 @@ type TreeFrame struct {
 	Groups []FrameTreeGroup `json:"groups,omitempty"`
 	Refs   []FrameRef       `json:"refs,omitempty"`
 	Notes  []FrameNote      `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameFlowNode is a FlowFrame's node: a name in a Sankey diagram, a
@@ -253,6 +269,8 @@ type FlowFrame struct {
 	Links  []FrameFlowLink `json:"links"`
 	Refs   []FrameRef      `json:"refs,omitempty"`
 	Notes  []FrameNote     `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameTimes is one row of an EventsFrame: its key and the instants of its
@@ -269,6 +287,8 @@ type EventsFrame struct {
 	Rows  []FrameTimes `json:"rows"`
 	Refs  []FrameRef   `json:"refs,omitempty"`
 	Notes []FrameNote  `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // StatesFrame is a state per observation, oldest first, drawn as a state
@@ -280,6 +300,8 @@ type StatesFrame struct {
 	At    []int64     `json:"at"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }
 
 // FrameMeter is one meter of a ValueFrame: a value between Min and Max, and
@@ -303,4 +325,6 @@ type ValueFrame struct {
 	Meters []FrameMeter `json:"meters"`
 	Refs   []FrameRef   `json:"refs,omitempty"`
 	Notes  []FrameNote  `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read *FrameRead `json:"read,omitempty"`
 }

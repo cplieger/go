@@ -1,6 +1,10 @@
 package chartdata
 
-import "reflect"
+import (
+	"reflect"
+
+	"github.com/cplieger/go/measure/v2"
+)
 
 // WireTypes returns every struct type this package puts on the wire, the
 // twelve frames, their parts and FrameEvent, for an app's code generator to
@@ -36,6 +40,8 @@ func WireTypes() []reflect.Type {
 		reflect.TypeFor[FrameFlowLink](),
 		reflect.TypeFor[FrameTimes](),
 		reflect.TypeFor[FrameMeter](),
+		reflect.TypeFor[FrameRead](),
+		reflect.TypeFor[Count](),
 	}
 }
 
@@ -49,6 +55,7 @@ func WireEnums() []reflect.Type {
 		reflect.TypeFor[FrameType](),
 		reflect.TypeFor[FrameAxis](),
 		reflect.TypeFor[FrameEventKind](),
+		reflect.TypeFor[measure.ReadState](),
 	}
 }
 

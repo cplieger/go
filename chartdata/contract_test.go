@@ -34,10 +34,11 @@ type fixture struct {
 	raw   string
 }
 
-// refusal is a refusal fixture's body: a frame the constructors refuse, and
-// the rule and field they name.
+// refusal is a refusal fixture's body: a frame the constructors refuse, or
+// a count CountOf refuses, and the rule and field they name.
 type refusal struct {
-	Frame any            `json:"frame"`
+	Frame any            `json:"frame,omitempty"`
+	Count any            `json:"count,omitempty"`
 	Rule  chartdata.Rule `json:"rule"`
 	Field string         `json:"field"`
 }
@@ -106,7 +107,35 @@ func frameFixtures(t *testing.T) []fixture {
 			{Key: "en", Value: 0.92, Min: 0, Max: 1, Low: new(0.5), High: new(0.9), Optimum: new(1.0)},
 			{Key: "fr", Value: 0.4, Min: 0, Max: 1},
 		})),
+		named("frame-series-read")(chartdata.NewSeriesFrame(wait,
+			[]float64{1_772_323_200_000, 1_772_323_260_000},
+			[]chartdata.Series{{Key: "p95", Values: []float64{0.4, 0.9}}},
+			chartdata.WithRead(measure.Whole(readAt).Cut(measure.ReadPartial, "rate_limited")))),
 	}
+}
+
+// countFixtures is one Count per read state, as an app's API row carries
+// it: the three states that follow a whole read keep its value and time.
+func countFixtures() []fixture {
+	last := 412.0
+	whole := measure.Whole(readAt)
+	reads := []struct {
+		last  *float64
+		state string
+		read  measure.Read
+	}{
+		{state: "complete", last: &last, read: whole},
+		{state: "partial", last: &last, read: whole.Cut(measure.ReadPartial, "rate_limited")},
+		{state: "blind", last: &last, read: whole.Cut(measure.ReadBlind, "root_unavailable")},
+		{state: "unread"},
+		{state: "unsupported", read: measure.Read{State: measure.ReadUnsupported, Reason: "token_scope"}},
+		{state: "excluded", read: measure.Read{State: measure.ReadExcluded}},
+	}
+	out := make([]fixture, len(reads))
+	for i, r := range reads {
+		out[i] = named("count-" + r.state)(chartdata.CountOf(r.last, r.read))
+	}
+	return out
 }
 
 func eventFixtures(t *testing.T) []fixture {
@@ -135,10 +164,30 @@ func refusalFixtures(t *testing.T) []fixture {
 	names := keys(chartdata.MaxRows + 1)
 	type check struct {
 		frame any
+		count any
 		build func() error
 		name  string
 		raw   string
+		// rule is the rule a fixture named for a case of it breaks.
+		rule chartdata.Rule
+		// field is set on a frame no constructor writes, whose fixture
+		// names the field a reader refuses.
+		field string
 	}
+	whole := measure.Whole(readAt)
+	readFrame := func(read map[string]any) map[string]any {
+		return map[string]any{
+			"type": "series", "name": "depth", "unit": "count", "x": []float64{1},
+			"series": []map[string]any{{"key": "depth", "values": []float64{1}}}, "read": read,
+		}
+	}
+	readSeries := func(r measure.Read) func() error {
+		return func() error {
+			_, err := chartdata.NewSeriesFrame(d, []float64{1}, series("depth", 1), chartdata.WithRead(r))
+			return err
+		}
+	}
+	long := strings.Repeat("a", 65)
 	checks := []check{
 		{name: "length", frame: map[string]any{
 			"type": "series", "name": "depth", "unit": "count", "x": []float64{1, 2},
@@ -206,11 +255,51 @@ func refusalFixtures(t *testing.T) []fixture {
 			_, err := chartdata.NewCategoriesFrame(d, names, nil)
 			return err
 		}},
+		{
+			name: "read-complete", rule: chartdata.RuleRead, field: "read.state",
+			frame: readFrame(map[string]any{"state": "complete", "as_of": readAt}),
+		},
+		{
+			name: "read-state", rule: chartdata.RuleRead, frame: readFrame(map[string]any{"state": "stale", "as_of": readAt}),
+			build: readSeries(whole.Cut("stale", "")),
+		},
+		{
+			name: "read-reason", rule: chartdata.RuleRead,
+			frame: readFrame(map[string]any{"state": "partial", "as_of": readAt, "reason": "Rate limited"}),
+			build: readSeries(whole.Cut(measure.ReadPartial, "Rate limited")),
+		},
+		{
+			name: "read-reason-length", rule: chartdata.RuleRead,
+			frame: readFrame(map[string]any{"state": "partial", "as_of": readAt, "reason": long}),
+			build: readSeries(whole.Cut(measure.ReadPartial, long)),
+		},
+		{
+			name: "read-count-reason", rule: chartdata.RuleRead,
+			count: map[string]any{"value": 5, "state": "complete", "as_of": readAt, "reason": "rate_limited"},
+			build: func() error {
+				_, err := chartdata.CountOf(new(5.0), whole.Cut(measure.ReadComplete, "rate_limited"))
+				return err
+			},
+		},
+		{
+			name: "read-count-value", rule: chartdata.RuleRead,
+			count: map[string]any{"value": 5, "state": "partial", "as_of": nil},
+			build: func() error {
+				_, err := chartdata.CountOf(new(5.0), measure.Read{State: measure.ReadPartial})
+				return err
+			},
+		},
 	}
 	out := make([]fixture, len(checks))
 	for i, c := range checks {
-		rule, field := refusalOf(t, c.name, c.build())
-		f := fixture{name: "refusal-" + c.name, value: refusal{Frame: c.frame, Rule: rule, Field: field}}
+		if c.rule == "" {
+			c.rule = chartdata.Rule(c.name)
+		}
+		rule, field := c.rule, c.field
+		if c.build != nil {
+			rule, field = refusalOf(t, c.name, c.rule, c.build())
+		}
+		f := fixture{name: "refusal-" + c.name, value: refusal{Frame: c.frame, Count: c.count, Rule: rule, Field: field}}
 		if c.raw != "" {
 			f = fixture{name: f.name, raw: `{"frame":` + c.raw + `,"rule":"` + string(rule) + `","field":"` + field + `"}`}
 		}
@@ -220,12 +309,12 @@ func refusalFixtures(t *testing.T) []fixture {
 }
 
 // refusalOf is err's rule and field, failing t unless err is a refusal by
-// the rule its fixture is named for.
-func refusalOf(t *testing.T, name string, err error) (rule chartdata.Rule, field string) {
+// the rule its fixture names.
+func refusalOf(t *testing.T, name string, want chartdata.Rule, err error) (rule chartdata.Rule, field string) {
 	t.Helper()
 	var r *chartdata.RefusalError
-	if !errors.As(err, &r) || r.Rule != chartdata.Rule(name) {
-		t.Fatalf("refusal-%s: the constructor returned %v, want a %q refusal", name, err, name)
+	if !errors.As(err, &r) || r.Rule != want {
+		t.Fatalf("refusal-%s: the constructor returned %v, want a %q refusal", name, err, want)
 	}
 	return r.Rule, r.Field
 }
@@ -270,7 +359,7 @@ func encodeFixture(t *testing.T, f fixture) []byte {
 // contract/fixtures is what the constructors produce today, and no other
 // file is there.
 func TestTheFixturesAreCurrent(t *testing.T) {
-	all := slices.Concat(frameFixtures(t), eventFixtures(t), refusalFixtures(t), limitsFixtures())
+	all := slices.Concat(frameFixtures(t), countFixtures(), eventFixtures(t), refusalFixtures(t), limitsFixtures())
 	update := os.Getenv("UPDATE_GOLDEN") == "1"
 	if update {
 		if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
@@ -308,12 +397,12 @@ func TestTheFixturesAreCurrent(t *testing.T) {
 	}
 }
 
-// TestFrameFixturesDecodeAsTheirTypes reads each frame and event fixture
-// back into its Go type, as an app's decoder would, and finds the same
-// bytes, so no field is lost on the wire.
+// TestFrameFixturesDecodeAsTheirTypes reads each frame, count and event
+// fixture back into its Go type, as an app's decoder would, and finds the
+// same bytes, so no field is lost on the wire.
 func TestFrameFixturesDecodeAsTheirTypes(t *testing.T) {
 	t.Parallel()
-	for _, f := range slices.Concat(frameFixtures(t), eventFixtures(t)) {
+	for _, f := range slices.Concat(frameFixtures(t), countFixtures(), eventFixtures(t)) {
 		t.Run(f.name, func(t *testing.T) {
 			t.Parallel()
 			b := encodeFixture(t, f)
