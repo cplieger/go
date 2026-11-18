@@ -140,10 +140,22 @@ func insertThenGet(t *testing.T, r scheduler.Records) {
 
 func keyedResend(t *testing.T, r scheduler.Records) {
 	f := &fixture{t: t, r: r}
-	key := &scheduler.Key{Credential: credential, Row: row, Key: "k1", Fingerprint: [32]byte{1}}
+	key := &scheduler.Key{
+		Credential: credential, Row: row, Key: "k1", Fingerprint: [32]byte{1}, Window: 24 * time.Hour,
+		Until: time.Now().Add(-time.Hour),
+	}
 	first := f.insert(f.record("scan", ""), key)
-	if stored := f.get(first.ID); stored.Key == nil || *stored.Key != *key {
-		t.Errorf("the stored key = %+v, want %+v", stored.Key, key)
+	stored := f.get(first.ID)
+	if stored.Key == nil {
+		t.Fatal("the stored record holds no key, want the insert's")
+	}
+	held, want := *stored.Key, *key
+	if until := first.QueuedAt.Add(key.Window); !held.Until.Equal(until) {
+		t.Errorf("the stored key's Until = %v, want %v: the stored QueuedAt plus the window", held.Until, until)
+	}
+	held.Until, want.Until = time.Time{}, time.Time{}
+	if held != want {
+		t.Errorf("the stored key = %+v, want %+v", held, want)
 	}
 
 	resend := f.record("scan", "")

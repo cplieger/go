@@ -99,5 +99,6 @@ type ScheduledScope struct {
 type Key struct {
 	Until                time.Time
 	Credential, Row, Key string
+	Window               time.Duration
 	Fingerprint          [32]byte
 }

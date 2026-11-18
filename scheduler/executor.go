@@ -67,6 +67,7 @@ type Job[P any] struct {
 	Scope   string
 	Trigger Trigger
 	Owner   string // the starting credential; "" for TriggerSchedule
+	Key     *Key
 }
 
 // Config configures NewExecutor.
