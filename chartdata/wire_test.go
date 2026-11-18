@@ -11,9 +11,10 @@ import (
 )
 
 // TestWireTypesListEveryTypeOnTheWire walks the fields of FrameEvent, which
-// holds every frame, and of Count: each struct they reach is listed, so an
-// app registering the list registers the whole wire, and each name but
-// Count's, the API figure an app's rows carry, keeps clear of an app's own.
+// holds every frame, of Count and of Read: each struct they reach is listed,
+// so an app registering the list registers the whole wire, and each name but
+// Count's and Read's, which an app's own rows carry, keeps clear of an app's
+// own. wiregen refuses a bare type name registered twice.
 func TestWireTypesListEveryTypeOnTheWire(t *testing.T) {
 	t.Parallel()
 	listed := chartdata.WireTypes()
@@ -34,6 +35,7 @@ func TestWireTypesListEveryTypeOnTheWire(t *testing.T) {
 	}
 	walk(reflect.TypeFor[chartdata.FrameEvent]())
 	walk(reflect.TypeFor[chartdata.Count]())
+	walk(reflect.TypeFor[chartdata.Read]())
 	for typ := range reached {
 		if !slices.Contains(listed, typ) {
 			t.Errorf("%s is on the wire but not in WireTypes", typ.Name())
@@ -43,12 +45,12 @@ func TestWireTypesListEveryTypeOnTheWire(t *testing.T) {
 		if !reached[typ] {
 			t.Errorf("%s is in WireTypes but on no frame or event", typ.Name())
 		}
-		if name := typ.Name(); name != "Count" && !strings.HasSuffix(name, "Frame") && !strings.HasPrefix(name, "Frame") {
+		if name := typ.Name(); name != "Count" && name != "Read" && !strings.HasSuffix(name, "Frame") && !strings.HasPrefix(name, "Frame") {
 			t.Errorf("%s neither ends nor starts with Frame, so it can meet an app's own type", name)
 		}
 	}
 	if got := len(listed); got != 28 {
-		t.Errorf("WireTypes lists %d types, want 28: 12 frames, FrameEvent, 14 parts and Count", got)
+		t.Errorf("WireTypes lists %d types, want 28: 12 frames, FrameEvent, 13 parts, Read and Count", got)
 	}
 	listed[0] = nil
 	if chartdata.WireTypes()[0] == nil {

@@ -93,7 +93,7 @@ The package examples on pkg.go.dev show more cases, and `go test` keeps them tru
 - Frames: `SeriesFrame`, `BinsFrame`, `CategoriesFrame`, `BoxesFrame`, `PointsFrame`, `GridFrame`, `CalendarFrame`, `TreeFrame`, `FlowFrame`, `EventsFrame`, `StatesFrame` and `ValueFrame`, their parts (`FrameSeries`, `FrameRef`, `FrameNote` and the rest), and `FrameType` and `FrameAxis` with their constants.
 - Constructors: `NewSeriesFrame`, `NewBinsFrame`, `NewCategoriesFrame`, `NewBoxesFrame`, `NewPointsFrame`, `NewGridFrame`, `NewCalendarFrame`, `NewTreeFrame`, `NewGroupedTreeFrame`, `NewFlowFrame`, `NewEventsFrame`, `NewStatesFrame` and `NewValueFrame`, with their inputs (`Series`, `Bin`, `Boxes`, `Measures`, `Points`, `Grid`, `TreePart`, `TreeGroup`, `Flow`, `FlowLink`, `Times`, `State`).
 - Options: `WithRefs`, `WithNotes`, `WithDomain` with `Range`, `WithOpen`, `WithResets` and `WithRead`.
-- Read state: `Count` and `CountOf`, an API row's figure for a count read elsewhere, `FrameRead`, a frame's `read`, and `MaxReasonBytes`.
+- Read state: `Count` and `CountOf`, an API row's figure for a count read elsewhere, `Read` and `ReadOf`, a read beside any other figure and a frame's `read`, and `MaxReasonBytes`.
 - Refusals: `RefusalError` and `Rule` with its constants.
 - Limits: `MaxValues`, `MaxRows`, `MaxSubRows`, `MaxMagnitude`, `MaxCalendarDays`, `MinEvery`, `MaxPoints`, `MaxLabelSets` and `MaxBaselines`, and the duration ladder `DurationEdges`.
 - Quantiles: `Quantile`, the estimate an `AsQuantile` track takes, from a histogram's edges and per-bucket counts.
@@ -117,7 +117,7 @@ chartdata leaves these out on purpose. The [non-goals](docs/non-goals.md) page g
 
 - [Frames](docs/frames.md) covers the twelve frame types, their constructors and options, the wire format, every refusal, the limits table, the duration ladder and `Quantile`.
 - [Sampling](docs/sampling.md) covers the `Sampler`: what it reads from each kind of series, its bounds, its reads and the events it sends.
-- [Read state](docs/read-state.md) covers `Count`, a frame's `read` and what rule `read` refuses.
+- [Read state](docs/read-state.md) covers `Count`, a read beside a list's total, a frame's `read` and what rule `read` refuses.
 - [Events](docs/events.md) covers the four event kinds and how a page applies them.
 - [The generated contract](docs/contract.md) covers the TypeScript types, the golden fixtures and their paths, the drift check and generating an app's own decoders.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.

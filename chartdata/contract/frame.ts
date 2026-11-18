@@ -80,7 +80,7 @@ export interface BinsFrame {
   domain?: number[];
   resets?: number[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
   /** Open says the last bin is still filling. */
@@ -98,7 +98,7 @@ export interface BoxesFrame {
   names: string[];
   series: FrameBoxes[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -117,7 +117,7 @@ export interface CalendarFrame {
   zone: string;
   values: (number | null)[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
   start: number;
@@ -137,7 +137,7 @@ export interface CategoriesFrame {
   names: string[];
   series: FrameSeries[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -167,7 +167,7 @@ export interface EventsFrame {
   name: string;
   rows: FrameTimes[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -185,7 +185,7 @@ export interface FlowFrame {
   stages?: string[];
   links: FrameFlowLink[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -270,18 +270,6 @@ export interface FramePoints {
   r?: (number | null)[];
 }
 
-/** FrameRead is how the read behind a frame went, when it was not whole. */
-export interface FrameRead {
-  state: ReadState;
-  /**
-   * AsOf is the last whole read's instant, an RFC 3339 string; null
-   * before the first.
-   */
-  as_of: string | null;
-  /** Reason is the app's code for why the read is not whole. */
-  reason?: string;
-}
-
 /**
  * FrameRef is a reference value the server computed, such as a median, a
  * p95 or a threshold, drawn as a rule. Key is data; the page holds its words.
@@ -344,7 +332,7 @@ export interface GridFrame {
   y: FrameGridAxis;
   values: (number | null)[][];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -359,9 +347,25 @@ export interface PointsFrame {
   units: FrameUnits;
   series: FramePoints[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
+}
+
+/**
+ * Read is how a read went, on the wire: beside a figure that is not a
+ * [Count], such as a list's total, built with [ReadOf], and as a frame's
+ * read through [WithRead] when the read was not whole.
+ */
+export interface Read {
+  state: ReadState;
+  /**
+   * AsOf is the last whole read's instant, an RFC 3339 string; null
+   * before the first.
+   */
+  as_of: string | null;
+  /** Reason is the app's code for why the read is not whole. */
+  reason?: string;
 }
 
 /**
@@ -386,7 +390,7 @@ export interface SeriesFrame {
    */
   resets?: number[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
   /** Open says the last column is still filling. */
@@ -403,7 +407,7 @@ export interface StatesFrame {
   keys: (string | null)[];
   at: number[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -420,7 +424,7 @@ export interface TreeFrame {
   parts?: FrameTreePart[];
   groups?: FrameTreeGroup[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -435,7 +439,7 @@ export interface ValueFrame {
   unit: string;
   meters: FrameMeter[];
   /** Read is how the read behind the frame went, absent when it was whole. */
-  read?: FrameRead;
+  read?: Read;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }

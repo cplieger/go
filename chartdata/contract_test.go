@@ -34,11 +34,13 @@ type fixture struct {
 	raw   string
 }
 
-// refusal is a refusal fixture's body: a frame the constructors refuse, or
-// a count CountOf refuses, and the rule and field they name.
+// refusal is a refusal fixture's body: a frame the constructors refuse, a
+// count CountOf refuses or a read ReadOf refuses, and the rule and field
+// they name.
 type refusal struct {
 	Frame any            `json:"frame,omitempty"`
 	Count any            `json:"count,omitempty"`
+	Read  any            `json:"read,omitempty"`
 	Rule  chartdata.Rule `json:"rule"`
 	Field string         `json:"field"`
 }
@@ -115,7 +117,8 @@ func frameFixtures(t *testing.T) []fixture {
 }
 
 // countFixtures is one Count per read state, as an app's API row carries
-// it: the three states that follow a whole read keep its value and time.
+// it, the three states that follow a whole read keeping its value and time,
+// then one Read per state, as a row carries it beside a list's total.
 func countFixtures() []fixture {
 	last := 412.0
 	whole := measure.Whole(readAt)
@@ -131,9 +134,12 @@ func countFixtures() []fixture {
 		{state: "unsupported", read: measure.Read{State: measure.ReadUnsupported, Reason: "token_scope"}},
 		{state: "excluded", read: measure.Read{State: measure.ReadExcluded}},
 	}
-	out := make([]fixture, len(reads))
-	for i, r := range reads {
-		out[i] = named("count-" + r.state)(chartdata.CountOf(r.last, r.read))
+	out := make([]fixture, 0, 2*len(reads))
+	for _, r := range reads {
+		out = append(out, named("count-"+r.state)(chartdata.CountOf(r.last, r.read)))
+	}
+	for _, r := range reads {
+		out = append(out, named("read-"+r.state)(chartdata.ReadOf(r.read)))
 	}
 	return out
 }
@@ -165,6 +171,7 @@ func refusalFixtures(t *testing.T) []fixture {
 	type check struct {
 		frame any
 		count any
+		read  any
 		build func() error
 		name  string
 		raw   string
@@ -313,6 +320,14 @@ func refusalFixtures(t *testing.T) []fixture {
 			},
 		},
 		{
+			name: "read-complete-without-as-of", rule: chartdata.RuleRead,
+			read: map[string]any{"state": "complete", "as_of": nil},
+			build: func() error {
+				_, err := chartdata.ReadOf(measure.Read{State: measure.ReadComplete})
+				return err
+			},
+		},
+		{
 			name: "read-count-as-of-year", rule: chartdata.RuleRead, field: "as_of",
 			count: map[string]any{"value": 5, "state": "complete", "as_of": year10000},
 		},
@@ -326,7 +341,7 @@ func refusalFixtures(t *testing.T) []fixture {
 		if c.build != nil {
 			rule, field = refusalOf(t, c.name, c.rule, c.build())
 		}
-		f := fixture{name: "refusal-" + c.name, value: refusal{Frame: c.frame, Count: c.count, Rule: rule, Field: field}}
+		f := fixture{name: "refusal-" + c.name, value: refusal{Frame: c.frame, Count: c.count, Read: c.read, Rule: rule, Field: field}}
 		if c.raw != "" {
 			f = fixture{name: f.name, raw: `{"frame":` + c.raw + `,"rule":"` + string(rule) + `","field":"` + field + `"}`}
 		}
@@ -424,9 +439,9 @@ func TestTheFixturesAreCurrent(t *testing.T) {
 	}
 }
 
-// TestFrameFixturesDecodeAsTheirTypes reads each frame, count and event
-// fixture back into its Go type, as an app's decoder would, and finds the
-// same bytes, so no field is lost on the wire.
+// TestFrameFixturesDecodeAsTheirTypes reads each frame, count, read and
+// event fixture back into its Go type, as an app's decoder would, and finds
+// the same bytes, so no field is lost on the wire.
 func TestFrameFixturesDecodeAsTheirTypes(t *testing.T) {
 	t.Parallel()
 	for _, f := range slices.Concat(frameFixtures(t), countFixtures(), eventFixtures(t)) {

@@ -84,8 +84,52 @@ func TestCountOfCopiesItsInputs(t *testing.T) {
 	}
 }
 
+// TestReadOf holds a read beside a figure that is not a Count, such as a
+// list's total: every state is written, complete included with its as_of.
+func TestReadOf(t *testing.T) {
+	t.Parallel()
+	whole := measure.Whole(readAt)
+	tests := []struct {
+		name string
+		want string
+		read measure.Read
+	}{
+		{name: "complete", read: whole, want: `{"state":"complete","as_of":` + readAtJSON + `}`},
+		{
+			name: "partial", read: whole.Cut(measure.ReadPartial, "rate_limited"),
+			want: `{"state":"partial","as_of":` + readAtJSON + `,"reason":"rate_limited"}`,
+		},
+		{
+			name: "blind", read: whole.Cut(measure.ReadBlind, "root_unavailable"),
+			want: `{"state":"blind","as_of":` + readAtJSON + `,"reason":"root_unavailable"}`,
+		},
+		{name: "zeroReadIsUnread", want: `{"state":"unread","as_of":null}`},
+		{
+			name: "partialBeforeTheFirstWholeRead", read: measure.Read{State: measure.ReadPartial, Reason: "page_cap"},
+			want: `{"state":"partial","as_of":null,"reason":"page_cap"}`,
+		},
+		{
+			name: "unsupported", read: measure.Read{State: measure.ReadUnsupported, Reason: "token_scope"},
+			want: `{"state":"unsupported","as_of":null,"reason":"token_scope"}`,
+		},
+		{name: "excluded", read: measure.Read{State: measure.ReadExcluded}, want: `{"state":"excluded","as_of":null}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, err := chartdata.ReadOf(tc.read)
+			if err != nil {
+				t.Fatalf("ReadOf: %v", err)
+			}
+			if got := encode(t, r); got != tc.want {
+				t.Errorf("ReadOf = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestFrameReadRefusals holds what rule read refuses, on a frame through
-// WithRead and on a Count through CountOf.
+// WithRead, on a Count through CountOf and on a read through ReadOf.
 func TestFrameReadRefusals(t *testing.T) {
 	t.Parallel()
 	d := gauge("depth", measure.UnitCount)
@@ -99,6 +143,12 @@ func TestFrameReadRefusals(t *testing.T) {
 	count := func(last *float64, r measure.Read) func() error {
 		return func() error {
 			_, err := chartdata.CountOf(last, r)
+			return err
+		}
+	}
+	alone := func(r measure.Read) func() error {
+		return func() error {
+			_, err := chartdata.ReadOf(r)
 			return err
 		}
 	}
@@ -125,6 +175,12 @@ func TestFrameReadRefusals(t *testing.T) {
 		{name: "countCompleteWithNoTime", rule: chartdata.RuleRead, field: "as_of", build: count(&five, measure.Read{State: measure.ReadComplete})},
 		{name: "countValueWithNoWholeRead", rule: chartdata.RuleRead, field: "value", build: count(&five, measure.Read{State: measure.ReadPartial})},
 		{name: "countWholeReadWithNoValue", rule: chartdata.RuleRead, field: "value", build: count(nil, whole.Cut(measure.ReadPartial, ""))},
+		{name: "readUnknownState", rule: chartdata.RuleRead, field: "state", build: alone(whole.Cut("stale", ""))},
+		{name: "readCompleteWithReason", rule: chartdata.RuleRead, field: "reason", build: alone(whole.Cut(measure.ReadComplete, "rate_limited"))},
+		{name: "readReasonDash", rule: chartdata.RuleRead, field: "reason", build: alone(whole.Cut(measure.ReadPartial, "rate-limited"))},
+		{name: "readReasonPast64Bytes", rule: chartdata.RuleRead, field: "reason", build: alone(whole.Cut(measure.ReadPartial, longest+"a"))},
+		{name: "readAsOfPastYear9999", rule: chartdata.RuleRead, field: "as_of", build: alone(measure.Whole(past))},
+		{name: "readCompleteWithNoTime", rule: chartdata.RuleRead, field: "as_of", build: alone(measure.Read{State: measure.ReadComplete})},
 		{name: "countNaN", rule: chartdata.RuleFinite, field: "value", build: count(new(nan), whole)},
 		{name: "countInfinite", rule: chartdata.RuleFinite, field: "value", build: count(new(-inf), whole)},
 		{name: "countPastMaxMagnitude", rule: chartdata.RuleMagnitude, field: "value", build: count(new(1e301), whole)},
@@ -136,6 +192,9 @@ func TestFrameReadRefusals(t *testing.T) {
 		}
 		if err := count(&five, whole.Cut(measure.ReadPartial, longest))(); err != nil {
 			t.Errorf("a count with a 64-byte reason: %v, want it taken", err)
+		}
+		if err := alone(whole.Cut(measure.ReadPartial, longest))(); err != nil {
+			t.Errorf("a read with a 64-byte reason: %v, want it taken", err)
 		}
 	})
 }
@@ -252,49 +311,58 @@ func TestWireEnumsTypeTheReadState(t *testing.T) {
 	if !slices.Contains(chartdata.WireEnums(), reflect.TypeFor[measure.ReadState]()) {
 		t.Errorf("WireEnums = %v, want measure.ReadState among them", chartdata.WireEnums())
 	}
-	for _, typ := range []reflect.Type{reflect.TypeFor[chartdata.Count](), reflect.TypeFor[chartdata.FrameRead]()} {
+	for _, typ := range []reflect.Type{reflect.TypeFor[chartdata.Count](), reflect.TypeFor[chartdata.Read]()} {
 		if f, ok := typ.FieldByName("State"); !ok || f.Type != reflect.TypeFor[measure.ReadState]() {
 			t.Errorf("%s.State is %v, want a measure.ReadState", typ.Name(), f.Type)
 		}
 	}
 }
 
-// TestCountAsOfIsRFC3339 reads the committed count fixtures: as_of is a
-// string time.Time's JSON writes, with its fraction, and null before the
-// first whole read; never a number.
+// TestCountAsOfIsRFC3339 reads the committed count and read fixtures: as_of
+// is a string time.Time's JSON writes, with its fraction, and null before
+// the first whole read; never a number.
 func TestCountAsOfIsRFC3339(t *testing.T) {
 	t.Parallel()
-	for state, want := range map[string]string{
+	for name, want := range map[string]string{
 		"complete": readAtJSON, "partial": readAtJSON, "blind": readAtJSON,
 		"unread": "null", "unsupported": "null", "excluded": "null",
 	} {
-		t.Run(state, func(t *testing.T) {
-			t.Parallel()
-			b, err := os.ReadFile(filepath.Join(fixtureDir, "count-"+state+".json"))
-			if err != nil {
-				t.Fatalf("%v; %s", err, regenerate)
-			}
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(b, &fields); err != nil {
-				t.Fatal(err)
-			}
-			if got := string(fields["as_of"]); got != want {
-				t.Errorf("as_of = %s, want %s", got, want)
-			}
-			if string(fields["state"]) != `"`+state+`"` {
-				t.Errorf("state = %s, want %q", fields["state"], state)
-			}
-			if want == "null" {
-				return
-			}
-			var at string
-			if err := json.Unmarshal(fields["as_of"], &at); err != nil {
-				t.Fatalf("as_of is no string: %v", err)
-			}
-			parsed, err := time.Parse(time.RFC3339Nano, at)
-			if err != nil || !parsed.Equal(readAt) {
-				t.Errorf("as_of %q parses as %v (%v), want %v", at, parsed, err, readAt)
-			}
-		})
+		for _, kind := range []string{"count", "read"} {
+			t.Run(kind+"-"+name, func(t *testing.T) {
+				t.Parallel()
+				checkAsOfFixture(t, kind+"-"+name, name, want)
+			})
+		}
+	}
+}
+
+// checkAsOfFixture holds the fixture named fixture to the state and the
+// as_of JSON want.
+func checkAsOfFixture(t *testing.T, fixture, state, want string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(fixtureDir, fixture+".json"))
+	if err != nil {
+		t.Fatalf("%v; %s", err, regenerate)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(fields["as_of"]); got != want {
+		t.Errorf("as_of = %s, want %s", got, want)
+	}
+	if string(fields["state"]) != `"`+state+`"` {
+		t.Errorf("state = %s, want %q", fields["state"], state)
+	}
+	if want == "null" {
+		return
+	}
+	var at string
+	if err := json.Unmarshal(fields["as_of"], &at); err != nil {
+		t.Fatalf("as_of is no string: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil || !parsed.Equal(readAt) {
+		t.Errorf("as_of %q parses as %v (%v), want %v", at, parsed, err, readAt)
 	}
 }

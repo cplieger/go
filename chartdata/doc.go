@@ -9,6 +9,6 @@
 // registered series in bounded rings, for the series the app keeps nowhere
 // else, and emits a [FrameEvent] for each step. Every constructor refuses a
 // malformed frame, and one past the limits the chart elements draw, with a
-// [RefusalError]. A [Count], and a frame through [WithRead], carry how the
-// read behind them went. The package keeps no store and never downsamples.
+// [RefusalError]. A [Count], a [Read], and a frame through [WithRead] carry
+// how the read behind them went. The package keeps no store and never downsamples.
 package chartdata

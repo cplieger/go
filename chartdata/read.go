@@ -55,14 +55,30 @@ func CountOf(last *float64, r measure.Read) (Count, error) {
 	return c, nil
 }
 
-// FrameRead is how the read behind a frame went, when it was not whole.
-type FrameRead struct {
+// Read is how a read went, on the wire: beside a figure that is not a
+// [Count], such as a list's total, built with [ReadOf], and as a frame's
+// read through [WithRead] when the read was not whole.
+type Read struct {
 	State measure.ReadState `json:"state"`
 	// AsOf is the last whole read's instant, an RFC 3339 string; null
 	// before the first.
 	AsOf *time.Time `json:"as_of"`
 	// Reason is the app's code for why the read is not whole.
 	Reason string `json:"reason,omitempty"`
+}
+
+// ReadOf is r on the wire, refused by [RuleRead] as [CountOf] refuses a
+// read, a complete r with no AsOf among them. It writes every state,
+// complete included.
+func ReadOf(r measure.Read) (Read, error) {
+	state, asOf, err := checkRead("", r)
+	if err != nil {
+		return Read{}, err
+	}
+	if state == measure.ReadComplete && asOf == nil {
+		return Read{}, refuse(RuleRead, "as_of", "must be set on a complete read")
+	}
+	return Read{State: state, AsOf: asOf, Reason: r.Reason}, nil
 }
 
 // WithRead marks the frame as built from r, refused by [RuleRead] as
@@ -73,7 +89,7 @@ func WithRead(r measure.Read) Option {
 }
 
 // frameRead is the read field WithRead's r gives a frame, nil when whole.
-func frameRead(r *measure.Read) (*FrameRead, error) {
+func frameRead(r *measure.Read) (*Read, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -81,7 +97,7 @@ func frameRead(r *measure.Read) (*FrameRead, error) {
 	if err != nil || state == measure.ReadComplete {
 		return nil, err
 	}
-	return &FrameRead{State: state, AsOf: asOf, Reason: r.Reason}, nil
+	return &Read{State: state, AsOf: asOf, Reason: r.Reason}, nil
 }
 
 // checkRead refuses what rule read refuses on both a Count and a frame's

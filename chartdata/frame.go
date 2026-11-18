@@ -69,7 +69,7 @@ type SeriesFrame struct {
 	// there instead of joining across them.
 	Resets []int64 `json:"resets,omitempty"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 	// Open says the last column is still filling.
@@ -91,7 +91,7 @@ type BinsFrame struct {
 	Domain []float64 `json:"domain,omitempty"`
 	Resets []int64   `json:"resets,omitempty"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 	// Open says the last bin is still filling.
@@ -108,7 +108,7 @@ type CategoriesFrame struct {
 	Names  []string      `json:"names"`
 	Series []FrameSeries `json:"series"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -136,7 +136,7 @@ type BoxesFrame struct {
 	Names  []string     `json:"names"`
 	Series []FrameBoxes `json:"series"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -167,7 +167,7 @@ type PointsFrame struct {
 	Units  FrameUnits    `json:"units"`
 	Series []FramePoints `json:"series"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -189,7 +189,7 @@ type GridFrame struct {
 	Y      FrameGridAxis `json:"y"`
 	Values [][]*float64  `json:"values"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -206,7 +206,7 @@ type CalendarFrame struct {
 	Zone   string     `json:"zone"`
 	Values []*float64 `json:"values"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 	Start int64       `json:"start"`
@@ -237,7 +237,7 @@ type TreeFrame struct {
 	Parts  []FrameTreePart  `json:"parts,omitempty"`
 	Groups []FrameTreeGroup `json:"groups,omitempty"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -268,7 +268,7 @@ type FlowFrame struct {
 	Stages []string        `json:"stages,omitempty"`
 	Links  []FrameFlowLink `json:"links"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -286,7 +286,7 @@ type EventsFrame struct {
 	Name string       `json:"name"`
 	Rows []FrameTimes `json:"rows"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -299,7 +299,7 @@ type StatesFrame struct {
 	Keys []*string `json:"keys"`
 	At   []int64   `json:"at"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -324,7 +324,7 @@ type ValueFrame struct {
 	Unit   string       `json:"unit"`
 	Meters []FrameMeter `json:"meters"`
 	// Read is how the read behind the frame went, absent when it was whole.
-	Read  *FrameRead  `json:"read,omitempty"`
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }

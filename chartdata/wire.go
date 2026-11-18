@@ -40,7 +40,7 @@ func WireTypes() []reflect.Type {
 		reflect.TypeFor[FrameFlowLink](),
 		reflect.TypeFor[FrameTimes](),
 		reflect.TypeFor[FrameMeter](),
-		reflect.TypeFor[FrameRead](),
+		reflect.TypeFor[Read](),
 		reflect.TypeFor[Count](),
 	}
 }

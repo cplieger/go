@@ -140,3 +140,18 @@ func ExampleCountOf() {
 	// Output:
 	// {"value":412,"state":"partial","as_of":"2026-11-18T14:05:00Z","reason":"rate_limited"}
 }
+
+func ExampleReadOf() {
+	whole := measure.Whole(time.Date(2026, 11, 18, 14, 5, 0, 0, time.UTC))
+	for _, r := range []measure.Read{whole, whole.Cut(measure.ReadBlind, "root_unavailable")} {
+		state, err := chartdata.ReadOf(r)
+		if err != nil {
+			log.Fatal(err)
+		}
+		b, _ := json.Marshal(state)
+		fmt.Println(string(b))
+	}
+	// Output:
+	// {"state":"complete","as_of":"2026-11-18T14:05:00Z"}
+	// {"state":"blind","as_of":"2026-11-18T14:05:00Z","reason":"root_unavailable"}
+}

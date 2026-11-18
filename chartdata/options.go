@@ -35,7 +35,7 @@ type options struct {
 	domain *Range
 	read   *measure.Read
 	// frameRead is the frame's read field, which applyOptions builds from read.
-	frameRead *FrameRead
+	frameRead *Read
 	refs      []FrameRef
 	notes     []FrameNote
 	resets    []time.Time
