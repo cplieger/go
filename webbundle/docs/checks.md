@@ -24,12 +24,13 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 
 ## Shells
 
-`Build` refuses a shell that `httpserver.SPA`'s Content-Security-Policy would block, or that names entries wrongly:
+`Build` reads a shell as a browser's HTML tokenizer does, so a tag inside a comment, or inside the text of a `<title>`, `<textarea>`, `<noscript>` or `<script>` element, is text: it is neither checked nor rewritten. It refuses a shell that `httpserver.SPA`'s Content-Security-Policy would block, or that names entries wrongly:
 
 - an inline `<script>` or `<style>` element, or a `style` attribute
 - an event handler attribute such as `onclick`, which the policy blocks as it blocks an inline script
 - a root path ending in `.js` or `.css`, such as `/main.js`, that is no entry's logical path
 - one logical path named twice in the shell
+- a logical path in a tag that does not load its entry's kind: a module entry needs `<script type="module" src>`, a classic entry a `<script src>` with no type or a JavaScript one, and a style entry a `<link rel="stylesheet" href>` that is not an alternate stylesheet
 - a module or style entry no shell names, or a classic entry that no shell names and no module entry reads through `BUNDLE_URLS`
 - with an `Icon`, a shell that already carries an `icon`, `apple-touch-icon` or `manifest` link, or has no `</head>`
 

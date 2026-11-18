@@ -6,7 +6,7 @@ This page describes what `Build` writes to `Out`, for a developer serving it wit
 
 | Path | What it holds |
 | --- | --- |
-| `<shell>.html` | Each shell, with its logical paths replaced by hashed ones and, with an icon, the icon links |
+| `<shell>.html` | Each shell, with its logical paths replaced by hashed ones (each tag naming one written back with its attributes double-quoted) and, with an icon, the icon links |
 | `assets/<name>-<hash>.<ext>` | Each entry's output, the fonts and images it uses, and the icon files |
 | `assets/chunks/<name>-<hash>.js` | The code module entries share, and each dynamic `import()` |
 | `licenses/` | The licence notices of the bundled npm packages |

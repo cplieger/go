@@ -79,6 +79,121 @@ func TestBuildRefusesShell(t *testing.T) {
 	}
 }
 
+// TestBuildReadsShellAsHTML pins that a shell is read as the HTML tokenizer
+// reads it: a comment (an abrupt "<!-->" or "<!--->" included) or a raw-text
+// element body holds text, never tags.
+func TestBuildReadsShellAsHTML(t *testing.T) {
+	t.Parallel()
+	edit := func(old, repl string) string { return strings.Replace(fixtureShell, old, repl, 1) }
+	moduleTag := `<script type="module" src="/app.js"></script>`
+	t.Run("HandlerAfterTitleQuotingOne", func(t *testing.T) {
+		t.Parallel()
+		shell := strings.Replace(edit("<title>Fixture</title>", `<title><x onclick="a()"></title>`), "<body>", `<body onload="start()">`, 1)
+		_, err := webbundle.Build(newFixture(t, files{"index.html": shell}))
+		if err == nil || !strings.Contains(err.Error(), "onload") || strings.Contains(err.Error(), "onclick") {
+			t.Fatalf("Build = %v, want a refusal naming onload and not the title's text", err)
+		}
+	})
+	abrupt := []struct{ name, comment string }{{"AbruptComment", "<!-->"}, {"AbruptDashComment", "<!--->"}}
+	for _, tc := range abrupt {
+		t.Run("HandlerAfter"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			shell := edit("<body>", "<body>"+tc.comment+`<p onclick="go()">Go</p><!-- end -->`)
+			buildRefused(t, newFixture(t, files{"index.html": shell}), "index.html", "onclick")
+		})
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"HandlerInSVGTitle", `<svg><title><b onclick="go()">Go</b></title></svg>`},
+		{"HandlerAfterSVGBreakout", `<svg><circle r="1"></circle><p>out</p><b onclick="go()">Go</b>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			buildRefused(t, newFixture(t, files{"index.html": edit("<body>", "<body>"+tc.body)}), "index.html", "onclick")
+		})
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"HandlerInComment", `<!-- <p onclick="go()"> -->`},
+		{"HandlerInTextarea", `<textarea><p onclick="go()"></textarea>`},
+		{"HandlerInNoscript", `<noscript><p onclick="go()">Turn on JavaScript.</p></noscript>`},
+		{"HandlerInSVGCDATA", `<svg><![CDATA[ a > <b onclick="go()"> ]]></svg>`},
+		{"HandlerInTextareaInForeignObject", `<svg><foreignObject><textarea><b onclick="go()"></textarea></foreignObject></svg>`},
+		{"HandlerInTextareaAfterSVGBreakout", `<svg><circle r="1"></circle><p>out</p><textarea><b onclick="go()"></textarea>`},
+		{"HandlerInTextareaInMathText", `<math><mi><textarea><b onclick="go()"></textarea></mi></math>`},
+		{"HandlerInTextareaInHTMLAnnotation", `<math><annotation-xml encoding="Text/HTML"><textarea><b onclick="go()"></textarea></annotation-xml></math>`},
+		{"HandlerInTextareaInSVGDescInAnnotation", `<math><annotation-xml><svg><desc><textarea><b onclick="go()"></textarea></desc></svg></annotation-xml></math>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mustBuild(t, newFixture(t, files{"index.html": edit("<body>", "<body>"+tc.body)}))
+		})
+	}
+	for _, tc := range abrupt {
+		t.Run("LogicalPathAfter"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFixture(t, files{"index.html": edit(moduleTag, tc.comment+moduleTag)})
+			mustBuild(t, c)
+			shell := string(readFile(t, c.Out, "index.html"))
+			if want := tc.comment + `<script type="module" src="/` + entryPath(t, readBundle(t, c.Out), "app", webbundle.Module) + `">`; !strings.Contains(shell, want) {
+				t.Errorf("index.html does not hold %s:\n%s", want, shell)
+			}
+		})
+	}
+	t.Run("LogicalPathInCommentUntouched", func(t *testing.T) {
+		t.Parallel()
+		comment := "<!-- " + moduleTag + " -->"
+		c := newFixture(t, files{"index.html": edit(moduleTag, comment+"\n"+moduleTag)})
+		mustBuild(t, c)
+		shell := string(readFile(t, c.Out, "index.html"))
+		if !strings.Contains(shell, comment+"\n") || !strings.Contains(shell, `src="/`+entryPath(t, readBundle(t, c.Out), "app", webbundle.Module)+`"`) {
+			t.Errorf("index.html rewrote the comment or missed the real tag:\n%s", shell)
+		}
+	})
+	t.Run("HeadEndInCommentUntouched", func(t *testing.T) {
+		t.Parallel()
+		comment := "<!-- the icon links go before </head> -->"
+		c := newFixture(t, files{"index.html": edit("<head>", "<head>\n"+comment), "icon.svg": seedIcon(t, "subflux.svg")})
+		c.Icon = "icon.svg"
+		mustBuild(t, c)
+		shell := string(readFile(t, c.Out, "index.html"))
+		head, _, _ := strings.Cut(strings.Replace(shell, comment, "", 1), "</head>")
+		if !strings.Contains(shell, comment) || !strings.Contains(head, `rel="stylesheet"`) || !strings.Contains(head, "apple-touch-icon") ||
+			strings.Index(head, "apple-touch-icon") < strings.Index(head, `rel="stylesheet"`) {
+			t.Errorf("the icon links are not at the end of the real <head>, or the comment changed:\n%s", shell)
+		}
+	})
+}
+
+// TestBuildChecksShellTagKind pins that a shell loads each entry as its kind
+// runs: a module by <script type=module>, a classic by a <script> with no
+// type or a JavaScript one, a style by <link rel=stylesheet> that is not an
+// alternate, keywords matched ASCII case-insensitively.
+func TestBuildChecksShellTagKind(t *testing.T) {
+	t.Parallel()
+	edit := func(old, repl string) string { return strings.Replace(fixtureShell, old, repl, 1) }
+	for _, tc := range []struct{ name, shell, path, kind string }{
+		{"ModuleByClassicScript", edit(`<script type="module" src="/app.js">`, `<script src="/app.js">`), "/app.js", "module"},
+		{"ClassicByModuleScript", edit(`<script src="/prepaint.js">`, `<script type="module" src="/prepaint.js">`), "/prepaint.js", "classic"},
+		{"StyleByPreload", edit(`<link rel="stylesheet" href="/app.css">`, `<link rel="preload" as="style" href="/app.css">`), "/app.css", "style"},
+		{"StyleByScript", edit(`<link rel="stylesheet" href="/app.css">`, `<script src="/app.css"></script>`), "/app.css", "style"},
+		{"ModuleByLink", edit(`<script type="module" src="/app.js"></script>`, `<link rel="modulepreload" href="/app.js">`), "/app.js", "module"},
+		{"StyleByAlternateStylesheet", edit(`rel="stylesheet"`, `rel="alternate stylesheet" title="Alt"`), "/app.css", "style"},
+		{"ClassicByTemplateType", edit(`<script src="/prepaint.js">`, `<script type="text/template" src="/prepaint.js">`), "/prepaint.js", "classic"},
+		{"ClassicByOtherLanguage", edit(`<script src="/prepaint.js">`, `<script language="vbscript" src="/prepaint.js">`), "/prepaint.js", "classic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			buildRefused(t, newFixture(t, files{"index.html": tc.shell}), "index.html", tc.path, tc.kind)
+		})
+	}
+	t.Run("KindWordsInAnyCase", func(t *testing.T) {
+		t.Parallel()
+		shell := edit(`<script type="module" src="/app.js">`, `<script type=" MODULE " src="/app.js">`)
+		shell = strings.Replace(shell, `rel="stylesheet"`, `rel="Stylesheet"`, 1)
+		shell = strings.Replace(shell, `<script src="/prepaint.js">`, `<script type="text/JavaScript" src="/prepaint.js">`, 1)
+		mustBuild(t, newFixture(t, files{"index.html": shell}))
+	})
+}
+
 func TestBuildRefusesClassicEntryNothingReads(t *testing.T) {
 	t.Parallel()
 	c := newFixture(t, files{"src/worker.js": "self.addEventListener(\"connect\", () => {});\n"})

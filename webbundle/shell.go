@@ -9,134 +9,11 @@ import (
 	"strings"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"golang.org/x/net/html"
 )
 
-// attr is one attribute of a start tag; start and end are its value's byte
-// span in the shell.
-type attr struct {
-	name       string // lower-case
-	value      string
-	start, end int
-}
-
-type tag struct {
-	name    string // lower-case
-	attrs   []attr
-	start   int // the tag's '<'
-	end     int // the byte after the tag's '>'
-	closing bool
-}
-
-// rawText are the elements whose content is text, never markup, so a '<'
-// inside one starts no tag.
-var rawText = []string{"script", "style", "textarea", "title"}
-
-// scanTags calls fn on each start and end tag in html, comments and the
-// content of raw-text elements skipped, as an HTML tokenizer reads them:
-// quoted attribute values may hold '>' and names compare case-insensitively.
-func scanTags(html []byte, fn func(tag)) {
-	for i := 0; i < len(html); {
-		rest := html[i:]
-		switch {
-		case rest[0] != '<' || len(rest) < 2:
-			i++
-		case bytes.HasPrefix(rest, []byte("<!--")):
-			end := bytes.Index(rest[4:], []byte("-->"))
-			if end < 0 {
-				return
-			}
-			i += 4 + end + 3
-		case rest[1] == '/' && len(rest) > 2 && isLetter(rest[2]):
-			t := readTag(html, i+2)
-			t.start, t.closing = i, true
-			fn(t)
-			i = t.end
-		case !isLetter(rest[1]):
-			i++
-		default:
-			t := readTag(html, i+1)
-			t.start = i
-			fn(t)
-			i = t.end
-			if slices.Contains(rawText, t.name) {
-				end := bytes.Index(bytes.ToLower(html[i:]), []byte("</"+t.name))
-				if end < 0 {
-					return
-				}
-				i += end
-			}
-		}
-	}
-}
-
-func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
-
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' }
-
-// readTag reads the start tag whose name begins at i.
-func readTag(html []byte, i int) tag {
-	j := i
-	for j < len(html) && !isSpace(html[j]) && html[j] != '/' && html[j] != '>' {
-		j++
-	}
-	t := tag{name: strings.ToLower(string(html[i:j]))}
-	for {
-		for j < len(html) && (isSpace(html[j]) || html[j] == '/') {
-			j++
-		}
-		if j >= len(html) || html[j] == '>' {
-			t.end = min(j+1, len(html))
-			return t
-		}
-		var a attr
-		a, j = readAttr(html, j)
-		t.attrs = append(t.attrs, a)
-	}
-}
-
-// readAttr reads the attribute whose name begins at i and returns it and
-// the byte after it.
-func readAttr(html []byte, i int) (a attr, next int) {
-	k := i + 1
-	for k < len(html) && !isSpace(html[k]) && html[k] != '/' && html[k] != '>' && html[k] != '=' {
-		k++
-	}
-	a.name = strings.ToLower(string(html[i:k]))
-	j := skipSpace(html, k)
-	if j >= len(html) || html[j] != '=' {
-		return a, j
-	}
-	a.start, a.end, j = attrValue(html, skipSpace(html, j+1))
-	a.value = string(html[a.start:a.end])
-	return a, j
-}
-
-func skipSpace(html []byte, i int) int {
-	for i < len(html) && isSpace(html[i]) {
-		i++
-	}
-	return i
-}
-
-// attrValue reads the attribute value at i, quoted or not, and returns its
-// span and the byte after it.
-func attrValue(html []byte, i int) (start, end, next int) {
-	if i < len(html) && (html[i] == '"' || html[i] == '\'') {
-		q := bytes.IndexByte(html[i+1:], html[i])
-		if q < 0 {
-			return i + 1, len(html), len(html)
-		}
-		return i + 1, i + 1 + q, i + 2 + q
-	}
-	j := i
-	for j < len(html) && !isSpace(html[j]) && html[j] != '>' {
-		j++
-	}
-	return i, j, j
-}
-
-// shell is one shell read from Src: its bytes and each entry's logical path
-// it names, with the span to replace.
+// shell is one shell read from Src: its bytes and each tag naming an entry's
+// logical path, with the span to replace.
 type shell struct {
 	name  string
 	body  []byte
@@ -146,16 +23,21 @@ type shell struct {
 	iconRels bool // whether to refuse a link Build writes for the icon
 }
 
+// link is a start tag naming an entry: the tag's byte span in the shell and
+// the token it is written back from, its attr'th attribute the logical path.
 type link struct {
+	tok        html.Token
 	entry      int // index into build.entries
 	start, end int
+	attr       int
 }
 
-// readShell reads a shell and refuses what httpserver.SPA's policy would
-// block: an inline script or style element, a style attribute, and an inline
-// event handler (an on* attribute, which script-src 'self' blocks as it does
-// an inline script). It also refuses a logical path named twice and a
-// root-level script or stylesheet path no entry is.
+// readShell reads a shell as the HTML tokenizer does, so a comment or a
+// raw-text element's body holds no tags, and refuses what httpserver.SPA's
+// policy would block: an inline script or style element, a style attribute,
+// and an inline event handler (an on* attribute, which script-src 'self'
+// blocks as it does an inline script). It also refuses a logical path named
+// twice, by a tag that does not load its entry's kind, or one no entry is.
 func (b *build) readShell(name string) (shell, error) {
 	body, err := os.ReadFile(filepath.Join(b.src, name))
 	if err != nil {
@@ -169,59 +51,273 @@ func (b *build) readShell(name string) (shell, error) {
 		logical[logicalPath(e)] = i
 	}
 	sh := shell{name: name, body: body, head: -1, iconRels: b.icon != ""}
-	named := map[string]bool{}
-	scanTags(body, func(t tag) {
-		if err == nil {
-			err = sh.tag(t, logical, named)
-		}
-	})
-	if err == nil && sh.iconRels && sh.head < 0 {
-		err = fmt.Errorf("webbundle: shell %s has no </head> to end with the icon links", name)
+	r := shellReader{shell: &sh, entries: b.entries, logical: logical, named: map[string]bool{}}
+	if err := r.walk(); err != nil {
+		return shell{}, err
 	}
-	return sh, err
+	if sh.iconRels && sh.head < 0 {
+		return shell{}, fmt.Errorf("webbundle: shell %s has no </head> to end with the icon links", name)
+	}
+	return sh, nil
 }
 
-func (s *shell) tag(t tag, logical map[string]int, named map[string]bool) error {
-	if t.closing {
-		if t.name == "head" && s.head < 0 {
-			s.head = t.start
-		}
-		return nil
-	}
-	for _, a := range t.attrs {
-		if err := s.attr(t, a, logical, named); err != nil {
-			return err
-		}
-	}
-	return nil
+// shellReader is one walk over a shell's tokens.
+type shellReader struct {
+	*shell
+	logical map[string]int  // entry index by logical path
+	named   map[string]bool // the logical paths read so far
+	entries []Entry
 }
 
-// attr checks one attribute of t and records it when it names an entry.
-func (s *shell) attr(t tag, a attr, logical map[string]int, named map[string]bool) error {
-	if strings.HasPrefix(a.name, "on") {
-		return fmt.Errorf("webbundle: shell %s: <%s> carries %s, an inline event handler the policy blocks", s.name, t.name, a.name)
-	}
-	if t.name == "link" && a.name == "rel" && s.iconRels {
-		for rel := range strings.FieldsSeq(strings.ToLower(a.value)) {
-			if slices.Contains(iconRels, rel) {
-				return fmt.Errorf("webbundle: shell %s carries a <link rel=%q>; Build writes the %s link from Config.Icon", s.name, a.value, rel)
+// walk reads every token of the shell, tracking each one's offset as the sum
+// of the raw bytes before it.
+func (r *shellReader) walk() error {
+	z := html.NewTokenizer(bytes.NewReader(r.body))
+	var f foreignStack
+	for at := 0; ; {
+		z.AllowCDATA(len(f) > 0)
+		tt := z.Next()
+		start := at
+		at += len(z.Raw())
+		switch tt {
+		case html.ErrorToken:
+			return nil
+		case html.EndTagToken:
+			tok := z.Token()
+			f.end(tok.Data)
+			if tok.Data == "head" && r.head < 0 {
+				r.head = start
+			}
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tok := z.Token()
+			inHTML := f.start(z, tok, tt == html.SelfClosingTagToken)
+			if err := r.tag(tok, inHTML, start, at); err != nil {
+				return err
 			}
 		}
 	}
-	ref := t.name == "script" && a.name == "src" || t.name == "link" && a.name == "href"
-	if !ref || !rootScriptOrStyle(a.value) {
+}
+
+// tag checks one start tag and records it when it names an entry.
+func (r *shellReader) tag(tok html.Token, inHTML bool, start, end int) error {
+	if err := r.handlers(tok); err != nil || !inHTML {
+		return err
+	}
+	for i, a := range tok.Attr {
+		if err := r.iconRel(tok, a); err != nil {
+			return err
+		}
+		ref := tok.Data == "script" && a.Key == "src" || tok.Data == linkElement && a.Key == "href"
+		if !ref || !rootScriptOrStyle(a.Val) {
+			continue
+		}
+		e, err := r.entry(tok, a.Val)
+		if err != nil {
+			return err
+		}
+		r.links = append(r.links, link{tok: tok, entry: e, start: start, end: end, attr: i})
+	}
+	return nil
+}
+
+// handlers refuses an on* attribute, an inline event handler.
+func (r *shellReader) handlers(tok html.Token) error {
+	for _, a := range tok.Attr {
+		if len(a.Key) > len("on") && strings.HasPrefix(a.Key, "on") {
+			return fmt.Errorf("webbundle: shell %s: <%s> carries %s, an inline event handler the policy blocks", r.name, tok.Data, a.Key)
+		}
+	}
+	return nil
+}
+
+// iconRel refuses a link relation Build writes itself for the icon.
+func (r *shellReader) iconRel(tok html.Token, a html.Attribute) error {
+	if tok.Data != linkElement || a.Key != "rel" || !r.iconRels {
 		return nil
 	}
-	i, ok := logical[a.value]
+	for rel := range strings.FieldsSeq(lowerASCII(a.Val)) {
+		if slices.Contains(iconRels, rel) {
+			return fmt.Errorf("webbundle: shell %s carries a <link rel=%q>; Build writes the %s link from Config.Icon", r.name, a.Val, rel)
+		}
+	}
+	return nil
+}
+
+// entry returns the index of the entry whose logical path tok names as p,
+// refusing a path no entry is, one named before and a tag that does not load
+// the entry's kind.
+func (r *shellReader) entry(tok html.Token, p string) (int, error) {
+	e, ok := r.logical[p]
 	switch {
 	case !ok:
-		return fmt.Errorf("webbundle: shell %s names %s, which no entry is", s.name, a.value)
-	case named[a.value]:
-		return fmt.Errorf("webbundle: shell %s names %s more than once", s.name, a.value)
+		return 0, fmt.Errorf("webbundle: shell %s names %s, which no entry is", r.name, p)
+	case r.named[p]:
+		return 0, fmt.Errorf("webbundle: shell %s names %s more than once", r.name, p)
+	case loads(tok) != r.entries[e].Kind:
+		return 0, fmt.Errorf("webbundle: shell %s names %s, %s entry %q, in %s, which does not load it as one; use %s",
+			r.name, p, r.entries[e].Kind, r.entries[e].Name, tok, kindTag[r.entries[e].Kind])
 	}
-	named[a.value] = true
-	s.links = append(s.links, link{entry: i, start: a.start, end: a.end})
-	return nil
+	r.named[p] = true
+	return e, nil
+}
+
+const (
+	linkElement = "link"
+	mathRoot    = "math"
+)
+
+var kindTag = map[EntryKind]string{
+	Module:  `<script type="module" src>`,
+	Classic: `<script src> with no type or a JavaScript one`,
+	Style:   `<link rel="stylesheet" href>`,
+}
+
+// loads returns the kind of entry a <script src> or <link href> loads, or ""
+// for none: a script's type is read as
+// https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
+// reads it, and only a link whose rel holds stylesheet and not alternate
+// applies its stylesheet.
+func loads(tok html.Token) EntryKind {
+	if tok.Data == linkElement {
+		rels := strings.Fields(lowerASCII(attrVal(tok, "rel")))
+		if slices.Contains(rels, "stylesheet") && !slices.Contains(rels, "alternate") {
+			return Style
+		}
+		return ""
+	}
+	typ, hasType := attrOf(tok, "type")
+	lang, hasLang := attrOf(tok, "language")
+	switch {
+	case hasType && typ != "":
+	case !hasType && hasLang && lang != "":
+		typ = "text/" + lang
+	default:
+		return Classic
+	}
+	switch typ = lowerASCII(strings.Trim(typ, " \t\n\f\r")); {
+	case typ == "module":
+		return Module
+	case slices.Contains(javaScriptTypes, typ):
+		return Classic
+	}
+	return ""
+}
+
+// javaScriptTypes are the JavaScript MIME type essences of
+// https://mimesniff.spec.whatwg.org/#javascript-mime-type.
+var javaScriptTypes = []string{
+	"application/ecmascript", "application/javascript", "application/x-ecmascript",
+	"application/x-javascript", "text/ecmascript", "text/javascript",
+	"text/javascript1.0", "text/javascript1.1", "text/javascript1.2",
+	"text/javascript1.3", "text/javascript1.4", "text/javascript1.5",
+	"text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript",
+}
+
+func attrOf(tok html.Token, key string) (string, bool) {
+	for _, a := range tok.Attr {
+		if a.Key == key {
+			return a.Val, true
+		}
+	}
+	return "", false
+}
+
+func attrVal(tok html.Token, key string) string {
+	v, _ := attrOf(tok, key)
+	return v
+}
+
+// lowerASCII lower-cases ASCII letters only, as HTML compares keywords.
+func lowerASCII(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
+}
+
+// foreignStack holds the open SVG and MathML elements, so the walk switches
+// the tokenizer's raw-text reading off inside them as html.Parse does: there
+// a <title> or <style> holds markup.
+type foreignStack []foreignElement
+
+type foreignElement struct {
+	ns, name string
+	html     bool // an integration point: its content is read as HTML
+}
+
+// html reports whether the next token is read as HTML content.
+func (f foreignStack) html() bool { return len(f) == 0 || f[len(f)-1].html }
+
+// start records a start tag and reports whether it is an HTML element,
+// following https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inforeign.
+func (f *foreignStack) start(z *html.Tokenizer, tok html.Token, selfClosing bool) bool {
+	var ns string
+	switch {
+	case f.html():
+		if tok.Data != svgRoot && tok.Data != mathRoot {
+			return true
+		}
+		ns = tok.Data
+	case breakout(tok):
+		for len(*f) > 0 && !f.html() {
+			*f = (*f)[:len(*f)-1]
+		}
+		return f.html()
+	default:
+		top := (*f)[len(*f)-1]
+		ns = top.ns
+		if tok.Data == svgRoot && top.name == "annotation-xml" {
+			ns = svgRoot
+		}
+		z.NextIsNotRawText()
+	}
+	if !selfClosing {
+		*f = append(*f, foreignElement{ns: ns, name: tok.Data, html: integrationPoint(ns, tok)})
+	}
+	return false
+}
+
+// end closes the innermost open foreign element named name, if any.
+func (f *foreignStack) end(name string) {
+	for i, e := range slices.Backward(*f) {
+		if e.name == name {
+			*f = (*f)[:i]
+			return
+		}
+	}
+}
+
+func integrationPoint(ns string, tok html.Token) bool {
+	switch ns {
+	case svgRoot:
+		return slices.Contains([]string{"foreignobject", "desc", "title"}, tok.Data)
+	case mathRoot:
+		if tok.Data == "annotation-xml" {
+			enc := lowerASCII(attrVal(tok, "encoding"))
+			return enc == "text/html" || enc == "application/xhtml+xml"
+		}
+		return slices.Contains([]string{"mi", "mo", "mn", "ms", "mtext"}, tok.Data)
+	}
+	return false
+}
+
+var breakoutTags = []string{
+	"b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt",
+	"em", "embed", "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li",
+	"listing", "menu", "meta", "nobr", "ol", "p", "pre", "ruby", "s", "small", "span",
+	"strong", "strike", "sub", "sup", "table", "tt", "u", "ul", "var",
+}
+
+// breakout reports whether a start tag in foreign content returns to HTML.
+func breakout(tok html.Token) bool {
+	if tok.Data == "font" {
+		return slices.ContainsFunc(tok.Attr, func(a html.Attribute) bool {
+			return a.Key == "color" || a.Key == "face" || a.Key == "size"
+		})
+	}
+	return slices.Contains(breakoutTags, tok.Data)
 }
 
 // rootScriptOrStyle reports whether v has a logical path's shape:
@@ -232,8 +328,9 @@ func rootScriptOrStyle(v string) bool {
 		(strings.HasSuffix(name, jsExt) || strings.HasSuffix(name, cssExt))
 }
 
-// render returns the shell with each logical path replaced by its entry's
-// hashed one and head inserted before </head>.
+// render returns the shell with each tag naming a logical path written back
+// naming its entry's hashed one (every attribute double-quoted, as
+// html.Token renders it) and head inserted before </head>.
 func (s *shell) render(hashed []string, head []byte) []byte {
 	out := make([]byte, 0, len(s.body)+len(s.links)*16+len(head))
 	at := 0
@@ -243,9 +340,10 @@ func (s *shell) render(hashed []string, head []byte) []byte {
 			out = append(append(out, s.body[at:s.head]...), head...)
 			at, inserted = s.head, true
 		}
-		out = append(out, s.body[at:l.start]...)
-		out = append(out, '/')
-		out = append(out, hashed[l.entry]...)
+		tok := l.tok
+		tok.Attr = slices.Clone(tok.Attr)
+		tok.Attr[l.attr].Val = "/" + hashed[l.entry]
+		out = append(append(out, s.body[at:l.start]...), tok.String()...)
 		at = l.end
 	}
 	if !inserted {
