@@ -21,6 +21,9 @@ type KindSpec[P any] struct {
 	// Covers is optional: when a job of this kind starts, each queued or
 	// yielded job it covers ends without running its own work.
 	Covers func(started, other Job[P]) bool
+	// Items is a batch kind's item count, read from the payload at Start;
+	// required with MaxItems > 0 and refused without it.
+	Items func(p P) int
 	// Watch is the lease a scheduled scope of this kind must end a job by;
 	// nil is {Interval: every, Cycles: 3}.
 	Watch *health.Lease
@@ -99,8 +102,9 @@ type Executor[P any] struct {
 
 // NewExecutor checks cfg and answers an executor that does nothing until Run.
 // It refuses a duplicate or ill-formed Kind, Kept outside its bound, a batch
-// MaxItems outside 1 to 500, more than 32 phases, a queue bound outside its
-// range, and a missing Records when a kind keeps records.
+// MaxItems outside 1 to 500, MaxItems without Items or Items without
+// MaxItems, more than 32 phases, a queue bound outside its range, and a
+// missing Records when a kind keeps records.
 func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 	return &Executor[P]{cfg: cfg}, nil
 }

@@ -543,6 +543,7 @@ func TestNewExecutorRefuses(t *testing.T) {
 		return out
 	}
 	const day = 24 * time.Hour
+	items := func(p payload) int { return p.N }
 
 	for _, tc := range []struct {
 		edit func(*scheduler.Config[payload])
@@ -554,8 +555,8 @@ func TestNewExecutorRefuses(t *testing.T) {
 		{name: "kept 15 minutes", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Kept = 15 * time.Minute }},
 		{name: "kept 400 days", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Kept = 400 * day }},
 		{name: "32 phases", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Phases = phases(32) }},
-		{name: "a batch of 1", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems = 1 }},
-		{name: "a batch of 500", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems = 500 }},
+		{name: "a batch of 1", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems, c.Kinds[0].Items = 1, items }},
+		{name: "a batch of 500", ok: true, edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems, c.Kinds[0].Items = 500, items }},
 		{name: "queue bounds at their top", ok: true, edit: func(c *scheduler.Config[payload]) { c.MaxQueued, c.MaxQueuedPerOwner = 256, 256 }},
 		{name: "queue bounds at their bottom", ok: true, edit: func(c *scheduler.Config[payload]) { c.MaxQueued, c.MaxQueuedPerOwner = 1, 1 }},
 
@@ -568,8 +569,10 @@ func TestNewExecutorRefuses(t *testing.T) {
 		{name: "kept under 15 minutes", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Kept = 15*time.Minute - time.Second }},
 		{name: "kept over 400 days", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Kept = 400*day + time.Second }},
 		{name: "a negative kept", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Kept = -time.Hour }},
-		{name: "a batch of 501", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems = 501 }},
-		{name: "a negative batch", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems = -1 }},
+		{name: "a batch of 501", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems, c.Kinds[0].Items = 501, items }},
+		{name: "a negative batch", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems, c.Kinds[0].Items = -1, items }},
+		{name: "a batch with no item count", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].MaxItems = 3 }},
+		{name: "an item count on a kind that is not a batch", edit: func(c *scheduler.Config[payload]) { c.Kinds[0].Items = items }},
 		{name: "33 phases on a second kind", edit: func(c *scheduler.Config[payload]) {
 			c.Kinds = append(c.Kinds, scheduler.KindSpec[payload]{Kind: "grab", Kept: time.Hour, Phases: phases(33), Run: noop})
 		}},

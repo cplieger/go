@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -197,6 +198,26 @@ func (l *logLines) count(level slog.Level) int {
 		}
 	}
 	return n
+}
+
+// text answers each line logged at level as its message and its attributes'
+// values, space-separated.
+func (l *logLines) text(level slog.Level) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, r := range l.recs {
+		if r.Level != level {
+			continue
+		}
+		parts := []string{r.Message}
+		r.Attrs(func(a slog.Attr) bool {
+			parts = append(parts, a.Key+"="+a.Value.String())
+			return true
+		})
+		out = append(out, strings.Join(parts, " "))
+	}
+	return out
 }
 
 // transitions keeps each Transition the Observer is told of.

@@ -23,6 +23,7 @@ func TestSlotOrder(t *testing.T) {
 			first := make(chan struct{})
 			resync := spec("resync", "heavy")
 			resync.MaxItems = 3
+			resync.Items = func(p payload) int { return p.N }
 			resync.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
 				for i := range r.Job().Payload.N {
 					err := r.Item(ctx, i, func(context.Context) scheduler.Line {

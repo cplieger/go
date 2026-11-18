@@ -65,6 +65,7 @@ const (
 	ReasonRunPanicked     = "run_panicked"
 	ReasonInterrupted     = "interrupted"
 	ReasonCancelled       = "cancelled"
+	ReasonNotRun          = "not_run" // a batch line the Run never reached, at an end other than cancelled or interrupted
 )
 
 // Reason is one cause of an end, codes only. Subject is a scope-grammar key

@@ -12,6 +12,7 @@ var (
 	ErrTooManyScopes = errors.New("scheduler: more than 64 scheduled scopes")
 	ErrCovered       = errors.New("scheduler: covered by a job that started") // matched through *CoveredError
 	ErrYieldTooLong  = errors.New("scheduler: yield more than 24 hours ahead")
+	ErrBatchSize     = errors.New("scheduler: batch item count outside 1 to MaxItems") // Start; the wire refuses the count first
 
 	ErrQueueFull        = errors.New("scheduler: queue full")               // queue_full
 	ErrCapacity         = errors.New("scheduler: no room for a record")     // job_capacity; Records.Insert
