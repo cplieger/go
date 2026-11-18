@@ -168,8 +168,20 @@ func TestBuildRefusesEntryURL(t *testing.T) {
 	}
 }
 
+// A module holding a stable entry's URL as a string reads that entry as
+// surely as BUNDLE_URLS.<name> does, since the URL never changes.
+func TestBuildCountsAStableURLLiteralAsARead(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{
+		"src/app.ts": "navigator.serviceWorker.register(\"/sw.js\", { scope: \"/\" });\n",
+		"src/sw.js":  "self.addEventListener(\"fetch\", () => {});\n",
+	})
+	c.Entries = append(c.Entries, webbundle.Entry{Name: "sw", Path: "src/sw.js", Kind: webbundle.Classic, URL: "/sw.js"})
+	mustBuild(t, c)
+}
+
 // An entry's URL keeps the rule every classic entry follows: a module
-// reads it through BUNDLE_URLS or a shell names it.
+// reads it through BUNDLE_URLS or its URL, or a shell names it.
 func TestBuildRefusesAnEntryAtAURLNothingReads(t *testing.T) {
 	t.Parallel()
 	c := newFixture(t, files{"src/sw.js": "self.addEventListener(\"fetch\", () => {});\n"})

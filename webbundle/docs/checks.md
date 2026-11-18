@@ -35,7 +35,7 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 - a root path ending in `.js` or `.css`, such as `/main.js`, that is no entry's logical path
 - one logical path named twice in the shell
 - a logical path in a tag that does not load its entry's kind: a module entry needs `<script type="module" src>`, a classic entry a `<script src>` with no type or a JavaScript one, and a style entry a `<link rel="stylesheet" href>` that is not an alternate stylesheet
-- a module or style entry no shell names, or a classic entry that no shell names and no module entry reads through `BUNDLE_URLS`
+- a module or style entry no shell names, or a classic entry that no shell names and no module entry reads, through `BUNDLE_URLS.<name>` or by holding the entry's served URL as a quoted string, such as a stable entry's `"/sw.js"`
 - with an `Icon`, a shell that already carries an `icon`, `apple-touch-icon` or `manifest` link
 - a written shell whose `<script>` and `<link>` elements, read again, are not the edited tree's, with the same attributes in the same order, or that `httpserver.CheckShell` refuses. `html.Render` does not promise that every tree reads back as itself: a `<plaintext>` start tag inside a table, which the parser moves before the table, makes every element after it text
 
@@ -47,6 +47,7 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 - a file from an npm package that `Packages` does not match
 - a file an entry's `Forbid` names, or, when the entry has an `Allow`, a file its `Allow` does not name; the items are those of [Forbid and Allow](configuration.md#forbid-and-allow)
 - a script entry that imports CSS
+- a module entry, or a chunk it loads, that reads `BUNDLE_URLS` other than as `BUNDLE_URLS.<name>` of a classic entry, such as `Object.values(BUNDLE_URLS)`, and a classic entry that reads `BUNDLE_URLS` at all
 
 Each of these errors ends with the chain of imports from the entry to the refused file.
 

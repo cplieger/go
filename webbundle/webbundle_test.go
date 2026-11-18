@@ -172,6 +172,56 @@ new SharedWorker(BUNDLE_URLS.feed_worker);
 	}
 }
 
+// BUNDLE_URLS.<name> is the one read: any other read of BUNDLE_URLS would
+// see every classic entry's URL, or none, at run time.
+func TestBuildRefusesBundleURLsReadOtherThanByName(t *testing.T) {
+	t.Parallel()
+	worker := files{"src/worker.js": "self.addEventListener(\"connect\", () => {});\n"}
+	for _, tc := range []struct {
+		name  string
+		files files
+	}{
+		{name: "Values", files: files{"src/app.ts": "declare const BUNDLE_URLS: Record<string, string>;\nfor (const u of Object.values(BUNDLE_URLS)) new SharedWorker(u);\n"}},
+		{name: "Spread", files: files{"src/app.ts": "declare const BUNDLE_URLS: Record<string, string>;\nconsole.log({ ...BUNDLE_URLS });\n"}},
+		{name: "Bracket", files: files{"src/app.ts": "declare const BUNDLE_URLS: Record<string, string>;\nconst k = String(Date.now());\nnew SharedWorker(BUNDLE_URLS[k]);\n"}},
+		{name: "UnknownName", files: files{"src/app.ts": "declare const BUNDLE_URLS: { nope: string };\nnew SharedWorker(BUNDLE_URLS.nope);\n"}},
+		{name: "InALoadedChunk", files: files{
+			"src/app.ts":  "void import(\"./late\");\n",
+			"src/late.ts": "declare const BUNDLE_URLS: Record<string, string>;\nconsole.log(Object.keys(BUNDLE_URLS));\n",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := files{}
+			maps.Copy(fs, worker)
+			maps.Copy(fs, tc.files)
+			c := newFixture(t, fs)
+			c.Entries = append(c.Entries, webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic})
+			buildRefused(t, c, `"app"`, "BUNDLE_URLS.worker")
+			outMissing(t, c.Out)
+		})
+	}
+	t.Run("ClassicEntry", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.ts":    "declare const BUNDLE_URLS: { worker: string };\nnew SharedWorker(BUNDLE_URLS.worker);\n",
+			"src/worker.js": "self.addEventListener(\"connect\", () => console.log(BUNDLE_URLS.worker));\n",
+		})
+		c.Entries = append(c.Entries, webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic})
+		buildRefused(t, c, `"worker"`, "BUNDLE_URLS")
+		outMissing(t, c.Out)
+	})
+	t.Run("AStringOfTheName", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.ts":    "declare const BUNDLE_URLS: { worker: string };\nconsole.log(\"BUNDLE_URLS\");\nnew SharedWorker(BUNDLE_URLS.worker);\n",
+			"src/worker.js": "self.addEventListener(\"connect\", () => {});\n",
+		})
+		c.Entries = append(c.Entries, webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic})
+		mustBuild(t, c)
+	})
+}
+
 // A script's import of an asset gives the URL the asset is served at, which
 // the page resolves from any path: an icon factory fed such URLs draws on a
 // nested page as on the root.

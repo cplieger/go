@@ -4,7 +4,7 @@
 
 webbundle builds your single-page app's web bundle with esbuild at build time. It writes content-hashed scripts and stylesheets, the shells that name them, icons, licence notices and the manifest this repository's `httpserver.SPA` serves.
 
-It replaces the bundle program each app writes around esbuild's Go API. It runs from your Dockerfile's builder stage and from `go generate`, never in your app binary, and needs no Node process once your npm packages are installed. It depends on esbuild, `go/httpserver` and the oksvg and rasterx SVG renderers, and is licensed under Apache-2.0.
+It replaces the bundle program each app writes around esbuild's Go API. It runs from your Dockerfile's builder stage and from `go generate`, never in your app binary, and needs no Node process once your npm packages are installed. It depends on esbuild, `go/httpserver`, `golang.org/x/net` (its HTML parser reads the shells) and the oksvg and rasterx SVG renderers, and is licensed under Apache-2.0.
 
 ## Why use it
 

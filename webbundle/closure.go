@@ -147,25 +147,35 @@ func (b *build) allowed(pkg string) bool {
 // exports go unused on the import graph and puts none of its bytes in an
 // output.
 func (m *metafile) shipped(e *Entry) map[string]bool {
-	seen, ins := map[string]bool{}, map[string]bool{}
+	ins := map[string]bool{}
+	for _, out := range m.loaded(e) {
+		asset := path.Ext(out) != jsExt && path.Ext(out) != cssExt
+		for in, use := range m.Outputs[out].Inputs {
+			if asset || use.BytesInOutput > 0 {
+				ins[in] = true
+			}
+		}
+	}
+	return ins
+}
+
+// loaded names entry e's main outputs and every output they import,
+// transitively, by metafile path.
+func (m *metafile) loaded(e *Entry) []string {
+	seen := map[string]bool{}
+	var outs []string
 	for queue := m.mainOutputs(e); len(queue) > 0; queue = queue[1:] {
 		out := queue[0]
 		if seen[out] {
 			continue
 		}
 		seen[out] = true
-		o := m.Outputs[out]
-		asset := path.Ext(out) != jsExt && path.Ext(out) != cssExt
-		for in, use := range o.Inputs {
-			if asset || use.BytesInOutput > 0 {
-				ins[in] = true
-			}
-		}
-		for _, imp := range o.Imports {
+		outs = append(outs, out)
+		for _, imp := range m.Outputs[out].Imports {
 			queue = append(queue, imp.Path)
 		}
 	}
-	return ins
+	return outs
 }
 
 // mainOutputs names the metafile outputs that are entry e's built file.

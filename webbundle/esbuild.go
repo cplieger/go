@@ -104,6 +104,7 @@ type outFile struct {
 
 // built is one esbuild run's result.
 type built struct {
+	opts    *api.BuildOptions // the run's options, which place its metafile paths in the tree
 	meta    metafile
 	entries map[string]string // the built path of each entry, by its Src path
 	scripts map[string]Output // what each script holds, by its path in the tree
@@ -132,7 +133,7 @@ func runBuild(opts *api.BuildOptions, what string, style bool) (built, error) {
 	if len(r.Errors) > 0 {
 		return built{}, fmt.Errorf("webbundle: %s: %s", what, messages(r.Errors))
 	}
-	var b built
+	b := built{opts: opts}
 	if err := json.Unmarshal([]byte(r.Metafile), &b.meta); err != nil {
 		return built{}, fmt.Errorf("webbundle: %s: esbuild's metafile: %w", what, err)
 	}
@@ -244,25 +245,65 @@ func messages(msgs []api.Message) string {
 	return strings.Join(lines, "; ")
 }
 
-// defines adds BUNDLE_URLS to the user's defines: the whole object, and one
-// dotted define per classic entry, so a member read inlines only that URL and
-// the unread-classic check sees which entries a module reads.
+// defines adds one dotted define per classic entry to the user's defines,
+// so a module's BUNDLE_URLS.<name> inlines that URL alone and the
+// unread-classic check sees which entries a module reads. Every other read
+// of BUNDLE_URLS becomes unreadURLs, which refuseUnreadURLs finds in the
+// output.
 func defines(user, urls map[string]string) (map[string]string, error) {
-	raw, err := json.Marshal(urls)
-	if err != nil {
-		return nil, err
-	}
 	d := make(map[string]string, len(user)+len(urls)+1)
 	maps.Copy(d, user)
-	d[bundleURLs] = string(raw)
+	d[bundleURLs] = unreadURLs
 	for name, u := range urls {
-		q, qerr := json.Marshal(u)
-		if qerr != nil {
-			return nil, qerr
+		q, err := json.Marshal(u)
+		if err != nil {
+			return nil, err
 		}
 		d[bundleURLs+"."+name] = string(q)
 	}
 	return d, nil
+}
+
+// unreadURLs is the global BUNDLE_URLS is defined to beside its members: a
+// name no source writes, so its presence in an output is a read of
+// BUNDLE_URLS that no member define replaced.
+const unreadURLs = "__webbundle_BUNDLE_URLS_read_by_name_only__"
+
+// refuseUnreadURLs refuses an entry of r whose outputs still read
+// BUNDLE_URLS: a whole-object read (Object.values, a spread, a bracket) or a
+// member no classic entry declares. names are the classic entries.
+func refuseUnreadURLs(r *built, entries []Entry, names []string) error {
+	marker := []byte(unreadURLs)
+	for i := range entries {
+		e := &entries[i]
+		for _, out := range r.meta.loaded(e) {
+			rel, err := treePath(r.opts, out)
+			if err != nil {
+				return err
+			}
+			j := slices.IndexFunc(r.outputs, func(o outFile) bool { return o.path == rel })
+			if j < 0 || !bytes.Contains(r.outputs[j].contents, marker) {
+				continue
+			}
+			if e.Kind == Classic {
+				return fmt.Errorf("webbundle: classic entry %q reads BUNDLE_URLS, which only a module entry reads", e.Name)
+			}
+			return fmt.Errorf("webbundle: module entry %q reads BUNDLE_URLS other than as %s", e.Name, dottedReads(names))
+		}
+	}
+	return nil
+}
+
+// dottedReads names the reads BUNDLE_URLS allows, one per classic entry.
+func dottedReads(names []string) string {
+	if len(names) == 0 {
+		return "BUNDLE_URLS.<name> of a classic entry, and the build has none"
+	}
+	reads := make([]string, len(names))
+	for i, n := range slices.Sorted(slices.Values(names)) {
+		reads[i] = bundleURLs + "." + n
+	}
+	return strings.Join(reads, " or ")
 }
 
 // buildClassic builds one classic entry as an IIFE with its whole closure.
@@ -274,8 +315,19 @@ func (b *build) buildClassic(e *Entry, outdir string) (built, error) {
 		opts.EntryNames = "[name]"
 	}
 	opts.Format = api.FormatIIFE
-	opts.Define = b.define
-	return runBuild(&opts, "classic entry "+e.Name, false)
+	d, err := defines(b.define, nil)
+	if err != nil {
+		return built{}, err
+	}
+	opts.Define = d
+	r, err := runBuild(&opts, "classic entry "+e.Name, false)
+	if err != nil {
+		return built{}, err
+	}
+	if err := refuseUnreadURLs(&r, []Entry{*e}, nil); err != nil {
+		return built{}, err
+	}
+	return r, nil
 }
 
 // buildModules builds every module entry in one ESM run, so code two of them
@@ -293,7 +345,14 @@ func (b *build) buildModules(modules []Entry, urls map[string]string, outdir str
 		return built{}, err
 	}
 	opts.Define = d
-	return runBuild(&opts, "module entries", false)
+	r, err := runBuild(&opts, "module entries", false)
+	if err != nil {
+		return built{}, err
+	}
+	if err := refuseUnreadURLs(&r, modules, slices.Collect(maps.Keys(urls))); err != nil {
+		return built{}, err
+	}
+	return r, nil
 }
 
 // buildStyle builds one stylesheet, its url() files emitted as hashed

@@ -184,7 +184,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 	}
 	for i, e := range b.entries {
 		if e.Kind == Classic && !named[i] && !bytes.Contains(eb.moduleJS, []byte(`"`+eb.urls[e.Name]+`"`)) {
-			return Result{}, fmt.Errorf("webbundle: classic entry %q is named by no shell and read through BUNDLE_URLS by no module entry", e.Name)
+			return Result{}, fmt.Errorf("webbundle: classic entry %q is named by no shell and read by no module entry, through BUNDLE_URLS or its URL", e.Name)
 		}
 	}
 	if werr := writeShells(t, shells, eb.paths, head); werr != nil {

@@ -42,7 +42,7 @@ A script entry and a style entry may share a name, since one is `/app.js` and th
 - `Classic` is a script with its own copy of everything it imports and no chunks, such as a script that sets the theme before the first paint, or the script a shared worker loads.
 - `Style` is a stylesheet. Its `@import` rules are inlined in order, and the fonts and images its `url()` values name are written as hashed files. See [Stylesheets](stylesheets.md).
 
-Classic entries build first. Every module entry then reads their URLs through the `BUNDLE_URLS` define, such as `new SharedWorker(BUNDLE_URLS.worker)` for an entry named `worker`. A classic entry read this way needs no shell to name it. The dotted read is the one form: an entry named `feed_worker` is `BUNDLE_URLS.feed_worker`.
+Classic entries build first. Every module entry then reads their URLs through the `BUNDLE_URLS` define, such as `new SharedWorker(BUNDLE_URLS.worker)` for an entry named `worker`. A classic entry read this way needs no shell to name it. The dotted read is the one form: an entry named `feed_worker` is `BUNDLE_URLS.feed_worker`. `BUNDLE_URLS` is no object at run time, so any other read of it, such as `Object.values(BUNDLE_URLS)`, a spread, a bracket read or a name no classic entry has, fails the build naming the module entry and the reads it may use. A classic entry cannot read `BUNDLE_URLS` at all.
 
 ## An entry at its own URL
 
@@ -52,7 +52,7 @@ A classic entry with a `URL` is written at that path instead of under `assets/` 
 webbundle.Entry{Name: "sw", Path: "src/sw.ts", Kind: webbundle.Classic, URL: "/sw.js"}
 ```
 
-The URL is one file at the root ending in `.js`. Its name may differ from the entry's, though one rule still holds: a module entry reads it as `BUNDLE_URLS.sw`, such as `navigator.serviceWorker.register(BUNDLE_URLS.sw)`, or a shell names it. `bundle.json` marks the entry `"stable": true`, and `SPA` serves it with `Cache-Control: no-cache`, so every load asks whether it changed.
+The URL is one file at the root ending in `.js`. Its name may differ from the entry's, though one rule still holds: a module entry reads it, or a shell names it. A module reads it as `BUNDLE_URLS.sw`, such as `navigator.serviceWorker.register(BUNDLE_URLS.sw)`, or by its URL as a quoted string, such as `register("/sw.js")`, since that URL never changes. `bundle.json` marks the entry `"stable": true`, and `SPA` serves it with `Cache-Control: no-cache`, so every load asks whether it changed.
 
 ## Forbid and Allow
 
