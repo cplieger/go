@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -589,4 +591,189 @@ func TestScheduledScopeStaysFreshAcrossWakes(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A failed Records.LastEnds read, at Run's start or at a Hold(all)'s resume,
+// is retried on 1, 2, 4 and 8 minutes, then every 15. No timer is armed until
+// a read answers, and meanwhile each deadline counts from the start or the
+// resume.
+func TestLastEndsReadRetried(t *testing.T) {
+	errDown := errors.New("store down")
+
+	t.Run("a failed read at start arms nothing until the retry answers", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			cfg := scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("daily", "")}}
+			before, stop := base.openUntil(t, cfg)
+			ran := before.start(t, api("daily", "", "alice", payload{}))
+			synctest.Wait()
+			lastEnd := before.rec(t, ran.Job).EndedAt
+			stop()
+			sleepUntil(lastEnd.Add(25 * time.Hour))
+
+			base.store.Fail(memrecords.OpLastEnds, errDown)
+			start := time.Now()
+			r := base.open(t, cfg)
+			r.schedule(t, "daily", "", scheduler.Scheduled(24*time.Hour))
+			sleepUntil(start.Add(59 * time.Second))
+			if n := len(r.wakes("daily", "")); n != 0 {
+				t.Errorf("%d timer records before the read answered, want 0", n)
+			}
+			if got, want := r.ex.Deadline("daily", ""), start.Add(72*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline while the read fails = %v, want %v: the start plus the lease", got, want)
+			}
+			base.store.Fail(memrecords.OpLastEnds, nil)
+			sleepUntil(start.Add(time.Minute))
+			w := r.wakes("daily", "")
+			if len(w) != 1 || !w[0].QueuedAt.Equal(start.Add(time.Minute)) {
+				t.Fatalf("timer records after the 1-minute retry answered = %+v, want one queued at %v: the scope was overdue", w, start.Add(time.Minute))
+			}
+		})
+	})
+
+	t.Run("the read is retried on 1, 2, 4 and 8 minutes, then every 15", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			store := memrecords.New()
+			store.Fail(memrecords.OpLastEnds, errDown)
+			lines := &logLines{}
+			start := time.Now()
+			(&rig{store: store, log: &runLog{}}).open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "")}, Logger: slog.New(lines)})
+			for _, tc := range []struct {
+				at    time.Duration
+				calls int
+			}{
+				{0, 1}, {time.Minute - time.Second, 1}, {time.Minute, 2}, {3*time.Minute - time.Second, 2}, {3 * time.Minute, 3},
+				{7 * time.Minute, 4}, {15 * time.Minute, 5}, {30*time.Minute - time.Second, 5}, {30 * time.Minute, 6}, {45 * time.Minute, 7},
+			} {
+				sleepUntil(start.Add(tc.at))
+				if n := store.Count(memrecords.OpLastEnds); n != tc.calls {
+					t.Errorf("LastEnds calls %v after start = %d, want %d", tc.at, n, tc.calls)
+				}
+			}
+			if n := lines.count(slog.LevelError); n != 7 {
+				t.Errorf("%d ERROR lines after seven failed reads, want 7", n)
+			}
+		})
+	})
+
+	t.Run("a store failing at start for longer than the lease reads stale", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			store := memrecords.New()
+			store.Fail(memrecords.OpLastEnds, errDown)
+			lines := &logLines{}
+			start := time.Now()
+			r := (&rig{store: store, log: &runLog{}}).open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "")}, Logger: slog.New(lines)})
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(time.Hour))
+			sleepUntil(start.Add(3 * time.Hour))
+			if !r.ex.Fresh("scan", "source:a").Healthy() {
+				t.Error("Fresh at the start plus the lease = false, want true")
+			}
+			sleepUntil(start.Add(3*time.Hour + time.Second))
+			if r.ex.Fresh("scan", "source:a").Healthy() {
+				t.Error("Fresh past the start plus the lease with the store unreadable = true, want false")
+			}
+			if n := len(r.wakes("scan", "source:a")); n != 0 {
+				t.Errorf("%d timer records while the read fails, want 0", n)
+			}
+			if n := countContaining(lines.text(slog.LevelError), "not ended by its deadline"); n != 1 {
+				t.Errorf("%d ERROR lines for the passed deadline, want 1", n)
+			}
+		})
+	})
+
+	t.Run("a failed read at resume arms nothing until the retry answers", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}})
+			end, resume := heldAfterAnEnd(t, r, "source:t")
+			sleepUntil(end.Add(2 * time.Hour))
+			r.store.Fail(memrecords.OpLastEnds, errDown)
+			resumed := time.Now()
+			resume()
+			sleepUntil(resumed.Add(59 * time.Second))
+			if n := len(r.wakes("scan", "source:t")); n != 0 {
+				t.Errorf("%d timer records before the resume's read answered, want 0", n)
+			}
+			if got, want := r.ex.Deadline("scan", "source:t"), resumed.Add(3*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline while the resume's read fails = %v, want %v: the resume plus the lease", got, want)
+			}
+			r.store.Fail(memrecords.OpLastEnds, nil)
+			sleepUntil(resumed.Add(time.Minute))
+			w := r.wakes("scan", "source:t")
+			if len(w) != 1 || !w[0].QueuedAt.Equal(resumed.Add(time.Minute)) {
+				t.Fatalf("timer records after the 1-minute retry answered = %+v, want one queued at %v: the scope was overdue", w, resumed.Add(time.Minute))
+			}
+		})
+	})
+
+	t.Run("a store failing at resume for longer than the lease reads stale", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}})
+			_, resume := heldAfterAnEnd(t, r, "source:t")
+			time.Sleep(time.Minute)
+			r.store.Fail(memrecords.OpLastEnds, errDown)
+			resumed := time.Now()
+			resume()
+			sleepUntil(resumed.Add(3 * time.Hour))
+			if !r.ex.Fresh("scan", "source:t").Healthy() {
+				t.Error("Fresh at the resume plus the lease = false, want true")
+			}
+			sleepUntil(resumed.Add(3*time.Hour + time.Second))
+			if r.ex.Fresh("scan", "source:t").Healthy() {
+				t.Error("Fresh past the resume plus the lease with the store unreadable = true, want false")
+			}
+			if n := len(r.wakes("scan", "source:t")); n != 0 {
+				t.Errorf("%d timer records while the resume's read fails, want 0", n)
+			}
+		})
+	})
+
+	t.Run("a hold during a resume's retry ends that retry", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "heavy")}})
+			_, resume := heldAfterAnEnd(t, r, "source:t")
+			r.store.Fail(memrecords.OpLastEnds, errDown)
+			resume()
+			resume, err := r.ex.Hold(t.Context(), true)
+			if err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", err)
+			}
+			calls := r.store.Count(memrecords.OpLastEnds)
+			time.Sleep(20 * time.Minute)
+			synctest.Wait()
+			if n := r.store.Count(memrecords.OpLastEnds); n != calls {
+				t.Errorf("LastEnds calls during a hold = %d, want %d: the hold ends the earlier resume's retry", n, calls)
+			}
+			r.store.Fail(memrecords.OpLastEnds, nil)
+			resume()
+			if n := r.store.Count(memrecords.OpLastEnds); n != calls+1 {
+				t.Errorf("LastEnds calls after the next resume = %d, want %d", n, calls+1)
+			}
+		})
+	})
+}
+
+// heldAfterAnEnd schedules scan's scope hourly, runs one job of it and holds
+// the executor once it ended; it answers the end and the hold's resume.
+func heldAfterAnEnd(t *testing.T, r *rig, scope string) (time.Time, func()) {
+	t.Helper()
+	r.schedule(t, "scan", scope, scheduler.Scheduled(time.Hour))
+	ran := r.start(t, api("scan", scope, "alice", payload{}))
+	synctest.Wait()
+	end := r.rec(t, ran.Job).EndedAt
+	resume, err := r.ex.Hold(t.Context(), true)
+	if err != nil {
+		t.Fatalf("Hold(all) = %v, want nil", err)
+	}
+	return end, resume
+}
+
+// countContaining answers how many of lines contain s.
+func countContaining(lines []string, s string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, s) {
+			n++
+		}
+	}
+	return n
 }
