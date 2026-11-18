@@ -199,15 +199,14 @@ func TestFrameReadRefusals(t *testing.T) {
 	})
 }
 
-// readOf is the read member f's JSON carries, and whether it carries one.
-func readOf(t *testing.T, f any) (string, bool) {
+// readOf is the read member f's JSON carries, empty when it carries none.
+func readOf(t *testing.T, f any) string {
 	t.Helper()
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(encode(t, f)), &fields); err != nil {
 		t.Fatal(err)
 	}
-	r, ok := fields["read"]
-	return string(r), ok
+	return string(fields["read"])
 }
 
 // TestWithReadMarksEveryFrame builds each frame type through its constructor
@@ -277,14 +276,14 @@ func TestWithReadMarksEveryFrame(t *testing.T) {
 				t.Fatalf("build WithRead(partial): %v", err)
 			}
 			want := `{"state":"partial","as_of":` + readAtJSON + `,"reason":"rate_limited"}`
-			if got, _ := readOf(t, cut); got != want {
+			if got := readOf(t, cut); got != want {
 				t.Errorf("a partial read = %s, want %s", got, want)
 			}
 			unread, err := build(chartdata.WithRead(measure.Read{}))
 			if err != nil {
 				t.Fatalf("build WithRead(unread): %v", err)
 			}
-			if got, _ := readOf(t, unread); got != `{"state":"unread","as_of":null}` {
+			if got := readOf(t, unread); got != `{"state":"unread","as_of":null}` {
 				t.Errorf("the zero read = %s, want unread with a null as_of", got)
 			}
 			for label, opts := range map[string][]chartdata.Option{
