@@ -7,13 +7,18 @@ import (
 )
 
 // Records stores one record per job; every method is safe for concurrent use.
+// The store owns the record's times: it stamps each from its own clock in the
+// write that records it, and ignores the times r carries.
 type Records interface {
-	// Insert writes a new record. With a key it first looks the key up and,
-	// when a record holds it, answers that record and true without writing
-	// (a keyed resend). It answers ErrCapacity when no record may make room.
+	// Insert writes a new record, stamping QueuedAt, and answers it. With a
+	// key it first looks the key up and, when a record holds it, answers that
+	// record and true without writing (a keyed resend). It answers
+	// ErrCapacity when no record may make room.
 	Insert(ctx context.Context, r Record, key *Key) (Record, bool, error)
-	// Put writes r over the stored record when r.Rev is newer: queued to
-	// running, a phase reached.
+	// Put writes r over the stored record when r.Rev is newer and the stored
+	// record has not ended; otherwise it writes nothing and answers nil. It
+	// stamps StartedAt as the record first runs and the At of each phase r
+	// newly reached, keeping QueuedAt and every earlier stamp.
 	Put(ctx context.Context, r Record) error
 	// End writes e unless the record already has an end (one written in the
 	// job's own commit) and answers the stored record either way.

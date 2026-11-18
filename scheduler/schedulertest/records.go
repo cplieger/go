@@ -15,14 +15,17 @@ import (
 )
 
 // Records runs the Records contract against the stores open answers, one
-// new empty store per case. Cases that order records by their end run inside
-// a synctest bubble, so open is called there and the store's own clock is the
+// new empty store per case. Cases that read the store's clock run inside a
+// synctest bubble, so open is called there and the store's own clock is the
 // bubble's.
 func Records(t *testing.T, open func() scheduler.Records) {
 	t.Helper()
 	t.Run("insert then get", func(t *testing.T) { insertThenGet(t, open()) })
 	t.Run("a keyed resend answers the stored record", func(t *testing.T) { keyedResend(t, open()) })
 	t.Run("put writes a newer rev only", func(t *testing.T) { putNewerRev(t, open()) })
+	t.Run("the store stamps the record's times", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) { storeStamps(t, open()) })
+	})
 	t.Run("end writes once", func(t *testing.T) { endOnce(t, open()) })
 	t.Run("an ended record takes no put", func(t *testing.T) { putAfterEnd(t, open()) })
 	t.Run("dismiss", func(t *testing.T) { dismiss(t, open) })
@@ -192,6 +195,58 @@ func putNewerRev(t *testing.T, r scheduler.Records) {
 	}
 	if got.Proposal != next.Proposal {
 		t.Errorf("after a Put naming a proposal: Proposal %q, want %q", got.Proposal, next.Proposal)
+	}
+}
+
+// storeStamps sends every queued, started and phase time an hour off: each
+// reads back as the store's own stamp, the first one kept on a later Put.
+func storeStamps(t *testing.T, r scheduler.Records) {
+	f := &fixture{t: t, r: r}
+	off := time.Now().Add(-time.Hour)
+	near := func(at time.Time) bool { d := time.Since(at); return d > -time.Minute && d < time.Minute }
+
+	rec := f.record("scan", "")
+	rec.QueuedAt = off
+	queued := f.insert(rec, nil)
+	if !near(queued.QueuedAt) {
+		t.Errorf("Insert of a record queued at %v answered QueuedAt %v; want the store's stamp, near %v", off, queued.QueuedAt, time.Now())
+	}
+	if stored := f.get(rec.ID); !stored.QueuedAt.Equal(queued.QueuedAt) {
+		t.Errorf("the stored QueuedAt = %v, want the %v Insert answered", stored.QueuedAt, queued.QueuedAt)
+	}
+
+	time.Sleep(10 * time.Minute)
+	run := *queued
+	run.State, run.Phase, run.QueuedAt, run.StartedAt, run.Rev = scheduler.StateRunning, scheduler.PhaseStarted, off, off, queued.Rev+1
+	f.put(&run)
+	started := f.get(rec.ID)
+	if !near(started.StartedAt) || !started.QueuedAt.Equal(queued.QueuedAt) {
+		t.Errorf("after a Put sending both times as %v: queued %v started %v; want queued %v, started near %v",
+			off, started.QueuedAt, started.StartedAt, queued.QueuedAt, time.Now())
+	}
+
+	time.Sleep(10 * time.Minute)
+	fetch := *started
+	fetch.Phase, fetch.StartedAt, fetch.Rev = phaseFetch, off, started.Rev+1
+	fetch.Phases = []scheduler.PhaseAt{{Phase: phaseFetch, At: off}}
+	f.put(&fetch)
+	fetched := f.get(rec.ID)
+	if !fetched.StartedAt.Equal(started.StartedAt) {
+		t.Errorf("a later Put sending StartedAt %v left %v, want the first stamp %v", off, fetched.StartedAt, started.StartedAt)
+	}
+	if len(fetched.Phases) != 1 || !near(fetched.Phases[0].At) {
+		t.Fatalf("after reaching fetch sent at %v: Phases %+v; want fetch near %v", off, fetched.Phases, time.Now())
+	}
+
+	time.Sleep(10 * time.Minute)
+	write := *fetched
+	write.Phase, write.Rev = "write", fetched.Rev+1
+	write.Phases = []scheduler.PhaseAt{{Phase: phaseFetch, At: off}, {Phase: "write", At: off}}
+	f.put(&write)
+	got := f.get(rec.ID)
+	if len(got.Phases) != 2 || !got.Phases[0].At.Equal(fetched.Phases[0].At) || !near(got.Phases[1].At) {
+		t.Errorf("after reaching write sent at %v: Phases %+v; want fetch at %v, write near %v",
+			off, got.Phases, fetched.Phases[0].At, time.Now())
 	}
 }
 

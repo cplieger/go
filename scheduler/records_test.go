@@ -576,3 +576,56 @@ func TestPipelinesStepNOfM(t *testing.T) {
 		}
 	})
 }
+
+// slowRecords takes a second over each Insert and Put before writing, as a
+// store waiting on its disk, so its stamps fall a second after the
+// executor's own clock reading.
+type slowRecords struct{ *memrecords.Store }
+
+func (s slowRecords) Insert(ctx context.Context, rec scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) {
+	time.Sleep(time.Second)
+	return s.Store.Insert(ctx, rec, key)
+}
+
+func (s slowRecords) Put(ctx context.Context, rec scheduler.Record) error {
+	time.Sleep(time.Second)
+	return s.Store.Put(ctx, rec)
+}
+
+func TestRecordTimesAreTheStores(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		full := spec("full_check", "passes")
+		full.Phases = []scheduler.Phase{"walking"}
+		var entered time.Time
+		full.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+			entered = time.Now()
+			run.Reached("walking")
+			return scheduler.End{Result: scheduler.ResultOK}
+		}
+		seen := &transitions{}
+		store := memrecords.New()
+		r := newRig(t, scheduler.Config[payload]{
+			Kinds:    []scheduler.KindSpec[payload]{full},
+			Records:  slowRecords{store},
+			Observer: seen.observer(),
+		})
+		r.store = store
+		asked := time.Now()
+		s := r.start(t, api("full_check", "", "alice", payload{}))
+		time.Sleep(time.Minute)
+		r.wantEnd(t, s.Job, scheduler.ResultOK)
+		rec := r.rec(t, s.Job)
+		if want := asked.Add(time.Second); !rec.QueuedAt.Equal(want) {
+			t.Errorf("QueuedAt = %v, want the store's stamp %v, not the executor's %v", rec.QueuedAt, want, asked)
+		}
+		if trs := seen.of(s.Job); len(trs) == 0 || trs[0].Phase != scheduler.PhaseQueued || !trs[0].At.Equal(rec.QueuedAt) {
+			t.Errorf("transitions %+v; want the first queued at the stored %v", trs, rec.QueuedAt)
+		}
+		if !rec.StartedAt.Equal(entered) {
+			t.Errorf("StartedAt = %v, want the store's stamp %v, a second after the executor's start", rec.StartedAt, entered)
+		}
+		if len(rec.Phases) != 1 || !rec.Phases[0].At.Equal(entered.Add(time.Second)) {
+			t.Errorf("Phases = %+v, want walking at the store's stamp %v", rec.Phases, entered.Add(time.Second))
+		}
+	})
+}

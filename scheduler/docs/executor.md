@@ -20,7 +20,7 @@ A `Job`'s `Scope` is the app's key for what the job covers, in code grammar plus
 
 ## The record
 
-Admission writes the job's record before the job is queued, and `Start` answers only after the write, so the id a client gets always names a record it can read. A failed write answers `ErrStoreUnavailable` and queues nothing. The executor writes the queued, started, phase and ended states itself, so a kind's `Run` writes only its own data.
+Admission writes the job's record before the job is queued, and `Start` answers only after the write, so the id a client gets always names a record it can read. A failed write answers `ErrStoreUnavailable` and queues nothing. The executor writes the queued, started, phase and ended states itself, so a kind's `Run` writes only its own data. The store stamps every time on the record (queued, started, each phase's first time and the end) from its own clock in the write that records it, and the executor keeps the queued time `Insert` answers; a time the executor sends is ignored.
 
 A kind whose work ends in one commit of its own writes its end inside that commit, through the store's own call, after `Run.Commit()` answered true. When `Run` returns, the executor leaves an end already stored as it is and reports the stored end, so a crash after the app's commit never leaves a committed write whose record reads `interrupted`.
 

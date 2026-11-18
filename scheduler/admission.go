@@ -244,18 +244,23 @@ func (e *Executor[P]) fullLocked(j *Job[P]) bool {
 	return e.closed || e.waiting >= e.maxQueued || (j.Owner != "" && e.owners[j.Owner] >= e.maxPerOwner)
 }
 
-// insert writes en's queued record. ErrCapacity reaches the caller as it is,
-// since it names the store's bound and not a fault.
+// insert writes en's queued record and keeps the record the store answers,
+// whose QueuedAt is the store's stamp. ErrCapacity reaches the caller as it
+// is, since it names the store's bound and not a fault.
 func (e *Executor[P]) insert(ctx context.Context, en *job[P]) error {
 	if en.spec.Kept == 0 {
 		return nil
 	}
-	if _, _, err := e.records.Insert(ctx, en.rec, nil); err != nil {
+	stored, _, err := e.records.Insert(ctx, en.rec, nil)
+	if err != nil {
 		if errors.Is(err, ErrCapacity) {
 			return err
 		}
 		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
+	en.recMu.Lock()
+	en.rec = stored
+	en.recMu.Unlock()
 	return nil
 }
 

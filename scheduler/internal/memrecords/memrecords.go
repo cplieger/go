@@ -150,7 +150,7 @@ func (s *Store) Reopen() {
 	}
 }
 
-// Insert writes r, stamping QueuedAt when it is zero. A key some record
+// Insert writes r, stamping QueuedAt at the wall time. A key some record
 // already holds answers that record and true, writing nothing.
 func (s *Store) Insert(_ context.Context, r scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) { //nolint:gocritic // hugeParam: the scheduler.Records signature
 	s.mu.Lock()
@@ -174,16 +174,16 @@ func (s *Store) Insert(_ context.Context, r scheduler.Record, key *scheduler.Key
 		k := *key
 		r.Key = &k
 	}
-	if r.QueuedAt.IsZero() {
-		r.QueuedAt = time.Now()
-	}
+	r.QueuedAt, r.StartedAt, r.EndedAt = time.Now(), time.Time{}, time.Time{}
 	s.recs[r.ID] = r
 	s.order = append(s.order, r.ID)
 	return clone(&r), false, nil
 }
 
 // Put writes r over the stored record when r.Rev is newer and the stored
-// record has not ended; otherwise it writes nothing and answers nil.
+// record has not ended; otherwise it writes nothing and answers nil. It
+// stamps StartedAt and each newly reached phase at the wall time and keeps
+// the stored stamps.
 func (s *Store) Put(_ context.Context, r scheduler.Record) error { //nolint:gocritic // hugeParam: the scheduler.Records signature
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,7 +197,19 @@ func (s *Store) Put(_ context.Context, r scheduler.Record) error { //nolint:gocr
 	if old.State == scheduler.StateEnded || r.Rev <= old.Rev {
 		return nil
 	}
-	s.recs[r.ID] = clone(&r)
+	r = clone(&r)
+	now := time.Now()
+	r.QueuedAt, r.StartedAt, r.EndedAt = old.QueuedAt, old.StartedAt, old.EndedAt
+	if r.StartedAt.IsZero() && r.State == scheduler.StateRunning {
+		r.StartedAt = now
+	}
+	for i, p := range r.Phases {
+		r.Phases[i].At = now
+		if j := slices.IndexFunc(old.Phases, func(o scheduler.PhaseAt) bool { return o.Phase == p.Phase }); j >= 0 {
+			r.Phases[i].At = old.Phases[j].At
+		}
+	}
+	s.recs[r.ID] = r
 	return nil
 }
 
