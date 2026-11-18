@@ -103,11 +103,23 @@ const maxScope = 128
 
 // validCode reports whether s is in code grammar.
 func validCode(s string) bool {
-	return false
+	return s != "" && grammar(s, false)
 }
 
 // validScope reports whether s is in scope grammar: "", or code grammar plus
 // ':' and '/', at most maxScope bytes.
 func validScope(s string) bool {
-	return false
+	return len(s) <= maxScope && grammar(s, true)
+}
+
+func grammar(s string, scope bool) bool {
+	for i := range len(s) {
+		switch c := s[i]; {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
+		case scope && (c == ':' || c == '/'):
+		default:
+			return false
+		}
+	}
+	return true
 }

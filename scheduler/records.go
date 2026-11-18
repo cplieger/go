@@ -48,30 +48,31 @@ const (
 // Record is one stored job: Job's fields with the payload as JSON, plus its
 // life.
 type Record struct {
+	QueuedAt, StartedAt, EndedAt time.Time
+
+	End *End
+	Key *Key // the start's idempotency slot, when it had one
+
 	ID      ID
 	Kind    Kind
 	Scope   string
-	Payload json.RawMessage
 	Trigger Trigger
 	Owner   string
+	State   string // StateQueued, StateRunning or StateEnded
+	Phase   Phase
 
-	State  string // StateQueued, StateRunning or StateEnded
-	Phase  Phase
-	Step   struct{ N, Of int }
-	Phases []PhaseAt // each distinct phase reached with its first time, at most 32
-	End    *End
+	Payload json.RawMessage
+	Phases  []PhaseAt // each distinct phase reached with its first time, at most 32
+	Lines   []Line    // a batch's, one per item
 
-	QueuedAt, StartedAt, EndedAt time.Time
-
-	Lines []Line // a batch's, one per item
-	Key   *Key   // the start's idempotency slot, when it had one
-	Rev   uint64
+	Step struct{ N, Of int }
+	Rev  uint64
 }
 
 // PhaseAt is the first time a job reached a phase.
 type PhaseAt struct {
-	Phase Phase
 	At    time.Time
+	Phase Phase
 }
 
 // LastEnd is a scheduled scope's last moving end.
@@ -89,7 +90,7 @@ type Scheduled struct {
 // Key is a start's idempotency slot: the credential, the row's name and the
 // key the client sent. Until is QueuedAt plus the row's window.
 type Key struct {
+	Until                time.Time
 	Credential, Row, Key string
 	Fingerprint          [32]byte
-	Until                time.Time
 }
