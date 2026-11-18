@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,9 @@ type OpsConfig struct {
 	Logger *slog.Logger
 	// Setting names the setting Addr came from ("OPS_LISTEN_ADDR") in errors.
 	Setting string
+	// HostsSetting names the setting Hosts came from ("ALLOWED_HOSTS") in the
+	// error for an entry no Host can match; blank is "OpsConfig.Hosts".
+	HostsSetting string
 	// Addr is read through ListenAddr; blank opens nothing.
 	Addr string
 	// Hosts, when it has a non-blank entry, are the host names or IP literals
@@ -80,7 +84,7 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	}
 	hosts, err := opsHostPolicy(c.Hosts, errs, c.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("httpserver: %s: %w", c.Setting, err)
+		return nil, fmt.Errorf("httpserver: %s: %w", cmp.Or(c.HostsSetting, "OpsConfig.Hosts"), err)
 	}
 	ln, err := Listen(ctx, ListenSetting{Name: c.Setting, Addr: addr})
 	if err != nil {
