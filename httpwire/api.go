@@ -329,7 +329,7 @@ func (a *API) clientFloor(next http.Handler) http.Handler {
 func (a *API) scoped(ep *Endpoint, next http.Handler) http.Handler {
 	public := ep.Access.Class == Public
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s := &scope{sealer: a.sealer, public: public}
+		s := &scope{api: a, ep: ep, public: public}
 		if !public {
 			s.credential, s.owner = a.o.credential(r), a.o.cursorOwner(r)
 			for _, got := range []struct{ value, name string }{{s.credential, "WithCredential"}, {s.owner, "WithCursorOwner"}} {

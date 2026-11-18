@@ -141,7 +141,7 @@ func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount boo
 	u.addIf(!ep.Keyed, "idempotency_key_unsupported")
 	u.addIf(write, writeUnion...)
 	if len(ep.PersonActions) > 0 {
-		u.add("person_required")
+		u.add(codePerson)
 		if guardCodes != nil && slices.ContainsFunc(ep.PersonActions, isInRowAction) {
 			u.add(guardCodes(Access{Class: Session, RecentAuth: true})...)
 		}

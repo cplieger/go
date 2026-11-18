@@ -163,9 +163,10 @@ func additionalData(fields ...string) []byte {
 }
 
 // scope is what the binder knows of a request's principal, carried in its
-// context for CredentialOf, CursorOwnerOf, Seal and Open.
+// context for CredentialOf, CursorOwnerOf, Seal, Open and RequirePerson.
 type scope struct {
-	sealer            *sealer
+	api               *API
+	ep                *Endpoint
 	credential, owner string
 	public            bool
 }
@@ -206,7 +207,7 @@ func Seal(ctx context.Context, purpose string, payload []byte) (string, error) {
 	case s.public:
 		return "", errPublicSeal
 	}
-	return s.sealer.seal(forward, payload, additionalData(handleDomain, purpose, s.credential))
+	return s.api.sealer.seal(forward, payload, additionalData(handleDomain, purpose, s.credential))
 }
 
 // Open answers the payload Seal sealed for purpose and this request's
@@ -216,7 +217,7 @@ func Open(ctx context.Context, purpose, sealed string, maxAge time.Duration) ([]
 	if s == nil || s.public {
 		return nil, ErrSealed
 	}
-	dir, payload, ok := s.sealer.open(sealed, additionalData(handleDomain, purpose, s.credential), maxAge)
+	dir, payload, ok := s.api.sealer.open(sealed, additionalData(handleDomain, purpose, s.credential), maxAge)
 	if !ok || dir != forward {
 		return nil, ErrSealed
 	}

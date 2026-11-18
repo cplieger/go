@@ -28,6 +28,7 @@ const (
 	codeIfMatchReq  = "if_match_required"
 	codeIfMatchBad  = "if_match_invalid"
 	codeCursor      = "cursor_invalid"
+	codePerson      = "person_required"
 	internalMessage = "internal error"
 )
 
@@ -51,7 +52,7 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	"idempotency_answer_too_large": {Status: http.StatusConflict, Remediation: "The request completed; its answer is too large to replay."},
 	"upgrade_required":             {Status: http.StatusBadRequest, Remediation: "Install the client release the message names.", NoEffect: true},
 	"held_limit":                   {Status: http.StatusTooManyRequests, Remediation: "Wait for an open request or stream to end, then retry.", NoEffect: true},
-	"person_required":              {Status: http.StatusForbidden, Remediation: "Do this from a signed-in session; an API key cannot."},
+	codePerson:                     {Status: http.StatusForbidden, Remediation: "Do this from a signed-in session; an API key cannot."},
 	"store_unavailable":            {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
 	codeAccounts:                   {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
 	"maintenance":                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
