@@ -2,6 +2,7 @@ package httpwire_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -471,6 +472,8 @@ func TestWhatIsKept(t *testing.T) {
 			return jobAnswer{}, &httpwire.Error{Code: "queue_full", Message: "the queue is full"}
 		case "lost":
 			return jobAnswer{}, &httpwire.Error{Code: "outcome_unknown", Message: "the queue did not answer"}
+		case "broken":
+			return jobAnswer{}, errors.New("the queue's file is locked")
 		}
 		return jobAnswer{ID: "done"}, nil
 	}
@@ -483,6 +486,7 @@ func TestWhatIsKept(t *testing.T) {
 	}{
 		{"full", "queue_full", 2},
 		{"lost", "outcome_unknown", 1},
+		{"broken", "internal_error", 1},
 		{"ok", "", 1},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -609,4 +613,35 @@ func TestOversizeAnswerIsACompletion(t *testing.T) {
 	if got := kf.outcomes(); len(got) != 2 || got[0] != want {
 		t.Errorf("observer saw %+v, want an oversize outcome per resend", got)
 	}
+}
+
+// MaxAnswer is the largest body kept, so an answer of exactly that size
+// replays and one a byte longer is kept without its body.
+func TestMaxAnswerIsTheLargestBodyKept(t *testing.T) {
+	kf := newKeyed(t, httpwire.IdempotencyOptions{MaxAnswer: kib}, nil)
+	padded(kf, 0)
+	frame := kf.quickJob(`"frame"`).Body.Len()
+	send := func(t *testing.T, key string, size int) (first, again *httptest.ResponseRecorder, runs int) {
+		t.Helper()
+		padded(kf, size-frame)
+		first = kf.quickJob(key)
+		if first.Code != http.StatusOK || first.Body.Len() != size {
+			t.Fatalf("first answer %d of %d bytes, want 200 of %d", first.Code, first.Body.Len(), size)
+		}
+		before := kf.runsOf("jobs.quick")
+		again = kf.quickJob(key)
+		return first, again, kf.runsOf("jobs.quick") - before
+	}
+	t.Run("exactly MaxAnswer bytes", func(t *testing.T) {
+		first, again, runs := send(t, `"at"`, kib)
+		if again.Code != http.StatusOK || again.Body.String() != first.Body.String() || runs != 0 {
+			t.Errorf("resend answered %d with %d bytes after %d runs, want the kept answer whole and no run", again.Code, again.Body.Len(), runs)
+		}
+	})
+	t.Run("a byte over MaxAnswer", func(t *testing.T) {
+		_, again, runs := send(t, `"over"`, kib+1)
+		if codeOf(t, again) != "idempotency_answer_too_large" || runs != 0 {
+			t.Errorf("resend answered %d %s after %d runs, want idempotency_answer_too_large and no run", again.Code, again.Body, runs)
+		}
+	})
 }

@@ -325,3 +325,34 @@ func TestKeyedRawJoinGetsTheRunsAnswer(t *testing.T) {
 		t.Errorf("directory after both = %v, want it empty", got)
 	}
 }
+
+// io.Writer's contract lets a handler reuse the slice it wrote once Write
+// returns, so the kept answer is the bytes sent, not the handler's buffer.
+func TestKeyedRawReplayIsTheBytesSent(t *testing.T) {
+	var runs int
+	buf := make([]byte, 6)
+	h := func(w http.ResponseWriter, r *http.Request) {
+		runs++
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write(append(buf[:0], "first "...))
+		_, _ = w.Write(append(buf[:0], "second"...))
+		copy(buf, "after ")
+	}
+	tb, bs, opts := spoolOptions(t, t.TempDir(), h, slog.New(&logSink{}))
+	api, err := httpwire.New(tb, bs, opts...)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	send := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, keyedRequest(http.MethodPost, "/api/import", "archive", `"k"`))
+		return rec
+	}
+	if first := send(); first.Body.String() != "first second" {
+		t.Fatalf("first answer %d %q, want %q", first.Code, first.Body, "first second")
+	}
+	if again := send(); again.Code != http.StatusOK || again.Body.String() != "first second" || runs != 1 {
+		t.Errorf("resend answered %d %q after %d runs, want the bytes first sent and one run", again.Code, again.Body, runs)
+	}
+}
