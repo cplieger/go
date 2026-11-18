@@ -88,6 +88,11 @@ type Observer struct {
 	// SlotWait is the time a job or a batch item waited for a named slot;
 	// it is never called for slot "".
 	SlotWait func(slot string, c Class, waited time.Duration)
+	// Moved is called when a count Live answers moved: a Progress, a queue
+	// position, a yield or its wake. It is called at most once a second
+	// while counts move, with one trailing call after the last move, from
+	// Run's goroutine, and never once Run has returned.
+	Moved func()
 }
 
 // Transition is a job queued, started, reaching a phase, or ended.
