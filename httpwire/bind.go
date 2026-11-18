@@ -104,6 +104,7 @@ type Binding struct {
 type decoded struct {
 	params, query, body any
 	list                *listCursor
+	key                 string
 	position            []byte
 	ifMatch             Tag
 	limit               int

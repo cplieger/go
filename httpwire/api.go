@@ -27,6 +27,7 @@ type API struct {
 	logger  *slog.Logger
 	schema  *Schema
 	sealer  *sealer
+	idem    *keyedRuns
 	version string
 	o       options
 }
@@ -54,10 +55,17 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	c.options()
 	schema := c.document()
 	s := c.sealer()
+	lim, problems := o.idem.limits()
+	for _, p := range problems {
+		c.fail("WithIdempotency: %s", p)
+	}
 	if len(c.errs) > 0 {
 		return nil, errors.Join(c.errs...)
 	}
-	a := &API{table: d, logger: o.logger, schema: schema, sealer: s, version: WireVersion(o.schema), o: o, mux: http.NewServeMux()}
+	a := &API{
+		table: d, logger: o.logger, schema: schema, sealer: s, version: WireVersion(o.schema), o: o, mux: http.NewServeMux(),
+		idem: newKeyedRuns(o.idem, lim, d),
+	}
 	for i := range d.Endpoints {
 		ep := &d.Endpoints[i]
 		a.mux.Handle(ep.Method+" "+ep.Path, &route{a.rowHandler(ep, bound[ep.Name])})
@@ -187,12 +195,7 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 			aw.position = a.o.feed.Position(r, ep.Changes)
 		}
 		if !own {
-			code, answer, err := b.run(r.Context(), d)
-			if err != nil {
-				a.writeError(aw, r, ep, err)
-				return
-			}
-			a.writeAnswer(aw, r, ep, code, answer)
+			a.runJSON(aw, r, ep, b, d)
 			return
 		}
 		switch {
@@ -205,6 +208,24 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 		b.handler.ServeHTTP(aw, r)
 		aw.finish()
 	})
+}
+
+// runJSON runs a JSON row's handler and writes its answer, once per
+// Idempotency-Key on a Keyed row.
+func (a *API) runJSON(w http.ResponseWriter, r *http.Request, ep *Endpoint, b *Binding, d *decoded) {
+	run := func(w http.ResponseWriter, r *http.Request) {
+		code, answer, err := b.run(r.Context(), d)
+		if err != nil {
+			a.writeError(w, r, ep, err)
+			return
+		}
+		a.writeAnswer(w, r, ep, code, answer)
+	}
+	if ep.Keyed {
+		a.keyed(w, r, ep, d, run)
+		return
+	}
+	run(w, r)
 }
 
 // wireCheck refuses a write built for another wire version; a request that
@@ -294,13 +315,17 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 	return d, b, nil
 }
 
-// decodeLast reads what follows the body: If-Match, then the cursor.
+// decodeLast reads what follows the body: If-Match, the Idempotency-Key,
+// then the cursor.
 func (a *API) decodeLast(r *http.Request, ep *Endpoint, d *decoded) *Error {
+	var e *Error
 	if ep.IfMatch {
-		var e *Error
 		if d.ifMatch, e = ifMatch(r); e != nil {
 			return e
 		}
+	}
+	if d.key, e = idempotencyKeyOf(r, ep); e != nil {
+		return e
 	}
 	if ep.List {
 		return a.openPage(r, ep, d)

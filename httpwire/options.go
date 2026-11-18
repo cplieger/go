@@ -24,6 +24,7 @@ type options struct {
 	logger      *slog.Logger
 	spoolDir    string
 	schema      []byte
+	idem        IdempotencyOptions
 	keyRateSet  bool
 	schemaSet   bool
 }

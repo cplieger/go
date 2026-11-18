@@ -31,6 +31,9 @@ type Error struct {
 	Message  string
 	// Reason is optional machine detail: the code grammar, at most 64 bytes.
 	Reason string
+	// remediation replaces the catalog's line where the binder completes
+	// it for one row.
+	remediation string
 	// Fields names the refused parts of the request; at most 100 are written.
 	Fields     []FieldError
 	RetryAfter time.Duration

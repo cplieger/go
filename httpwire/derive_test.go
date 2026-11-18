@@ -588,10 +588,36 @@ func TestDeriveRefusesKeyedAndHeldRows(t *testing.T) {
 		"result not keyed":     {edit("settings.save", func(e *httpwire.Endpoint) { e.Result = "jobs.list" }), []string{`row "settings.save"`, "Result"}},
 		"result names nothing": {edit("jobs.start", func(e *httpwire.Endpoint) { e.Result = "jobs.gone" }), []string{`row "jobs.start"`, `"jobs.gone"`}},
 		"result is a write":    {edit("jobs.start", func(e *httpwire.Endpoint) { e.Result = "settings.save" }), []string{`row "jobs.start"`, `"settings.save"`}},
-		"held raw":             {edit("archive.export", func(e *httpwire.Endpoint) { e.Held = true }), []string{`row "archive.export"`, "Held"}},
-		"held stream":          {edit("live.stream", func(e *httpwire.Endpoint) { e.Held = true }), []string{`row "live.stream"`, "Held"}},
+		"keyed read":           {edit("jobs.get", func(e *httpwire.Endpoint) { e.Keyed = true }), []string{`row "jobs.get"`, "Keyed", "read"}},
+		"keyed text one way": {edit("jobs.start", func(e *httpwire.Endpoint) { e.Request = reflect.TypeFor[oneWayBody]() }), []string{
+			`row "jobs.start"`, "httpwire_test.oneWayText", "MarshalText",
+		}},
+		"keyed JSON one way": {edit("jobs.start", func(e *httpwire.Endpoint) { e.Request = reflect.TypeFor[[]map[string]*oneWayJSON]() }), []string{
+			`row "jobs.start"`, "httpwire_test.oneWayJSON", "MarshalJSON",
+		}},
+		"keyed query one way": {edit("jobs.start", func(e *httpwire.Endpoint) { e.Query = reflect.TypeFor[oneWayQuery]() }), []string{
+			`row "jobs.start"`, "httpwire_test.oneWayText",
+		}},
+		"held raw":    {edit("archive.export", func(e *httpwire.Endpoint) { e.Held = true }), []string{`row "archive.export"`, "Held"}},
+		"held stream": {edit("live.stream", func(e *httpwire.Endpoint) { e.Held = true }), []string{`row "live.stream"`, "Held"}},
 	})
 }
+
+// oneWayText and oneWayJSON decode into a field the fingerprint's
+// json.Marshal cannot see.
+type (
+	oneWayText struct{ v string }
+	oneWayJSON struct{ v string }
+	oneWayBody struct {
+		V oneWayText `json:"v"`
+	}
+	oneWayQuery struct {
+		V oneWayText `json:"v"`
+	}
+)
+
+func (o *oneWayText) UnmarshalText(b []byte) error { o.v = string(b); return nil }
+func (o *oneWayJSON) UnmarshalJSON(b []byte) error { o.v = string(b); return nil }
 
 func TestDeriveAcceptsKeyedBounds(t *testing.T) {
 	for name, w := range map[string]time.Duration{"one minute": time.Minute, "seven days": 7 * 24 * time.Hour} {

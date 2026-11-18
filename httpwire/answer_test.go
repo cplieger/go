@@ -19,15 +19,16 @@ func TestJSONRowAnswersItsPrimaryStatus(t *testing.T) {
 	api := newCase(t).mustBuild(t)
 	for name, tc := range map[string]struct {
 		method, path, body string
+		header             []string
 		status             int
 		want               string
 	}{
-		"a 200 read":                  {http.MethodGet, "/api/jobs", "", http.StatusOK, "[{\"id\":\"a\"}]\n"},
-		"a declared 202":              {http.MethodPost, "/api/jobs", `{"kind":"x"}`, http.StatusAccepted, "{\"id\":\"new\"}\n"},
-		"a row with no Response, 204": {http.MethodPatch, "/api/settings", `{"name":"x"}`, http.StatusNoContent, ""},
+		"a 200 read":                  {http.MethodGet, "/api/jobs", "", nil, http.StatusOK, "[{\"id\":\"a\"}]\n"},
+		"a declared 202":              {http.MethodPost, "/api/jobs", `{"kind":"x"}`, []string{"Idempotency-Key", `"k"`}, http.StatusAccepted, "{\"id\":\"new\"}\n"},
+		"a row with no Response, 204": {http.MethodPatch, "/api/settings", `{"name":"x"}`, []string{"If-Match", fixtureIfMatch}, http.StatusNoContent, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rec := answer(api, request(tc.method, tc.path, tc.body, "If-Match", fixtureIfMatch))
+			rec := answer(api, request(tc.method, tc.path, tc.body, tc.header...))
 			if rec.Code != tc.status || rec.Body.String() != tc.want {
 				t.Errorf("answer = %d %q, want %d %q", rec.Code, rec.Body.String(), tc.status, tc.want)
 			}

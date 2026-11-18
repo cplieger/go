@@ -1,6 +1,8 @@
 package httpwire
 
 import (
+	"encoding"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -22,8 +24,8 @@ const (
 // The codes the union adds for a row's features.
 var (
 	keyedUnion = []string{
-		"idempotency_key_invalid", "idempotency_key_required", "idempotency_key_reused", "idempotency_in_flight",
-		"idempotency_store_full", "idempotency_answer_too_large", "held_limit",
+		codeKeyInvalid, codeKeyRequired, codeKeyReused, codeInFlight,
+		codeStoreFull, codeTooLarge, "held_limit",
 	}
 	ifMatchUnion  = []string{codeIfMatchReq, codeIfMatchBad, "stale_version"}
 	writeUnion    = []string{codeWire, "cross_origin_refused"}
@@ -296,6 +298,9 @@ func (c *tableChecker) row(r rowRef, names map[string]*Endpoint) {
 		c.fail("%s: %s", at, p)
 	}
 	c.keyed(ep, at, names)
+	if ep.Held && ep.Kind != JSON {
+		c.fail("%s: a Held row is a JSON row", at)
+	}
 	c.changes(ep, at)
 	c.events(ep, at)
 	c.personActions(ep, at)
@@ -560,13 +565,19 @@ func (c *tableChecker) keyed(ep *Endpoint, at string, names map[string]*Endpoint
 	if ep.MaxKept < 0 || ep.MaxKept != 0 && !ep.Keyed {
 		c.fail("%s: MaxKept %d is set only on a Keyed row, and never negative", at, ep.MaxKept)
 	}
-	if ep.Result != "" {
-		if r := names[ep.Result]; !ep.Keyed || r == nil || r.Method != http.MethodGet {
-			c.fail("%s: Result %q is set only on a Keyed row and names a GET row", at, ep.Result)
-		}
+	if r := names[ep.Result]; ep.Result != "" && (!ep.Keyed || r == nil || r.Method != http.MethodGet) {
+		c.fail("%s: Result %q is set only on a Keyed row and names a GET row", at, ep.Result)
 	}
-	if ep.Held && ep.Kind != JSON {
-		c.fail("%s: a Held row is a JSON row", at)
+	if ep.Keyed {
+		c.fingerprinted(ep, at)
+	}
+}
+
+func (c *tableChecker) fingerprinted(ep *Endpoint, at string) {
+	for _, part := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
+		if t, method := oneWay(part, map[reflect.Type]bool{}); t != nil {
+			c.fail("%s: a Keyed row's fingerprint marshals the decoded request, but %s decodes itself with no %s", at, t, method)
+		}
 	}
 }
 
@@ -579,8 +590,79 @@ func keyedProblem(ep *Endpoint) string {
 		return "a Stream, since a kept answer cannot hold an event stream"
 	case ep.ShownOnce:
 		return "ShownOnce, since a replay would show its secret again"
+	case !isWrite(ep.Method):
+		return "a read, since only a write needs a key"
 	}
 	return ""
+}
+
+var (
+	typeJSONUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
+	typeJSONMarshaler   = reflect.TypeFor[json.Marshaler]()
+	typeTextUnmarshaler = reflect.TypeFor[encoding.TextUnmarshaler]()
+	typeTextMarshaler   = reflect.TypeFor[encoding.TextMarshaler]()
+)
+
+// oneWay answers the first type reachable from t that decodes through its
+// own UnmarshalJSON or UnmarshalText with no marshaler to match, and the
+// method it lacks: the fingerprint's json.Marshal would not see what it
+// decoded, so two requests could share one fingerprint.
+func oneWay(t reflect.Type, seen map[reflect.Type]bool) (found reflect.Type, missing string) {
+	if t == nil || seen[t] {
+		return nil, ""
+	}
+	seen[t] = true
+	if t.Kind() == reflect.Pointer {
+		return oneWay(t.Elem(), seen)
+	}
+	if own, missing := ownCodec(t); own {
+		if missing == "" {
+			return nil, ""
+		}
+		return t, missing
+	}
+	switch t.Kind() {
+	case reflect.Slice, reflect.Array:
+		return oneWay(t.Elem(), seen)
+	case reflect.Map:
+		if k := t.Key(); k.Kind() != reflect.String && reflect.PointerTo(k).Implements(typeTextUnmarshaler) && !k.Implements(typeTextMarshaler) {
+			return k, "MarshalText on its value"
+		}
+		return oneWay(t.Elem(), seen)
+	case reflect.Struct:
+		return oneWayField(t, seen)
+	}
+	return nil, ""
+}
+
+// ownCodec reports whether t decodes through its own method, and the
+// marshaler it lacks, "" when it has one.
+func ownCodec(t reflect.Type) (own bool, missing string) {
+	p := reflect.PointerTo(t)
+	switch {
+	case p.Implements(typeJSONUnmarshaler):
+		if !p.Implements(typeJSONMarshaler) {
+			return true, "MarshalJSON"
+		}
+		return true, ""
+	case p.Implements(typeTextUnmarshaler):
+		if !p.Implements(typeTextMarshaler) && !p.Implements(typeJSONMarshaler) {
+			return true, "MarshalText"
+		}
+		return true, ""
+	}
+	return false, ""
+}
+
+func oneWayField(t reflect.Type, seen map[reflect.Type]bool) (found reflect.Type, missing string) {
+	for f := range t.Fields() {
+		if (f.IsExported() || f.Anonymous) && f.Tag.Get("json") != "-" {
+			if ot, m := oneWay(f.Type, seen); ot != nil {
+				return ot, m
+			}
+		}
+	}
+	return nil, ""
 }
 
 func (c *tableChecker) changes(ep *Endpoint, at string) {

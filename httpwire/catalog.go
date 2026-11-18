@@ -1,6 +1,7 @@
 package httpwire
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -29,33 +30,39 @@ const (
 	codeIfMatchBad  = "if_match_invalid"
 	codeCursor      = "cursor_invalid"
 	codePerson      = "person_required"
+	codeKeyInvalid  = "idempotency_key_invalid"
+	codeKeyRequired = "idempotency_key_required"
+	codeKeyReused   = "idempotency_key_reused"
+	codeInFlight    = "idempotency_in_flight"
+	codeStoreFull   = "idempotency_store_full"
+	codeTooLarge    = "idempotency_answer_too_large"
 	internalMessage = "internal error"
 )
 
 // libraryCodes are the codes httpwire's own layers answer, each with its
 // default remediation.
 var libraryCodes = map[string]httpserver.CodeSpec{
-	codeBadBody:                    {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
-	"bad_query":                    {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
-	"body_too_large":               {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
-	codeCursor:                     {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},
-	codeIfMatchReq:                 {Status: http.StatusPreconditionRequired, Remediation: "Read the row, then resend with If-Match set to the tag the read returned."},
-	codeIfMatchBad:                 {Status: http.StatusBadRequest, Remediation: "Send If-Match as the quoted tag a read of the row returned."},
-	"stale_version":                {Status: http.StatusPreconditionFailed, Remediation: "Read the row again, reapply the change, and resend with the new tag."},
-	codeWire:                       {Status: http.StatusConflict, Remediation: "Reload the client: the server's API changed since it loaded."},
-	"idempotency_key_invalid":      {Status: http.StatusBadRequest, Remediation: `Send the key as a quoted string: Idempotency-Key: "<key>".`},
-	"idempotency_key_required":     {Status: http.StatusBadRequest, Remediation: `Resend with an Idempotency-Key header: Idempotency-Key: "<key>".`},
-	"idempotency_key_unsupported":  {Status: http.StatusBadRequest, Remediation: "Resend without the Idempotency-Key header; this endpoint does not take one."},
-	"idempotency_key_reused":       {Status: http.StatusUnprocessableEntity, Remediation: "Use a new Idempotency-Key for a different request."},
-	"idempotency_in_flight":        {Status: http.StatusConflict, Remediation: "Wait, then resend with the same Idempotency-Key to get the first request's answer.", NoEffect: true},
-	"idempotency_store_full":       {Status: http.StatusServiceUnavailable, Remediation: "Wait for earlier keyed requests to expire, then retry.", NoEffect: true},
-	"idempotency_answer_too_large": {Status: http.StatusConflict, Remediation: "The request completed; its answer is too large to replay."},
-	"upgrade_required":             {Status: http.StatusBadRequest, Remediation: "Install the client release the message names.", NoEffect: true},
-	"held_limit":                   {Status: http.StatusTooManyRequests, Remediation: "Wait for an open request or stream to end, then retry.", NoEffect: true},
-	codePerson:                     {Status: http.StatusForbidden, Remediation: "Do this from a signed-in session; an API key cannot."},
-	"store_unavailable":            {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
-	codeAccounts:                   {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
-	"maintenance":                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
+	codeBadBody:                   {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
+	"bad_query":                   {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
+	"body_too_large":              {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
+	codeCursor:                    {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},
+	codeIfMatchReq:                {Status: http.StatusPreconditionRequired, Remediation: "Read the row, then resend with If-Match set to the tag the read returned."},
+	codeIfMatchBad:                {Status: http.StatusBadRequest, Remediation: "Send If-Match as the quoted tag a read of the row returned."},
+	"stale_version":               {Status: http.StatusPreconditionFailed, Remediation: "Read the row again, reapply the change, and resend with the new tag."},
+	codeWire:                      {Status: http.StatusConflict, Remediation: "Reload the client: the server's API changed since it loaded."},
+	codeKeyInvalid:                {Status: http.StatusBadRequest, Remediation: `Send the key as a quoted string: Idempotency-Key: "<key>".`},
+	codeKeyRequired:               {Status: http.StatusBadRequest, Remediation: `Resend with an Idempotency-Key header: Idempotency-Key: "<key>".`},
+	"idempotency_key_unsupported": {Status: http.StatusBadRequest, Remediation: "Resend without the Idempotency-Key header; this endpoint does not take one."},
+	codeKeyReused:                 {Status: http.StatusUnprocessableEntity, Remediation: "Use a new Idempotency-Key for a different request."},
+	codeInFlight:                  {Status: http.StatusConflict, Remediation: "Wait, then resend with the same Idempotency-Key to get the first request's answer.", NoEffect: true},
+	codeStoreFull:                 {Status: http.StatusServiceUnavailable, Remediation: "Wait for earlier keyed requests to expire, then retry.", NoEffect: true},
+	codeTooLarge:                  {Status: http.StatusConflict, Remediation: "The request completed; its result is no longer replayable."},
+	"upgrade_required":            {Status: http.StatusBadRequest, Remediation: "Install the client release the message names.", NoEffect: true},
+	"held_limit":                  {Status: http.StatusTooManyRequests, Remediation: "Wait for an open request or stream to end, then retry.", NoEffect: true},
+	codePerson:                    {Status: http.StatusForbidden, Remediation: "Do this from a signed-in session; an API key cannot."},
+	"store_unavailable":           {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
+	codeAccounts:                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
+	"maintenance":                 {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
 }
 
 // Catalog is the one code table of an app's listeners: every code any layer
@@ -211,7 +218,7 @@ func (c *Catalog) envelope(r *http.Request, e *Error) (env Envelope, status int)
 		spec, _ = c.Lookup(codeInternal)
 		e = &Error{Code: codeInternal}
 	}
-	env = Envelope{Code: e.Code, Remediation: spec.Remediation}
+	env = Envelope{Code: e.Code, Remediation: cmp.Or(e.remediation, spec.Remediation)}
 	if e.Code == codeInternal {
 		env.Message = internalMessage
 		return env, spec.Status
