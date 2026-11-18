@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// Start admits j, writing its record before it is queued. A queued job of the
-// same kind and scope, a queued job that covers it, or a running one inside
-// the kind's Fresh window answers it instead (Joined). It answers *RecentError
-// under Fresh after a recent end, ErrQueueFull past a queue bound (its record
-// ended skipped, queue_full), ErrStoreUnavailable when the record cannot be
-// written, ErrBatchSize for a batch whose item count is outside 1 to
-// MaxItems, ErrUnknownKind and ErrScope. A batch's record holds one queued
-// line per item.
+// Start admits j, writing its record (a batch's with one queued line per item)
+// before it is queued. A queued job of its kind and scope or one covering it,
+// or a running one of its scope that started inside the kind's Fresh window,
+// answers it instead (Joined); a running one answers a timer request. It
+// answers *RecentError under Fresh after a recent end, ErrQueueFull past a
+// queue bound (the record ended skipped, queue_full), ErrStoreUnavailable when
+// the record cannot be written, ErrBatchSize for an item count outside 1 to
+// MaxItems, ErrUnknownKind and ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -46,6 +46,10 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 			return Started{}, ctx.Err()
 		}
 		e.mu.Lock()
+	}
+	if s, ok, err := e.answerLocked(spec, &en.j); ok || err != nil {
+		e.mu.Unlock()
+		return s, err
 	}
 	if e.fullLocked(&en.j) {
 		e.mu.Unlock()
@@ -169,6 +173,33 @@ func (e *Executor[P]) joinLocked(j *Job[P]) (s Started, admitting <-chan struct{
 // waiting reports whether the job is admitting or queued.
 func (en *job[P]) waiting() bool { return en.state == stateAdmitting || en.state == stateQueued }
 
+// answerLocked answers j from a running job of its kind and scope that no
+// cancel has stopped (rule 3):
+// one that started inside the kind's Fresh window joins it, and so does a
+// timer request, which never queues a follow-up behind it. Otherwise a Fresh
+// kind refuses j with *RecentError inside the window after its scope's last
+// moving end (rule 4). ok false and a nil error leave j to be queued.
+func (e *Executor[P]) answerLocked(spec *KindSpec[P], j *Job[P]) (s Started, ok bool, err error) {
+	var run *job[P]
+	for _, q := range e.live {
+		if q.state == stateRunning && !q.stopped && q.j.Kind == j.Kind && q.j.Scope == j.Scope &&
+			(run == nil || q.startedAt.After(run.startedAt)) {
+			run = q
+		}
+	}
+	now := time.Now()
+	if run != nil {
+		if j.Trigger == TriggerSchedule || (spec.Fresh != nil && now.Sub(run.startedAt) < spec.Fresh(j.Scope)) {
+			return Started{Job: run.j.ID, Joined: true}, true, nil
+		}
+		return Started{}, false, nil
+	}
+	if until, held := e.recent[ScheduledScope{Kind: j.Kind, Scope: j.Scope}]; held && now.Before(until) {
+		return Started{}, false, &RecentError{Until: until}
+	}
+	return Started{}, false, nil
+}
+
 // fullLocked reports whether a new waiting job of j's owner is past a bound,
 // or the executor has stopped.
 func (e *Executor[P]) fullLocked(j *Job[P]) bool {
@@ -201,8 +232,12 @@ func (e *Executor[P]) refuse(ctx context.Context, en *job[P]) error {
 	return ErrQueueFull
 }
 
-// ended writes the end of a job that never ran and tells the Observer.
+// ended writes the end of a job that never ran, takes it out of the live
+// jobs and tells the Observer.
 func (e *Executor[P]) ended(ctx context.Context, en *job[P], end End) {
 	stored, at := e.end(ctx, en, end)
+	e.mu.Lock()
+	e.removeLocked(en)
+	e.mu.Unlock()
 	e.emit(en, &Transition{Phase: en.rec.Phase, Result: stored.Result, At: at})
 }

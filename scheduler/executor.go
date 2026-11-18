@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -20,7 +21,9 @@ var errStub = errors.New("scheduler: not built")
 type KindSpec[P any] struct {
 	// Fresh is optional: a new request for the scope joins a run that started
 	// less than Fresh(scope) ago, and is refused with *RecentError after a
-	// run that ended less than that ago.
+	// run that ended less than that ago, cancelled and interrupted runs
+	// aside. The executor calls it holding its lock, so it must not call the
+	// executor.
 	Fresh func(scope string) time.Duration
 	// Covers is optional: when a job of this kind starts, each queued or
 	// yielded job it covers ends without running its own work. The executor
@@ -113,12 +116,15 @@ const (
 // Executor runs an app's jobs: its timers, its slots and its records. It is
 // safe for concurrent use.
 type Executor[P any] struct {
-	records  Records
-	log      *slog.Logger
-	kinds    map[Kind]*KindSpec[P]
-	slots    map[string]*slot
-	owners   map[string]int // waiting jobs per credential
-	ready    chan struct{}  // closed by Run
+	records Records
+	log     *slog.Logger
+	kinds   map[Kind]*KindSpec[P]
+	slots   map[string]*slot
+	owners  map[string]int // waiting jobs per credential
+	// recent is when each Fresh kind's scope may run again after its last
+	// moving end (rule 4); an entry goes once its time has passed.
+	recent   map[ScheduledScope]time.Time
+	ready    chan struct{} // closed by Run
 	observer Observer
 	live     []*job[P] // admitting, queued and running jobs, in admission order
 	wg       sync.WaitGroup
@@ -149,6 +155,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		kinds:       map[Kind]*KindSpec[P]{},
 		slots:       map[string]*slot{},
 		owners:      map[string]int{},
+		recent:      map[ScheduledScope]time.Time{},
 		ready:       make(chan struct{}),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
@@ -218,9 +225,10 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 	for _, en := range slices.Clone(e.live) {
 		switch en.state {
 		case stateQueued:
-			e.dequeueLocked(en)
+			e.dequeueLocked(en, End{Result: ResultInterrupted})
+			e.removeLocked(en)
 		case stateRunning:
-			e.stopLocked(en)
+			e.stopLocked(en, nil)
 		case stateAdmitting, stateEnded:
 		}
 	}
@@ -238,18 +246,22 @@ const (
 	stateEnded
 )
 
-// job is one admitted job. state, cancel, stopped, committing, the counts and
-// w's ownership are guarded by the executor's mu; rec, claimed and
-// factsDropped are guarded by recMu once the job runs, which also orders its
-// record writes.
+// job is one admitted job. state, cancel, startedAt, stopEnd, stopped,
+// returned, committing, the counts and w's ownership are guarded by the
+// executor's mu; rec, claimed and factsDropped are guarded by recMu once the
+// job runs, which also orders its record writes.
 type job[P any] struct {
-	spec        *KindSpec[P]
-	slot        *slot
-	w           *waiter            // its take of a named slot; nil when it waits for none
-	admitted    chan struct{}      // closed once its record is written or refused
-	gone        chan struct{}      // closed when it leaves the queue without running
-	cancel      context.CancelFunc // set when it runs
-	claimed     []bool             // a batch's lines an Item call has taken
+	spec      *KindSpec[P]
+	slot      *slot
+	w         *waiter            // its take of a named slot; nil when it waits for none
+	admitted  chan struct{}      // closed once its record is written or refused
+	gone      chan struct{}      // closed when it leaves the queue without running
+	cancel    context.CancelFunc // set when it runs
+	startedAt time.Time          // when it took its slot
+	// stopEnd is the end a cancel or a covering start gave it, written in
+	// place of its Run's; nil when nothing stopped it or a shutdown did.
+	stopEnd     *End
+	claimed     []bool // a batch's lines an Item call has taken
 	relay       relay
 	j           Job[P]
 	rec         Record
@@ -258,15 +270,18 @@ type job[P any] struct {
 	class       Class
 	state       jobState
 	stopped     bool // its ctx was cancelled, so Commit answers false
+	returned    bool // its Run returned, so a cancel has nothing left to stop
 	committing  bool // Commit answered true, so Cancel answers ErrCommitting
 	// factsDropped is a line's facts dropped, so the end carries
 	// facts_too_large.
 	factsDropped bool
 }
 
-// stopLocked cancels a running job's ctx; it then commits nothing.
-func (e *Executor[P]) stopLocked(en *job[P]) {
+// stopLocked cancels a running job's ctx; it then commits nothing and ends
+// with end, or with what its Run returns when end is nil.
+func (e *Executor[P]) stopLocked(en *job[P], end *End) {
 	en.stopped = true
+	en.stopEnd = end
 	en.cancel()
 }
 
@@ -319,30 +334,64 @@ func (e *Executor[P]) begin(en *job[P]) {
 	}
 	e.unwaitLocked(en)
 	en.state = stateRunning
+	now := time.Now()
+	en.startedAt = now
 	ctx, cancel := context.WithCancel(context.Background())
 	en.cancel = cancel
+	covered := e.coverLocked(en)
 	e.mu.Unlock()
 	defer cancel()
 
 	if en.w != nil && e.observer.SlotWait != nil {
 		e.observer.SlotWait(en.spec.Slot, en.class, en.slot.waited(en.w))
 	}
-	now := time.Now()
 	en.recMu.Lock()
 	en.rec.State, en.rec.StartedAt, en.rec.Phase = StateRunning, now, PhaseStarted
 	e.put(en)
 	e.post(en, &Transition{Phase: PhaseStarted, At: now})
 	en.recMu.Unlock()
 	e.flush(en)
+	for _, q := range covered {
+		e.ended(context.Background(), q, *q.stopEnd)
+	}
 	e.finish(en, e.guarded(ctx, en))
 }
 
+// coverLocked takes out of the queue each queued job the starting job's kind
+// covers, each to end skipped as covered by it, and answers them.
+func (e *Executor[P]) coverLocked(en *job[P]) []*job[P] {
+	if en.spec.Covers == nil {
+		return nil
+	}
+	var covered []*job[P]
+	for _, q := range e.live {
+		if q.state == stateQueued && en.spec.Covers(en.j, q.j) {
+			covered = append(covered, q)
+		}
+	}
+	end := End{Result: ResultSkipped, Reasons: []Reason{{Code: ReasonCovered, Subject: string(en.j.ID)}}}
+	for _, q := range covered {
+		e.dequeueLocked(q, end)
+	}
+	return covered
+}
+
 // finish writes a run job's end, frees its slot and reports the stored end.
+// A job a cancel stopped ends as the cancel said, whatever its Run returned.
 func (e *Executor[P]) finish(en *job[P], end End) {
+	e.mu.Lock()
+	en.returned = true
+	if en.stopEnd != nil {
+		end = *en.stopEnd
+	}
+	e.mu.Unlock()
 	stored, at := e.end(context.Background(), en, e.bounded(en, end))
 	e.mu.Lock()
 	en.state = stateEnded
 	e.removeLocked(en)
+	if en.spec.Fresh != nil && moving(stored.Result) {
+		e.noteRecentLocked(en, at)
+	}
 	e.mu.Unlock()
 	if en.w != nil {
 		en.slot.drop(en.w)
@@ -379,12 +428,27 @@ func (e *Executor[P]) put(en *job[P]) {
 	}
 }
 
-// dequeueLocked takes a queued job out of the queue without running it; its
-// record is the caller's to end.
-func (e *Executor[P]) dequeueLocked(en *job[P]) {
+// moving reports whether the end of a job that started moves its scope's
+// last end: a cancel or a cut-short run did not finish its work.
+func moving(r Result) bool { return r != ResultCancelled && r != ResultInterrupted }
+
+// noteRecentLocked opens the Fresh window of en's scope from its end at at,
+// and drops the windows that have closed.
+func (e *Executor[P]) noteRecentLocked(en *job[P], at time.Time) {
+	now := time.Now()
+	maps.DeleteFunc(e.recent, func(_ ScheduledScope, until time.Time) bool { return !until.After(now) })
+	if until := at.Add(en.spec.Fresh(en.j.Scope)); until.After(now) {
+		e.recent[ScheduledScope{Kind: en.j.Kind, Scope: en.j.Scope}] = until
+	}
+}
+
+// dequeueLocked takes a queued job out of the queue without running it, to
+// end with end. It stays live, so a repeat Cancel finds it, until ended has
+// written that end.
+func (e *Executor[P]) dequeueLocked(en *job[P], end End) {
 	e.unwaitLocked(en)
 	en.state = stateEnded
-	e.removeLocked(en)
+	en.stopEnd = &end
 	close(en.gone)
 	if en.w != nil {
 		en.slot.drop(en.w)
