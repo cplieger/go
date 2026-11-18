@@ -324,3 +324,49 @@ func TestFreshLogsOncePerTransition(t *testing.T) {
 		}
 	})
 }
+
+func TestPassedDeadlineClearsOnScheduleChange(t *testing.T) {
+	cases := []struct {
+		change func(r *rig) error
+		name   string
+	}{
+		{name: "Unschedule", change: func(r *rig) error { r.ex.Unschedule("scan", "source:a"); return nil }},
+		{name: "a TriggerOnly Schedule", change: func(r *rig) error { return r.ex.Schedule("scan", "source:a", scheduler.TriggerOnly()) }},
+		{name: "a changed cadence", change: func(r *rig) error { return r.ex.Schedule("scan", "source:a", scheduler.Scheduled(2*time.Hour)) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				lines := &logLines{}
+				hold := newLatch()
+				scan := spec("scan", "")
+				scan.Run = func(ctx context.Context, _ *scheduler.Run[payload]) scheduler.End {
+					hold.wait(ctx)
+					return scheduler.End{Result: scheduler.ResultOK}
+				}
+				r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{scan}, Logger: slog.New(lines)})
+				t0 := time.Now()
+				r.schedule(t, "scan", "source:a", scheduler.Scheduled(time.Hour))
+				sleepUntil(t0.Add(3*time.Hour + time.Second))
+				if got := deadlineLines(lines, slog.LevelError, "scan", "source:a"); len(got) != 1 {
+					t.Fatalf("ERROR lines once the deadline passed = %q, want one", got)
+				}
+				if err := c.change(r); err != nil {
+					t.Fatalf("%s = %v, want nil", c.name, err)
+				}
+				synctest.Wait()
+				if !r.ex.Fresh("scan", "source:a").Healthy() {
+					t.Errorf("Fresh unhealthy after %s, want healthy", c.name)
+				}
+				if got := deadlineLines(lines, slog.LevelInfo, "scan", "source:a"); len(got) != 1 {
+					t.Errorf("INFO lines naming the deadline after %s = %q, want one: the passed deadline cleared", c.name, got)
+				}
+				sleepUntil(time.Now().Add(time.Minute))
+				if got := deadlineLines(lines, slog.LevelError, "scan", "source:a"); len(got) != 1 {
+					t.Errorf("ERROR lines after %s = %q, want still one", c.name, got)
+				}
+				hold.open()
+			})
+		})
+	}
+}
