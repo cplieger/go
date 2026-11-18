@@ -309,6 +309,44 @@ func TestCoveringEndsCoveredSkipped(t *testing.T) {
 	})
 }
 
+// A request whose record is still being written when a job covering it
+// starts ends covered once the write returns, and never runs.
+func TestCoverEndsJobBeingAdmitted(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := &heldRecords{Store: memrecords.New(), entered: make(chan struct{}), hold: make(chan struct{})}
+		refresh := spec("refresh", "net")
+		refresh.Covers = forgeCovers
+		r := (&rig{store: g.Store, log: &runLog{}}).open(t, scheduler.Config[payload]{
+			Kinds:   []scheduler.KindSpec[payload]{refresh},
+			Records: g,
+		})
+		mine := startAsync(t.Context(), r.ex, api("refresh", "repo:a/b", "alice", payload{Conn: 3}))
+		<-g.entered
+		gate := make(chan struct{})
+		conn := r.start(t, api("refresh", "connection:3", "bob", payload{Conn: 3, Gate: gate}))
+		synctest.Wait()
+		if !r.log.ran(conn.Job) {
+			t.Fatal("the covering refresh did not start while the covered record was being written")
+		}
+		close(g.hold)
+		a := <-mine
+		synctest.Wait()
+		if a.err != nil || a.s.Job == "" || a.s.Joined {
+			t.Fatalf("covered Start = (%+v, %v), want its own job with a nil error", a.s, a.err)
+		}
+		r.wantEnd(t, a.s.Job, scheduler.ResultSkipped, scheduler.Reason{Code: scheduler.ReasonCovered, Subject: string(conn.Job)})
+		if rec := r.rec(t, a.s.Job); !rec.StartedAt.IsZero() || r.log.ran(a.s.Job) {
+			t.Errorf("covered record = %+v, want it never started", rec)
+		}
+		close(gate)
+		synctest.Wait()
+		r.wantEnd(t, conn.Job, scheduler.ResultOK)
+		if r.log.ran(a.s.Job) {
+			t.Error("the covered refresh ran after the covering one, want it never run")
+		}
+	})
+}
+
 func TestAdmissionWritesRecordFirst(t *testing.T) {
 	errDisk := errors.New("disk full")
 

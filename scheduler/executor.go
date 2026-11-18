@@ -24,11 +24,11 @@ type KindSpec[P any] struct {
 	// executor.
 	Fresh func(scope string) time.Duration
 	// Covers is optional: when a job of this kind starts, each queued or
-	// yielded job it covers ends without running its own work, and its
-	// moving end moves the deadline of each scheduled scope whose timer job
-	// it covers. For that deadline it is asked with started's Kind and Scope
-	// only. The executor calls it holding its lock, so it must not call the
-	// executor.
+	// yielded job it covers, its record being written included, ends without
+	// running its own work, and its moving end moves the deadline of each
+	// scheduled scope whose timer job it covers. For that deadline it is
+	// asked with started's Kind and Scope only. The executor calls it holding
+	// its lock, so it must not call the executor.
 	Covers func(started, other Job[P]) bool
 	// Items is a batch kind's item count, read from the payload at Start;
 	// required with MaxItems > 0 and refused without it.
@@ -434,20 +434,25 @@ func (e *Executor[P]) begin(en *job[P]) {
 }
 
 // coverLocked takes out of the queue each queued job the starting job's kind
-// covers, each to end skipped as covered by it, and answers them; a yielded
+// covers, each to end skipped as covered by it, and answers them; one whose
+// record is being written gets that end for admit to write, and a yielded
 // job it covers has its wait ended.
 func (e *Executor[P]) coverLocked(en *job[P]) []*job[P] {
 	if en.spec.Covers == nil {
 		return nil
 	}
 	e.coverYieldedLocked(en)
+	end := End{Result: ResultSkipped, Reasons: []Reason{{Code: ReasonCovered, Subject: string(en.j.ID)}}}
 	var covered []*job[P]
 	for _, q := range e.live {
-		if q.state == stateQueued && en.spec.Covers(en.j, q.j) {
+		switch {
+		case q.state == stateQueued && en.spec.Covers(en.j, q.j):
 			covered = append(covered, q)
+		case q.state == stateAdmitting && q.stopEnd == nil && en.spec.Covers(en.j, q.j):
+			stop := end
+			q.stopEnd = &stop
 		}
 	}
-	end := End{Result: ResultSkipped, Reasons: []Reason{{Code: ReasonCovered, Subject: string(en.j.ID)}}}
 	for _, q := range covered {
 		e.dequeueLocked(q, end)
 	}

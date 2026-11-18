@@ -38,7 +38,7 @@ Facts that are not a JSON object, or are above 2 KiB, are dropped: the end gains
 4. A kind with `Fresh` whose scope's last job ended less than `Fresh(scope)` ago refuses the request with `*RecentError`, whose `Until` is the window's end (`errors.Is(err, ErrRecent)` holds). Cancelled and interrupted jobs do not count. The window also opens from the ends `Records.LastEnds` answers at start and at `resume`, so a restart does not reopen it.
 5. Otherwise the job is queued. Past `MaxQueued` waiting jobs (default 16, 1 to 256), or `MaxQueuedPerOwner` of one credential's (default 4), the request is refused `ErrQueueFull` and its written record ends `skipped` with reason `queue_full`. A scheduled job counts against the total only.
 
-When a job starts, every queued job it covers ends `skipped` with reason `covered`, whose `Subject` is the covering job's id. Such a job never started, so it moves no deadline.
+When a job starts, every queued job it covers ends `skipped` with reason `covered`, whose `Subject` is the covering job's id; so does one whose record is still being written, once the write returns. Such a job never started, so it moves no deadline.
 
 ## Classes and the slot
 
