@@ -20,7 +20,7 @@ type Bin struct {
 // NewSeriesFrame builds a SeriesFrame of d's series along x, instants in Unix
 // milliseconds or plain numbers, strictly increasing and finite. Each series
 // holds a value per x and a key no other series has. It takes WithDomain,
-// WithOpen, WithResets, WithRefs and WithNotes.
+// WithOpen, WithResets, WithRefs, WithNotes and WithRead.
 func NewSeriesFrame(d measure.Declared, x []float64, series []Series, opts ...Option) (SeriesFrame, error) {
 	decl, o, err := begin(d, opts, optMarks|optDomain|optOpen|optResets, seriesCharge(len(series), len(x)),
 		func() error { return checkOrder("x", x, false) })
@@ -49,7 +49,8 @@ func NewSeriesFrame(d measure.Declared, x []float64, series []Series, opts ...Op
 // NewBinsFrame builds a BinsFrame of d's series over bins along axis. Each
 // bin's From is below its To, the Froms strictly increase and the Tos never
 // decrease. Each series holds a value per bin and a key no other series has.
-// It takes WithDomain, WithOpen, WithResets, WithRefs and WithNotes.
+// It takes WithDomain, WithOpen, WithResets, WithRefs, WithNotes and
+// WithRead.
 func NewBinsFrame(d measure.Declared, axis FrameAxis, bins []Bin, series []Series, opts ...Option) (BinsFrame, error) {
 	if axis != AxisTime && axis != AxisValue {
 		return BinsFrame{}, refusef(RuleShape, "axis", "must be %q or %q, not %q", AxisTime, AxisValue, axis)

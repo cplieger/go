@@ -21,8 +21,8 @@ type TreeGroup struct {
 }
 
 // NewTreeFrame builds a one-level TreeFrame of d's parts, in the order to
-// lay them out. Keys are unique and never empty. It takes WithRefs and
-// WithNotes.
+// lay them out. Keys are unique and never empty. It takes WithRefs,
+// WithNotes and WithRead.
 func NewTreeFrame(d measure.Declared, parts []TreePart, opts ...Option) (TreeFrame, error) {
 	decl, o, err := begin(d, opts, optMarks, len(parts))
 	if err != nil {
@@ -40,7 +40,8 @@ func NewTreeFrame(d measure.Declared, parts []TreePart, opts ...Option) (TreeFra
 
 // NewGroupedTreeFrame builds a two-level TreeFrame of d's groups and their
 // parts, in the order to lay them out. Each group holds a part at least, and
-// siblings' keys are unique and never empty. It takes WithRefs and WithNotes.
+// siblings' keys are unique and never empty. It takes WithRefs, WithNotes
+// and WithRead.
 func NewGroupedTreeFrame(d measure.Declared, groups []TreeGroup, opts ...Option) (TreeFrame, error) {
 	charge := len(groups)
 	for _, g := range groups {

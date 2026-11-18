@@ -32,7 +32,7 @@ type FlowLink struct {
 // two links join the same nodes at the same stage, and without stages the
 // links form no loop, since a node in a loop has no column. Each stage a
 // link names is listed and not the last, and with three stages or more every
-// link names one. It takes WithRefs and WithNotes.
+// link names one. It takes WithRefs, WithNotes and WithRead.
 func NewFlowFrame(d measure.Declared, f Flow, opts ...Option) (FlowFrame, error) {
 	decl, o, err := begin(d, opts, optMarks, len(f.Links)+len(f.Nodes), func() error { return checkFlowNames(f) })
 	if err != nil {

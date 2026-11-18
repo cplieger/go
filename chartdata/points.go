@@ -34,7 +34,7 @@ type Grid struct {
 // sized on m.R when it is not nil; the frame takes its name from m.Y. Each
 // group's names, x, y and r are equally long, every name is unique across the
 // frame and never empty, every group has r exactly when m.R is set, and an r
-// is 0 or more. It takes WithRefs and WithNotes.
+// is 0 or more. It takes WithRefs, WithNotes and WithRead.
 func NewPointsFrame(m Measures, series []Points, opts ...Option) (PointsFrame, error) {
 	charge := 0
 	for i := range series {
@@ -124,8 +124,8 @@ func buildPoints(field string, s *Points, sized bool) (FramePoints, error) {
 // NewGridFrame builds a GridFrame of d's values over g. Each axis has exactly
 // one of names, unique and never empty, or two or more finite, strictly
 // increasing edges; g.Values holds a row per y entry and each row a value per
-// x entry. Its y holds at most MaxRows entries. It takes WithRefs and
-// WithNotes.
+// x entry. Its y holds at most MaxRows entries. It takes WithRefs,
+// WithNotes and WithRead.
 func NewGridFrame(d measure.Declared, g *Grid, opts ...Option) (GridFrame, error) {
 	if g == nil {
 		return GridFrame{}, refuse(RuleEmpty, "grid", "is nil")

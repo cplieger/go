@@ -12,8 +12,8 @@ import (
 // time.LoadLocation resolves and a browser's Intl.DateTimeFormat takes; an
 // app whose image has no zoneinfo imports time/tzdata. start must be the
 // first instant of a day in zone, whatever start's own location. The frame
-// holds at most MaxCalendarDays days. It takes WithOpen, WithRefs and
-// WithNotes.
+// holds at most MaxCalendarDays days. It takes WithOpen, WithRefs,
+// WithNotes and WithRead.
 func NewCalendarFrame(d measure.Declared, zone string, start time.Time, values []float64, opts ...Option) (CalendarFrame, error) {
 	if err := checkMost("values", len(values), MaxCalendarDays, "days"); err != nil {
 		return CalendarFrame{}, err

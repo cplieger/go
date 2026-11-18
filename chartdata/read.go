@@ -9,10 +9,9 @@ import (
 // MaxReasonBytes is the longest reason a read carries.
 const MaxReasonBytes = 64
 
-// Count is an API row's figure for a count read elsewhere, built with
-// [CountOf]: the last whole read's value and time, and how the latest read
-// went. Value and AsOf are both null before the first whole read, and both
-// set after it.
+// Count is an API row's figure for a count read elsewhere: the last whole
+// read's value and time, and how the latest read went. Value and AsOf are
+// both null before the first whole read, and both set after it.
 type Count struct {
 	// Value is the last whole read's value, never a later cut read's.
 	Value *float64          `json:"value"`
@@ -56,8 +55,8 @@ func CountOf(last *float64, r measure.Read) (Count, error) {
 }
 
 // Read is how a read went, on the wire: beside a figure that is not a
-// [Count], such as a list's total, built with [ReadOf], and as a frame's
-// read through [WithRead] when the read was not whole.
+// count, such as a list's total, and as a frame's read when the read was not
+// whole.
 type Read struct {
 	State measure.ReadState `json:"state"`
 	// AsOf is the last whole read's instant, an RFC 3339 string; null
@@ -81,9 +80,12 @@ func ReadOf(r measure.Read) (Read, error) {
 	return Read{State: state, AsOf: asOf, Reason: r.Reason}, nil
 }
 
-// WithRead marks the frame as built from r, refused by [RuleRead] as
-// [CountOf] refuses a read. A complete r adds nothing, so a frame built from
-// a whole read encodes as one built with no option. Every frame takes it.
+// WithRead marks the frame as built from r. It is refused by [RuleRead] for
+// a state outside the six, a complete read with a reason, a reason past
+// [MaxReasonBytes] or outside [a-z0-9_], and an AsOf time.Time's JSON cannot
+// write. Any complete r adds nothing, one with no AsOf included, so a frame
+// built from a whole read encodes as one built with no option. Every frame
+// takes it.
 func WithRead(r measure.Read) Option {
 	return func(o *options) { o.read, o.used = &r, o.used|optRead }
 }

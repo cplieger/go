@@ -22,7 +22,7 @@ type Boxes struct {
 // NewCategoriesFrame builds a CategoriesFrame of d's series over names,
 // unique and never empty. Each series holds a value per name and a key no
 // other series has. It holds at most MaxRows names and MaxRows series, and
-// takes WithRefs and WithNotes.
+// takes WithRefs, WithNotes and WithRead.
 func NewCategoriesFrame(d measure.Declared, names []string, series []Series, opts ...Option) (CategoriesFrame, error) {
 	if err := checkMost("names", len(names), MaxRows, "names"); err != nil {
 		return CategoriesFrame{}, err
@@ -55,7 +55,8 @@ func NewCategoriesFrame(d measure.Declared, names []string, series []Series, opt
 // and never empty. Each category of each series has low ≤ q1 ≤ median ≤ q3 ≤
 // high, or all five NaN and no outliers, and its outliers are finite and lie
 // below low or above high. It holds at most MaxRows names and MaxSubRows
-// boxes' rows (names times series), and takes WithRefs and WithNotes.
+// boxes' rows (names times series), and takes WithRefs, WithNotes and
+// WithRead.
 func NewBoxesFrame(d measure.Declared, names []string, series []Boxes, opts ...Option) (BoxesFrame, error) {
 	if err := checkMost("names", len(names), MaxRows, "names"); err != nil {
 		return BoxesFrame{}, err

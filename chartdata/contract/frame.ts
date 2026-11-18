@@ -143,10 +143,9 @@ export interface CategoriesFrame {
 }
 
 /**
- * Count is an API row's figure for a count read elsewhere, built with
- * [CountOf]: the last whole read's value and time, and how the latest read
- * went. Value and AsOf are both null before the first whole read, and both
- * set after it.
+ * Count is an API row's figure for a count read elsewhere: the last whole
+ * read's value and time, and how the latest read went. Value and AsOf are
+ * both null before the first whole read, and both set after it.
  */
 export interface Count {
   /** Value is the last whole read's value, never a later cut read's. */
@@ -354,8 +353,8 @@ export interface PointsFrame {
 
 /**
  * Read is how a read went, on the wire: beside a figure that is not a
- * [Count], such as a list's total, built with [ReadOf], and as a frame's
- * read through [WithRead] when the read was not whole.
+ * count, such as a list's total, and as a frame's read when the read was not
+ * whole.
  */
 export interface Read {
   state: ReadState;
