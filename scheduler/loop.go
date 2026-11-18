@@ -6,16 +6,6 @@ import (
 	"time"
 )
 
-// Job is one unit of scheduled work. It receives the loop's context, which is
-// cancelled when RunLoop is asked to stop; a job that must run to completion
-// past a shutdown signal should derive its own context (context.WithoutCancel)
-// internally. A Job reports its outcome through its own closure (setting a
-// health marker, logging); RunLoop does not inspect a return value.
-//
-// A panic in a Job is NOT recovered: it unwinds through RunLoop and terminates
-// the process, so record a cycle's outcome before the work that can panic.
-type Job func(ctx context.Context)
-
 // LoopOptions configures RunLoop. Interval must be positive; Jitter,
 // FirstDelay and FireOnStart are optional.
 type LoopOptions struct {
@@ -42,14 +32,15 @@ type LoopOptions struct {
 	FireOnStart bool
 }
 
-// RunLoop runs job on a schedule until ctx is cancelled. The job runs
+// RunLoop runs job on a schedule until ctx is cancelled, passing it ctx; job
+// reports its own outcome, and a panic in it is not recovered. The job runs
 // sequentially, so two invocations never overlap in-process; guard cross-process
 // overlap with TryLock inside the job. RunLoop blocks until ctx is cancelled and
 // the in-flight job returns, so a caller can treat its return as a completed
 // drain. It covers the built-in scheduling mode only — a ModeOnce job is run
 // directly by the caller and a ModeExternal container waits on ctx.Done — and
 // returns immediately if Interval is not positive.
-func RunLoop(ctx context.Context, job Job, opts LoopOptions) {
+func RunLoop(ctx context.Context, job func(ctx context.Context), opts LoopOptions) {
 	if opts.Interval <= 0 {
 		return
 	}

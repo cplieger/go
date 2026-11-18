@@ -4,7 +4,7 @@
 
 scheduler lets your Go container run its job on an interval or an outside trigger, with no overlapping runs and a clean shutdown.
 
-It replaces the interval parsing, ticker loop, lock-file handling and graceful child-process shutdown you would otherwise write in each job runner's `main`. It uses only the standard library at run time, works on Unix systems only because its locks use `flock(2)`, and is licensed under Apache-2.0.
+It replaces the interval parsing, ticker loop, lock-file handling and graceful child-process shutdown you would otherwise write in each job runner's `main`. Its one dependency at run time is the sibling [health](https://github.com/cplieger/go/tree/main/health) module. It works on Unix systems only because its locks use `flock(2)`, and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -97,7 +97,7 @@ In `ModeExternal`, an external scheduler such as [Ofelia](https://github.com/mcu
 ## API
 
 - Interval parsing: `ParseInterval`, `Schedule`, `Mode` and the `With*` interval options.
-- Run loop: `RunLoop`, `LoopOptions`, `Job` and `JitteredDelay`.
+- Run loop: `RunLoop`, `LoopOptions` and `JitteredDelay`.
 - Restart record: `Stamp`, `RunRecord` and `FailurePolicy`.
 - Overlap guard: `TryLock`, `Lock` and `ReadHolder`.
 - Run coalescing: `Exclusive` with `WithLogger`, `WithQueueCapacity` and `WithGate`, `Outcome`, and `SlotFile`.
@@ -114,7 +114,7 @@ These are deliberate non-goals, which keep the library small.
 | --- | --- |
 | Logging setup | Your `main` owns logging. The library logs through `slog.Default()` or a logger you pass, and never configures a handler. |
 | Health signaling | Set health inside your job, with the companion [health](https://github.com/cplieger/go/tree/main/health) library. |
-| What a job does and its result type | `Job` is `func(ctx)`. Exit codes, health and log lines are your policy. |
+| What a job does and its result type | `RunLoop` takes a `func(context.Context)`. Exit codes, health and log lines are your policy. |
 | Cron expressions and calendar schedules | Run an external scheduler such as Ofelia or cron in `ModeExternal`. |
 | Coordination across hosts | The `flock` guard works on one host. Leader election across nodes needs a lease store. |
 | Concurrent runs in one process | `RunLoop` runs one job at a time by design. Run jobs concurrently yourself if you must. |
