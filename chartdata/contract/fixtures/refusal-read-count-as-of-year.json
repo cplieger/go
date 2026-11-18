@@ -1,0 +1,9 @@
+{
+  "count": {
+    "as_of": "10000-01-01T00:00:00Z",
+    "state": "complete",
+    "value": 5
+  },
+  "rule": "read",
+  "field": "as_of"
+}

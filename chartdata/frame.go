@@ -67,9 +67,11 @@ type SeriesFrame struct {
 	Domain []float64 `json:"domain,omitempty"`
 	// Resets are the instants a restart broke the series at: a line breaks
 	// there instead of joining across them.
-	Resets []int64     `json:"resets,omitempty"`
-	Refs   []FrameRef  `json:"refs,omitempty"`
-	Notes  []FrameNote `json:"notes,omitempty"`
+	Resets []int64 `json:"resets,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 	// Open says the last column is still filling.
 	Open bool `json:"open,omitempty"`
 }
@@ -86,10 +88,12 @@ type BinsFrame struct {
 	X2     []float64     `json:"x2"`
 	Series []FrameSeries `json:"series"`
 	// Domain is the span the axis covers, from and to.
-	Domain []float64   `json:"domain,omitempty"`
-	Resets []int64     `json:"resets,omitempty"`
-	Refs   []FrameRef  `json:"refs,omitempty"`
-	Notes  []FrameNote `json:"notes,omitempty"`
+	Domain []float64 `json:"domain,omitempty"`
+	Resets []int64   `json:"resets,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 	// Open says the last bin is still filling.
 	Open bool `json:"open,omitempty"`
 }
@@ -103,8 +107,10 @@ type CategoriesFrame struct {
 	Unit   string        `json:"unit"`
 	Names  []string      `json:"names"`
 	Series []FrameSeries `json:"series"`
-	Refs   []FrameRef    `json:"refs,omitempty"`
-	Notes  []FrameNote   `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // FrameBoxes is one series of a BoxesFrame: each category's five numbers,
@@ -129,8 +135,10 @@ type BoxesFrame struct {
 	Unit   string       `json:"unit"`
 	Names  []string     `json:"names"`
 	Series []FrameBoxes `json:"series"`
-	Refs   []FrameRef   `json:"refs,omitempty"`
-	Notes  []FrameNote  `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // FrameUnits are a PointsFrame's units, one per measure.
@@ -158,8 +166,10 @@ type PointsFrame struct {
 	Name   string        `json:"name"`
 	Units  FrameUnits    `json:"units"`
 	Series []FramePoints `json:"series"`
-	Refs   []FrameRef    `json:"refs,omitempty"`
-	Notes  []FrameNote   `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // FrameGridAxis is one axis of a GridFrame: exactly one of its categories'
@@ -178,8 +188,10 @@ type GridFrame struct {
 	X      FrameGridAxis `json:"x"`
 	Y      FrameGridAxis `json:"y"`
 	Values [][]*float64  `json:"values"`
-	Refs   []FrameRef    `json:"refs,omitempty"`
-	Notes  []FrameNote   `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // CalendarFrame is a value per calendar day, drawn as a calendar heatmap.
@@ -191,11 +203,13 @@ type CalendarFrame struct {
 	Name string    `json:"name"`
 	Unit string    `json:"unit"`
 	// Zone is the IANA time zone the days are in.
-	Zone   string      `json:"zone"`
-	Values []*float64  `json:"values"`
-	Refs   []FrameRef  `json:"refs,omitempty"`
-	Notes  []FrameNote `json:"notes,omitempty"`
-	Start  int64       `json:"start"`
+	Zone   string     `json:"zone"`
+	Values []*float64 `json:"values"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
+	Start int64       `json:"start"`
 	// Open says the last day is still running.
 	Open bool `json:"open,omitempty"`
 }
@@ -222,8 +236,10 @@ type TreeFrame struct {
 	Unit   string           `json:"unit"`
 	Parts  []FrameTreePart  `json:"parts,omitempty"`
 	Groups []FrameTreeGroup `json:"groups,omitempty"`
-	Refs   []FrameRef       `json:"refs,omitempty"`
-	Notes  []FrameNote      `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // FrameFlowNode is a FlowFrame's node: a name in a Sankey diagram, a
@@ -251,8 +267,10 @@ type FlowFrame struct {
 	Nodes  []FrameFlowNode `json:"nodes,omitempty"`
 	Stages []string        `json:"stages,omitempty"`
 	Links  []FrameFlowLink `json:"links"`
-	Refs   []FrameRef      `json:"refs,omitempty"`
-	Notes  []FrameNote     `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // FrameTimes is one row of an EventsFrame: its key and the instants of its
@@ -264,20 +282,24 @@ type FrameTimes struct {
 
 // EventsFrame is rows of instants, drawn as a dot timeline strip.
 type EventsFrame struct {
-	Type  FrameType    `json:"type" wiregen:"const=events"`
-	Name  string       `json:"name"`
-	Rows  []FrameTimes `json:"rows"`
-	Refs  []FrameRef   `json:"refs,omitempty"`
-	Notes []FrameNote  `json:"notes,omitempty"`
+	Type FrameType    `json:"type" wiregen:"const=events"`
+	Name string       `json:"name"`
+	Rows []FrameTimes `json:"rows"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }
 
 // StatesFrame is a state per observation, oldest first, drawn as a state
 // history: Keys and At are equally long, and a null key is a gap.
 type StatesFrame struct {
-	Type  FrameType   `json:"type" wiregen:"const=states"`
-	Name  string      `json:"name"`
-	Keys  []*string   `json:"keys"`
-	At    []int64     `json:"at"`
+	Type FrameType `json:"type" wiregen:"const=states"`
+	Name string    `json:"name"`
+	Keys []*string `json:"keys"`
+	At   []int64   `json:"at"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
 	Refs  []FrameRef  `json:"refs,omitempty"`
 	Notes []FrameNote `json:"notes,omitempty"`
 }
@@ -301,6 +323,8 @@ type ValueFrame struct {
 	Name   string       `json:"name"`
 	Unit   string       `json:"unit"`
 	Meters []FrameMeter `json:"meters"`
-	Refs   []FrameRef   `json:"refs,omitempty"`
-	Notes  []FrameNote  `json:"notes,omitempty"`
+	// Read is how the read behind the frame went, absent when it was whole.
+	Read  *Read       `json:"read,omitempty"`
+	Refs  []FrameRef  `json:"refs,omitempty"`
+	Notes []FrameNote `json:"notes,omitempty"`
 }

@@ -1,0 +1,23 @@
+{
+  "type": "series",
+  "name": "wait_seconds",
+  "unit": "seconds",
+  "x": [
+    1772323200000,
+    1772323260000
+  ],
+  "series": [
+    {
+      "key": "p95",
+      "values": [
+        0.4,
+        0.9
+      ]
+    }
+  ],
+  "read": {
+    "state": "partial",
+    "as_of": "2026-11-18T14:05:00.123456789Z",
+    "reason": "rate_limited"
+  }
+}

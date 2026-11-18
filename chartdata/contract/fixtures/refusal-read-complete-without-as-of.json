@@ -1,0 +1,8 @@
+{
+  "read": {
+    "as_of": null,
+    "state": "complete"
+  },
+  "rule": "read",
+  "field": "as_of"
+}
