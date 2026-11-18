@@ -181,6 +181,10 @@ func TestInlineHashesOfAPageHTMLParseStopsIn(t *testing.T) {
 	if got := InlineScriptHashes(spelled); got != nil {
 		t.Errorf("InlineScriptHashes(a page spelling templateMark) = %v, want nil", got)
 	}
+	cloned := []byte(`<script>a()</script><svg></svg><p><b title="<template>">a<p>b<svg><foreignObject><template></template><script>b()</script>`)
+	if got := InlineScriptHashes(cloned); got != nil {
+		t.Errorf("InlineScriptHashes(a template behind a cloned formatting element) = %v, want nil", got)
+	}
 }
 
 // Scripts must not pick up style content and styles script content, on a page

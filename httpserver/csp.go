@@ -63,11 +63,16 @@ func parseShell(page []byte) (*html.Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot be read as HTML: %w", err)
 	}
-	if stopsAtForeignTemplate(doc, page) {
-		return nil, errors.New("holds a <template> inside <svg> or <math>, after which html.Parse drops markup a browser reads")
+	if err := foreignTemplateError(doc, page); err != nil {
+		return nil, err
 	}
 	return doc, nil
 }
+
+// maxShellTemplates bounds the template check at two parses per <template>
+// tag after a shell's first <svg> or <math>. A shell is a small page with no
+// need for templates, so the limit is generous.
+const maxShellTemplates = 16
 
 // templateMark is text a parsed page holds wherever it is put after a
 // template start tag, unless the parser drops what follows that tag.
@@ -77,42 +82,42 @@ const templateMark = "httpserver-template-probe"
 // after closing any quoted attribute value or tag a prefix ends in.
 const templateProbe = "<template>" + templateMark + `"'>` + templateMark
 
-// stopsAtForeignTemplate reports whether html.Parse ignored the tokens after a
-// <template> start tag that came with an <svg> or <math> element open, as
-// x/net/html v0.63.0's inHeadIM does (ignoreTheRemainingTokens) and a browser
-// does not. An HTML <frameset> pops every foreign element and admits none, so
-// a document holding one never stops. Otherwise page is parsed again with
-// templateMark after each template tag past the first <svg> or <math>, and
-// only when a mark is lost is each tag probed on its own.
-func stopsAtForeignTemplate(doc *html.Node, page []byte) bool {
+// foreignTemplateError refuses a <template> start tag after which html.Parse
+// ignores the HTML tokens, as x/net/html v0.63.0's inHeadIM does
+// (ignoreTheRemainingTokens) with an <svg> or <math> element open and a
+// browser does not. Each tag past the first <svg> or <math> is probed alone: a
+// mark count over the whole page decides nothing, since the parser clones a
+// formatting element with any mark in its attributes. An HTML <frameset> pops
+// every foreign element and admits none, so a document holding one never stops.
+func foreignTemplateError(doc *html.Node, page []byte) error {
 	lower := lowerASCIIString(string(page))
 	from := strings.Index(lower, "<svg")
 	if m := strings.Index(lower, "<math"); m >= 0 && (from < 0 || m < from) {
 		from = m
 	}
 	if from < 0 || hasFrameset(doc) {
-		return false
+		return nil
 	}
-	var starts, ends []int
+	var starts []int
 	for k := from; ; k += len("<template") {
 		i := strings.Index(lower[k:], "<template")
 		if i < 0 {
 			break
 		}
 		k += i
-		if n := templateTagLen(page[k:]); n > 0 {
-			starts, ends = append(starts, k), append(ends, k+n)
+		if opensTemplateTag(page[k:]) {
+			starts = append(starts, k)
 		}
 	}
-	if len(starts) == 0 || marksEveryTemplate(doc, page, ends) {
-		return false
+	if len(starts) > maxShellTemplates {
+		return fmt.Errorf("holds more than %d <template> tags after an <svg> or <math>, more than the check reads", maxShellTemplates)
 	}
 	for _, k := range starts {
 		if !readsPastTemplate(page[:k]) {
-			return true
+			return errors.New("holds a <template> inside <svg> or <math>, after which html.Parse drops markup a browser reads")
 		}
 	}
-	return false
+	return nil
 }
 
 func hasFrameset(doc *html.Node) bool {
@@ -124,31 +129,14 @@ func hasFrameset(doc *html.Node) bool {
 	return false
 }
 
-// templateTagLen is the length of the template start tag page opens with, or 0.
-func templateTagLen(page []byte) int {
+// opensTemplateTag reports whether page opens with a template start tag.
+func opensTemplateTag(page []byte) bool {
 	z := html.NewTokenizer(bytes.NewReader(page))
 	if tt := z.Next(); tt == html.StartTagToken || tt == html.SelfClosingTagToken {
-		if name, _ := z.TagName(); string(name) == "template" {
-			return len(z.Raw())
-		}
+		name, _ := z.TagName()
+		return string(name) == "template"
 	}
-	return 0
-}
-
-// marksEveryTemplate reports whether page, with templateMark put at each
-// offset in ends, parses to a tree holding every mark. Each offset follows a
-// '>', where letters change no tokenizer state, so the tree is doc's own.
-func marksEveryTemplate(doc *html.Node, page []byte, ends []int) bool {
-	slices.Sort(ends)
-	ends = slices.Compact(ends)
-	var marked []byte
-	last := 0
-	for _, e := range ends {
-		marked = append(append(marked, page[last:e]...), templateMark...)
-		last = e
-	}
-	got, err := html.Parse(bytes.NewReader(append(marked, page[last:]...)))
-	return err == nil && templateMarks(got) == templateMarks(doc)+len(ends)
+	return false
 }
 
 // readsPastTemplate reports whether html.Parse keeps text after a <template>

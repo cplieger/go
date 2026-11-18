@@ -139,7 +139,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - Code written against `v2.0.0-dev.1` or `v2.0.0-dev.2` calls `ListenAddr` where it called `OpsAddr`, with the same arguments.
 - A shell written against `v2.0.0-dev.1` or `v2.0.0-dev.2` that carries an `on…` event-handler attribute, such as `onclick`, is now refused by `SPA` and `CheckShell`. The policy already blocked the handler in the browser, so attach it from the bundle's script with `addEventListener`.
 - A shell that ends inside a `<script>` is now refused too, because the browser never ran that script: close it with `</script>`.
-- A shell nested deeper than 512 elements, or holding a `<template>` inside `<svg>` or `<math>`, is now refused, because the check cannot read all of it: flatten the nesting, or move the `<template>` out of the `<svg>` or `<math>`.
+- A shell nested deeper than 512 elements, or holding a `<template>` start tag while an `<svg>` or `<math>` element is open, such as inside `<foreignObject>`, is now refused, because the check cannot read all of it: flatten the nesting, or move the `<template>` out of the `<svg>` or `<math>`. So is a shell with more than 16 `<template>` tags after its first `<svg>` or `<math>`: move the templates before it or into the bundle. A `<template>` in svg markup itself is read as usual ([the SPA policy](docs/spa.md#the-content-security-policy)).
 - Code written against `v2.0.0-dev.1` wraps each `OutageConfig.Commands` string as `httpserver.OutageCommand{Run: s}`, since the field is now `[]OutageCommand`. A line that explained a command moves into its `Note`, and a line about the outage as a whole into `Notice`.
 
 ## Related projects

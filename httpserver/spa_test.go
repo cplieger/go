@@ -1001,20 +1001,23 @@ func TestShellPastParserDepth(t *testing.T) {
 	}
 }
 
-// x/net/html v0.63.0 ignores every token after a <template> start tag that
-// arrives with an <svg> or <math> element open (parse.go inHeadIM), where a
-// browser reads on and builds the rest.
+// x/net/html v0.63.0 drops every HTML token after a <template> start tag that
+// arrives with an <svg> or <math> element open (parse.go inHeadIM), keeping
+// only foreign-content ones, where a browser reads on and builds the rest.
 func TestCheckShellRefusesTemplateInForeignContent(t *testing.T) {
 	refused := map[string]string{
-		"an img after a template in a foreignObject": `<svg><foreignObject><template></template><img src=x onerror=alert(1)></foreignObject></svg>`,
-		"a script after it":                          `<svg><foreignObject><template></template><script>alert(1)</script>`,
-		"a body onload after it":                     `<svg><foreignObject><template></template><body onload=alert(1)>`,
-		"an annotation-xml template":                 `<math><annotation-xml encoding="text/html"><template></template><img src=x onerror=alert(1)>`,
-		"an svg title template":                      `<svg><title><template></template><img src=x onerror=alert(1)>`,
-		"a kept div before the template":             `<svg><foreignObject><div id=keep></div><template></template><img src=x onerror=alert(1)>`,
-		"svg content read on after foreignObject":    `<svg><foreignObject><template></template><img onerror=x></foreignObject><g></g></svg>`,
-		"an upper-case template with an attribute":   `<svg><desc><TEMPLATE id=t></TEMPLATE><img onerror=x>`,
-		"a mathml text integration point":            `<math><mi><template></template><img onerror=x>`,
+		"an img after a template in a foreignObject":    `<svg><foreignObject><template></template><img src=x onerror=alert(1)></foreignObject></svg>`,
+		"a script after it":                             `<svg><foreignObject><template></template><script>alert(1)</script>`,
+		"a body onload after it":                        `<svg><foreignObject><template></template><body onload=alert(1)>`,
+		"an annotation-xml template":                    `<math><annotation-xml encoding="text/html"><template></template><img src=x onerror=alert(1)>`,
+		"an svg title template":                         `<svg><title><template></template><img src=x onerror=alert(1)>`,
+		"a kept div before the template":                `<svg><foreignObject><div id=keep></div><template></template><img src=x onerror=alert(1)>`,
+		"svg content read on after foreignObject":       `<svg><foreignObject><template></template><img onerror=x></foreignObject><g></g></svg>`,
+		"an upper-case template with an attribute":      `<svg><desc><TEMPLATE id=t></TEMPLATE><img onerror=x>`,
+		"a mathml text integration point":               `<math><mi><template></template><img onerror=x>`,
+		"a template behind a cloned formatting element": `<svg></svg><p><b title="<template>">a<p>b<svg><foreignObject><template></template><img src=x onerror=alert(1)>`,
+		"an svg-markup template after the stop":         `<svg><foreignObject><template></template></foreignObject><template></template><img onerror=x>`,
+		"two templates behind two clones":               `<svg></svg><p><b title="<template>">a<p>b<p>c<svg><foreignObject><template></template><template></template><img src=x onerror=alert(1)>`,
 	}
 	for name, html := range refused {
 		t.Run(name, func(t *testing.T) {
@@ -1032,6 +1035,22 @@ func TestCheckShellRefusesTemplateInForeignContent(t *testing.T) {
 		err := httpserver.CheckShell([]byte(html))
 		if err == nil || !strings.Contains(err.Error(), `"onerror" on <img>`) {
 			t.Errorf("CheckShell(%q) = %v, want the onerror on <img> refused", html, err)
+		}
+	})
+	t.Run("at most 16 templates are read past an svg", func(t *testing.T) {
+		pair := "<template></template>"
+		for _, html := range []string{
+			"<svg></svg>" + strings.Repeat(pair, 16),
+			strings.Repeat(pair, 17) + "<svg></svg>",
+		} {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		}
+		html := "<svg></svg>" + strings.Repeat(pair, 17)
+		err := httpserver.CheckShell([]byte(html))
+		if err == nil || !strings.Contains(err.Error(), "more than 16 <template>") {
+			t.Errorf("CheckShell(17 templates after an svg) = %v, want the limit of 16 named", err)
 		}
 	})
 	passed := map[string]string{

@@ -201,9 +201,10 @@ func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
 // builds its document: one holding an inline script or style element, a style
 // attribute or an on* event-handler attribute, or a script left open at end
 // of input, which never runs. It also refuses a shell html.Parse cannot read
-// whole: one nested past 512 elements, or one holding a <template> inside
-// <svg> or <math>. The error names the element, and the attribute where one is
-// the cause. SPA calls it on every shell at start; a bundler before writing one.
+// whole or the check cannot bound: past 512 nested elements, a <template> start
+// tag while an <svg> or <math> element is open, or over 16 <template> tags past
+// the first <svg> or <math>. The error names the element, and the attribute
+// where one is the cause. SPA calls it on every shell at start; a bundler too.
 func CheckShell(body []byte) error {
 	doc, err := parseShell(body)
 	if err != nil {

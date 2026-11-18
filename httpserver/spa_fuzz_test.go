@@ -39,6 +39,7 @@ func FuzzCheckShell(f *testing.F) {
 		"<body>" + strings.Repeat("<div>", 512) + "<script>x()</script>",
 		`<svg><foreignObject><template></template><img src=x onerror=alert(1)>`,
 		`<svg><foreignObject><div title="<template>"></div></foreignObject></svg>`,
+		`<svg></svg><p><b title="<template>">a<p>b<svg><foreignObject><template></template><img src=x onerror=alert(1)>`,
 	} {
 		f.Add([]byte(s))
 	}

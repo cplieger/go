@@ -59,7 +59,7 @@ The gzip and revalidation behaviour is not configurable.
 - a data block, whose `type` is not a script type, such as `application/json` or `text/template`
 - a `<script>` the end of the page closed, which never runs
 
-It returns nil for a page `CheckShell` refuses because `html.Parse` cannot read all of it: one nested deeper than 512 elements, or one holding a `<template>` inside `<svg>` or `<math>` (see [the SPA policy](spa.md#the-content-security-policy)). Without those hashes the policy blocks every inline script on the page.
+It returns nil for a page `CheckShell` refuses because `html.Parse` cannot read all of it: one nested deeper than 512 elements, one holding a `<template>` start tag while an `<svg>` or `<math>` element is open, or one with more than 16 `<template>` tags after its first `<svg>` or `<math>` (see [the SPA policy](spa.md#the-content-security-policy)). Without those hashes the policy blocks every inline script on the page.
 
 It extracts hashes from a page your app controls. It is not an HTML sanitizer.
 
