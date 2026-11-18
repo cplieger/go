@@ -7,7 +7,8 @@
 // [String] takes no fallback; compose one with cmp.Or.
 //
 // Require errors on a missing mandatory variable; Secret also reads a
-// Docker-style KEY_FILE secret file, with each failure class a sentinel.
+// Docker-style KEY_FILE secret file, with each failure class a sentinel, and
+// returns the value as a masked.Secret that no printer shows.
 // BoolStrict, IntStrict and DurationStrict return (value, ok, error) and
 // never log. A Source carries the same getters over an injected environment.
 //
