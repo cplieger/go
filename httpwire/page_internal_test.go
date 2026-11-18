@@ -41,3 +41,31 @@ func TestOpenRefusesAHeaderOffTheLayout(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenRefusesAValuePastTheBoundUnread measures allocations because a
+// longer value fails to open either way: refused unread, it costs no
+// decode buffer.
+func TestOpenRefusesAValuePastTheBoundUnread(t *testing.T) {
+	s, err := newSealer([32]byte{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := additionalData(cursorDomain, "items.list")
+	longest, err := s.seal(forward, make([]byte, maxPosition), aad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(longest) != maxSealed {
+		t.Fatalf("a %d-byte position sealed to %d bytes, want %d", maxPosition, len(longest), maxSealed)
+	}
+	if _, _, ok := s.open(longest, aad, cursorAge); !ok {
+		t.Error("the longest sealed value does not open")
+	}
+	over := longest + "A"
+	if _, _, ok := s.open(over, aad, cursorAge); ok {
+		t.Error("a value a byte past the bound opens")
+	}
+	if n := testing.AllocsPerRun(10, func() { s.open(over, aad, cursorAge) }); n != 0 {
+		t.Errorf("opening a value a byte past the bound allocated %v times, want 0", n)
+	}
+}

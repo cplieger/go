@@ -130,8 +130,12 @@ func (s *sealer) seal(dir direction, payload, aad []byte) (string, error) {
 }
 
 // open answers the direction and payload of a value seal made with aad no
-// longer than maxAge ago.
+// longer than maxAge ago. A value longer than any seal makes is refused
+// unread.
 func (s *sealer) open(sealed string, aad []byte, maxAge time.Duration) (dir direction, payload []byte, ok bool) {
+	if len(sealed) > maxSealed {
+		return 0, nil, false
+	}
 	ct, err := sealedText.DecodeString(sealed)
 	if err != nil {
 		return 0, nil, false

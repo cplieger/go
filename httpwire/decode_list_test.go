@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -68,7 +69,9 @@ func TestDecodeQueryList(t *testing.T) {
 		want  []string
 	}{
 		"none sent":                     {"kind=disc", []string{"path=required"}},
-		"past MaxItems":                 {"path=a1&path=a2&path=a3&path=a4", []string{"path=range"}},
+		"past MaxItems":                 {"path=a1&path=a2&path=a3&path=a4", []string{"path[3]=range"}},
+		"two past MaxItems":             {"path=a1&path=a2&path=a3&path=a4&path=a5", []string{"path[3]=range", "path[4]=range"}},
+		"far past MaxItems":             {strings.Repeat("path=a1&", 3+150) + "kind=disc", farPast()},
 		"an element its type refuses":   {"path=a1&path=" + strings.Repeat("a", 9), []string{"path[1]=range"}},
 		"an element the schema refuses": {"path=a1&path=a2&path=x", []string{"path[2]=range"}},
 		"an element of invalid UTF-8":   {"path=%FF&path=a2", []string{"path[0]=malformed"}},
@@ -86,6 +89,17 @@ func TestDecodeQueryList(t *testing.T) {
 			}
 		})
 	}
+}
+
+// farPast is the answer to 153 values for a cap of 3, in fieldCodes'
+// order: the envelope keeps the first 100 field entries.
+func farPast() []string {
+	var want []string
+	for i := 3; i < 103; i++ {
+		want = append(want, "path["+strconv.Itoa(i)+"]=range")
+	}
+	slices.Sort(want)
+	return want
 }
 
 // holdersParam edits the holders row's path parameter in the decode

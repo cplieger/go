@@ -199,7 +199,10 @@ func (a *API) queryList(qv reflect.Value, ep *Endpoint, f *textField, given []st
 		c.add(f.name, codeRequired, "required")
 		return c.out
 	case len(given) > m.MaxItems():
-		c.add(f.name, codeRange, "at most "+strconv.Itoa(m.MaxItems())+" values")
+		// The envelope keeps the first maxFields entries.
+		for i := m.MaxItems(); i < len(given) && len(c.out) < maxFields; i++ {
+			c.add(f.name+"["+strconv.Itoa(i)+"]", codeRange, "at most "+strconv.Itoa(m.MaxItems())+" values")
+		}
 		return c.out
 	}
 	list := reflect.MakeSlice(f.typ, len(given), len(given))
