@@ -1,2 +1,4 @@
+github.com/cplieger/go/masked v1.0.0-dev.1 h1:Do4+avpvVJP//Jm4LLH1y468Rxrz966dAgESVp/z7wU=
+github.com/cplieger/go/masked v1.0.0-dev.1/go.mod h1:jRx6ZGlfjrDaAQ5n8MTd023wl5rLuacKmtDbnJgrD+g=
 github.com/cplieger/go/pathinside v1.1.0 h1:INqhQezkPwf/gA4fGxVuTBvV4bh4CedFGKm36c+GeIQ=
 github.com/cplieger/go/pathinside v1.1.0/go.mod h1:fIyGk/T2XYqVLJ5/cXOFkjk202Mwbdu0aXhH7Ky1/kI=

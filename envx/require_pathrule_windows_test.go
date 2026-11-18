@@ -26,7 +26,7 @@ func TestSecret_trailing_dot_alias_of_a_directory_is_refused(t *testing.T) {
 	if err != nil && !strings.Contains(err.Error(), "not a regular file") {
 		t.Errorf("Secret() = %v for %q, want the not-a-regular-file reason: the alias names a directory", err, p)
 	}
-	if v != "" {
+	if !v.IsZero() {
 		t.Errorf("value = %q for a refused path, want empty: a broken pointer never falls through to KEY", v)
 	}
 }

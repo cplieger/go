@@ -46,18 +46,10 @@ func TestMalformedKeyPanicMessage(t *testing.T) {
 	mustPanicWith(t, want, func() { String("127.0.0.1:7681") })
 }
 
-// TestMalformedKeyPanicEchoIsBounded pins the two rules the echo budget is made
-// of, at the byte where they meet. A key whose quoted form fits the budget is
-// named in FULL — that is the exact-naming contract a caller reads to find the
-// offending literal, and it must still hold for a key that fills the budget
-// exactly. A longer key is named by the longest quoted prefix that still fits
-// once the ellipsis is inside the closing quote, so a dynamically built name
-// that came out as a whole connection string or a mount path names the mistake
-// without carrying the entire value into a log store.
-//
-// The two keys are sized against the budget deliberately: the first quotes to
-// exactly keyEchoMax bytes, the second to more, and both echoes are therefore
-// keyEchoMax bytes wide by different rules.
+// TestMalformedKeyPanicEchoIsBounded checks both echo rules where they meet: a
+// key whose quote fits keyEchoMax exactly is named in full, and a longer one by
+// the longest quoted prefix that fits with the ellipsis, so both echoes are
+// keyEchoMax bytes wide.
 func TestMalformedKeyPanicEchoIsBounded(t *testing.T) {
 	for name, tc := range map[string]struct {
 		key  Key
@@ -78,19 +70,10 @@ func TestMalformedKeyPanicEchoIsBounded(t *testing.T) {
 	}
 }
 
-// TestStringTakesNoFallback is a compile-time pin on the signature that closes
-// the key/fallback transposition class. A (key, fallback string) String was
-// two adjacent strings, so a swapped call read the fallback as a variable name
-// and returned the name as the value, silently and forever; the fix was to
-// delete the parameter rather than to detect the swap, since cmp.Or composes
-// the default and the two-parameter body was cmp.Or all along. Restoring a
-// second string parameter breaks these lines.
-//
-// The assertion is the PARAMETER type: passing each getter to a func(Key)
-// string parameter admits exactly that signature and nothing else. Spelling it
-// as `var _ func(Key) string = String` reads the same to a human but is a
-// declaration whose type an inference pass can drop, at which point it asserts
-// nothing at all — the pin has to be a position that cannot be inferred away.
+// TestStringTakesNoFallback fails to compile if String gains a fallback string,
+// which a caller could transpose with the key. Passing each getter as a
+// func(Key) string argument pins the exact signature; a `var _ func(Key)
+// string = String` declaration would not, because inference can drop its type.
 func TestStringTakesNoFallback(t *testing.T) {
 	pin := func(func(Key) string) {}
 	pin(String)

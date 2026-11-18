@@ -1,6 +1,6 @@
 # Behavior contract
 
-This page lists the guarantees envx gives a caller, for a developer deciding how each getter treats a value. The package documentation on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/envx) has the full text of each symbol.
+This page lists the guarantees envx gives a caller, for a developer deciding how each getter treats a value. The package documentation on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/envx/v2) has the full text of each symbol.
 
 ## Keys
 
@@ -48,6 +48,8 @@ Read `ok`, not the value, to tell a variable set to `false` from one that is not
 ## Secrets
 
 `Secret` follows the Docker secrets convention. When `KEY_FILE` is set and not empty, it reads the file that variable names. Otherwise it returns `KEY`, or a `*MissingError` when `KEY` is unset or empty too.
+
+The value comes back as a [`masked.Secret`](https://github.com/cplieger/go/tree/main/masked), never a `string`, so it is not held in clear from its first read and no `fmt` verb, `slog` handler or `encoding/json` shows it. Hold the `masked.Secret` and call `Reveal()` only where the value is sent, such as in an `Authorization` header. Every error path returns the zero `Secret`, whose `IsZero()` is true.
 
 - The file is opened once, without waiting, then checked and read through that handle, so replacing the path cannot redirect the read. Only a regular file is read: a FIFO, a directory or a device is refused at once as unreadable, so a FIFO with no writer cannot hang startup. Symlinks are followed, so a Kubernetes secret's link reaches its file. The read is capped at 1 MB. A file that grows past the cap during the read is refused rather than cut short.
 - The path must already be clean and must have no `..` component, a rule from [pathinside](https://github.com/cplieger/go/tree/main/pathinside). Two dots inside a name, as in `/run/secrets/key..v2`, are allowed.

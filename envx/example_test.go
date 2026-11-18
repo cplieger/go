@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/cplieger/go/envx"
+	"github.com/cplieger/go/envx/v2"
 )
 
 func Example() {
