@@ -151,22 +151,10 @@ func (e *Executor[P]) resumeCurrent(gen uint64) bool {
 	return e.readGen == gen && e.holds == 0 && !e.closed
 }
 
-// resumeEndsLocked takes a resume's LastEnds read: each scope keeps the later
-// of its read end and one noted since the resume, the Fresh windows open
-// from the read ends, and every scheduled scope is counted again
-// (baseLocked) and armed.
+// resumeEndsLocked takes a resume's LastEnds read (mergeEndsLocked) and
+// counts every scheduled scope again (baseLocked) and arms it.
 func (e *Executor[P]) resumeEndsLocked(ends map[ScheduledScope]LastEnd) {
-	now := time.Now()
-	for key, end := range ends {
-		if have, ok := e.ends[key]; !ok || end.At.After(have.At) {
-			e.ends[key] = end
-		}
-		if spec := e.kinds[key.Kind]; spec != nil && spec.Fresh != nil {
-			if until := end.At.Add(spec.Fresh(key.Scope)); until.After(now) && until.After(e.recent[key]) {
-				e.recent[key] = until
-			}
-		}
-	}
+	e.mergeEndsLocked(ends)
 	e.stale = false
 	for key, t := range e.scheduled {
 		e.baseLocked(key, t)

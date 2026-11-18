@@ -407,6 +407,36 @@ func TestRestartDoesNotRerunDaily(t *testing.T) {
 	})
 }
 
+func TestRestartKeepsFreshWindow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		refresh := spec("refresh", "")
+		refresh.Fresh = forgeFresh
+		cfg := scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{refresh}}
+		base := &rig{store: memrecords.New(), log: &runLog{}}
+		before, stop := base.openUntil(t, cfg)
+		ran := before.start(t, api("refresh", "", "alice", payload{}))
+		synctest.Wait()
+		ended := before.rec(t, ran.Job).EndedAt
+		time.Sleep(time.Second)
+		stop()
+
+		r := base.open(t, cfg)
+		synctest.Wait()
+		sleepUntil(ended.Add(6 * time.Second))
+		_, err := r.ex.Start(t.Context(), api("refresh", "", "bob", payload{}))
+		var recent *scheduler.RecentError
+		if !errors.As(err, &recent) || !recent.Until.Equal(ended.Add(60*time.Second)) {
+			t.Fatalf("Start 6 s after a stored end, after a restart = %v, want *RecentError until the end plus 60 s", err)
+		}
+		sleepUntil(ended.Add(60 * time.Second))
+		again := r.start(t, api("refresh", "", "bob", payload{}))
+		synctest.Wait()
+		if !r.log.ran(again.Job) {
+			t.Errorf("Start at the end plus 60 s = %+v, want a job that ran", again)
+		}
+	})
+}
+
 func TestScheduleCountsFromTheGivenChange(t *testing.T) {
 	cfg := scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("quick", "passes")}}
 

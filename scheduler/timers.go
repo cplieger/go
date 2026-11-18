@@ -137,9 +137,10 @@ func (e *Executor[P]) stopTimerLocked(t *timed) {
 }
 
 // readEnds reads Records.LastEnds once Run starts, retrying a failed read
-// on readBackoff until one answers or ctx ends, then sets the base of each
-// scheduled scope and arms every timer. Until a read answers no timer is
-// armed and each deadline counts as if the scope had no end.
+// on readBackoff until one answers or ctx ends, then takes it
+// (mergeEndsLocked), sets the base of each scheduled scope and arms every
+// timer. Until a read answers no timer is armed and each deadline counts as
+// if the scope had no end.
 func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 	ends, err := e.lastEnds(ctx)
 	for n := 1; err != nil; n++ {
@@ -154,16 +155,29 @@ func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for key, end := range ends {
-		if have, ok := e.ends[key]; !ok || end.At.After(have.At) {
-			e.ends[key] = end
-		}
-	}
+	e.mergeEndsLocked(ends)
 	e.endsRead, e.countFrom = true, start
 	for key, t := range e.scheduled {
 		e.baseLocked(key, t)
 		e.armLocked(key, t)
 		e.watchLocked(key, t)
+	}
+}
+
+// mergeEndsLocked takes a LastEnds read: each scope keeps the later of its
+// read end and one already noted, and each Fresh window a read end opens
+// that is still ahead is opened, so rule 4 holds across a restart.
+func (e *Executor[P]) mergeEndsLocked(ends map[ScheduledScope]LastEnd) {
+	now := time.Now()
+	for key, end := range ends {
+		if have, ok := e.ends[key]; !ok || end.At.After(have.At) {
+			e.ends[key] = end
+		}
+		if spec := e.kinds[key.Kind]; spec != nil && spec.Fresh != nil {
+			if until := end.At.Add(spec.Fresh(key.Scope)); until.After(now) && until.After(e.recent[key]) {
+				e.recent[key] = until
+			}
+		}
 	}
 }
 

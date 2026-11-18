@@ -35,7 +35,7 @@ Facts that are not a JSON object, or are above 2 KiB, are dropped: the end gains
 1. A queued job of the same kind and scope answers the request (`Started.Joined`, with its id and position).
 2. A queued job whose kind `Covers` the request answers it: a quick check requested while a full check is queued joins the full check.
 3. A running job of the same kind and scope: for a kind with `Fresh`, a job that started less than `Fresh(scope)` ago answers the request. Otherwise one follow-up job is queued behind it, and later requests join the follow-up by rule 1. A timer request never queues a follow-up; the running job serves it.
-4. A kind with `Fresh` whose scope's last job ended less than `Fresh(scope)` ago refuses the request with `*RecentError`, whose `Until` is the window's end (`errors.Is(err, ErrRecent)` holds). Cancelled and interrupted jobs do not count.
+4. A kind with `Fresh` whose scope's last job ended less than `Fresh(scope)` ago refuses the request with `*RecentError`, whose `Until` is the window's end (`errors.Is(err, ErrRecent)` holds). Cancelled and interrupted jobs do not count. The window also opens from the ends `Records.LastEnds` answers at start and at `resume`, so a restart does not reopen it.
 5. Otherwise the job is queued. Past `MaxQueued` waiting jobs (default 16, 1 to 256), or `MaxQueuedPerOwner` of one credential's (default 4), the request is refused `ErrQueueFull` and its written record ends `skipped` with reason `queue_full`. A scheduled job counts against the total only.
 
 When a job starts, every queued job it covers ends `skipped` with reason `covered`, whose `Subject` is the covering job's id. Such a job never started, so it moves no deadline.
