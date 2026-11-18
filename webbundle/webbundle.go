@@ -163,7 +163,7 @@ type entriesBuilt struct {
 	own      map[string]bool // every bundled file under Src outside node_modules
 	urls     map[string]string
 	scripts  map[string]Output
-	hashed   []string // each entry's hashed path, by index
+	paths    []string // each entry's path in the tree, by index
 	moduleJS []byte   // every module output's bytes, chunks included
 }
 
@@ -186,7 +186,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 		}
 	}
 	for _, sh := range shells {
-		if werr := t.write(sh.name, sh.render(eb.hashed, head), 0o644); werr != nil {
+		if werr := t.write(sh.name, sh.render(eb.paths, head), 0o644); werr != nil {
 			return Result{}, werr
 		}
 	}
@@ -198,7 +198,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 	}
 	entries := make([]httpserver.BundleEntry, len(b.entries))
 	for i, e := range b.entries {
-		entries[i] = httpserver.BundleEntry{Name: e.Name, Kind: httpserver.BundleKind(e.Kind), Path: eb.hashed[i], Stable: e.URL != ""}
+		entries[i] = httpserver.BundleEntry{Name: e.Name, Kind: httpserver.BundleKind(e.Kind), Path: eb.paths[i], Stable: e.URL != ""}
 	}
 	files, err := t.manifest(entries)
 	if err != nil {
@@ -210,7 +210,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 // buildEntries builds the classic entries, then the module entries, then the
 // style entries into outdir.
 func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
-	eb := &entriesBuilt{pkgs: packageRoots{}, own: map[string]bool{}, urls: map[string]string{}, scripts: map[string]Output{}, hashed: make([]string, len(b.entries))}
+	eb := &entriesBuilt{pkgs: packageRoots{}, own: map[string]bool{}, urls: map[string]string{}, scripts: map[string]Output{}, paths: make([]string, len(b.entries))}
 	if err := b.buildClassicEntries(eb, outdir); err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (b *build) buildEntries(outdir string) (*entriesBuilt, error) {
 }
 
 // take checks entry i's closure and its built file in r, and records its
-// packages and hashed path.
+// packages and its path in the tree.
 func (b *build) take(eb *entriesBuilt, r *built, i int) error {
 	e := b.entries[i]
 	pkgs, own, err := b.checkClosure(&r.meta, i)
@@ -251,7 +251,7 @@ func (b *build) take(eb *entriesBuilt, r *built, i int) error {
 	case r.empty(name, body):
 		return fmt.Errorf("webbundle: %s entry %q (%s) builds an empty file", e.Kind, e.Name, e.Path)
 	}
-	eb.hashed[i] = name
+	eb.paths[i] = name
 	maps.Copy(eb.scripts, r.scripts)
 	return nil
 }
@@ -268,7 +268,7 @@ func (b *build) buildClassicEntries(eb *entriesBuilt, outdir string) error {
 		if err := b.take(eb, &r, i); err != nil {
 			return err
 		}
-		eb.urls[e.Name] = "/" + eb.hashed[i]
+		eb.urls[e.Name] = "/" + eb.paths[i]
 	}
 	return nil
 }

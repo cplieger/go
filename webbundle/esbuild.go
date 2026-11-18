@@ -105,7 +105,7 @@ type outFile struct {
 // built is one esbuild run's result.
 type built struct {
 	meta    metafile
-	entries map[string]string // the hashed path of each entry, by its Src path
+	entries map[string]string // the built path of each entry, by its Src path
 	scripts map[string]Output // what each script holds, by its path in the tree
 	hollow  map[string]bool   // the outputs that hold no code, by path in the tree
 	outputs []outFile

@@ -318,9 +318,9 @@ func rootScriptOrStyle(v string) bool {
 }
 
 // render returns the shell with each tag naming a logical path written back
-// naming its entry's hashed one (every attribute double-quoted, as
+// naming its entry's built one (every attribute double-quoted, as
 // html.Token renders it) and head inserted before </head>.
-func (s *shell) render(hashed []string, head []byte) []byte {
+func (s *shell) render(paths []string, head []byte) []byte {
 	out := make([]byte, 0, len(s.body)+len(s.links)*16+len(head))
 	at := 0
 	inserted := len(head) == 0
@@ -331,7 +331,7 @@ func (s *shell) render(hashed []string, head []byte) []byte {
 		}
 		tok := l.tok
 		tok.Attr = slices.Clone(tok.Attr)
-		tok.Attr[l.attr].Val = "/" + hashed[l.entry]
+		tok.Attr[l.attr].Val = "/" + paths[l.entry]
 		out = append(append(out, s.body[at:l.start]...), tok.String()...)
 		at = l.end
 	}
