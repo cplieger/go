@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -591,8 +593,11 @@ func (c *newChecker) document() *Schema {
 			c.fail("row %q has no operation of that operationId in the document", ep.Name)
 		case op.method != ep.Method || op.path != ep.Path:
 			c.fail("row %q is %s %s, but the document's operation is %s %s", ep.Name, ep.Method, ep.Path, op.method, op.path)
-		case !r.mount:
-			c.decodedParts(ep, op)
+		default:
+			c.idempotencyPolicy(ep, op)
+			if !r.mount {
+				c.decodedParts(ep, op)
+			}
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(s.ops)) {
@@ -601,6 +606,42 @@ func (c *newChecker) document() *Schema {
 		}
 	}
 	return s
+}
+
+// idempotencyPolicy holds a Keyed row's x-idempotency to the policy the
+// binder enforces, so a client never resends past a window the server has
+// shortened; any other row's operation carries none.
+func (c *newChecker) idempotencyPolicy(ep *Endpoint, op *operation) {
+	want := publishedPolicy(ep)
+	switch {
+	case want == nil && op.idempotency != nil:
+		c.fail("row %q is not Keyed, but the document's operation carries x-idempotency", ep.Name)
+	case want != nil && !jsonEqual(op.idempotency, want):
+		got, _ := json.Marshal(op.idempotency)
+		exp, _ := json.Marshal(want)
+		c.fail("row %q: the document's x-idempotency is %s, but the row's policy is %s", ep.Name, got, exp)
+	}
+}
+
+// publishedPolicy is a Keyed row's x-idempotency as a decoded JSON value,
+// its window in whole seconds rounded down; nil on any other row.
+func publishedPolicy(ep *Endpoint) map[string]any {
+	if !ep.Keyed {
+		return nil
+	}
+	p := map[string]any{
+		"window_s":   json.Number(strconv.FormatInt(int64(ep.Window/time.Second), 10)),
+		"scope":      "credential,operation",
+		"concurrent": "join",
+		"kept":       "success_and_effectful_refusals",
+	}
+	if ep.MaxKept > 0 {
+		p["max_kept"] = json.Number(strconv.Itoa(ep.MaxKept))
+	}
+	if ep.Result != "" {
+		p["result"] = ep.Result
+	}
+	return p
 }
 
 // decodedParts matches what the binder decodes on ep with what op declares:

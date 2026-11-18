@@ -211,7 +211,15 @@
             "description": "Accepted"
           }
         },
-        "summary": "Start a job"
+        "summary": "Start a job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 86400,
+          "max_kept": 1000,
+          "result": "jobs.list"
+        }
       }
     },
     "/api/jobs/{id}": {

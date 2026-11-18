@@ -23,8 +23,10 @@ type operation struct {
 	request   *requestBody
 	responses map[int]*response
 	params    map[paramKey]*param
-	method    string
-	path      string
+	// idempotency is the x-idempotency value, nil when absent.
+	idempotency any
+	method      string
+	path        string
 }
 
 type paramKey struct{ in, name string }
@@ -195,7 +197,7 @@ func (p *parser) operation(path, method string, v any, at string) {
 	if !ok {
 		return
 	}
-	op := &operation{method: strings.ToUpper(method), path: path, responses: map[int]*response{}, params: map[paramKey]*param{}}
+	op := &operation{method: strings.ToUpper(method), path: path, responses: map[int]*response{}, params: map[paramKey]*param{}, idempotency: m["x-idempotency"]}
 	id, _ := m["operationId"].(string)
 	switch {
 	case id == "":

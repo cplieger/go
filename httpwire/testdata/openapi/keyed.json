@@ -130,7 +130,14 @@
             "description": "Accepted"
           }
         },
-        "summary": "Start a job"
+        "summary": "Start a job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600,
+          "result": "jobs.read"
+        }
       }
     },
     "/api/jobs/quick": {
@@ -159,7 +166,13 @@
             "description": "OK"
           }
         },
-        "summary": "Run a quick job"
+        "summary": "Run a quick job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
       }
     },
     "/api/jobs/{id}/retry": {
@@ -208,7 +221,13 @@
             "description": "OK"
           }
         },
-        "summary": "Retry a job"
+        "summary": "Retry a job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
       }
     },
     "/api/notes": {
@@ -240,7 +259,13 @@
             "description": "No Content"
           }
         },
-        "summary": "Save the note"
+        "summary": "Save the note",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
       }
     },
     "/api/notes/touch": {
@@ -311,7 +336,14 @@
             "description": "Created"
           }
         },
-        "summary": "Register a user"
+        "summary": "Register a user",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600,
+          "result": "users.read"
+        }
       }
     }
   }

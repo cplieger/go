@@ -267,6 +267,9 @@ func TestNewAcceptsAKeyedRawRowWithASpoolDirectory(t *testing.T) {
 	c := newCase(t)
 	row(c.tb, "archive.export").Keyed = true
 	c.opts["spool"] = httpwire.WithSpoolDir(t.TempDir())
+	c.opts["schema"] = httpwire.WithSchema(editDoc(t, func(paths map[string]any) {
+		paths["/api/archive"].(map[string]any)["post"].(map[string]any)["x-idempotency"] = policy(600, nil)
+	}))
 	c.mustBuild(t)
 }
 

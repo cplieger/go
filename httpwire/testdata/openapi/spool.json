@@ -19,7 +19,13 @@
             "description": "OK"
           }
         },
-        "summary": "Import an archive"
+        "summary": "Import an archive",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
       }
     }
   }

@@ -1,13 +1,17 @@
 package httpwire_test
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -241,6 +245,7 @@ func buildKeyed(t testing.TB, io httpwire.IdempotencyOptions, edit func(*httpwir
 	tb := keyedTable(t)
 	if edit != nil {
 		edit(tb)
+		doc = publishPolicies(t, doc, tb)
 	}
 	kf := &keyedFixture{catalog: tb.Catalog, log: &logSink{}, runs: map[string]int{}, users: map[string]bool{}}
 	observer := io.Observer
@@ -267,6 +272,99 @@ func buildKeyed(t testing.TB, io httpwire.IdempotencyOptions, edit func(*httpwir
 		httpwire.WithLogger(slog.New(kf.log)),
 	)
 	return api, kf, err
+}
+
+// policy is a Keyed operation's x-idempotency: the window in seconds, the
+// fixed scope, join and kept members, and extra (max_kept, result).
+func policy(windowS int, extra map[string]any) map[string]any {
+	p := map[string]any{"window_s": windowS, "scope": "credential,operation", "concurrent": "join", "kept": "success_and_effectful_refusals"}
+	maps.Copy(p, extra)
+	return p
+}
+
+// publishPolicies writes into doc each Keyed row's policy as the client
+// generator publishes it: the row's window, else the table's, else 10
+// minutes, with max_kept and result when the row sets them.
+func publishPolicies(t testing.TB, doc []byte, tb *httpwire.Table) []byte {
+	t.Helper()
+	var d map[string]any
+	if err := json.Unmarshal(doc, &d); err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range tb.Endpoints {
+		if !ep.Keyed {
+			continue
+		}
+		window := cmp.Or(ep.Window, tb.Window, 10*time.Minute)
+		extra := map[string]any{}
+		if ep.MaxKept > 0 {
+			extra["max_kept"] = ep.MaxKept
+		}
+		if ep.Result != "" {
+			extra["result"] = ep.Result
+		}
+		op := d["paths"].(map[string]any)[ep.Path].(map[string]any)[strings.ToLower(ep.Method)].(map[string]any)
+		op["x-idempotency"] = policy(int(window/time.Second), extra)
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// The published policy is the one the binder enforces, so a client never
+// resends past a window the server has shortened.
+func TestNewHoldsThePublishedIdempotencyPolicy(t *testing.T) {
+	committed := func(t *testing.T) []byte {
+		b, err := os.ReadFile("testdata/openapi/keyed.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	quick := func(t *testing.T, doc []byte, edit func(op map[string]any)) []byte {
+		var d map[string]any
+		if err := json.Unmarshal(doc, &d); err != nil {
+			t.Fatal(err)
+		}
+		edit(d["paths"].(map[string]any)["/api/jobs/quick"].(map[string]any)["post"].(map[string]any))
+		b, _ := json.Marshal(d)
+		return b
+	}
+	member := func(key string, v any) func(op map[string]any) {
+		return func(op map[string]any) { op["x-idempotency"].(map[string]any)[key] = v }
+	}
+	for name, tc := range map[string]struct {
+		table func(*httpwire.Table)
+		doc   func(op map[string]any)
+		want  string
+	}{
+		"another window":     {nil, member("window_s", 60), `row "jobs.quick": the document's x-idempotency`},
+		"the table's window": {func(tb *httpwire.Table) { tb.Window = time.Hour }, func(map[string]any) {}, `policy is {"concurrent":"join","kept":"success_and_effectful_refusals","scope":"credential,operation","window_s":3600}`},
+		"a missing max_kept": {func(tb *httpwire.Table) { row(tb, "jobs.quick").MaxKept = 2 }, func(map[string]any) {}, `policy is {"concurrent":"join","kept":"success_and_effectful_refusals","max_kept":2,"scope"`},
+		"a missing result":   {func(tb *httpwire.Table) { row(tb, "jobs.quick").Result = "jobs.read" }, func(map[string]any) {}, `policy is {"concurrent":"join","kept":"success_and_effectful_refusals","result":"jobs.read","scope"`},
+		"another scope":      {nil, member("scope", "credential"), `row "jobs.quick"`},
+		"an extra member":    {nil, member("ttl", 5), `row "jobs.quick"`},
+		"no policy":          {nil, func(op map[string]any) { delete(op, "x-idempotency") }, `row "jobs.quick": the document's x-idempotency is null`},
+		"a policy not Keyed": {func(tb *httpwire.Table) { row(tb, "jobs.quick").Keyed = false }, func(map[string]any) {}, `row "jobs.quick" is not Keyed`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tb := keyedTable(t)
+			if tc.table != nil {
+				tc.table(tb)
+			}
+			kf := &keyedFixture{catalog: tb.Catalog, log: &logSink{}, runs: map[string]int{}, users: map[string]bool{}}
+			_, err := httpwire.New(tb, kf.bindings(), httpwire.WithSchema(quick(t, committed(t), tc.doc)),
+				httpwire.WithGuard(fixtureGuard{}), httpwire.WithCredential(func(*http.Request) string { return "s:a" }),
+				httpwire.WithCursorOwner(func(*http.Request) string { return "u:a" }), httpwire.WithHold(kf.hold))
+			if err == nil || !slices.ContainsFunc(strings.Split(err.Error(), "\n"), func(line string) bool {
+				return strings.Contains(line, `row "jobs.quick"`) && strings.Contains(line, tc.want)
+			}) {
+				t.Errorf("New answered %v, want a refusal of jobs.quick holding %s", err, tc.want)
+			}
+		})
+	}
 }
 
 // keyedRequest is one request; key is the raw Idempotency-Key value, ""
