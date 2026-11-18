@@ -20,9 +20,8 @@ type ListenSetting struct{ Name, Addr string }
 
 // ListenAddr is a listener's address from its setting's raw value, such as
 // LISTEN_ADDR's or OPS_LISTEN_ADDR's: edge spaces and invisible runes cut, and
-// def, the app's documented address, for a blank value. A def of "" leaves a
-// blank setting's listener off. Listen, CheckListenAddrs and ListenOps read
-// every address through it.
+// def, the app's documented address, for a blank value. A def of "" returns ""
+// for a blank value.
 func ListenAddr(value, def string) string {
 	if v := strings.TrimFunc(value, edgeRune); v != "" {
 		return v
@@ -39,10 +38,9 @@ func edgeRune(r rune) bool { return unicode.IsSpace(r) || invisibleRune(r) }
 var listenRetry = struct{ interval, window time.Duration }{250 * time.Millisecond, 5 * time.Second}
 
 // Listen binds s.Addr, read through ListenAddr, over TCP. A blank Addr is an
-// error. A port in use
-// (EADDRINUSE) is retried every 250 ms for up to 5 s; another error, or ctx
-// ending, fails at once. The error names s.Name and the address, control
-// characters cleaned, and wraps the cause.
+// error. A port in use (EADDRINUSE) is retried every 250 ms for up to 5 s;
+// another error, or ctx ending, fails at once. The error names s.Name and the
+// address, control characters cleaned, and wraps the cause.
 func Listen(ctx context.Context, s ListenSetting) (net.Listener, error) {
 	s.Addr = ListenAddr(s.Addr, "")
 	if s.Addr == "" {

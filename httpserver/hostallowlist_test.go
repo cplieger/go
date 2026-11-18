@@ -43,10 +43,8 @@ func TestCanonicalHost(t *testing.T) {
 		{"v4-mapped v6 collapses to ipv4", "[::ffff:192.168.1.5]:443", "192.168.1.5"},
 		{"trailing-dot fqdn", "localhost.", "localhost"},
 
-		// Malformed authorities are rejected, never repaired. Each of the
-		// bracket/colon shapes below used to collapse onto a plausible
-		// allowlist key, silently widening an exact-match gate (the
-		// adversarial-review finding this pins).
+		// Malformed authorities are rejected, never repaired onto a plausible
+		// allowlist key, which would widen an exact-match gate.
 		{"lone port is empty", ":9848", ""},
 		// An unbracketed colon-bearing value can only be an address, and no
 		// address carries an FQDN dot — that dot belongs to the DNS-name and
@@ -73,15 +71,12 @@ func TestCanonicalHost(t *testing.T) {
 		{"all-numeric dotted non-ip", "1.2.3.4.5", ""},
 		{"non-ascii name (use punycode)", "wébterm.example", ""},
 
-		// The case-fold laundering class. strings.ToLower applies Unicode
-		// simple case mapping, under which two ALREADY-ASSIGNED runes map into
-		// ASCII: U+0130 to "i" and U+212A to "k". Measured on go1.26.7
-		// (Unicode 15) and go1.27.0 (Unicode 17), those two are the complete
-		// set that lands in the byte class validHostname accepts, so a
-		// canonicalizer built on strings.ToLower turned each of these into an
-		// ASCII key an operator's allowlist could hold — the same widening the
-		// bracket and port shapes above pin, arriving through the fold instead
-		// of the grammar. The fold is ASCII-only, so they reject.
+		// The case-fold laundering class: under Unicode simple case mapping
+		// (strings.ToLower) U+0130 maps to "i" and U+212A to "k", the only
+		// runes that land in validHostname's byte class (measured on Unicode
+		// 15 and 17). A canonicalizer built on that fold turns each of these
+		// into an ASCII key an allowlist could hold; the fold is ASCII-only,
+		// so they reject.
 		{"kelvin sign does not launder to k", "\u212Aibana.example", ""},
 		{"dotted capital I does not launder to i", "k\u0130bana.example", ""},
 		{"both laundering runes", "\u212A\u0130.example", ""},
@@ -175,11 +170,9 @@ func TestLoopbackRequest(t *testing.T) {
 		})
 	}
 
-	// Forwarded headers are ignored in BOTH directions. Their presence must not
-	// ADMIT (the header is client-controlled, so honoring it would hand a remote
-	// caller the gate) and must not REFUSE either (an app that wants a
-	// provenance deny composes it around this predicate; folding it in here
-	// would make that policy the library's).
+	// Forwarded headers are client-controlled, so they must not admit, and a
+	// provenance deny is the app's to compose around this predicate, so they
+	// must not refuse.
 	t.Run("forwarded headers change nothing", func(t *testing.T) {
 		forwarded := map[string]string{
 			"X-Forwarded-For":  "127.0.0.1",
@@ -217,13 +210,9 @@ func TestLoopbackRequest(t *testing.T) {
 		}
 	})
 
-	// Why this predicate exists rather than a HostPolicy call, pinned rather
-	// than only asserted in the godoc: HostPolicy checks its Host-only
-	// allowlist BEFORE the two-legged loopback exemption, so an operator who
-	// allows "localhost" (so their own browser reaches the service) thereby
-	// admits a REMOTE caller that sends Host: localhost — the exact request
-	// LoopbackRequest must refuse. The two answer different questions, and this
-	// case fails if that ordering ever changes underneath the doc comment.
+	// HostPolicy checks its Host-only allowlist before the loopback exemption,
+	// so allowing "localhost" admits a remote caller sending Host: localhost,
+	// the request LoopbackRequest must refuse.
 	t.Run("HostPolicy admits the caller this predicate refuses", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
 		req.Host = "localhost:9848"
@@ -270,12 +259,9 @@ func TestParseHostList(t *testing.T) {
 			[]string{"[allowed.example]", "allowed[.]example", "allowed.example:garbage:443", "example.com.."},
 		},
 		{
-			// An operator entry spelled with a case-fold laundering rune is
-			// reported rather than silently canonicalized to its ASCII
-			// lookalike. Fail-loud is the right direction on both doors: the
-			// entry the operator meant is one keystroke away, and admitting the
-			// ASCII key from a non-ASCII entry would put a name in the map that
-			// no request spelling matches byte-for-byte.
+			// An entry spelled with a case-fold laundering rune is reported,
+			// never canonicalized to its ASCII lookalike, which no request
+			// spelling would match byte for byte.
 			"case-fold laundering entries reported",
 			[]string{"\u212Aibana.example", "k\u0130bana.example"},
 			true, 0,
@@ -734,10 +720,10 @@ func ownNonLoopbackIPv4(t *testing.T) net.IP {
 	return nil
 }
 
-// WithIPLiteralHosts admits a Host that is an IP address, with or without a
-// port, beside the allowlist: IPv4, or IPv6 in brackets with a zone as
-// net/netip parses one. A name stays under the allowlist, so a rebound page,
-// whose Host is the attacker's name, is still refused.
+// WithIPLiteralHosts admits a Host that is an IP address beside the allowlist:
+// IPv4 or IPv6, bracketed IPv6 optionally with a zone as net/netip parses one,
+// and a port wherever CanonicalHost takes one. A name stays under the
+// allowlist, so a rebound page, whose Host is the attacker's name, is refused.
 func TestHostPolicyIPLiteralHosts(t *testing.T) {
 	cases := []struct {
 		name, host string

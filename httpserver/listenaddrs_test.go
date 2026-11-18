@@ -37,7 +37,7 @@ func TestListenAddr(t *testing.T) {
 		"a bidi control cut":               {"\u202e:9000", ":9738", ":9000"},
 		"a line separator cut":             {":9000\u2028", ":9738", ":9000"},
 		"invisible only takes the default": {"\u200b \u2060", ":9738", ":9738"},
-		"inner runes are kept":             {"[::1]: 9000", ":9738", "[::1]: 9000"},
+		"inner runes are kept":             {"[::1\u200b]: 9000", ":9738", "[::1\u200b]: 9000"},
 		"blank with no default is off":     {" ", "", ""},
 		"a value with no default is kept":  {":9000", "", ":9000"},
 	} {

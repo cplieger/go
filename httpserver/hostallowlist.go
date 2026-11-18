@@ -165,12 +165,13 @@ func WithLoopbackExempt(exempt bool) HostAllowlistOption {
 }
 
 // WithIPLiteralHosts selects whether a Host that is an IP address passes
-// beside the allowlist: IPv4, or bracketed IPv6 with a zone as netip.ParseAddr
-// reads one, each with an optional port. A deployment reached by address keeps
-// working with no entry per address. It is safe because DNS rebinding needs the
-// attacker's name in Host, and an address literal names no one's domain; a
-// name stays under the exact-match list. False, the default, is the same as
-// leaving it out, and options are last-wins.
+// beside the allowlist: IPv4 or IPv6, bracketed IPv6 optionally with a zone as
+// netip.ParseAddr reads one, and a port wherever CanonicalHost takes one. A
+// deployment reached by address keeps working with no entry per address. It
+// is safe because DNS rebinding needs the attacker's name in Host, and an
+// address literal names no one's domain; a name stays under the exact-match
+// list. False, the default, is the same as leaving it out, and options are
+// last-wins.
 func WithIPLiteralHosts(admit bool) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.ipLiteralHosts = admit }
 }
