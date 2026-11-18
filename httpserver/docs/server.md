@@ -89,12 +89,13 @@ if err := httpserver.CheckListenAddrs(
 	return err
 }
 ops, err := httpserver.ListenOps(ctx, httpserver.OpsConfig{
-	Setting: "OPS_LISTEN_ADDR",
-	Addr:    opsAddr,
-	Metrics: reg.Handler(),
-	Healthz: health.CheckHandler(checks...),
-	Hosts:   []string{"app.example.com", "prometheus.lan"},
-	Errors:  catalog.Responder(),
+	Setting:      "OPS_LISTEN_ADDR",
+	Addr:         opsAddr,
+	Metrics:      reg.Handler(),
+	Healthz:      health.CheckHandler(checks...),
+	Hosts:        []string{"app.example.com", "prometheus.lan"},
+	HostsSetting: "ALLOWED_HOSTS",
+	Errors:       catalog.Responder(),
 })
 if err != nil {
 	return err
@@ -115,6 +116,6 @@ return httpserver.RunWithOps(ctx, ops, httpserver.Served{
 - `Listen(ctx, setting)` binds one TCP listener. A blank address is an error. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error, or `ctx` ending, fails at once. The error names the setting and the address, with control characters cleaned, and wraps the cause, so `errors.Is(err, syscall.EADDRINUSE)` and `CausedByCancellation` see through it. Bind each product listener with it.
 - `ListenOps` binds through `Listen` before it returns, `Setting` naming `Addr` in its error. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.
 - It answers `GET` and `HEAD` on `/healthz` and `/metrics` only. Another path answers `not_found` and another method `method_not_allowed` with `Allow: GET, HEAD`, both as the error envelope through `Errors` (nil is `WriteError`).
-- With no `Hosts` (nil, empty or all blank), the listener answers every `Host`: `/healthz` and `/metrics` hold nothing a DNS rebinding page could steal. Bind `Addr` to `127.0.0.1` to keep the port private. With `Hosts` set, a `Host` outside it answers 403 `host_not_allowed`, as on every listener. An entry is a host name or an IP literal (`192.0.2.10`, `2001:db8::1` or `[2001:db8::1]`), compared exactly after `CanonicalHost`. A request from the host's own network stack passes whatever its names (`WithLoopbackExempt`), so the image's healthcheck on `127.0.0.1` works.
+- With no `Hosts` (nil, empty or all blank), the listener answers every `Host`: `/healthz` and `/metrics` hold nothing a DNS rebinding page could steal. Bind `Addr` to `127.0.0.1` to keep the port private. With `Hosts` set, a `Host` outside it answers 403 `host_not_allowed`, as on every listener. An entry is a host name or an IP literal (`192.0.2.10`, `2001:db8::1` or `[2001:db8::1]`), compared exactly after `CanonicalHost`. An entry no `Host` can match fails `ListenOps`, naming `HostsSetting`, the setting the entries came from, so the operator sees the one to fix (`OpsConfig.Hosts` when it is blank). A request from the host's own network stack passes whatever its names (`WithLoopbackExempt`), so the image's healthcheck on `127.0.0.1` works.
 - Both routes log at Debug (`WithProbeLogLevel`) to `Logger`, and `Recoverer` answers a panic with `internal_error`. `ReadTimeout` is 10 s and `WriteTimeout` 30 s, since each route answers in one short response.
 - `RunWithOps` serves each `Served` with `Run` and its `Options`, and the ops listener beside them, until `ctx` ends or one fails. A product listener's return, or an ops failure, stops the rest, and every error is returned, joined. The ops listener stops only after every product `Run` has returned, so `/healthz` answers through the drain (its draining 503 included). Its own grace is then 1 s, and a request still running at its end is cut and logged at Warn, never returned. With no `Served`, it serves the ops listener alone. One `Ops` serves once.

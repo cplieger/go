@@ -183,6 +183,14 @@ func TestListenOpsRefusesInvalidHost(t *testing.T) {
 	if !strings.Contains(err.Error(), "http://scraper.example/metrics") {
 		t.Errorf("error %q does not name the bad entry", err)
 	}
+	if !strings.HasPrefix(err.Error(), "httpserver: OpsConfig.Hosts: ") {
+		t.Errorf("error %q does not name OpsConfig.Hosts when HostsSetting is blank", err)
+	}
+	c.HostsSetting = "ALLOWED_HOSTS"
+	_, err = httpserver.ListenOps(t.Context(), c)
+	if err == nil || !strings.HasPrefix(err.Error(), "httpserver: ALLOWED_HOSTS: ") {
+		t.Errorf("error %v does not name HostsSetting, the setting the operator fixes", err)
+	}
 }
 
 func TestListenOpsBindsBeforeReturn(t *testing.T) {
