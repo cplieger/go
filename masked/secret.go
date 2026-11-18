@@ -37,8 +37,9 @@ func (s Secret) Equal(o Secret) bool { return equal(s.p, o.p) }
 // Key returns s's tag, an HMAC-SHA256 of the text under a key drawn at
 // process start, or 32 zero bytes for the zero Secret. Equal texts give
 // equal keys within one process, so it is a valid map key, and == on it is
-// a fixed-size compare. The key changes every start: never store or send
-// it. A durable index keys on Reveal().
+// a fixed-size compare. The key changes every start, so it is an in-process
+// map key only: never store or send it. A durable identifier is derived
+// where the value is hashed or sealed, never by storing Reveal().
 func (s Secret) Key() [32]byte { return s.p.tag() }
 
 func (s Secret) render() string {

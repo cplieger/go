@@ -14,25 +14,29 @@ var credentialName = regexp.MustCompile(`key|token|secret|password|passkey`)
 // NameAllow is what [SecretNamed] accepts.
 type NameAllow struct {
 	// Fields are reviewed credential-named text fields, written as in
-	// [Allow.Fields] ("app.Copy.ReleaseKey"), each mapped to the reason it
-	// is allowed: it carries no credential, or one shown once on purpose.
+	// [Allow.Fields] ("example.com/app/api.Copy.ReleaseKey"), each mapped to
+	// the reason it is allowed: it carries no credential, or one shown once
+	// on purpose. An entry is stale when it names no credential-named text
+	// field a root reaches.
 	Fields map[string]string
 	// Enums are string types whose values are a fixed set, not free text.
+	// An enum is stale when it excludes no credential-named field a root
+	// reaches.
 	Enums []reflect.Type
 }
 
-// SecretNamed walks each root's type graph as encoding/json does and
-// returns, sorted, one line per field whose JSON name (its Go name when
-// untagged), lowercased, contains key, token, secret, password or passkey,
-// and whose type can hold text: a string that is none of a.Enums, or a
-// []byte, directly or through a pointer, slice, array or map. A struct field
-// is judged by its own fields. Nil roots are skipped. An allow entry with
-// no reason, naming no such field a root reaches, or an enum no field
-// reaches is reported. A test fails when the result is not empty.
+// SecretNamed follows encoding/json's field names, tags and embedding
+// through each root's types and returns, sorted, one line per field whose
+// JSON name (its Go name untagged), lowercased, contains key, token, secret,
+// password or passkey, and that can hold text: a string not in a.Enums, a
+// []byte or an interface, directly or in a container. A struct field is
+// judged by its own fields, so a type with its own MarshalJSON or MarshalText
+// needs its own test. Nil roots are skipped. A stale [NameAllow] entry or one
+// with no reason is reported. A test fails when the result is not empty.
 func SecretNamed(a NameAllow, roots ...reflect.Type) []string {
 	n := namer{
 		allow:  a,
-		seen:   make(map[reflect.Type]bool),
+		walked: make(map[reflect.Type]bool),
 		fields: make(map[string]bool),
 		enums:  make(map[reflect.Type]bool),
 		found:  make(map[string]bool),
@@ -52,7 +56,7 @@ func SecretNamed(a NameAllow, roots ...reflect.Type) []string {
 	}
 	for _, e := range a.Enums {
 		if !n.enums[e] {
-			n.found["allow entry "+e.String()+": reached by no root"] = true
+			n.found["allow entry "+typeName(e)+": excludes no credential-named field a root reaches"] = true
 		}
 	}
 	out := make([]string, 0, len(n.found))
@@ -64,42 +68,31 @@ func SecretNamed(a NameAllow, roots ...reflect.Type) []string {
 }
 
 type namer struct {
-	seen   map[reflect.Type]bool
+	walked map[reflect.Type]bool
 	fields map[string]bool
 	enums  map[reflect.Type]bool
 	found  map[string]bool
 	allow  NameAllow
 }
 
-// walk judges each struct once, which ends every type cycle through a
-// struct; through records the containers on the way to one, which ends a
-// cycle of containers (type chain []map[string]chain).
+// walk visits each type once per call, which ends every type cycle, through
+// a struct or through containers alone (type loop map[*loop]int).
 func (n *namer) walk(t reflect.Type) {
-	through := make(map[reflect.Type]bool)
-	for !through[t] {
-		through[t] = true
-		switch t.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array:
-			t = t.Elem()
-		case reflect.Map:
-			n.walk(t.Key())
-			t = t.Elem()
-		case reflect.Struct:
-			n.fieldsOf(t)
-			return
-		default:
-			return
-		}
-	}
-}
-
-func (n *namer) fieldsOf(t reflect.Type) {
-	if n.seen[t] {
+	if n.walked[t] {
 		return
 	}
-	n.seen[t] = true
-	for f := range t.Fields() {
-		n.field(t, &f)
+	n.walked[t] = true
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		n.walk(t.Elem())
+	case reflect.Map:
+		n.walk(t.Key())
+		n.walk(t.Elem())
+	case reflect.Struct:
+		for f := range t.Fields() {
+			n.field(t, &f)
+		}
+	default:
 	}
 }
 
@@ -121,8 +114,10 @@ func (n *namer) field(t reflect.Type, f *reflect.StructField) {
 	if name == "" {
 		name = f.Name
 	}
-	if n.holdsText(f.Type, make(map[reflect.Type]bool)) && credentialName.MatchString(strings.ToLower(name)) {
-		id := t.String() + "." + f.Name
+	// The name goes first: holdsText marks an enum reached, and only a
+	// credential-named field's exclusion keeps an enum entry from going stale.
+	if credentialName.MatchString(strings.ToLower(name)) && n.holdsText(f.Type, make(map[reflect.Type]bool)) {
+		id := typeName(t) + "." + f.Name
 		if _, ok := n.allow.Fields[id]; ok {
 			n.fields[id] = true
 		} else {
@@ -145,6 +140,9 @@ func (n *namer) holdsText(t reflect.Type, through map[reflect.Type]bool) bool {
 			n.enums[t] = true
 			return false
 		}
+		return true
+	case reflect.Interface:
+		// encoding/json writes whatever value the interface holds.
 		return true
 	case reflect.Slice:
 		// encoding/json writes a []byte as a base64 string.

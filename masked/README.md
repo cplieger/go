@@ -10,11 +10,11 @@ It replaces the `string` field you would otherwise have to remember never to pri
 
 masked is built for Go services that hold credentials in memory and log, encode or dump the structs that carry them.
 
-- Every `fmt` verb, `%#v`, `%x` and `%p` included, `log/slog` in text and JSON, and `encoding/json` write `[redacted]`, or nothing for the zero value.
-- The text is never held in clear: a `Secret` holds an HMAC-SHA256 tag and the text encrypted with AES-256-CTR under keys drawn at process start, so a printer that walks fields by reflection (go-cmp, go-spew, `%v` of a holder) finds only masked bytes.
+- Every `fmt` verb that reaches its `Format` method, `%#v` and `%x` included, `log/slog` in text and JSON, and `encoding/json` write `[redacted]`, or nothing for the zero value. `%p` prints an address or `fmt`'s bad-verb form and `%T` the type name, neither of them the text.
+- The text is never held in clear: a `Secret` holds an HMAC-SHA256 tag and the text encrypted with AES-256-CTR under keys drawn at process start, so a printer that walks fields by reflection (go-cmp, go-spew, `%v` of a holder) finds only masked bytes or an address.
 - `==` on a `Secret` does not compile. `Equal` compares two 32-byte tags in constant time, and `Key()` returns the tag as a fixed-size map key, so a lookup by secret never handles the text.
 - A `Secret` has no JSON decoder: it is not a wire or storage type, so a request body cannot fill one by accident. Wrap the decoded string with `NewSecret` where it enters.
-- The `maskedtest` package checks your own types and printers in tests: `Unmasked` lists every field of your configuration and client types that can carry text in clear, `SecretNamed` lists every field of your wire types that is named like a credential and holds text, and `Leak` finds a secret's text, its hex and its base64 in any output.
+- The `maskedtest` package checks your own types and printers in tests: `Unmasked` lists every field of your configuration and client types that can carry text in clear, `SecretNamed` lists every field of your wire types that is named like a credential and holds text, and `Leak` reports whether an output contains a secret's text, its hex or base64, or its HMAC pad forms.
 
 Consider a plain `string` with a custom `String` method if you only print through `fmt` and never log, encode or dump the struct that holds it, because masked adds a dependency and an encryption per value.
 
@@ -39,7 +39,7 @@ slog.Info("config loaded", "config", cfg) // config={APIToken:[redacted]}
 req.Header.Set("Authorization", "Bearer "+cfg.APIToken.Reveal())
 ```
 
-Key an in-memory map by `Key()`. The key is the per-process tag: equal texts give equal keys within one process, and it changes at every start, so never store or send it. A durable index keys on `Reveal()` instead.
+Key an in-memory map by `Key()`. The key is the per-process tag: equal texts give equal keys within one process, and it changes at every start, so it is an in-process map key only and is never stored or sent. Derive a durable identifier where the value is hashed or sealed, never by storing `Reveal()`.
 
 ```go
 sessions := map[[32]byte]Session{}
@@ -62,12 +62,12 @@ func TestNoPlainSecrets(t *testing.T) {
 }
 ```
 
-Run `Unmasked` over the types that hold secrets, never over wire types: every title and path on the wire is text, so it would report them all. Check wire types by name instead. `SecretNamed` reports every field whose JSON name contains `key`, `token`, `secret`, `password` or `passkey` and that can hold text, unless you allow it with a reason. Exclude your string enum types so a `token_state` enum field passes:
+Run `Unmasked` over the types that hold secrets, never over wire types: every title and path on the wire is text, so it would report them all. Check wire types by name instead. `SecretNamed` reports every field whose JSON name contains `key`, `token`, `secret`, `password` or `passkey` and that can hold text (a string that is none of your enums, a `[]byte`, or an interface), unless you allow it with a reason. Name a field by its type's import path, type name and field name. Exclude your string enum types so a `token_state` enum field passes:
 
 ```go
 func TestNoCredentialOnTheWire(t *testing.T) {
     allow := maskedtest.NameAllow{
-        Fields: map[string]string{"api.Release.ReleaseKey": "a release's identity, not a credential"},
+        Fields: map[string]string{"example.com/app/api.Release.ReleaseKey": "a release's identity, not a credential"},
         Enums:  []reflect.Type{reflect.TypeFor[api.TokenState]()},
     }
     if found := maskedtest.SecretNamed(allow, reflect.TypeFor[api.Release](), reflect.TypeFor[api.Session]()); len(found) > 0 {
@@ -83,9 +83,9 @@ The package examples on pkg.go.dev show the common cases, and `go test` keeps th
 - `NewSecret` wraps a text, `Reveal` returns it, and `IsZero` reports the zero value, which `NewSecret("")` also gives.
 - `Equal` compares two secrets in constant time, and `Key` returns the 32-byte per-process tag for an in-memory map key, 32 zero bytes for the zero value.
 - `Format`, `LogValue` and `MarshalJSON` write `[redacted]`, or nothing for the zero value. There is no decoder.
-- `maskedtest.Unmasked` walks a type graph and lists every field that can carry text and is not a masked type or an entry of the `maskedtest.Allow` you pass, and reports an allow entry no root reaches, so none goes stale.
-- `maskedtest.SecretNamed` walks wire types as `encoding/json` does and lists every field whose JSON name contains `key`, `token`, `secret`, `password` or `passkey` and whose type can hold text (a string that is not one of your enums, or a `[]byte`), unless the `maskedtest.NameAllow` you pass allows it with a reason. It reports an entry with no reason and an entry no root reaches.
-- `maskedtest.Leak` reports whether an output contains a text in any form `maskedtest.KeyForms` returns: the text, its hex and base64, and its HMAC pad forms, which a printed `crypto/hmac` value can show.
+- `maskedtest.Unmasked` walks a type graph and lists every field that can carry text and is not a masked type or an entry of the `maskedtest.Allow` you pass, and reports an allow entry no root reaches, so none goes stale. A field is named by its type's import path, type name and field name (`example.com/app.User.Email`), so two packages that share a package name stay apart.
+- `maskedtest.SecretNamed` follows `encoding/json`'s field names, tags and embedding through wire types and lists every field whose JSON name contains `key`, `token`, `secret`, `password` or `passkey` and whose type can hold text (a string that is not one of your enums, a `[]byte`, or an interface), unless the `maskedtest.NameAllow` you pass allows it with a reason. A struct field is judged by its own fields, so a type with its own `MarshalJSON` or `MarshalText` needs its own test. It reports an entry with no reason, an entry no root reaches, and an enum that excludes no credential-named field a root reaches.
+- `maskedtest.Leak` reports whether an output contains a text in any form `maskedtest.KeyForms` returns: the text, its hex and base64, and its HMAC pad forms, which a printed `crypto/hmac` value can show. A key longer than the 64-byte SHA-256 block also gets the pads of its SHA-256 hash, which HMAC-SHA-256 uses in its place.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/masked).
 

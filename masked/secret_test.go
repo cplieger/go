@@ -168,7 +168,7 @@ func TestSecretNeverPrints(t *testing.T) {
 	})
 	t.Run("type_graph", func(t *testing.T) {
 		t.Parallel()
-		allow := maskedtest.Allow{Fields: []string{"masked_test.holder.Label"}}
+		allow := maskedtest.Allow{Fields: []string{"github.com/cplieger/go/masked_test.holder.Label"}}
 		for _, line := range maskedtest.Unmasked(allow, reflect.TypeFor[*holder]()) {
 			t.Error(line)
 		}
@@ -177,10 +177,10 @@ func TestSecretNeverPrints(t *testing.T) {
 		t.Parallel()
 		var zero masked.Secret
 		for _, verb := range verbs {
-			if got := strings.TrimSpace(fmt.Sprintf(verb, zero)); got != "" {
+			if got := fmt.Sprintf(verb, zero); got != "" {
 				t.Errorf("Sprintf(%s, zero) = %q, want empty", verb, got)
 			}
-			if got := strings.TrimSpace(fmt.Sprintf(verb, &zero)); got != "" {
+			if got := fmt.Sprintf(verb, &zero); got != "" {
 				t.Errorf("Sprintf(%s, &zero) = %q, want empty", verb, got)
 			}
 		}

@@ -11,6 +11,10 @@ import (
 	"unsafe"
 )
 
+// pkg is this package's import path, which names its types in an allow entry
+// and a reported line.
+const pkg = "github.com/cplieger/go/masked/maskedtest."
+
 // masker stands in for a masked type: Unmasked must not enter it.
 type masker struct{ text string }
 
@@ -48,7 +52,7 @@ func TestUnmasked(t *testing.T) {
 	t.Parallel()
 	allow := Allow{
 		Masked: []reflect.Type{reflect.TypeFor[masker]()},
-		Fields: []string{"maskedtest.kinds.reviewed"},
+		Fields: []string{pkg + "kinds.reviewed"},
 		Types:  []reflect.Type{reflect.TypeFor[time.Time]()},
 	}
 	t.Run("kinds", func(t *testing.T) {
@@ -78,13 +82,13 @@ func TestUnmasked(t *testing.T) {
 		}
 		got := Unmasked(allow, reflect.TypeOf(fixture))
 		want := []string{
-			"maskedtest.kinds.boxed: holds an interface (interface {})",
-			"maskedtest.kinds.byKey: holds a string (string)",
-			"maskedtest.kinds.byValue: holds an integer sequence ([]uint8)",
-			"maskedtest.kinds.bytes: holds an integer sequence ([]uint8)",
-			"maskedtest.kinds.ids: holds an integer sequence ([]int64)",
-			"maskedtest.kinds.schedule: holds an integer sequence ([60]uint32)",
-			"maskedtest.kinds.str: holds a string (string)",
+			pkg + "kinds.boxed: holds an interface (interface {})",
+			pkg + "kinds.byKey: holds a string (string)",
+			pkg + "kinds.byValue: holds an integer sequence ([]uint8)",
+			pkg + "kinds.bytes: holds an integer sequence ([]uint8)",
+			pkg + "kinds.ids: holds an integer sequence ([]int64)",
+			pkg + "kinds.schedule: holds an integer sequence ([60]uint32)",
+			pkg + "kinds.str: holds a string (string)",
 			"struct { s string }.s: holds a string (string)",
 		}
 		if !slices.Equal(got, want) {
@@ -93,7 +97,7 @@ func TestUnmasked(t *testing.T) {
 	})
 	t.Run("root_leaf", func(t *testing.T) {
 		t.Parallel()
-		got := Unmasked(Allow{}, reflect.TypeFor[map[string]bool]())
+		got := Unmasked(Allow{}, nil, reflect.TypeFor[map[string]bool]())
 		want := []string{"map[string]bool: holds a string (string)"}
 		if !slices.Equal(got, want) {
 			t.Errorf("Unmasked() = %q, want %q", got, want)
@@ -114,8 +118,8 @@ func TestUnmasked(t *testing.T) {
 		t.Parallel()
 		got := Unmasked(allow, reflect.TypeFor[struct{ n int }]())
 		want := []string{
-			"allow entry maskedtest.kinds.reviewed: reached by no root",
-			"allow entry maskedtest.masker: reached by no root",
+			"allow entry " + pkg + "kinds.reviewed: reached by no root",
+			"allow entry " + pkg + "masker: reached by no root",
 			"allow entry time.Time: reached by no root",
 		}
 		if !slices.Equal(got, want) {
@@ -130,7 +134,7 @@ func TestUnmasked(t *testing.T) {
 		go func() { done <- Unmasked(Allow{}, reflect.TypeOf(*loop), reflect.TypeFor[list]()) }()
 		select {
 		case got := <-done:
-			want := []string{"maskedtest.node.label: holds a string (string)"}
+			want := []string{pkg + "node.label: holds a string (string)"}
 			if !slices.Equal(got, want) {
 				t.Errorf("Unmasked() = %q, want %q", got, want)
 			}
@@ -167,37 +171,49 @@ func TestLeak(t *testing.T) {
 			t.Errorf("%s: Leak(%q) = %t, want %t", tc.name, tc.got, got, tc.want)
 		}
 	}
-	t.Run("hmac_pads", func(t *testing.T) {
-		t.Parallel()
-		key := make([]byte, 32)
-		unrelated := make([]byte, 32)
-		for i := range key {
-			key[i] = byte(i*7 + 1)
-			unrelated[i] = byte(i*11 + 200)
-		}
-		// crypto/hmac caches the key, zero-padded to the block, XOR 0x36
-		// and XOR 0x5c (RFC 2104 section 2); a printed HMAC shows those bytes.
-		padded := func(b byte) []byte {
-			block := make([]byte, sha256.BlockSize)
-			copy(block, key)
-			for i := range block {
-				block[i] ^= b
+	for name, size := range map[string]int{"hmac_pads": 32, "hmac_pads_long_key": sha256.BlockSize + 1} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			key := make([]byte, size)
+			unrelated := make([]byte, size)
+			for i := range key {
+				key[i] = byte(i*7 + 1)
+				unrelated[i] = byte(i*11 + 200)
 			}
-			return block
-		}
-		for name, block := range map[string][]byte{"ipad": padded(0x36), "opad": padded(0x5c)} {
-			for route, got := range map[string]string{
-				"clear":  string(block),
-				"hex":    hex.EncodeToString(block),
-				"base64": base64.StdEncoding.EncodeToString(block),
-			} {
-				if !Leak(got, string(key)) {
-					t.Errorf("Leak(%s %s, key) = false, want true", name, route)
+			for pad, block := range hmacPads(key) {
+				for route, got := range map[string]string{
+					"clear":  string(block),
+					"hex":    hex.EncodeToString(block),
+					"base64": base64.StdEncoding.EncodeToString(block),
+				} {
+					if !Leak(got, string(key)) {
+						t.Errorf("Leak(%s %s, key) = false, want true", pad, route)
+					}
 				}
 			}
+			if Leak(hex.EncodeToString(unrelated)+base64.StdEncoding.EncodeToString(unrelated), string(key)) {
+				t.Errorf("Leak(an unrelated %d-byte value, key) = true, want false", size)
+			}
+		})
+	}
+}
+
+// hmacPads returns the inner and outer pads crypto/hmac with SHA-256 caches
+// for key, which a printed HMAC shows: the key, hashed first when longer than
+// the block, zero-padded to the block and XORed with 0x36 and 0x5c (RFC 2104
+// section 2).
+func hmacPads(key []byte) map[string][]byte {
+	if len(key) > sha256.BlockSize {
+		sum := sha256.Sum256(key)
+		key = sum[:]
+	}
+	padded := func(b byte) []byte {
+		block := make([]byte, sha256.BlockSize)
+		copy(block, key)
+		for i := range block {
+			block[i] ^= b
 		}
-		if Leak(hex.EncodeToString(unrelated)+base64.StdEncoding.EncodeToString(unrelated), string(key)) {
-			t.Error("Leak(an unrelated 32-byte value, key) = true, want false")
-		}
-	})
+		return block
+	}
+	return map[string][]byte{"ipad": padded(0x36), "opad": padded(0x5c)}
 }

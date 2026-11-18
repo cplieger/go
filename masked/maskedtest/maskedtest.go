@@ -9,6 +9,7 @@
 package maskedtest
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"reflect"
@@ -27,7 +28,10 @@ type Allow struct {
 	// Types are reviewed non-secret types, such as time.Time.
 	Types []reflect.Type
 	// Fields are reviewed non-secret fields, each written as its declaring
-	// type's reflect.Type.String, a dot and the field name: "app.User.Email".
+	// type's name, a dot and the field name: "example.com/app.User.Email". A
+	// named type's name is its import path, a dot and its name, so two
+	// packages sharing a package name stay apart; an unnamed type's is its
+	// reflect.Type.String.
 	Fields []string
 }
 
@@ -40,7 +44,7 @@ var secretType = reflect.TypeFor[masked.Secret]()
 // type does not fix. Masked types, allowed types and allowed fields are not
 // entered; an allow entry no root reached is reported, so none goes stale.
 // Funcs, chans and unsafe pointers pass: every printer shows an address.
-// A test fails when the result is not empty.
+// Nil roots are skipped. A test fails when the result is not empty.
 func Unmasked(a Allow, roots ...reflect.Type) []string {
 	w := walker{
 		allow: a,
@@ -49,12 +53,14 @@ func Unmasked(a Allow, roots ...reflect.Type) []string {
 		found: make(map[string]bool),
 	}
 	for _, r := range roots {
-		w.queue = append(w.queue, item{t: r, owner: r.String()})
+		if r != nil {
+			w.queue = append(w.queue, item{t: r, owner: typeName(r)})
+		}
 	}
 	w.run()
 	names := slices.Clone(a.Fields)
 	for _, t := range slices.Concat(a.Masked, a.Types) {
-		names = append(names, t.String())
+		names = append(names, typeName(t))
 	}
 	for _, name := range names {
 		if !w.used[name] {
@@ -101,7 +107,7 @@ func (w *walker) run() {
 		}
 		w.seen[it] = true
 		if slices.Contains(w.allow.Masked, it.t) || slices.Contains(w.allow.Types, it.t) {
-			w.used[it.t.String()] = true
+			w.used[typeName(it.t)] = true
 			continue
 		}
 		if it.t == secretType {
@@ -113,7 +119,7 @@ func (w *walker) run() {
 
 func (w *walker) fields(t reflect.Type) {
 	for f := range t.Fields() {
-		name := t.String() + "." + f.Name
+		name := typeName(t) + "." + f.Name
 		if slices.Contains(w.allow.Fields, name) {
 			w.used[name] = true
 			continue
@@ -149,6 +155,15 @@ func (w *walker) report(it item, what string) {
 	w.found[it.owner+": holds "+what+" ("+it.t.String()+")"] = true
 }
 
+// typeName names t as [Allow.Fields] documents. reflect.Type.String uses the
+// short package name, which two packages can share.
+func typeName(t reflect.Type) string {
+	if t.Name() != "" && t.PkgPath() != "" {
+		return t.PkgPath() + "." + t.Name()
+	}
+	return t.String()
+}
+
 func isInteger(k reflect.Kind) bool {
 	switch k {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
@@ -182,15 +197,24 @@ func forms(text string) []string {
 
 // KeyForms returns the forms of key a printer can show: key itself, and
 // key XOR 0x36 and XOR 0x5c, the inner and outer pads a crypto/hmac value
-// caches (RFC 2104 section 2), each in clear, hex and base64.
+// caches (RFC 2104 section 2), each in clear, hex and base64. A key longer
+// than sha256.BlockSize also gets the pads of its SHA-256 hash, which
+// HMAC-SHA-256 uses in its place.
 func KeyForms(key string) []string {
 	out := forms(key)
-	for _, pad := range []byte{0x36, 0x5c} {
-		b := []byte(key)
-		for i := range b {
-			b[i] ^= pad
+	padded := [][]byte{[]byte(key)}
+	if len(key) > sha256.BlockSize {
+		sum := sha256.Sum256([]byte(key))
+		padded = append(padded, sum[:])
+	}
+	for _, k := range padded {
+		for _, pad := range []byte{0x36, 0x5c} {
+			b := make([]byte, len(k))
+			for i := range k {
+				b[i] = k[i] ^ pad
+			}
+			out = append(out, forms(string(b))...)
 		}
-		out = append(out, forms(string(b))...)
 	}
 	return out
 }

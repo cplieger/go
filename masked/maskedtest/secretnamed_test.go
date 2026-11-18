@@ -46,6 +46,7 @@ type shapes struct {
 	Upper    string   `json:"X_API_TOKEN"`
 	Tokens   []string `json:"refresh_tokens"`
 	Raw      []byte   `json:"session_secret"`
+	Opaque   any      `json:"opaque_token"`
 	base
 	KeyCount int      `json:"key_count"`
 	Digest   [32]byte `json:"key_digest"`
@@ -53,6 +54,15 @@ type shapes struct {
 
 // chain refers to itself through a slice and a map.
 type chain []map[string]chain
+
+// keyLoop refers to itself through a map key.
+type keyLoop map[*keyLoop]int
+
+// sorted is reached by the enum state only through a field named like no
+// credential.
+type sorted struct {
+	Kind state `json:"kind"`
+}
 
 type wireNode struct {
 	Next  *wireNode `json:"next"`
@@ -66,6 +76,7 @@ type wireNode struct {
 var (
 	release = releaseItem{ReleaseKey: "nyaa:1", Title: "t"}
 	created = feedKeyCreated{Key: "k"}
+	kinded  = sorted{Kind: "set"}
 	nested  = outer{
 		Keys:  map[string]inner{"a": {Passkey: "p", Token: "set", KeyID: 1}},
 		Items: []inner{{Passkey: "p", Token: "set", KeyID: 1}},
@@ -79,8 +90,8 @@ func TestSecretNamed(t *testing.T) {
 		t.Parallel()
 		got := maskedtest.SecretNamed(maskedtest.NameAllow{Enums: enums}, reflect.TypeOf(nested))
 		want := []string{
-			`maskedtest_test.inner.Passkey: json name "ab_passkey" holds text (string)`,
-			`maskedtest_test.outer.Keys: json name "keys" holds text (map[string]maskedtest_test.inner)`,
+			pkg + `inner.Passkey: json name "ab_passkey" holds text (string)`,
+			pkg + `outer.Keys: json name "keys" holds text (map[string]maskedtest_test.inner)`,
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("SecretNamed() =\n%q\nwant\n%q", got, want)
@@ -90,8 +101,8 @@ func TestSecretNamed(t *testing.T) {
 		t.Parallel()
 		allow := maskedtest.NameAllow{
 			Fields: map[string]string{
-				"maskedtest_test.releaseItem.ReleaseKey": "a release's identity: its tracker and torrent id",
-				"maskedtest_test.feedKeyCreated.Key":     "a new feed key, shown once to the owner who created it",
+				pkg + "releaseItem.ReleaseKey": "a release's identity: its tracker and torrent id",
+				pkg + "feedKeyCreated.Key":     "a new feed key, shown once to the owner who created it",
 			},
 		}
 		got := maskedtest.SecretNamed(allow, reflect.TypeOf(release), reflect.TypeOf(created), nil)
@@ -112,19 +123,21 @@ func TestSecretNamed(t *testing.T) {
 			Upper:       "u",
 			Tokens:      []string{"t"},
 			Raw:         []byte("r"),
+			Opaque:      "o",
 			AccessToken: "a",
 			KeyCount:    1,
 			Digest:      [32]byte{1},
 		}
 		got := maskedtest.SecretNamed(maskedtest.NameAllow{Enums: enums}, reflect.TypeFor[*shapes]())
 		want := []string{
-			`maskedtest_test.base.AccessToken: json name "access_token" holds text (string)`,
-			`maskedtest_test.shapes.APIKey: json name "APIKey" holds text (string)`,
-			`maskedtest_test.shapes.Keyring: json name "keyring" holds text (map[maskedtest_test.state]string)`,
-			`maskedtest_test.shapes.Password: json name "pw_password" holds text (*string)`,
-			`maskedtest_test.shapes.Raw: json name "session_secret" holds text ([]uint8)`,
-			`maskedtest_test.shapes.Tokens: json name "refresh_tokens" holds text ([]string)`,
-			`maskedtest_test.shapes.Upper: json name "X_API_TOKEN" holds text (string)`,
+			pkg + `base.AccessToken: json name "access_token" holds text (string)`,
+			pkg + `shapes.APIKey: json name "APIKey" holds text (string)`,
+			pkg + `shapes.Keyring: json name "keyring" holds text (map[maskedtest_test.state]string)`,
+			pkg + `shapes.Opaque: json name "opaque_token" holds text (interface {})`,
+			pkg + `shapes.Password: json name "pw_password" holds text (*string)`,
+			pkg + `shapes.Raw: json name "session_secret" holds text ([]uint8)`,
+			pkg + `shapes.Tokens: json name "refresh_tokens" holds text ([]string)`,
+			pkg + `shapes.Upper: json name "X_API_TOKEN" holds text (string)`,
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("SecretNamed(%T) =\n%q\nwant\n%q", fixture, got, want)
@@ -134,20 +147,20 @@ func TestSecretNamed(t *testing.T) {
 		t.Parallel()
 		allow := maskedtest.NameAllow{
 			Fields: map[string]string{
-				"maskedtest_test.releaseItem.Gone":       "a field that was removed",
-				"maskedtest_test.releaseItem.Title":      "a field whose name is no credential's",
-				"maskedtest_test.feedKeyCreated.Key":     "",
-				"maskedtest_test.releaseItem.ReleaseKey": "a release's identity",
+				pkg + "releaseItem.Gone":       "a field that was removed",
+				pkg + "releaseItem.Title":      "a field whose name is no credential's",
+				pkg + "feedKeyCreated.Key":     "",
+				pkg + "releaseItem.ReleaseKey": "a release's identity",
 			},
 			Enums: []reflect.Type{reflect.TypeFor[state](), reflect.TypeFor[time.Month]()},
 		}
-		got := maskedtest.SecretNamed(allow, reflect.TypeOf(release), reflect.TypeOf(created))
+		got := maskedtest.SecretNamed(allow, reflect.TypeOf(release), reflect.TypeOf(created), reflect.TypeOf(kinded))
 		want := []string{
-			"allow entry maskedtest_test.feedKeyCreated.Key: has no reason",
-			"allow entry maskedtest_test.releaseItem.Gone: names no credential-named text field a root reaches",
-			"allow entry maskedtest_test.releaseItem.Title: names no credential-named text field a root reaches",
-			"allow entry maskedtest_test.state: reached by no root",
-			"allow entry time.Month: reached by no root",
+			"allow entry " + pkg + "feedKeyCreated.Key: has no reason",
+			"allow entry " + pkg + "releaseItem.Gone: names no credential-named text field a root reaches",
+			"allow entry " + pkg + "releaseItem.Title: names no credential-named text field a root reaches",
+			"allow entry " + pkg + "state: excludes no credential-named field a root reaches",
+			"allow entry time.Month: excludes no credential-named field a root reaches",
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("SecretNamed() =\n%q\nwant\n%q", got, want)
@@ -158,12 +171,14 @@ func TestSecretNamed(t *testing.T) {
 		loop := &wireNode{Token: "t", Chain: chain{}}
 		loop.Next = loop
 		done := make(chan []string, 1)
-		go func() { done <- maskedtest.SecretNamed(maskedtest.NameAllow{}, reflect.TypeOf(loop)) }()
+		go func() {
+			done <- maskedtest.SecretNamed(maskedtest.NameAllow{}, reflect.TypeOf(loop), reflect.TypeFor[keyLoop]())
+		}()
 		select {
 		case got := <-done:
 			want := []string{
-				`maskedtest_test.wireNode.Chain: json name "token_chain" holds text (maskedtest_test.chain)`,
-				`maskedtest_test.wireNode.Token: json name "token" holds text (string)`,
+				pkg + `wireNode.Chain: json name "token_chain" holds text (maskedtest_test.chain)`,
+				pkg + `wireNode.Token: json name "token" holds text (string)`,
 			}
 			if !slices.Equal(got, want) {
 				t.Errorf("SecretNamed() = %q, want %q", got, want)
