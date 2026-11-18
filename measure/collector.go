@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -120,11 +121,21 @@ type Collector struct {
 	collect    func(ctx context.Context, e *Emitter)
 	active     map[problemKey]bool // problems the last scrape saw; guarded by mu
 	logger     *slog.Logger        // the registry's WithLogger; set once at registration
+	last       *keptRun            // the latest-started successful run; guarded by mu
 	pending    []logEntry          // transitions not logged yet, in order; guarded by mu
 	descs      []*Desc
+	runs       atomic.Uint64 // runs started, numbering each
 	mu         sync.Mutex
 	registered atomic.Bool
 	logging    bool // a run is draining pending; guarded by mu
+}
+
+// keptRun is what a successful run served, private to the collector, which
+// a run that calls [Emitter.Keep] serves again.
+type keptRun struct {
+	problems map[problemKey]int
+	fams     []Family
+	seq      uint64
 }
 
 // NewCollector returns a collector that runs collect, with the request's
@@ -273,10 +284,12 @@ func (c *Collector) registerInto(r *Registry) error {
 // Emitter records the samples of one run of a collector's collect function.
 type Emitter struct {
 	c        *Collector
+	keptErr  error                       // the first Keep's cause
 	samples  map[*Desc]map[string]Sample // keyed by the label values joined with keySep
 	problems map[problemKey]int          // dropped or warned samples per family and kind
 	mu       sync.Mutex
 	done     bool
+	kept     bool
 }
 
 // keySep joins label values into one map key; it cannot occur in valid UTF-8.
@@ -305,6 +318,23 @@ func (e *Emitter) Emit(d *Desc, value float64, labelValues ...string) {
 		return
 	}
 	e.record(d, Sample{Value: value}, labelValues)
+}
+
+// Keep is what a collect function whose own read failed (its store read, its
+// snapshot) calls instead of emitting, so that a scrape never withholds a
+// series an alert reads. The run serves the samples of the collector's
+// latest successful run again, and nothing before its first, discarding
+// what it emitted and anything emitted after; [Registry.Gather] reports no
+// error for it, and the failure, with err, is logged once when it starts
+// and once when a run succeeds again. A Keep after collect returned does
+// nothing.
+func (e *Emitter) Keep(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.done || e.kept {
+		return
+	}
+	e.kept, e.keptErr = true, err
 }
 
 // EmitState records the current state of one state set of d, a state set
@@ -444,6 +474,7 @@ const (
 	problemShape       // a sample that does not fit its family's type or buckets
 	problemCardinality // a warning only: nothing is dropped
 	problemSanitized   // a warning only: the value was kept with U+FFFD
+	problemKept        // a warning only: a run called Keep, keyed on the first desc
 )
 
 // dropped reports whether the problem drops samples, which Gather returns as
@@ -466,6 +497,8 @@ func (k problemKind) String() string {
 		return fmt.Sprintf("%d or more series", cardinalityWarnThreshold)
 	case problemSanitized:
 		return "label values with invalid UTF-8, replaced with U+FFFD"
+	case problemKept:
+		return "a failed read, so the collector serves its last successful run's samples, none before its first"
 	}
 	return "unknown"
 }
@@ -478,11 +511,16 @@ type problemKey struct {
 // run calls collect once and returns every declared family in declaration
 // order, samples sorted by label values, with the error Gather reports.
 func (c *Collector) run(ctx context.Context) ([]Family, error) {
+	seq := c.runs.Add(1)
 	e := &Emitter{c: c, samples: make(map[*Desc]map[string]Sample), problems: make(map[problemKey]int)}
 	c.collect(ctx, e)
 	e.mu.Lock()
 	e.done = true
+	kept, cause := e.kept, e.keptErr
 	e.mu.Unlock()
+	if kept {
+		return c.serveKept(cause)
+	}
 
 	fams := make([]Family, 0, len(c.descs))
 	for _, d := range c.descs {
@@ -497,20 +535,72 @@ func (c *Collector) run(ctx context.Context) ([]Family, error) {
 		slices.SortFunc(samples, compareLabelValues)
 		fams = append(fams, Family{Name: d.name, Help: d.help, Type: d.typ, Samples: samples})
 	}
-	c.logTransitions(e.problems)
+	c.mu.Lock()
+	if c.last == nil || seq > c.last.seq {
+		c.last = &keptRun{seq: seq, fams: cloneFamilies(fams), problems: maps.Clone(e.problems)}
+	}
+	c.mu.Unlock()
+	c.logTransitions(e.problems, nil)
+	return fams, droppedErr(e.problems)
+}
 
+// serveKept answers a run that called Keep: a copy of the latest successful
+// run's families and its drops, or every family empty before the first.
+func (c *Collector) serveKept(cause error) ([]Family, error) {
+	c.mu.Lock()
+	last := c.last
+	c.mu.Unlock()
+	problems := map[problemKey]int{}
+	var fams []Family
+	if last != nil {
+		problems = maps.Clone(last.problems)
+		fams = cloneFamilies(last.fams)
+	} else {
+		fams = make([]Family, len(c.descs))
+		for i, d := range c.descs {
+			fams[i] = Family{Name: d.name, Help: d.help, Type: d.typ, Samples: []Sample{}}
+		}
+	}
+	problems[problemKey{c.descs[0].name, problemKept}] = 1
+	c.logTransitions(problems, cause)
+	return fams, droppedErr(problems)
+}
+
+// droppedErr joins one error per family and kind of problem that dropped
+// samples, sorted.
+func droppedErr(problems map[problemKey]int) error {
 	var errs []error
-	for k, n := range e.problems {
+	for k, n := range problems {
 		if k.kind.dropped() {
 			errs = append(errs, fmt.Errorf("measure: collector family %q: %d sample(s) dropped for %s", k.family, n, k.kind))
 		}
 	}
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
-	return fams, errors.Join(errs...)
+	return errors.Join(errs...)
+}
+
+// cloneFamilies copies fams deeply, so neither a caller nor the page's
+// in-place label sort reaches the collector's kept copy.
+func cloneFamilies(fams []Family) []Family {
+	out := slices.Clone(fams)
+	for i := range out {
+		out[i].Samples = slices.Clone(out[i].Samples)
+		for j := range out[i].Samples {
+			s := &out[i].Samples[j]
+			s.Labels = slices.Clone(s.Labels)
+			if s.Histogram != nil {
+				h := *s.Histogram
+				h.Buckets = slices.Clone(h.Buckets)
+				s.Histogram = &h
+			}
+		}
+	}
+	return out
 }
 
 // logEntry is one transition logTransitions owes the log.
 type logEntry struct {
+	cause   error // a kept run's Keep error
 	key     problemKey
 	count   int
 	cleared bool
@@ -522,20 +612,25 @@ func (e logEntry) log(l *slog.Logger) {
 		l.Info("measure: collector problem cleared", "family", e.key.family, "problem", e.key.kind.String())
 		return
 	}
+	if e.key.kind == problemKept {
+		l.Warn("measure: collector problem", "family", e.key.family, "problem", e.key.kind.String(), "error", e.cause)
+		return
+	}
 	l.Warn("measure: collector problem", "family", e.key.family, "problem", e.key.kind.String(), "count", e.count)
 }
 
 // logTransitions logs a problem once when a scrape first sees it and once
-// when a later scrape no longer does, never on every scrape. Transitions queue
+// when a later scrape no longer does, never on every scrape; a kept run's
+// entry carries cause. Transitions queue
 // under c.mu in the order they happen, and one run at a time drains the queue
 // with c.mu released: concurrent scrapes log in state order, and a log handler
 // that scrapes the registry only queues, so it cannot deadlock.
-func (c *Collector) logTransitions(seen map[problemKey]int) {
+func (c *Collector) logTransitions(seen map[problemKey]int, cause error) {
 	c.mu.Lock()
 	for k, n := range seen {
 		if !c.active[k] {
 			c.active[k] = true
-			c.pending = append(c.pending, logEntry{key: k, count: n})
+			c.pending = append(c.pending, logEntry{key: k, count: n, cause: cause})
 		}
 	}
 	for k := range c.active {

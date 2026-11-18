@@ -17,7 +17,8 @@ measure is built for Go services whose set of metrics is fixed when the program 
 - The handler writes valid Prometheus text format 0.0.4, with invalid UTF-8 replaced by U+FFFD.
 - Every registry adds the Go and process metrics that client_golang's default collectors serve, under the same names, so stock Go dashboards work. On Linux and macOS, the process ones the OS gives a program without cgo appear when their reads succeed.
 - A labeled metric logs one warning when it reaches 1,000 series, so a runaway label shows in your logs.
-- A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, as gauges, counters, histograms, state sets or info series with any number of labels.
+- A collector serves values your code reads when Prometheus scrapes, from a store, a file or a device, as gauges, counters, histograms, state sets or info series with any number of labels. A collector whose own read fails serves its last successful samples again, so no alert resolves on a scrape that told it nothing.
+- A count read from somewhere else says how that read went: six read states, one rule for folding the reads of a scope's parts, and one series pair per scope, its state and the time of its last whole read.
 - `Gather` reads a registry as structured values, so a test can check a metric without parsing the page, and `GatherOf` reads only the declarations you name.
 - Recording and scraping are safe from many goroutines at once.
 
@@ -124,6 +125,17 @@ func init() {
 }
 ```
 
+To say how the read behind a count went, keep a `Read` per scope and export it beside the count. A read cut short keeps the time of the last whole read, and a connection's read folds its repositories':
+
+```go
+var signal = measure.NewReadDescs("signal", "Each signal's read", []string{"connection", "signal"})
+
+read := measure.Whole(time.Now())                      // a whole read
+read = read.Cut(measure.ReadPartial, "rate_limited")   // a later read stopped early: same time
+conn := measure.FoldRead(repoReads...)                 // the connection's read from its repositories'
+e.EmitRead(signal, conn, "github", "checks")           // in a collector: <prefix>_signal_state and _complete_timestamp_seconds
+```
+
 To declare a series only your charts read, export it to `chartdata` alone. The page never serves it, and only such a series may carry a label with no bound, such as a user's name:
 
 ```go
@@ -141,6 +153,8 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) ha
 - Time each route beside `RecordHTTP`. `RecordHTTP` takes an unlabeled histogram, so observe a `LabeledHistogram` keyed by route in the same middleware, and pass nil as `RecordHTTP`'s histogram.
 - Publish build information as `build_info`, an `Info` series with a `version` label. The registry prefix makes it `<prefix>_build_info{version="..."} 1`, which a query joins onto any other series of the app.
 - Declare a 1-of-n state, such as a mode or a health, as a `StateSet`, so a scrape never sees two states at 1 or none.
+- Export a count read elsewhere at its last whole read's value, beside its scope's `NewReadDescs` pair, and key alert rules on the state and the time, never on the count alone. Before the first whole read, emit no count: its state reads `unread` and its time 0.
+- Call `Keep(err)` in a collector whose own read failed, instead of emitting nothing: the scrape serves the last successful run's samples, so a firing alert never resolves on a read that told it nothing.
 - Take a value that is unknown for a while off the page with `Delete` on its label set. For a series with no labels, declare a `LabeledGauge` with no labels, whose `Delete()` removes it until the next `Set`.
 
 ## API
@@ -151,7 +165,8 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) ha
 - Buckets: `DefaultBuckets` and `APIBuckets`.
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.
 - Registry: `NewRegistry` with its `WithLogger` option (`RegistryOption`), `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement. An `ExportChartdata` `Desc` registers on its own too, reserving its name for a series only charts draw.
-- Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewHistogramDesc`, `NewStateSetDesc`, `NewInfoDesc`, `NewCollector`, `(*Emitter).Emit`, `(*Emitter).EmitHistogram` and `(*Emitter).EmitState`.
+- Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewHistogramDesc`, `NewStateSetDesc`, `NewInfoDesc`, `NewCollector`, `(*Emitter).Emit`, `(*Emitter).EmitHistogram`, `(*Emitter).EmitState` and `(*Emitter).Keep`.
+- Read state: `ReadState` with `ReadComplete`, `ReadPartial`, `ReadBlind`, `ReadUnread`, `ReadUnsupported` and `ReadExcluded`, `ReadStates`, `Read`, `Whole`, `(Read).Cut`, `(Read).Under`, `FoldRead`, `ReadDescs`, `NewReadDescs` and `(*Emitter).EmitRead`.
 - Reading: `Gather` and `GatherOf`, which return `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`; `Find` and `(*Family).Sample` pick a family and a series.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure/v2). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
@@ -203,7 +218,7 @@ The page an unchanged declaration serves is byte for byte v1's, which a test che
 
 ## Documentation
 
-- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, reading a registry with `Gather` and `GatherOf`, label values, HTTP instrumentation, process metrics and the output format.
+- [How measure works](docs/how-it-works.md) covers each metric type, the registry, collectors, read state, reading a registry with `Gather` and `GatherOf`, label values, HTTP instrumentation, process metrics and the output format.
 - [Declarations](docs/declarations.md) covers units, kinds, export, unbounded labels, seeding, taking a series off the page and every refusal.
 - [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
 

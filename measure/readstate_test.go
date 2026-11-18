@@ -348,15 +348,21 @@ func TestKeptSamplesSurviveAReaderEditingThem(t *testing.T) {
 	k := &keepCollector{g: NewGaugeDesc("g", "h", UnitNone, []string{"k"})}
 	r := NewRegistry("")
 	r.MustRegister(NewCollector(k.collect, k.g))
-	k.set(7, nil)
-	gaugeValue(t, r, "g")
-	k.set(0, errors.New("store read failed"))
-	fams, _ := r.Gather(t.Context())
-	f := findFamily(t, fams, "g")
-	for i := range f.Samples {
-		f.Samples[i].Value = 99
-		f.Samples[i].Labels[0].Value = "edited"
+	edit := func() {
+		fams, _ := r.Gather(t.Context())
+		f := findFamily(t, fams, "g")
+		for i := range f.Samples {
+			f.Samples[i].Value = 99
+			f.Samples[i].Labels[0].Value = "edited"
+		}
 	}
+	k.set(7, nil)
+	edit()
+	k.set(0, errors.New("store read failed"))
+	if v, ok := gaugeValue(t, r, "g"); !ok || v != 7 {
+		t.Errorf("after a caller edited the successful Gather, a kept run serves %v (present %v), want 7", v, ok)
+	}
+	edit()
 	if v, ok := gaugeValue(t, r, "g"); !ok || v != 7 {
 		t.Errorf("after a caller edited a kept Gather, serves %v (present %v), want 7", v, ok)
 	}
@@ -393,5 +399,71 @@ func TestKeepUnderConcurrentScrapesNeverServesAFailedRun(t *testing.T) {
 	wg.Wait()
 	if i := slices.Index(served, -1); i >= 0 || len(served) == 0 {
 		t.Errorf("served %d samples, the failed run's -1 at %d; want only successful runs' values", len(served), i)
+	}
+}
+
+func TestKeepServesTheLatestStartedSuccess(t *testing.T) {
+	captureDebugLogs(t)
+	g := NewGaugeDesc("g", "h", UnitNone, []string{"k"})
+	started, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	step := 0
+	r := NewRegistry("")
+	r.MustRegister(NewCollector(func(_ context.Context, e *Emitter) {
+		mu.Lock()
+		step++
+		n := step
+		mu.Unlock()
+		switch n {
+		case 1:
+			close(started)
+			<-release
+			e.Emit(g, 1, "a")
+		case 2:
+			e.Emit(g, 2, "a")
+		default:
+			e.Keep(errors.New("store read failed"))
+		}
+	}, g))
+	slow := make(chan struct{})
+	go func() {
+		defer close(slow)
+		_, _ = r.Gather(t.Context())
+	}()
+	<-started
+	gaugeValue(t, r, "g")
+	close(release)
+	<-slow
+	if v, ok := gaugeValue(t, r, "g"); !ok || v != 2 {
+		t.Errorf("a kept run serves %v (present %v), want 2, the later-started run's, not the later-finished 1", v, ok)
+	}
+}
+
+func TestUnknownReadStateReadsBlind(t *testing.T) {
+	odd := Read{State: "stale", AsOf: readT0, Reason: "odd"}
+	if got := FoldRead(Whole(readT0), odd, Whole(readT0).Cut(ReadUnread, "late")); got.State != ReadBlind || got.Reason != "odd" {
+		t.Errorf("FoldRead with an unknown state = %+v, want blind with its reason", got)
+	}
+	if got := odd.Under(Whole(readT0)); got.State != ReadBlind {
+		t.Errorf("unknown under complete = %s, want blind", got.State)
+	}
+	if got := Whole(readT0).Under(odd); got.State != ReadBlind || got.Reason != "odd" {
+		t.Errorf("complete under an unknown parent = %+v, want blind with the parent's reason", got)
+	}
+}
+
+func TestEmitReadDropsAnUnknownState(t *testing.T) {
+	captureDebugLogs(t)
+	d := NewReadDescs("signal", "Each signal's read", []string{"signal"})
+	r := NewRegistry("app")
+	r.MustRegister(staticCollector(func(e *Emitter) {
+		e.EmitRead(d, Read{State: "stale", AsOf: readT0}, "checks")
+	}, d.State, d.Complete))
+	fams, err := r.Gather(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "app_signal_state") {
+		t.Errorf("Gather = %v, want the dropped state set named", err)
+	}
+	if f := findFamily(t, fams, "app_signal_state"); len(f.Samples) != 0 {
+		t.Errorf("state set serves %d samples for an unknown state, want none", len(f.Samples))
 	}
 }
