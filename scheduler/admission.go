@@ -12,10 +12,10 @@ import (
 // before it is queued. A stored record holding j's Key, its owner's held
 // proposal of its scope, a queued job of its scope or one covering it, or a
 // running one of its scope inside Fresh, of a proposing kind or serving a
-// timer request, answers it instead (Joined), running nothing. It answers
-// *RecentError, ErrQueueFull past a queue or proposal bound (the record ended
-// skipped, queue_full) and during a Hold(all) (no record), ErrStoreUnavailable
-// when the record cannot be written, ErrBatchSize, ErrUnknownKind, ErrScope.
+// timer request, answers it instead (Joined), running nothing. Errors:
+// *RecentError; ErrQueueFull past a queue or proposal bound (the record ended
+// skipped, queue_full) or in a Hold(all) (no record); ErrStoreUnavailable, or
+// ctx's error, when the record write fails; ErrBatchSize, ErrUnknownKind, ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -266,7 +266,7 @@ func (e *Executor[P]) insert(ctx context.Context, en *job[P]) (replay ID, err er
 		if errors.Is(err, ErrCapacity) {
 			return "", err
 		}
-		return "", fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+		return "", storeFault(err)
 	}
 	if replayed {
 		return stored.ID, nil

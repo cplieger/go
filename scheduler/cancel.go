@@ -1,9 +1,6 @@
 package scheduler
 
-import (
-	"context"
-	"fmt"
-)
+import "context"
 
 // Cancel ends a queued job cancelled without running, and cancels a running
 // or yielded job's context so it ends cancelled at the phase it reached,
@@ -12,7 +9,7 @@ import (
 // for an ended job and ErrUnknownJob for an unknown id; a repeat answers as
 // the first cancel did. A job of a kind that keeps no record is unknown once
 // it has ended. ErrStoreUnavailable wraps a failed read of an ended job's
-// record.
+// record; ctx's error ending that read is answered as it is.
 func (e *Executor[P]) Cancel(ctx context.Context, id ID) (stopping bool, err error) {
 	e.mu.Lock()
 	en := e.findLocked(id)
@@ -59,7 +56,7 @@ func (e *Executor[P]) cancelledBefore(ctx context.Context, id ID) (stopping bool
 	rec, ok, err := e.records.Get(ctx, id)
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+		return false, storeFault(err)
 	case !ok:
 		return false, ErrUnknownJob
 	case rec.End != nil && rec.End.Result == ResultCancelled:

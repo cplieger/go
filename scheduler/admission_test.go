@@ -383,6 +383,24 @@ func TestAdmissionWritesRecordFirst(t *testing.T) {
 		})
 	})
 
+	t.Run("a write the caller's context ended answers that context's error", func(t *testing.T) {
+		for name, cause := range map[string]error{
+			"cancelled":         context.Canceled,
+			"deadline, wrapped": fmt.Errorf("insert: %w", context.DeadlineExceeded),
+		} {
+			t.Run(name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("check", "")}})
+					r.store.Fail(memrecords.OpInsert, cause)
+					_, err := r.ex.Start(t.Context(), api("check", "", "alice", payload{}))
+					if !errors.Is(err, cause) || errors.Is(err, scheduler.ErrStoreUnavailable) {
+						t.Errorf("Start with its record write ending on %v = %v, want that error and not ErrStoreUnavailable", cause, err)
+					}
+				})
+			})
+		}
+	})
+
 	t.Run("a store with no room answers ErrCapacity", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("check", "")}})

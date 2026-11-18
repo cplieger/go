@@ -20,7 +20,7 @@ A `Job`'s `Scope` is the app's key for what the job covers, in code grammar plus
 
 ## The record
 
-Admission writes the job's record before the job is queued, and `Start` answers only after the write, so the id a client gets always names a record it can read. A failed write answers `ErrStoreUnavailable` and queues nothing. The executor writes the queued, started, phase and ended states itself, so a kind's `Run` writes only its own data. The store stamps every time on the record (queued, started, each phase's first time and the end) from its own clock in the write that records it, and the executor keeps the queued time `Insert` answers; a time the executor sends is ignored.
+Admission writes the job's record before the job is queued, and `Start` answers only after the write, so the id a client gets always names a record it can read. A failed write answers `ErrStoreUnavailable` and queues nothing; a write the caller's context ended answers that context's error instead. The executor writes the queued, started, phase and ended states itself, so a kind's `Run` writes only its own data. The store stamps every time on the record (queued, started, each phase's first time and the end) from its own clock in the write that records it, and the executor keeps the queued time `Insert` answers; a time the executor sends is ignored.
 
 A keyed start (`Job.Key`) writes its idempotency key in that same insert, and the store sets the key's `Until` to the record's queued time plus the key's `Window`. When a stored record already holds the key, as for a resend after a crash between the commit and the client's answer, `Insert` writes nothing and `Start` answers that job with `Joined` set, queuing and running nothing.
 

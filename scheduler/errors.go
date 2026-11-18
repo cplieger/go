@@ -1,7 +1,9 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -25,6 +27,15 @@ var (
 	ErrUnknownLine      = errors.New("scheduler: unknown line")             // line_unknown; Records.Dismiss
 	ErrStoreUnavailable = errors.New("scheduler: record store unavailable") // wraps a failed Records call: an admission write, or Cancel's read of a job no longer live; store_unavailable
 )
+
+// storeFault wraps a failed Records call as ErrStoreUnavailable. A context
+// error stays as it is: it is the caller's own ending, not a store fault.
+func storeFault(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+}
 
 // CoveredError is Yield's answer when a job whose kind covers the yielded one
 // started. errors.Is(err, ErrCovered) holds for it.

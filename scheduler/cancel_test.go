@@ -88,6 +88,28 @@ func TestCancel(t *testing.T) {
 		})
 	})
 
+	t.Run("a failed read of an ended job's record", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			cause, want, notWant error
+		}{
+			"answers store_unavailable":      {cause: errors.New("disk gone"), want: scheduler.ErrStoreUnavailable},
+			"of a context answers its error": {cause: context.Canceled, want: context.Canceled, notWant: scheduler.ErrStoreUnavailable},
+		} {
+			t.Run(name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "")}})
+					done := r.start(t, api("scan", "", "alice", payload{}))
+					synctest.Wait()
+					r.store.Fail(memrecords.OpGet, tc.cause)
+					_, err := r.ex.Cancel(t.Context(), done.Job)
+					if !errors.Is(err, tc.want) || (tc.notWant != nil && errors.Is(err, tc.notWant)) {
+						t.Errorf("Cancel(an ended job) with its record read failing on %v = %v, want %v and not %v", tc.cause, err, tc.want, tc.notWant)
+					}
+				})
+			})
+		}
+	})
+
 	t.Run("an unknown id", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "")}})
