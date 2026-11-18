@@ -80,9 +80,10 @@ type Config[P any] struct {
 	MaxQueuedPerOwner int
 }
 
-// Observer is told of each transition and each slot wait. Each func is
-// optional and is called synchronously, outside the executor's lock and in
-// order for one job, so it must return promptly.
+// Observer is told of each transition, each slot wait and each move of a
+// live count. Each func is optional, is called outside the executor's lock
+// and must return promptly; Transition and SlotWait are called synchronously
+// and in order for one job.
 type Observer struct {
 	Transition func(Transition)
 	// SlotWait is the time a job or a batch item waited for a named slot;
@@ -144,6 +145,7 @@ type Executor[P any] struct {
 	// scope with no last end counts from it.
 	countFrom time.Time
 	ready     chan struct{} // closed by Run
+	kick      chan struct{} // a Live count changed; relayMoves drains it
 	observer  Observer
 	live      []*job[P] // admitting, queued and running jobs, in admission order
 	wg        sync.WaitGroup
@@ -182,6 +184,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		seen:        map[ScheduledScope]struct{}{},
 		ends:        map[ScheduledScope]LastEnd{},
 		ready:       make(chan struct{}),
+		kick:        make(chan struct{}, 1),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
 		maxPerOwner: perOwner,
@@ -200,7 +203,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		k.Phases = slices.Clone(k.Phases)
 		e.kinds[k.Kind] = &k
 		if k.Slot != "" && e.slots[k.Slot] == nil {
-			e.slots[k.Slot] = newSlot()
+			e.slots[k.Slot] = newSlot(e.moved)
 		}
 	}
 	return e, nil
@@ -254,6 +257,11 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 	e.started = true
 	close(e.ready)
 	e.mu.Unlock()
+	stopMoves := make(chan struct{})
+	var relay sync.WaitGroup
+	if e.observer.Moved != nil {
+		relay.Go(func() { e.relayMoves(stopMoves) })
+	}
 	e.readEnds(ctx, time.Now())
 
 	<-ctx.Done()
@@ -279,6 +287,8 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 		e.ended(ctx, en, *en.stopEnd)
 	}
 	e.wg.Wait()
+	close(stopMoves)
+	relay.Wait()
 	return nil
 }
 

@@ -106,7 +106,17 @@ A panic in a kind's `Run`, in an item's `fn`, or from `Reached` with a phase out
 
 ## The Observer
 
-`Observer.Transition` is called for each job queued, started, reaching a phase, and ended, with `Result` set only on the end. Each func is optional and is called synchronously, outside the executor's lock and in order for one job, so it must return promptly: a series update or a log line.
+`Observer.Transition` is called for each job queued, started, reaching a phase, and ended, with `Result` set only on the end. Each func is optional and is called outside the executor's lock, so it must return promptly: a series update or a log line. `Transition` and `SlotWait` are called synchronously and in order for one job; `Moved` is described under Live counts.
+
+## Live counts
+
+A job's counts stay in memory, so a 500-item batch never writes its record once per item. `Executor.Live()` answers each queued, running or yielded job by id as a `LiveJob`:
+
+- `Position`: the jobs queued ahead of it in its slot, the same count `Start` answers, and 0 once it runs.
+- `Done` and `Total`: its latest `Run.Progress(done, total)`, 0 and 0 until it reports.
+- `Until`: a yielded job's `until`, moved to the time of a `Wake`, and zero otherwise.
+
+A job that is not live is absent, so a reader merges `Live()` over the stored records by id. `Observer.Moved` reports that a count moved: a `Progress` that changed the counts, a queue position, a yield or its wake. It is called at most once a second while counts move, with one trailing call after the last move so the last value is never lost. It runs on `Run`'s own goroutine, outside the executor's lock, so it may call `Live()`, and it is never called once `Run` has returned. An app sets it to the call that tells its clients to re-read the jobs.
 
 ## Hold and shutdown
 

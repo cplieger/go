@@ -47,15 +47,17 @@ const (
 )
 
 // slot runs one job or batch item of a named slot at a time and never
-// preempts it.
+// preempts it. moved is called, holding mu, whenever a queue changes, so it
+// must not block or call the slot.
 type slot struct {
+	moved  func()
 	queues [tiers][]*waiter // FIFO per tier
 	mu     sync.Mutex
 	busy   bool
 	shared tier // the Automatic or Batch tier served last
 }
 
-func newSlot() *slot { return &slot{} }
+func newSlot(moved func()) *slot { return &slot{moved: moved} }
 
 // acquire waits for the slot in class c and answers its release, which is
 // safe to call more than once; a ctx that ends first answers its error.
@@ -86,6 +88,7 @@ func (s *slot) join(t tier) *waiter {
 		return w
 	}
 	s.queues[t] = append(s.queues[t], w)
+	s.moved()
 	return w
 }
 
@@ -99,6 +102,7 @@ func (s *slot) drop(w *waiter) {
 		q := s.queues[w.tier]
 		if i := slices.Index(q, w); i >= 0 {
 			s.queues[w.tier] = slices.Delete(q, i, i+1)
+			s.moved()
 		}
 	case granted:
 		s.handLocked()
@@ -157,6 +161,7 @@ func (s *slot) handLocked() {
 	w := s.queues[t][0]
 	s.queues[t] = s.queues[t][1:]
 	s.grantLocked(w)
+	s.moved()
 }
 
 func (s *slot) grantLocked(w *waiter) {

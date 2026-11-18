@@ -147,7 +147,7 @@ check := health.Check{Signal: ex.Fresh("refresh", ""), Reason: "the refresh has 
 - Run coalescing: `Exclusive` with `WithLogger`, `WithQueueCapacity` and `WithGate`, `Outcome`, and `SlotFile`.
 - Subprocesses: `CommandRunner`, `NewCommandRunner` and `DefaultGrace`.
 - Package `trigger`: `Queue`, `Job` with its `Result`, `Execute`, `Server` and its blocking `Serve`, `Submit`, `Event` with its `EventKind`, and their error values.
-- Executor: `NewExecutor`, `Config`, `KindSpec`, `Executor` with `Run`, `Start`, `Cancel`, `CredentialEnded`, `Schedule`, `Unschedule`, `Fresh`, `Deadline`, `Wake`, `Proposal` and `Hold`, the job handle `Run`, and `Observer` with its `Transition`.
+- Executor: `NewExecutor`, `Config`, `KindSpec`, `Executor` with `Run`, `Start`, `Cancel`, `CredentialEnded`, `Schedule`, `Unschedule`, `Fresh`, `Deadline`, `Wake`, `Proposal`, `Hold` and `Live` with its `LiveJob`, the job handle `Run`, and `Observer` with its `Transition`.
 - Jobs and their records: `Job`, `Kind`, `Phase`, `Trigger`, `Class`, `End`, `Result`, `Reason`, `Line`, `LineState`, `ID`, `ProposalID`, `DigestScope`, the `Records` interface with `Record`, `PhaseAt`, `LastEnd`, `ScheduledScope` and `Key`, and the error values.
 - Cadence and deadlines: `Cadence` with `Scheduled`, `TriggerOnly` and `Retry`, and `Watch` with `NewWatch`.
 - Package `schedulertest`: `Records`, the contract test a `Records` implementation runs.

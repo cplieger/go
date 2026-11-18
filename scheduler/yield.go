@@ -12,7 +12,7 @@ const maxYield = 24 * time.Hour
 // mu; wake and covered are closed at most once, by Wake and by a covering
 // start.
 type yielding struct {
-	until   time.Time     // when it takes its slot back unless woken sooner
+	until   time.Time     // when it takes its slot back; Wake moves it to now
 	wake    chan struct{} // closed by Wake
 	covered chan struct{} // closed once by is set
 	by      ID            // the covering job
@@ -36,6 +36,7 @@ func (r *Run[P]) Yield(ctx context.Context, until time.Time) error {
 	en.yield = y
 	held := en.w
 	en.w = nil
+	e.moved()
 	e.mu.Unlock()
 	if held != nil {
 		en.slot.drop(held)
@@ -82,6 +83,7 @@ func (e *Executor[P]) unyield(en *job[P], w *waiter) error {
 	if by == "" {
 		en.w = w
 	}
+	e.moved()
 	e.mu.Unlock()
 	if by == "" {
 		return nil
@@ -92,8 +94,9 @@ func (e *Executor[P]) unyield(en *job[P], w *waiter) error {
 	return &CoveredError{By: by}
 }
 
-// Wake brings a yielded job's return to its slot forward to now. It answers
-// false when id is not yielded, a cancelled or covered job's wait included.
+// Wake brings a yielded job's return to its slot forward to now, which Live
+// then answers as its Until. It answers false when id is not yielded, a
+// cancelled or covered job's wait included.
 func (e *Executor[P]) Wake(id ID) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -103,7 +106,11 @@ func (e *Executor[P]) Wake(id ID) bool {
 	}
 	if y := en.yield; !y.woken {
 		y.woken = true
+		if now := time.Now(); now.Before(y.until) {
+			y.until = now
+		}
 		close(y.wake)
+		e.moved()
 	}
 	return true
 }

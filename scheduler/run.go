@@ -41,12 +41,15 @@ func (r *Run[P]) Reached(p Phase) {
 	}
 }
 
-// Progress sets the job's done and total counts, held in memory for the live
-// view; it writes nothing to the record.
+// Progress sets the job's done and total counts, which Live answers and a
+// change of which Observer.Moved reports; it writes nothing to the record.
 func (r *Run[P]) Progress(done, total int) {
 	r.e.mu.Lock()
 	defer r.e.mu.Unlock()
-	r.en.done, r.en.total = done, total
+	if r.en.done != done || r.en.total != total {
+		r.en.done, r.en.total = done, total
+		r.e.moved()
+	}
 }
 
 // Commit begins the commit step at phase committing, after which Cancel
