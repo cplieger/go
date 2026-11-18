@@ -24,8 +24,8 @@ func TestReadStatesListsTheSixInOrder(t *testing.T) {
 }
 
 func TestZeroReadIsUnread(t *testing.T) {
-	if got := FoldRead(Read{}); got.State != ReadUnread {
-		t.Errorf("FoldRead(Read{}).State = %q, want unread", got.State)
+	if got := FoldParts(Read{}); got.State != ReadUnread {
+		t.Errorf("FoldParts(Read{}).State = %q, want unread", got.State)
 	}
 	if got := (Read{}).Under(Whole(readT0)); got.State != ReadUnread {
 		t.Errorf("Read{}.Under(complete).State = %q, want unread", got.State)
@@ -38,16 +38,18 @@ func TestWholeIsCompleteAtItsTime(t *testing.T) {
 	}
 }
 
-// foldOracle is section 4.1's rule as written: no parts is unread; all
-// excluded is excluded; of the rest, all unsupported is unsupported;
-// otherwise the worst of blind, unread, partial, complete among what is
-// left. AsOf is the oldest of the parts counted, zero when one has none.
-func foldOracle(parts []Read) (ReadState, time.Time) {
-	if len(parts) == 0 {
-		return ReadUnread, time.Time{}
+// foldOracle is the rule both folds share, written from the definitions: no
+// inputs is unread; all excluded is excluded; of the rest, all unsupported
+// is unsupported; otherwise the supported inputs are counted and whole gives
+// the state from them. AsOf is the oldest of the inputs counted, zero when
+// one has none; worst is the worst counted state, whose reason the fold
+// carries.
+func foldOracle(in []Read, whole func(counted []ReadState) ReadState) (state, worst ReadState, asOf time.Time) {
+	if len(in) == 0 {
+		return ReadUnread, ReadUnread, time.Time{}
 	}
 	var kept, supported []Read
-	for _, p := range parts {
+	for _, p := range in {
 		if p.State != ReadExcluded {
 			kept = append(kept, p)
 		}
@@ -57,30 +59,53 @@ func foldOracle(parts []Read) (ReadState, time.Time) {
 			supported = append(supported, p)
 		}
 	}
-	counted, state := supported, ReadComplete
+	counted := supported
 	switch {
 	case len(kept) == 0:
-		counted, state = parts, ReadExcluded
+		counted, state, worst = in, ReadExcluded, ReadExcluded
 	case len(supported) == 0:
-		counted, state = kept, ReadUnsupported
+		counted, state, worst = kept, ReadUnsupported, ReadUnsupported
 	default:
-		rank := map[ReadState]int{ReadComplete: 0, ReadPartial: 1, ReadUnread: 2, ReadBlind: 3}
-		for _, p := range supported {
-			if rank[p.State] > rank[state] {
-				state = p.State
-			}
+		states := make([]ReadState, len(supported))
+		for i, p := range supported {
+			states[i] = p.State
 		}
+		state, worst = whole(states), worstOf(states)
 	}
-	var asOf time.Time
 	for i, p := range counted {
 		if p.AsOf.IsZero() {
-			return state, time.Time{}
+			return state, worst, time.Time{}
 		}
 		if i == 0 || p.AsOf.Before(asOf) {
 			asOf = p.AsOf
 		}
 	}
-	return state, asOf
+	return state, worst, asOf
+}
+
+// worstOf is the worst of blind, unread, partial and complete.
+func worstOf(states []ReadState) ReadState {
+	for _, s := range []ReadState{ReadBlind, ReadUnread, ReadPartial} {
+		if slices.Contains(states, s) {
+			return s
+		}
+	}
+	return ReadComplete
+}
+
+// partsWhole is a scope of parts: every part complete is complete; none
+// complete or partial is blind when one is blind, else unread; anything
+// else is partial.
+func partsWhole(states []ReadState) ReadState {
+	switch {
+	case !slices.ContainsFunc(states, func(s ReadState) bool { return s != ReadComplete }):
+		return ReadComplete
+	case slices.Contains(states, ReadComplete), slices.Contains(states, ReadPartial):
+		return ReadPartial
+	case slices.Contains(states, ReadBlind):
+		return ReadBlind
+	}
+	return ReadUnread
 }
 
 // partOf gives state s the AsOf at minute m (none for unread, which no whole
@@ -110,7 +135,11 @@ func permutations(parts []Read) [][]Read {
 	return out
 }
 
-func TestFoldReadIsOrderFree(t *testing.T) {
+// checkFoldIsOrderFree checks fold over every single input and every
+// ordered pair and triple of the six states, in every permutation, against
+// the oracle with whole.
+func checkFoldIsOrderFree(t *testing.T, name string, fold func(...Read) Read, whole func([]ReadState) ReadState) {
+	t.Helper()
 	var sets [][]Read
 	for _, a := range allReadStates {
 		sets = append(sets, []Read{partOf(a, 3)})
@@ -121,20 +150,64 @@ func TestFoldReadIsOrderFree(t *testing.T) {
 			}
 		}
 	}
-	for _, parts := range sets {
-		wantState, wantAsOf := foldOracle(parts)
-		for _, perm := range permutations(parts) {
-			got := FoldRead(perm...)
+	for _, in := range sets {
+		wantState, worst, wantAsOf := foldOracle(in, whole)
+		wantReason := partOf(worst, 0).Reason
+		if wantState == ReadComplete {
+			wantReason = ""
+		}
+		for _, perm := range permutations(in) {
+			got := fold(perm...)
 			if got.State != wantState || !got.AsOf.Equal(wantAsOf) {
-				t.Errorf("FoldRead(%v) = %s at %v, want %s at %v", states(perm), got.State, got.AsOf, wantState, wantAsOf)
+				t.Errorf("%s(%v) = %s at %v, want %s at %v", name, states(perm), got.State, got.AsOf, wantState, wantAsOf)
 			}
-			if want := partOf(wantState, 0).Reason; wantState != ReadComplete && got.Reason != want {
-				t.Errorf("FoldRead(%v).Reason = %q, want the worst part's %q", states(perm), got.Reason, want)
-			}
-			if wantState == ReadComplete && got.Reason != "" {
-				t.Errorf("FoldRead(%v).Reason = %q, want none for a complete fold", states(perm), got.Reason)
+			if got.Reason != wantReason {
+				t.Errorf("%s(%v).Reason = %q, want the worst input's %q", name, states(perm), got.Reason, wantReason)
 			}
 		}
+	}
+}
+
+func TestFoldPartsIsOrderFree(t *testing.T) {
+	checkFoldIsOrderFree(t, "FoldParts", FoldParts, partsWhole)
+}
+
+func TestFoldNeedsIsOrderFree(t *testing.T) {
+	checkFoldIsOrderFree(t, "FoldNeeds", FoldNeeds, worstOf)
+}
+
+func TestFoldMixedParts(t *testing.T) {
+	complete := Whole(readT0)
+	blind := Whole(readT0.Add(-time.Hour)).Cut(ReadBlind, "rate_limited")
+	unread := Read{State: ReadUnread, Reason: "not_reached"}
+	partial := Whole(readT0).Cut(ReadPartial, "page_cap")
+	for _, c := range []struct {
+		name         string
+		in           []Read
+		parts, needs ReadState
+		reason       string
+		asOf         time.Time
+	}{
+		{"one blind beside complete ones", []Read{complete, blind, complete}, ReadPartial, ReadBlind, "rate_limited", readT0.Add(-time.Hour)},
+		{"one unread beside a complete one", []Read{unread, complete}, ReadPartial, ReadUnread, "not_reached", time.Time{}},
+		{"one partial beside a complete one", []Read{complete, partial}, ReadPartial, ReadPartial, "page_cap", readT0},
+		{"a blind and an unread", []Read{unread, blind}, ReadBlind, ReadBlind, "rate_limited", time.Time{}},
+		{"only unread ones", []Read{unread, unread}, ReadUnread, ReadUnread, "not_reached", time.Time{}},
+		{"a blind beside a partial one", []Read{partial, blind}, ReadPartial, ReadBlind, "rate_limited", readT0.Add(-time.Hour)},
+		{"every one complete", []Read{complete, complete}, ReadComplete, ReadComplete, "", readT0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, n := FoldParts(c.in...), FoldNeeds(c.in...)
+			if p.State != c.parts || n.State != c.needs {
+				t.Errorf("FoldParts = %s, FoldNeeds = %s, want %s and %s", p.State, n.State, c.parts, c.needs)
+			}
+			if p.Reason != c.reason || n.Reason != c.reason {
+				t.Errorf("reasons %q and %q, want the worst input's %q in both", p.Reason, n.Reason, c.reason)
+			}
+			if !p.AsOf.Equal(c.asOf) || !n.AsOf.Equal(c.asOf) {
+				t.Errorf("AsOf %v and %v, want the oldest, %v", p.AsOf, n.AsOf, c.asOf)
+			}
+		})
 	}
 }
 
@@ -146,20 +219,25 @@ func states(parts []Read) []ReadState {
 	return out
 }
 
-func TestFoldReadOfNoPartsIsUnread(t *testing.T) {
-	if got := FoldRead(); got != (Read{State: ReadUnread}) {
-		t.Errorf("FoldRead() = %+v, want unread with no time", got)
+func TestFoldOfNoInputsIsUnread(t *testing.T) {
+	if got := FoldParts(); got != (Read{State: ReadUnread}) {
+		t.Errorf("FoldParts() = %+v, want unread with no time", got)
+	}
+	if got := FoldNeeds(); got != (Read{State: ReadUnread}) {
+		t.Errorf("FoldNeeds() = %+v, want unread with no time", got)
 	}
 }
 
-func TestFoldReadTakesTheFirstWorstReasonAmongEquals(t *testing.T) {
+func TestFoldTakesTheFirstWorstReasonAmongEquals(t *testing.T) {
 	a := Read{State: ReadBlind, AsOf: readT0, Reason: "rate_limited"}
 	b := Read{State: ReadBlind, AsOf: readT0, Reason: "root_unavailable"}
-	if got := FoldRead(a, b).Reason; got != "rate_limited" {
-		t.Errorf("FoldRead(a, b).Reason = %q, want the first, rate_limited", got)
-	}
-	if got := FoldRead(b, a).Reason; got != "root_unavailable" {
-		t.Errorf("FoldRead(b, a).Reason = %q, want the first, root_unavailable", got)
+	for name, fold := range map[string]func(...Read) Read{"FoldParts": FoldParts, "FoldNeeds": FoldNeeds} {
+		if got := fold(a, b).Reason; got != "rate_limited" {
+			t.Errorf("%s(a, b).Reason = %q, want the first, rate_limited", name, got)
+		}
+		if got := fold(b, a).Reason; got != "root_unavailable" {
+			t.Errorf("%s(b, a).Reason = %q, want the first, root_unavailable", name, got)
+		}
 	}
 }
 
@@ -441,8 +519,13 @@ func TestKeepServesTheLatestStartedSuccess(t *testing.T) {
 
 func TestUnknownReadStateReadsBlind(t *testing.T) {
 	odd := Read{State: "stale", AsOf: readT0, Reason: "odd"}
-	if got := FoldRead(Whole(readT0), odd, Whole(readT0).Cut(ReadUnread, "late")); got.State != ReadBlind || got.Reason != "odd" {
-		t.Errorf("FoldRead with an unknown state = %+v, want blind with its reason", got)
+	for name, fold := range map[string]func(...Read) Read{"FoldParts": FoldParts, "FoldNeeds": FoldNeeds} {
+		if got := fold(odd, Whole(readT0).Cut(ReadUnread, "late")); got.State != ReadBlind || got.Reason != "odd" {
+			t.Errorf("%s with an unknown state beside an unread one = %+v, want blind with its reason", name, got)
+		}
+	}
+	if got := FoldParts(Whole(readT0), odd); got.State != ReadPartial || got.Reason != "odd" {
+		t.Errorf("FoldParts with an unknown state beside a complete one = %+v, want partial with its reason", got)
 	}
 	if got := odd.Under(Whole(readT0)); got.State != ReadBlind {
 		t.Errorf("unknown under complete = %s, want blind", got.State)

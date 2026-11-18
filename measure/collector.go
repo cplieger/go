@@ -621,10 +621,10 @@ func (e logEntry) log(l *slog.Logger) {
 
 // logTransitions logs a problem once when a scrape first sees it and once
 // when a later scrape no longer does, never on every scrape; a kept run's
-// entry carries cause. Transitions queue
-// under c.mu in the order they happen, and one run at a time drains the queue
-// with c.mu released: concurrent scrapes log in state order, and a log handler
-// that scrapes the registry only queues, so it cannot deadlock.
+// entry carries cause. Transitions queue under c.mu in the order they happen,
+// and one run at a time drains the queue with c.mu released: concurrent
+// scrapes log in state order, and a log handler that scrapes the registry
+// only queues, so it cannot deadlock.
 func (c *Collector) logTransitions(seen map[problemKey]int, cause error) {
 	c.mu.Lock()
 	for k, n := range seen {

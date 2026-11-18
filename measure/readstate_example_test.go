@@ -16,16 +16,27 @@ import (
 // A connection's read folds its repositories' reads. A read cut short after
 // a whole one keeps the whole read's time, and a repository the person left
 // out does not count.
-func ExampleFoldRead() {
+func ExampleFoldParts() {
 	at := time.Date(2026, 11, 18, 14, 5, 0, 0, time.UTC)
 	repos := []measure.Read{
 		measure.Whole(at.Add(10 * time.Minute)),
 		measure.Whole(at).Cut(measure.ReadPartial, "rate_limited"),
 		{State: measure.ReadExcluded},
 	}
-	r := measure.FoldRead(repos...)
+	r := measure.FoldParts(repos...)
 	fmt.Println(r.State, r.Reason, r.AsOf.Format("15:04"))
 	// Output: partial rate_limited 14:05
+}
+
+// A count needs every signal it is computed from, so one signal's failed
+// read makes the count's read blind, where FoldParts would read a scope with
+// one failed part as partial.
+func ExampleFoldNeeds() {
+	at := time.Date(2026, 11, 18, 14, 5, 0, 0, time.UTC)
+	pulls := measure.Whole(at)
+	checks := measure.Whole(at.Add(-time.Hour)).Cut(measure.ReadBlind, "rate_limited")
+	fmt.Println(measure.FoldNeeds(pulls, checks).State, measure.FoldParts(pulls, checks).State)
+	// Output: blind partial
 }
 
 // Each read scope exports its state and the time of its last whole read

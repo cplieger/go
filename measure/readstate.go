@@ -7,8 +7,8 @@ import (
 
 // ReadState says how the read behind a count went. The zero ReadState reads
 // as [ReadUnread], so a scope no read reached never reads complete. A value
-// outside the six reads as [ReadBlind] in [FoldRead] and [Read.Under], and
-// [Emitter.EmitRead] drops it.
+// outside the six reads as [ReadBlind] in [FoldParts], [FoldNeeds] and
+// [Read.Under], and [Emitter.EmitRead] drops it.
 type ReadState string
 
 const (
@@ -50,7 +50,7 @@ func (s ReadState) norm() ReadState {
 	return ReadBlind
 }
 
-// worse ranks the states FoldRead takes the worst of.
+// worse ranks the states the folds take the worst of.
 var worse = map[ReadState]int{ReadComplete: 0, ReadPartial: 1, ReadUnread: 2, ReadBlind: 3}
 
 // Read is one scope's read. Its zero value is unread with no time.
@@ -113,27 +113,49 @@ func older(a, b time.Time) time.Time {
 	return a
 }
 
-// FoldRead folds the reads of a scope's parts, or of the signals one count
-// is computed from, into one read. No parts is unread; every part excluded
-// is excluded; else, leaving the excluded out, every part unsupported is
-// unsupported; else, leaving those out too, the worst of blind, unread,
-// partial and complete. AsOf is the oldest among the parts counted, zero
-// when any has none; Reason is the first worst part's, none when complete.
-func FoldRead(parts ...Read) Read {
-	if len(parts) == 0 {
-		return Read{State: ReadUnread}
+// FoldParts folds the reads of one scope's separate parts, each read on its
+// own, such as a connection's repositories. No parts is unread; every part
+// excluded is excluded; else, leaving the excluded out, every part
+// unsupported is unsupported; else, leaving those out too, every part
+// complete is complete, none complete or partial is blind when one is blind
+// and unread otherwise, and anything else is partial, so one failed part
+// among many reads partial. AsOf and Reason follow [FoldNeeds].
+func FoldParts(parts ...Read) Read {
+	r, someRead := fold(parts)
+	if someRead && (r.State == ReadBlind || r.State == ReadUnread) {
+		r.State = ReadPartial
+	}
+	return r
+}
+
+// FoldNeeds folds the reads of the signals one value is computed from and
+// needs all of: the steps of [FoldParts] up to unsupported, then the worst of
+// blind, unread, partial and complete, since a value missing one input is
+// no better than that input. AsOf is the oldest among the reads counted,
+// zero when any has none; Reason is the worst counted read's, the first
+// among equals, none when the fold is complete.
+func FoldNeeds(signals ...Read) Read {
+	r, _ := fold(signals)
+	return r
+}
+
+// fold applies the steps both folds share and the worst-of state, and
+// reports whether a counted read was complete or partial.
+func fold(in []Read) (Read, bool) {
+	if len(in) == 0 {
+		return Read{State: ReadUnread}, false
 	}
 	supported := func(s ReadState) bool { return s != ReadExcluded && s != ReadUnsupported }
 	included := func(s ReadState) bool { return s != ReadExcluded }
 	out, counted := Read{State: ReadExcluded}, func(ReadState) bool { return true }
 	switch {
-	case anyOf(parts, supported):
+	case anyOf(in, supported):
 		out.State, counted = ReadComplete, supported
-	case anyOf(parts, included):
+	case anyOf(in, included):
 		out.State, counted = ReadUnsupported, included
 	}
-	lasting, first := out.State != ReadComplete, true
-	for _, p := range parts {
+	lasting, first, someRead := out.State != ReadComplete, true, false
+	for _, p := range in {
 		s := p.State.norm()
 		if !counted(s) {
 			continue
@@ -145,11 +167,12 @@ func FoldRead(parts ...Read) Read {
 			}
 		}
 		out.AsOf = older(out.AsOf, p.AsOf)
+		someRead = someRead || s == ReadComplete || s == ReadPartial
 		if !lasting && worse[s] > worse[out.State] {
 			out.State, out.Reason = s, p.Reason
 		}
 	}
-	return out
+	return out, someRead
 }
 
 func anyOf(parts []Read, f func(ReadState) bool) bool {

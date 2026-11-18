@@ -125,14 +125,15 @@ func init() {
 }
 ```
 
-To say how the read behind a count went, keep a `Read` per scope and export it beside the count. A read cut short keeps the time of the last whole read, and a connection's read folds its repositories':
+To say how the read behind a count went, keep a `Read` per scope and export it beside the count. A read cut short keeps the time of the last whole read, a connection's read folds its repositories', and a count folds the signals it needs:
 
 ```go
 var signal = measure.NewReadDescs("signal", "Each signal's read", []string{"connection", "signal"})
 
 read := measure.Whole(time.Now())                      // a whole read
 read = read.Cut(measure.ReadPartial, "rate_limited")   // a later read stopped early: same time
-conn := measure.FoldRead(repoReads...)                 // the connection's read from its repositories'
+conn := measure.FoldParts(repoReads...)                // the connection's read from its repositories'
+ready := measure.FoldNeeds(pullsRead, checksRead)      // a count that needs both signals
 e.EmitRead(signal, conn, "github", "checks")           // in a collector: <prefix>_signal_state and _complete_timestamp_seconds
 ```
 
@@ -166,7 +167,7 @@ The [package reference](https://pkg.go.dev/github.com/cplieger/go/measure/v2) ha
 - Timing and HTTP: `NewTimer`, `(*LabeledHistogram).NewTimer` and `RecordHTTP`.
 - Registry: `NewRegistry` with its `WithLogger` option (`RegistryOption`), `Register`, `MustRegister`, `Handler` and the `Metric` interface, which only this package can implement. An `ExportChartdata` `Desc` registers on its own too, reserving its name for a series only charts draw.
 - Collectors: `NewGaugeDesc`, `NewCounterDesc`, `NewHistogramDesc`, `NewStateSetDesc`, `NewInfoDesc`, `NewCollector`, `(*Emitter).Emit`, `(*Emitter).EmitHistogram`, `(*Emitter).EmitState` and `(*Emitter).Keep`.
-- Read state: `ReadState` with `ReadComplete`, `ReadPartial`, `ReadBlind`, `ReadUnread`, `ReadUnsupported` and `ReadExcluded`, `ReadStates`, `Read`, `Whole`, `(Read).Cut`, `(Read).Under`, `FoldRead`, `ReadDescs`, `NewReadDescs` and `(*Emitter).EmitRead`.
+- Read state: `ReadState` with `ReadComplete`, `ReadPartial`, `ReadBlind`, `ReadUnread`, `ReadUnsupported` and `ReadExcluded`, `ReadStates`, `Read`, `Whole`, `(Read).Cut`, `(Read).Under`, `FoldParts`, `FoldNeeds`, `ReadDescs`, `NewReadDescs` and `(*Emitter).EmitRead`.
 - Reading: `Gather` and `GatherOf`, which return `Family` values with their `Type`, `Sample`, `Label`, `HistogramValue`, `Bucket`, `SummaryValue` and `Quantile`; `Find` and `(*Family).Sample` pick a family and a series.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/measure/v2). Its examples are runnable, and `go test` keeps them true. [How measure works](docs/how-it-works.md) gives the bucket values, the record and delete methods and the limits of each type.
