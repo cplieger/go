@@ -129,15 +129,22 @@ type Executor[P any] struct {
 	// moving end (rule 4); an entry goes once its time has passed.
 	recent    map[ScheduledScope]time.Time
 	proposals map[ProposalID]*proposal
-	ready     chan struct{} // closed by Run
-	observer  Observer
-	live      []*job[P] // admitting, queued and running jobs, in admission order
-	wg        sync.WaitGroup
-	mu        sync.Mutex
+	scheduled map[ScheduledScope]*timed
+	seen      map[ScheduledScope]struct{} // every scope scheduled in this executor's life
+	// ends is each scope's last moving end, read from Records at Run and
+	// kept from each later end.
+	ends     map[ScheduledScope]LastEnd
+	runAt    time.Time     // when Run started
+	ready    chan struct{} // closed by Run
+	observer Observer
+	live     []*job[P] // admitting, queued and running jobs, in admission order
+	wg       sync.WaitGroup
+	mu       sync.Mutex
 
 	maxQueued, maxPerOwner int
 	waiting                int
 	started, closed        bool
+	endsRead               bool // Run has read Records.LastEnds, so timers may be armed
 }
 
 // NewExecutor checks cfg and answers an executor that does nothing until Run.
@@ -162,6 +169,9 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		owners:      map[string]int{},
 		recent:      map[ScheduledScope]time.Time{},
 		proposals:   map[ProposalID]*proposal{},
+		scheduled:   map[ScheduledScope]*timed{},
+		seen:        map[ScheduledScope]struct{}{},
+		ends:        map[ScheduledScope]LastEnd{},
 		ready:       make(chan struct{}),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
@@ -213,8 +223,9 @@ func (k *KindSpec[P]) check() error {
 }
 
 // Run drives the timers, slots and dispatch until ctx ends, then cancels each
-// running job and returns once every one has returned. A second call answers
-// an error at once.
+// running job and returns once every one has returned. It reads
+// Records.LastEnds first, and no scheduled scope wakes before that read
+// answers. A second call answers an error at once.
 func (e *Executor[P]) Run(ctx context.Context) error {
 	e.mu.Lock()
 	if e.started {
@@ -224,10 +235,12 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 	e.started = true
 	close(e.ready)
 	e.mu.Unlock()
+	e.readEnds(ctx, time.Now())
 
 	<-ctx.Done()
 	e.mu.Lock()
 	e.closed = true
+	e.stopTimersLocked()
 	for _, en := range slices.Clone(e.live) {
 		switch en.state {
 		case stateQueued:
@@ -399,8 +412,11 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	e.mu.Lock()
 	en.state = stateEnded
 	e.removeLocked(en)
-	if en.spec.Fresh != nil && moving(stored.Result) {
-		e.noteRecentLocked(en, at)
+	if moving(stored.Result) {
+		e.noteEndLocked(en, stored.Result, at)
+		if en.spec.Fresh != nil {
+			e.noteRecentLocked(en, at)
+		}
 	}
 	e.keepLocked(en, at)
 	e.mu.Unlock()

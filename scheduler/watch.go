@@ -34,6 +34,13 @@ func (w *Watch) Beat(at time.Time) {
 	}
 }
 
+// from moves the start the deadline counts from before the first beat.
+func (w *Watch) from(at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.start = at
+}
+
 // Fresh answers a Signal that is healthy until the deadline has passed. It
 // reads the watch at each call, so one Signal follows every later Beat.
 func (w *Watch) Fresh() health.Signal {
