@@ -4,197 +4,188 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"iter"
 	"slices"
+	"strings"
+
+	"golang.org/x/net/html"
 )
 
 // InlineScriptHashes returns a CSP source token 'sha256-<base64>' for each
-// inline <script> element in html, hashing the exact bytes between its '>'
-// and its '</script>' as a browser does. A script with a src attribute is
-// skipped. It reads pages the app controls and is not a sanitizer: malformed
-// or script-less input yields an empty slice, which a caller whose page holds
-// an inline script treats as a broken build rather than loosening its policy.
-func InlineScriptHashes(html []byte) []string {
-	return inlineElementHashes(html, "script", func(attrs []string) bool { return slices.Contains(attrs, "src") })
-}
-
-// InlineStyleHashes returns a CSP source token for each inline <style>
-// element in html, as InlineScriptHashes does for scripts. It covers style
-// elements only: a style attribute needs style-src-attr, which no element
-// hash satisfies.
-func InlineStyleHashes(html []byte) []string {
-	return inlineElementHashes(html, "style", nil)
-}
-
-// inlineElementHashes is the one scanner behind both hash functions, because
-// a second copy whose element bounds drifted from the browser's would emit a
-// policy that blocks the page it was computed from. skip, when non-nil, drops
-// an element by its start tag's attribute names.
-func inlineElementHashes(html []byte, tag string, skip func(attrs []string) bool) []string {
-	openTag := "<" + tag
-	closeTag := "</" + tag
+// inline script element, HTML or SVG, in page's document as html.Parse builds
+// it, hashing the element's text as a browser does. A script a browser never
+// checks against the policy is skipped: one with a source (src on HTML, href
+// on SVG), a data block such as type="application/json", and one left open at
+// end of input. It reads pages the app controls and is not a sanitizer: a
+// script-less page yields an empty slice, which a caller whose page holds an
+// inline script treats as a broken build rather than loosening its policy.
+func InlineScriptHashes(page []byte) []string {
+	doc := parseShell(page)
+	open := openScript(doc, page)
 	var out []string
-	for i := 0; i < len(html); {
-		open := findElementOpen(html, i, openTag)
-		if open < 0 {
-			break
+	for n := range shellElements(doc) {
+		if n != open && isInlineScript(n) {
+			out = append(out, cspHash(childText(n)))
 		}
-		_, attrs, content := scanStartTag(html, open+1)
-		if content < 0 {
-			break
-		}
-		closeIdx := findElementClose(html, content, closeTag)
-		if closeIdx < 0 {
-			break
-		}
-		if skip == nil || !skip(attrs) {
-			out = append(out, cspHash(html[content:closeIdx]))
-		}
-		i = closeIdx + len(closeTag)
 	}
 	return out
+}
+
+// InlineStyleHashes returns a CSP source token for each style element, HTML
+// or SVG, in page, as InlineScriptHashes does for scripts. A style left open
+// at end of input is hashed, since a browser applies it. It covers style
+// elements only: a style attribute needs style-src-attr, which no element
+// hash satisfies.
+func InlineStyleHashes(page []byte) []string {
+	var out []string
+	for n := range shellElements(parseShell(page)) {
+		if isInlineStyle(n) {
+			out = append(out, cspHash(childText(n)))
+		}
+	}
+	return out
+}
+
+// parseShell is page's document as html.Parse builds it with scripting on, as
+// a browser reads a page.
+func parseShell(page []byte) *html.Node {
+	// html.Parse fails only on a read error, which a bytes.Reader never
+	// returns, and it builds a document node for any input.
+	doc, _ := html.Parse(bytes.NewReader(page))
+	return doc
+}
+
+// shellElements yields every element under doc in document order.
+func shellElements(doc *html.Node) iter.Seq[*html.Node] {
+	return func(yield func(*html.Node) bool) {
+		for n := range doc.Descendants() {
+			if n.Type == html.ElementNode && !yield(n) {
+				return
+			}
+		}
+	}
+}
+
+// openScript returns doc's script element that end of input closed, or nil.
+// A browser never runs it (HTML "text" insertion mode, end-of-file token), and
+// html.Parse builds the same tree whether or not the end tag came, so the
+// script is found as the one whose text grows when a byte is appended to page:
+// a closed element takes nothing after its end tag. A tag left unfinished at
+// end of input, such as "</script ", is cut first, since the tokenizer drops
+// it and an appended byte would extend it instead.
+func openScript(doc *html.Node, page []byte) *html.Node {
+	page = page[:len(page)-unfinishedTagLen(page)]
+	base := scripts(parseShell(page))
+	grown := scripts(parseShell(append(slices.Clip(page), '!')))
+	for i, n := range scripts(doc) {
+		if i < len(base) && i < len(grown) && !bytes.Equal(childText(base[i]), childText(grown[i])) {
+			return n
+		}
+	}
+	return nil
+}
+
+// unfinishedTagLen is the length of the tag page ends inside, which the
+// tokenizer reports as its end-of-input token's raw bytes, or 0.
+func unfinishedTagLen(page []byte) int {
+	z := html.NewTokenizer(bytes.NewReader(page))
+	for {
+		if z.Next() == html.ErrorToken {
+			return len(z.Raw())
+		}
+	}
+}
+
+func scripts(doc *html.Node) []*html.Node {
+	var out []*html.Node
+	for n := range shellElements(doc) {
+		if n.Data == "script" && htmlOrSVG(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// isInlineScript follows HTML "prepare the script element" and SVG 2's script
+// element: a script with a source never runs its text, and an HTML script
+// whose type is no script type is a data block the policy never sees.
+func isInlineScript(n *html.Node) bool {
+	switch {
+	case n.Data != "script":
+		return false
+	case n.Namespace == "":
+		_, src := attr(n, "", "src")
+		return !src && scriptType(n)
+	case n.Namespace == svgNamespace:
+		_, href := attr(n, "", "href")
+		_, xlinkHref := attr(n, "xlink", "href")
+		return !href && !xlinkHref
+	}
+	return false
+}
+
+// javaScriptTypes are the JavaScript MIME type essences of
+// https://mimesniff.spec.whatwg.org/#javascript-mime-type.
+var javaScriptTypes = []string{
+	"application/ecmascript", "application/javascript", "application/x-ecmascript",
+	"application/x-javascript", "text/ecmascript", "text/javascript",
+	"text/javascript1.0", "text/javascript1.1", "text/javascript1.2",
+	"text/javascript1.3", "text/javascript1.4", "text/javascript1.5",
+	"text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript",
+}
+
+// scriptType reports whether an HTML script's type and language attributes
+// make it a classic, module, import map or speculation rules script, by the
+// "prepare the script element" steps that read them: a type with parameters,
+// such as "text/javascript; charset=utf-8", matches no essence.
+func scriptType(n *html.Node) bool {
+	typ, hasType := attr(n, "", "type")
+	lang, hasLang := attr(n, "", "language")
+	switch {
+	case hasType && typ != "":
+	case !hasType && hasLang && lang != "":
+		typ = "text/" + lang
+	default:
+		return true
+	}
+	switch typ = lowerASCIIString(strings.Trim(typ, " \t\n\f\r")); typ {
+	case "module", "importmap", "speculationrules":
+		return true
+	}
+	return slices.Contains(javaScriptTypes, typ)
+}
+
+func isInlineStyle(n *html.Node) bool {
+	return n.Data == "style" && htmlOrSVG(n)
+}
+
+// svgNamespace is html.Node's Namespace for an element inside <svg>.
+const svgNamespace = "svg"
+
+func htmlOrSVG(n *html.Node) bool { return n.Namespace == "" || n.Namespace == svgNamespace }
+
+func attr(n *html.Node, namespace, key string) (string, bool) {
+	for _, a := range n.Attr {
+		if a.Namespace == namespace && a.Key == key {
+			return a.Val, true
+		}
+	}
+	return "", false
+}
+
+// childText is n's child text content, the string CSP hashes
+// (https://w3c.github.io/webappsec-csp/#match-element-to-source-list).
+func childText(n *html.Node) []byte {
+	var b bytes.Buffer
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.TextNode {
+			b.WriteString(c.Data)
+		}
+	}
+	return b.Bytes()
 }
 
 func cspHash(content []byte) string {
 	sum := sha256.Sum256(content)
 	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
-}
-
-// findElementOpen returns the index at or after from of the next
-// case-insensitive openTag ("<script") followed by a tag-name boundary, or -1.
-func findElementOpen(html []byte, from int, openTag string) int {
-	for i := from; ; {
-		s := indexFoldASCII(html, i, openTag)
-		if s < 0 {
-			return -1
-		}
-		after := s + len(openTag)
-		if after >= len(html) || isTagNameBoundary(html[after]) {
-			return s
-		}
-		i = after
-	}
-}
-
-// findElementClose returns the index at or after from of the end tag closing
-// the element, or -1. The tokenizer leaves script or style data only on
-// "</name" followed by a tag-name boundary, never at end of input, so a
-// "</scriptfoo>" or a truncated end tag is content.
-func findElementClose(html []byte, from int, closeTag string) int {
-	for i := from; ; {
-		s := indexFoldASCII(html, i, closeTag)
-		if s < 0 {
-			return -1
-		}
-		after := s + len(closeTag)
-		if after < len(html) && isTagNameBoundary(html[after]) {
-			return s
-		}
-		i = after
-	}
-}
-
-// scanStartTag reads the start tag whose name begins at html[from] through
-// the tokenizer states of https://html.spec.whatwg.org/multipage/parsing.html#tag-name-state,
-// returning the lowercase tag name, each lowercase attribute name, and the
-// index after the closing '>', or -1 when input ends first.
-func scanStartTag(html []byte, from int) (tag string, attrs []string, end int) {
-	i := from
-	for i < len(html) && !isTagNameBoundary(html[i]) {
-		i++
-	}
-	tag = lowerASCIIString(string(html[from:i]))
-	for i < len(html) {
-		switch c := html[i]; {
-		case c == '>':
-			return tag, attrs, i + 1
-		case isASCIISpace(c) || c == '/':
-			i++
-		default:
-			var name string
-			name, i = scanAttr(html, i)
-			attrs = append(attrs, name)
-		}
-	}
-	return tag, attrs, -1
-}
-
-// scanAttr reads the attribute whose name begins at html[from] and returns
-// its lowercase name and the index after its value. A leading '=' belongs to
-// the name, and a quote ends nothing but a quoted value, as the tokenizer has it.
-func scanAttr(html []byte, from int) (name string, end int) {
-	i := from + 1
-	for i < len(html) && !isTagNameBoundary(html[i]) && html[i] != '=' {
-		i++
-	}
-	name = lowerASCIIString(string(html[from:i]))
-	i = skipASCIISpace(html, i)
-	if i == len(html) || html[i] != '=' {
-		return name, i
-	}
-	i = skipASCIISpace(html, i+1)
-	if i == len(html) {
-		return name, i
-	}
-	switch q := html[i]; q {
-	case '"', '\'':
-		if n := bytes.IndexByte(html[i+1:], q); n >= 0 {
-			return name, i + 1 + n + 1
-		}
-		return name, len(html)
-	case '>':
-		return name, i
-	}
-	for i < len(html) && !isASCIISpace(html[i]) && html[i] != '>' {
-		i++
-	}
-	return name, i
-}
-
-func skipASCIISpace(b []byte, i int) int {
-	for i < len(b) && isASCIISpace(b[i]) {
-		i++
-	}
-	return i
-}
-
-// indexFoldASCII returns the index at or after from of the first
-// ASCII-case-insensitive match of the lowercase literal needle in b, or -1.
-// It scans b itself, so the index addresses the bytes a browser hashes.
-func indexFoldASCII(b []byte, from int, needle string) int {
-	for i := from; i <= len(b)-len(needle); i++ {
-		if hasFoldPrefix(b[i:], needle) {
-			return i
-		}
-	}
-	return -1
-}
-
-// hasFoldPrefix reports whether b begins with the lowercase ASCII literal
-// lowerNeedle, comparing ASCII letters case-insensitively.
-func hasFoldPrefix(b []byte, lowerNeedle string) bool {
-	if len(b) < len(lowerNeedle) {
-		return false
-	}
-	for i := range len(lowerNeedle) {
-		if lowerASCII(b[i]) != lowerNeedle[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// isTagNameBoundary reports whether c ends an HTML tag name ('>', '/', or ASCII
-// whitespace).
-func isTagNameBoundary(c byte) bool {
-	return c == '>' || c == '/' || isASCIISpace(c)
-}
-
-// isASCIISpace reports whether c is an HTML ASCII whitespace byte.
-func isASCIISpace(c byte) bool {
-	switch c {
-	case ' ', '\t', '\n', '\r', '\f':
-		return true
-	default:
-		return false
-	}
 }

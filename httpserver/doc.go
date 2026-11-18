@@ -16,5 +16,5 @@
 // Middleware is func(http.Handler) http.Handler and Chain lists the outermost
 // first, so Chain(mux, Logging(), Recoverer(), SecurityHeaders()) logs a
 // recovered panic as its 500. The package depends on nothing beyond the
-// standard library, go/ssrf and go/textsafe.
+// standard library, golang.org/x/net/html, go/ssrf and go/textsafe.
 package httpserver

@@ -43,6 +43,7 @@ func TestInlineScriptHashes(t *testing.T) {
 		{"src right after a quoted value is external", `<script title="x"src=/x.js></script>`, nil},
 		{"a quote in an unquoted value opens no quoted value", `<script data=a"b>alert(1)</script>"`, []string{hashToken("alert(1)")}},
 		{"src with spaces around its = is still external", `<script src = "/x.js"></script>`, nil},
+		// HTML "text" insertion mode: a script closed by end of input never runs.
 		{"unclosed script yields nothing", `<script>never closed`, nil},
 		{"open tag never terminated yields nothing", `<script type=module`, nil},
 		{"input ending inside the tag name yields nothing", `<p><script`, nil},
@@ -58,6 +59,32 @@ func TestInlineScriptHashes(t *testing.T) {
 		// An end tag truncated by end-of-input never leaves script data either, so
 		// there is no span to hash.
 		{"close tag truncated at end of input yields nothing", `<script>x=10</script`, nil},
+		{"a script tag in a quoted value is no element", `<div title="<script src=x>"></div><script>alert(1)</script>`, []string{hashToken("alert(1)")}},
+		{"script tags in a quoted value hash nothing", `<div title="</script><script>alert(1)</script>">x</div>`, nil},
+		// WHATWG 13.2.5.28 to 13.2.5.31: after "<!--<script>" inside script
+		// data, "</script>" is text until the escape ends.
+		{
+			"a double-escaped end tag does not end the script",
+			`<script><!--<script>alert(1)</script>more</script>`,
+			[]string{hashToken(`<!--<script>alert(1)</script>more`)},
+		},
+		// The tokenizer's preprocessing turns a NUL in script data into U+FFFD.
+		{"a NUL is hashed as U+FFFD", "<script>a\x00b</script>", []string{hashToken("a\ufffdb")}},
+		{"an svg script", `<svg><script>s=1</script></svg>`, []string{hashToken("s=1")}},
+		{"an svg script with href is external", `<svg><script href="/a.js"></script></svg>`, nil},
+		{"an svg script with xlink:href is external", `<svg><script xlink:href="/a.js"></script></svg>`, nil},
+		{"a json data block is skipped", `<script type="application/json">{"a":1}</script>`, nil},
+		{"a template data block is skipped", `<script type="text/template"><p>x</p></script>`, nil},
+		{"a type with parameters is a data block", `<script type="text/javascript; charset=utf-8">p=1</script>`, nil},
+		{"a javascript type runs", `<script type=" Text/JavaScript ">t=1</script>`, []string{hashToken("t=1")}},
+		{"an empty type runs", `<script type="">e=1</script>`, []string{hashToken("e=1")}},
+		{"a module type runs", `<script type=MODULE>m=1</script>`, []string{hashToken("m=1")}},
+		{"a speculation rules script runs", `<script type="speculationrules">{}</script>`, []string{hashToken("{}")}},
+		{"a language attribute names the type", `<script language="javascript">l=1</script>`, []string{hashToken("l=1")}},
+		{"an unknown language is a data block", `<script language="vbscript">l=2</script>`, nil},
+		{"a language is trimmed after text/ is prepended", `<script language="javascript ">l=3</script>`, []string{hashToken("l=3")}},
+		{"a type attribute outranks language", `<script type="text/template" language="javascript">l=4</script>`, nil},
+		{"an end tag cut at end of input leaves the script open", `<script>x=11</script `, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,35 +113,32 @@ func TestInlineStyleHashes(t *testing.T) {
 		{"newlines hashed verbatim", "<style>\n  d{left:0}\n</style>", []string{hashToken("\n  d{left:0}\n")}},
 		{"styles is not a style tag", `<styles>nope</styles>`, nil},
 		{"a quote in an unquoted value opens no quoted value", `<style data=a'b>k{z:0}</style>'`, []string{hashToken("k{z:0}")}},
-		{"unclosed style yields nothing", `<style>never closed`, nil},
+		// HTML "text" insertion mode pops a style at end of input, and popping
+		// it updates the style block, so a browser applies it.
+		{"unclosed style is hashed", `<style>never closed`, []string{hashToken("never closed")}},
 		// A quote that never closes swallows the rest of the input into the
 		// opening tag, so the later "</style>" is attribute bytes, not an end tag.
 		{"unterminated attribute quote yields nothing", `<style data-x="a>b{c:0}</style>`, nil},
-		// The shared core's close-side boundary rule, on the tag whose plural is
-		// the natural collision: "</styles>" is content, not this element's end
-		// tag.
+		// "</styles>" is content, not this element's end tag.
 		{
 			"a longer close tag name does not end the element",
 			`<style>a{content:"</styles>"}</style>`,
 			[]string{hashToken(`a{content:"</styles>"}`)},
 		},
-		{"close tag truncated at end of input yields nothing", `<style>j{z:0}</style`, nil},
+		{"close tag truncated at end of input is style text", `<style>j{z:0}</style`, []string{hashToken("j{z:0}</style")}},
+		{"an svg style", `<svg><style>c{x:0}</style></svg>`, []string{hashToken("c{x:0}")}},
 		{
 			"gt inside quoted attribute does not end the tag",
 			`<style media="all and (min-width:1px)" data-x="a>b">e{right:0}</style>`,
 			[]string{hashToken("e{right:0}")},
 		},
-		// A media attribute does not change what a browser hashes, and unlike the
-		// script scanner there is no external-reference form to skip: a stylesheet
-		// reference is <link rel="stylesheet">, which style-src covers via 'self'.
+		// A style has no external-reference form to skip: a stylesheet reference
+		// is <link rel="stylesheet">, which style-src covers through 'self'.
 		{"media attribute still hashed", `<style media="print">f{bottom:0}</style>`, []string{hashToken("f{bottom:0}")}},
 		{"src attribute is meaningless on style and does not skip it", `<style src="x">g{gap:0}</style>`, []string{hashToken("g{gap:0}")}},
 		// A <link rel=stylesheet> is not a <style> element and must not be hashed.
 		{"link stylesheet ignored", `<link rel="stylesheet" href="/style.css">`, nil},
 		{"style attribute is not a style element", `<div style="color:red">x</div>`, nil},
-		// Boundary cases inherited from web-terminal-kiro's local scanner when the
-		// library took over the style half: attributes and tag case must not enter
-		// the hash, and a spaced close tag still terminates the block.
 		{"attributes excluded from the hash", `<style type="text/css" media="all">h{x:0}</style>`, []string{hashToken("h{x:0}")}},
 		{"spaced close tag", `<style>i{y:0}</style >`, []string{hashToken("i{y:0}")}},
 	}
@@ -128,29 +152,23 @@ func TestInlineStyleHashes(t *testing.T) {
 	}
 }
 
-// TestInlineHashesSurviveLengthChangingFold is the sharpest boundary case, and it
-// is why the scanner folds ASCII in place instead of calling bytes.ToLower: a
-// unicode-aware fold can CHANGE a rune's byte length (U+0130 folds to the 1-byte
-// 'i'), sliding every index computed on the folded copy off the ORIGINAL bytes so
-// the scanner hashes the wrong content and ships a policy that blocks the page.
-// Pure-ASCII content cannot tell the two implementations apart, so only content
-// carrying such a rune tests it. Inherited from web-terminal-kiro's local style
-// scanner when the library took over that half; asserted for both tags, since
-// they now share one core.
+// TestInlineHashesSurviveLengthChangingFold hashes content holding U+0130,
+// whose Unicode fold is the 1-byte 'i', byte for byte: a reader that folded
+// the page before slicing it would hash other bytes than a browser does.
 func TestInlineHashesSurviveLengthChangingFold(t *testing.T) {
 	const content = "\n  body { content: '\u0130' }\n"
 	want := hashToken(content)
 
 	if got := InlineStyleHashes([]byte("<html><style>" + content + "</style></html>")); !slices.Equal(got, []string{want}) {
-		t.Errorf("InlineStyleHashes = %v, want %v (a length-changing fold slides the content indices)", got, []string{want})
+		t.Errorf("InlineStyleHashes = %v, want %v ", got, []string{want})
 	}
 	if got := InlineScriptHashes([]byte("<html><script>" + content + "</script></html>")); !slices.Equal(got, []string{want}) {
-		t.Errorf("InlineScriptHashes = %v, want %v (a length-changing fold slides the content indices)", got, []string{want})
+		t.Errorf("InlineScriptHashes = %v, want %v ", got, []string{want})
 	}
 }
 
-// The two extractors share one scanner core, so pin that they stay independent:
-// scripts must not pick up style content and vice versa, on a page carrying both.
+// Scripts must not pick up style content and styles script content, on a page
+// carrying both.
 func TestInlineHashesDoNotCrossContaminate(t *testing.T) {
 	html := []byte(`<head><style>body{margin:0}</style><script type="module">boot()</script></head>`)
 	styles := InlineStyleHashes(html)
@@ -160,11 +178,6 @@ func TestInlineHashesDoNotCrossContaminate(t *testing.T) {
 	}
 	if !slices.Equal(scripts, []string{hashToken("boot()")}) {
 		t.Errorf("InlineScriptHashes = %v, want the script body only", scripts)
-	}
-	// A style hash must never equal the script hash on this page, which would mean
-	// the shared core sliced the wrong content boundary for one of them.
-	if styles[0] == scripts[0] {
-		t.Error("style and script hashes are identical; the shared scanner sliced the same bytes twice")
 	}
 }
 

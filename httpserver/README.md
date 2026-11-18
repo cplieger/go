@@ -4,7 +4,7 @@
 
 httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy.
 
-Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `go/ssrf` and `go/textsafe`, and is licensed under Apache-2.0.
+Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `golang.org/x/net/html`, `go/ssrf` and `go/textsafe`, and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -138,6 +138,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - A `StaticHandler` file with an extension outside the content-type table, such as `.jpg` or `.woff`, now answers `application/octet-stream`. Convert it to a listed format, or serve it with your own handler.
 - Code written against `v2.0.0-dev.1` or `v2.0.0-dev.2` calls `ListenAddr` where it called `OpsAddr`, with the same arguments.
 - A shell written against `v2.0.0-dev.1` or `v2.0.0-dev.2` that carries an `on…` event-handler attribute, such as `onclick`, is now refused by `SPA` and `CheckShell`. The policy already blocked the handler in the browser, so attach it from the bundle's script with `addEventListener`.
+- A shell that ends inside a `<script>` is now refused too, because the browser never ran that script: close it with `</script>`.
 - Code written against `v2.0.0-dev.1` wraps each `OutageConfig.Commands` string as `httpserver.OutageCommand{Run: s}`, since the field is now `[]OutageCommand`. A line that explained a command moves into its `Note`, and a line about the outage as a whole into `Notice`.
 
 ## Related projects

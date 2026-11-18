@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -192,39 +191,30 @@ func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
 	return err
 }
 
-// CheckShell refuses a shell SPA's policy would block: one holding an inline
-// script or style element, a style attribute or an on* event-handler
-// attribute, reading attribute names as an HTML parser does. An attribute
-// error names the element and the attribute. SPA calls it on every shell at
-// start; a bundler calls it before writing one.
+// CheckShell refuses a shell SPA's policy would block, read as html.Parse
+// builds its document: one holding an inline script or style element, a style
+// attribute or an on* event-handler attribute, or a script left open at end
+// of input, which never runs. The error names the element, and the attribute
+// where one is the cause. SPA calls it on every shell at start; a bundler
+// calls it before writing one.
 func CheckShell(body []byte) error {
-	switch {
-	case len(InlineScriptHashes(body)) > 0:
-		return errors.New("holds an inline script element")
-	case len(InlineStyleHashes(body)) > 0:
-		return errors.New("holds an inline style element")
+	doc := parseShell(body)
+	if n := openScript(doc, body); n != nil {
+		return fmt.Errorf("leaves a <%s> element open at end of input, so it never runs", n.Data)
 	}
-	return checkShellAttrs(body)
-}
-
-func checkShellAttrs(html []byte) error {
-	for i := 0; i+1 < len(html); i++ {
-		if html[i] != '<' || !isASCIILetter(html[i+1]) {
-			continue
+	for n := range shellElements(doc) {
+		if isInlineScript(n) || isInlineStyle(n) {
+			return fmt.Errorf("holds an inline <%s> element", n.Data)
 		}
-		tag, attrs, end := scanStartTag(html, i+1)
-		for _, a := range attrs {
+		for _, a := range n.Attr {
 			switch {
-			case a == "style":
-				return fmt.Errorf("holds a style attribute on <%s>", tag)
-			case len(a) > len("on") && strings.HasPrefix(a, "on"):
-				return fmt.Errorf("holds the event-handler attribute %q on <%s>", a, tag)
+			case a.Namespace != "":
+			case a.Key == "style":
+				return fmt.Errorf("holds a style attribute on <%s>", n.Data)
+			case len(a.Key) > len("on") && strings.HasPrefix(a.Key, "on"):
+				return fmt.Errorf("holds the event-handler attribute %q on <%s>", a.Key, n.Data)
 			}
 		}
-		if end < 0 {
-			return nil
-		}
-		i = end - 1
 	}
 	return nil
 }
@@ -329,5 +319,3 @@ func writeBody(w http.ResponseWriter, r *http.Request, body []byte) {
 		_, _ = bytes.NewReader(body).WriteTo(w)
 	}
 }
-
-func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }

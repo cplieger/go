@@ -778,7 +778,11 @@ func TestCheckShell(t *testing.T) {
 		"upper case STYLE":  `<P STYLE='x'>x</P>`,
 		"unquoted style":    `<p class=a style=color:red>x</p>`,
 		"style after quote": `<p title="a>b" style=x>y</p>`,
-		"script after a quote in an unquoted value": `<script data=a"b>alert(1)</script>"`,
+		"script after a quote in an unquoted value":   `<script data=a"b>alert(1)</script>"`,
+		"script after a script tag in a quoted value": `<div title="<script src=x>"></div><script>alert(1)</script>`,
+		"style open at end of input":                  `<style>a{}`,
+		"svg script":                                  `<svg><script>s=1</script></svg>`,
+		"svg style":                                   `<svg><style>a{}</style></svg>`,
 	}
 	for name, html := range refused {
 		t.Run(name, func(t *testing.T) {
@@ -788,9 +792,13 @@ func TestCheckShell(t *testing.T) {
 		})
 	}
 	passed := map[string]string{
-		"external script":  `<script type="module" src="/assets/app.js"></script>`,
-		"data-style":       `<body data-style="x">style=plain text</body>`,
-		"style in a value": `<p title="style=x">y</p>`,
+		"external script":               `<script type="module" src="/assets/app.js"></script>`,
+		"data-style":                    `<body data-style="x">style=plain text</body>`,
+		"style in a value":              `<p title="style=x">y</p>`,
+		"script tags in a quoted value": `<div title="</script><script>alert(1)</script>">x</div>`,
+		"json data block":               `<script type="application/json">{"a":1}</script>`,
+		"template data block":           `<script type="text/template"><p onclick=go()>x</p></script>`,
+		"svg script with href":          `<svg><script href="/assets/a.js"></script></svg>`,
 	}
 	for name, html := range passed {
 		t.Run(name, func(t *testing.T) {
@@ -812,6 +820,16 @@ func TestCheckShellRefusesEventHandlers(t *testing.T) {
 		{"after an unquoted value holding a quote", `<p title=a"b onclick=go()>x</p>`, "<p>", `"onclick"`},
 		{"upper-case element", `<DIV ONMOUSEOVER=go()>x</DIV>`, "<div>", `"onmouseover"`},
 		{"style after an unquoted value holding a quote", `<p title=a"b style=x>y</p>`, "<p>", "style"},
+		{"after a comment holding an open quote", `<!-- <a title=' --><body onload="init()">x</body><!-- ' -->`, "<body>", `"onload"`},
+		{"after a title holding an open quote", `<title><a title='</title><body onload=go()>'</title>`, "<body>", `"onload"`},
+		{"after a title holding a fake tag", `<title><x onclick=go()></title><body onload=init()>x</body>`, "<body>", `"onload"`},
+		{"after a textarea holding an open quote", `<textarea><a title='</textarea><button onclick=go()>x</button>'</textarea>`, "<button>", `"onclick"`},
+		{"after a script holding an open quote", `<script src=/a.js>var s = "<a title='";</script><body onload=go()><script src=/b.js>'</script>`, "<body>", `"onload"`},
+		{"after a noscript holding an open quote", `<noscript><a title='</noscript><button onclick=go()>'</noscript>`, "<button>", `"onclick"`},
+		// HTML "in foreign content": an <img> start tag breaks out of svg, so a
+		// svg title is no raw text and the img is an element.
+		{"inside an svg title", `<svg><title><img src=x onerror=alert(1)></title></svg>`, "<img>", `"onerror"`},
+		{"on an svg element", `<svg onload=go()></svg>`, "<svg>", `"onload"`},
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
@@ -831,6 +849,45 @@ func TestCheckShellRefusesEventHandlers(t *testing.T) {
 		"data-on":                 `<div data-on="click">x</div>`,
 		"a bare on attribute":     `<p on="x">y</p>`,
 		"on in text":              `<p>onclick=go()</p>`,
+		"in a comment":            `<!-- <button onclick="old()">x</button> -->`,
+		"in a title":              `<title><button onclick="x">t</title>`,
+		"in a textarea":           `<textarea><img onerror=alert(1)></textarea>`,
+		"in a noscript":           `<noscript><button onclick="x">n</button></noscript>`,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
+// HTML "text" insertion mode: a script closed by end of input never runs, so
+// a shell ending inside one is broken whatever its source.
+func TestCheckShellRefusesAnOpenScript(t *testing.T) {
+	refused := map[string]string{
+		"no end tag":                     `<script src=/assets/a.js>`,
+		"an end tag missing its >":       `<script src=/assets/a.js></script`,
+		"an end tag ending in a space":   `<script src=/assets/a.js></script `,
+		"an end tag ending in attribute": `<script src=/assets/a.js></SCRIPT  a=`,
+		"an inline script":               `<script>x=1</script `,
+		"an svg script":                  `<svg><script href=/assets/a.js>`,
+	}
+	for name, html := range refused {
+		t.Run(name, func(t *testing.T) {
+			err := httpserver.CheckShell([]byte(html))
+			if err == nil {
+				t.Fatalf("CheckShell accepted %q", html)
+			}
+			if !strings.Contains(err.Error(), "<script>") || !strings.Contains(err.Error(), "open at end of input") {
+				t.Errorf("CheckShell(%q) = %q, want it to name <script> left open at end of input", html, err)
+			}
+		})
+	}
+	passed := map[string]string{
+		"a closed external script":                    `<script src=/assets/a.js></script>`,
+		"an unfinished end tag after a closed script": `<script src=/assets/a.js></script><p></script `,
 	}
 	for name, html := range passed {
 		t.Run(name, func(t *testing.T) {
