@@ -41,7 +41,7 @@ type Records interface {
 	Live(ctx context.Context, now time.Time) ([]Record, error)
 	// History answers up to n ended records of kind ("" for every kind)
 	// newest first, after the cursor after, and the cursor of the next page
-	// ("" on the last).
+	// ("" on the last); n below 1 answers an empty last page.
 	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
 	// LastEnds answers each scheduled scope's last moving end: the end of a
 	// job that started and did not end cancelled or interrupted, the one

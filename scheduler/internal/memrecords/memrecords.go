@@ -341,7 +341,7 @@ func (s *Store) Live(_ context.Context, now time.Time) ([]scheduler.Record, erro
 
 // History answers up to n ended records of kind ("" for every kind), newest
 // first, after the cursor after; the cursor is the last answered record's ID
-// and "" on the last page.
+// and "" on the last page, and n below 1 answers an empty last page.
 func (s *Store) History(_ context.Context, kind scheduler.Kind, after string, n int) ([]scheduler.Record, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -364,9 +364,12 @@ func (s *Store) History(_ context.Context, kind scheduler.Kind, after string, n 
 		}
 		start = i + 1
 	}
+	if n < 1 {
+		return []scheduler.Record{}, "", nil
+	}
 	page := ended[start:]
 	next := ""
-	if n > 0 && len(page) > n {
+	if len(page) > n {
 		page = page[:n]
 		next = string(page[n-1].ID)
 	}

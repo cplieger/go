@@ -514,6 +514,11 @@ func history(t *testing.T, r scheduler.Records) {
 	if err != nil || next != "" || len(all) != 6 {
 		t.Errorf("History(every kind) = %d records, next %q, %v; want the 6 ended, the last page", len(all), next, err)
 	}
+
+	none, next, err := r.History(t.Context(), "", "", 0)
+	if err != nil || next != "" || len(none) != 0 {
+		t.Errorf("History(n 0) = %d records, next %q, %v; want an empty last page", len(none), next, err)
+	}
 }
 
 func lastEnds(t *testing.T, r scheduler.Records) {
