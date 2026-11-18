@@ -9,8 +9,7 @@ import (
 	"github.com/cplieger/go/scheduler/v2"
 )
 
-// EndInFunc is a store's own-commit end: the job's end written in the app's
-// transaction, as jobstore's EndIn is.
+// EndInFunc is a store's own-commit end: the job's end written in the app's transaction.
 type EndInFunc func(ctx context.Context, id scheduler.ID, e scheduler.End) error
 
 // EndIn runs the own-commit end's contract against the stores open answers,
