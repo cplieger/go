@@ -43,10 +43,8 @@ func TestCanonicalHost(t *testing.T) {
 		{"v4-mapped v6 collapses to ipv4", "[::ffff:192.168.1.5]:443", "192.168.1.5"},
 		{"trailing-dot fqdn", "localhost.", "localhost"},
 
-		// Malformed authorities are rejected, never repaired. Each of the
-		// bracket/colon shapes below used to collapse onto a plausible
-		// allowlist key, silently widening an exact-match gate (the
-		// adversarial-review finding this pins).
+		// Malformed authorities are rejected, never repaired onto a plausible
+		// allowlist key, which would widen an exact-match gate.
 		{"lone port is empty", ":9848", ""},
 		// An unbracketed colon-bearing value can only be an address, and no
 		// address carries an FQDN dot — that dot belongs to the DNS-name and
@@ -73,15 +71,12 @@ func TestCanonicalHost(t *testing.T) {
 		{"all-numeric dotted non-ip", "1.2.3.4.5", ""},
 		{"non-ascii name (use punycode)", "wébterm.example", ""},
 
-		// The case-fold laundering class. strings.ToLower applies Unicode
-		// simple case mapping, under which two ALREADY-ASSIGNED runes map into
-		// ASCII: U+0130 to "i" and U+212A to "k". Measured on go1.26.7
-		// (Unicode 15) and go1.27.0 (Unicode 17), those two are the complete
-		// set that lands in the byte class validHostname accepts, so a
-		// canonicalizer built on strings.ToLower turned each of these into an
-		// ASCII key an operator's allowlist could hold — the same widening the
-		// bracket and port shapes above pin, arriving through the fold instead
-		// of the grammar. The fold is ASCII-only, so they reject.
+		// The case-fold laundering class: under Unicode simple case mapping
+		// (strings.ToLower) U+0130 maps to "i" and U+212A to "k", the only
+		// runes that land in validHostname's byte class (measured on Unicode
+		// 15 and 17). A canonicalizer built on that fold turns each of these
+		// into an ASCII key an allowlist could hold; the fold is ASCII-only,
+		// so they reject.
 		{"kelvin sign does not launder to k", "\u212Aibana.example", ""},
 		{"dotted capital I does not launder to i", "k\u0130bana.example", ""},
 		{"both laundering runes", "\u212A\u0130.example", ""},
@@ -175,11 +170,9 @@ func TestLoopbackRequest(t *testing.T) {
 		})
 	}
 
-	// Forwarded headers are ignored in BOTH directions. Their presence must not
-	// ADMIT (the header is client-controlled, so honoring it would hand a remote
-	// caller the gate) and must not REFUSE either (an app that wants a
-	// provenance deny composes it around this predicate; folding it in here
-	// would make that policy the library's).
+	// Forwarded headers are client-controlled, so they must not admit, and a
+	// provenance deny is the app's to compose around this predicate, so they
+	// must not refuse.
 	t.Run("forwarded headers change nothing", func(t *testing.T) {
 		forwarded := map[string]string{
 			"X-Forwarded-For":  "127.0.0.1",
@@ -217,13 +210,9 @@ func TestLoopbackRequest(t *testing.T) {
 		}
 	})
 
-	// Why this predicate exists rather than a HostPolicy call, pinned rather
-	// than only asserted in the godoc: HostPolicy checks its Host-only
-	// allowlist BEFORE the two-legged loopback exemption, so an operator who
-	// allows "localhost" (so their own browser reaches the service) thereby
-	// admits a REMOTE caller that sends Host: localhost — the exact request
-	// LoopbackRequest must refuse. The two answer different questions, and this
-	// case fails if that ordering ever changes underneath the doc comment.
+	// HostPolicy checks its Host-only allowlist before the loopback exemption,
+	// so allowing "localhost" admits a remote caller sending Host: localhost,
+	// the request LoopbackRequest must refuse.
 	t.Run("HostPolicy admits the caller this predicate refuses", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
 		req.Host = "localhost:9848"
@@ -270,12 +259,9 @@ func TestParseHostList(t *testing.T) {
 			[]string{"[allowed.example]", "allowed[.]example", "allowed.example:garbage:443", "example.com.."},
 		},
 		{
-			// An operator entry spelled with a case-fold laundering rune is
-			// reported rather than silently canonicalized to its ASCII
-			// lookalike. Fail-loud is the right direction on both doors: the
-			// entry the operator meant is one keystroke away, and admitting the
-			// ASCII key from a non-ASCII entry would put a name in the map that
-			// no request spelling matches byte-for-byte.
+			// An entry spelled with a case-fold laundering rune is reported,
+			// never canonicalized to its ASCII lookalike, which no request
+			// spelling would match byte for byte.
 			"case-fold laundering entries reported",
 			[]string{"\u212Aibana.example", "k\u0130bana.example"},
 			true, 0,
@@ -732,4 +718,107 @@ func ownNonLoopbackIPv4(t *testing.T) net.IP {
 	}
 	t.Skip("this host has no non-loopback IPv4 address")
 	return nil
+}
+
+// WithIPLiteralHosts admits a Host that is an IP address beside the allowlist:
+// IPv4 or IPv6, bracketed IPv6 optionally with a zone as net/netip parses one,
+// and a port wherever CanonicalHost takes one. A name stays under the
+// allowlist, so a rebound page, whose Host is the attacker's name, is refused.
+func TestHostPolicyIPLiteralHosts(t *testing.T) {
+	cases := []struct {
+		name, host string
+		want       bool
+	}{
+		{"ipv4", "192.0.2.7", true},
+		{"ipv4 with a port", "192.0.2.7:8080", true},
+		{"ipv4 with a trailing dot", "192.0.2.7.", true},
+		{"bracketed ipv6", "[2001:db8::7]", true},
+		{"bare ipv6", "2001:db8::7", true},
+		{"bracketed ipv6 with a port", "[2001:db8::7]:8080", true},
+		{"bracketed v4-mapped ipv6", "[::ffff:192.0.2.7]:8080", true},
+		{"ipv6 with a zone", "[fe80::1%eth0]", true},
+		{"ipv6 with a zone and a port", "[fe80::1%eth0]:8080", true},
+		{"ipv6 with a percent-encoded zone", "[fe80::1%25eth0]:8080", true},
+		{"listed name still passes", "app.example:8080", true},
+
+		{"name refused", "attacker.evil", false},
+		{"name with a port refused", "attacker.evil:8080", false},
+		{"ip-shaped name refused", "192.0.2.7.attacker.evil", false},
+		{"bracketed ipv4 refused (brackets are ipv6-only)", "[192.0.2.7]", false},
+		{"bracketed ipv4 with a zone refused", "[192.0.2.7%eth0]", false},
+		{"bracketed name refused", "[attacker.evil]:8080", false},
+		{"ipv4 with a bad port refused", "192.0.2.7:garbage", false},
+		{"zoned ipv6 with a bad port refused", "[fe80::1%eth0]:99999", false},
+		{"zoned ipv6 with an empty zone refused", "[fe80::1%]", false},
+		{"zoned ipv6 with text after the bracket refused", "[fe80::1%eth0]x", false},
+		{"unclosed bracket refused", "[fe80::1%eth0", false},
+		{"unbracketed zoned ipv6 refused", "fe80::1%eth0", false},
+		{"leading-zero ipv4 refused", "192.0.2.007", false},
+		{"empty Host refused", "", false},
+	}
+	request := func(host string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
+		req.Host = host
+		req.RemoteAddr = "203.0.113.9:5000"
+		return req
+	}
+	p, invalid := httpserver.ParseHostList([]string{"app.example"},
+		httpserver.WithIPLiteralHosts(true), httpserver.WithHostAllowlistLogger(discardLogger()))
+	if len(invalid) != 0 {
+		t.Fatalf("unexpected invalid entries: %v", invalid)
+	}
+	h := p.Middleware()(okHandler())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := p.Allows(request(tc.host)); got != tc.want {
+				t.Errorf("Allows(Host %q) = %v, want %v", tc.host, got, tc.want)
+			}
+			want := http.StatusForbidden
+			if tc.want {
+				want = http.StatusOK
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, request(tc.host))
+			if rec.Code != want {
+				t.Errorf("Middleware(Host %q) = %d, want %d", tc.host, rec.Code, want)
+			}
+		})
+	}
+}
+
+// The option is off by default, false means the same as leaving it out, and
+// the last call wins.
+func TestHostPolicyIPLiteralHostsOffByDefaultAndLastWins(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []httpserver.HostAllowlistOption
+		want bool
+	}{
+		{"option omitted", nil, false},
+		{"false", []httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(false)}, false},
+		{"true", []httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(true)}, true},
+		{
+			"true then false closes it",
+			[]httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(true), httpserver.WithIPLiteralHosts(false)},
+			false,
+		},
+		{
+			"false then true opens it",
+			[]httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(false), httpserver.WithIPLiteralHosts(true)},
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := httpserver.ParseHostList([]string{"app.example"}, tc.opts...)
+			for _, host := range []string{"192.0.2.7:8080", "[2001:db8::7]:8080", "[fe80::1%eth0]:8080"} {
+				req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
+				req.Host = host
+				req.RemoteAddr = "203.0.113.9:5000"
+				if got := p.Allows(req); got != tc.want {
+					t.Errorf("Allows(Host %q) = %v, want %v", host, got, tc.want)
+				}
+			}
+		})
+	}
 }

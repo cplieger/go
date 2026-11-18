@@ -80,7 +80,8 @@ What to log, at which level, and what exit code to use stay your decisions for a
 `/healthz` and `/metrics` live on a listener of their own, the ops listener, so they never share a port with the app's product routes or its API. An app with no product port uses the same listener alone.
 
 ```go
-opsAddr := httpserver.OpsAddr(envx.String("OPS_LISTEN_ADDR"), ":9738")
+listenAddr := httpserver.ListenAddr(envx.String("LISTEN_ADDR"), ":9737")
+opsAddr := httpserver.ListenAddr(envx.String("OPS_LISTEN_ADDR"), ":9738")
 if err := httpserver.CheckListenAddrs(
 	httpserver.ListenSetting{Name: "LISTEN_ADDR", Addr: listenAddr},
 	httpserver.ListenSetting{Name: "OPS_LISTEN_ADDR", Addr: opsAddr},
@@ -109,7 +110,7 @@ return httpserver.RunWithOps(ctx, ops, httpserver.Served{
 })
 ```
 
-- `OpsAddr(value, def)` cuts edge spaces and invisible runes from the raw value and answers `def` for a blank one. The app documents `def` beside its product port. With `def` `""`, a blank value turns the listener off: `ListenOps` binds nothing, `Addr` is nil and `RunWithOps` serves the product listeners alone. httpserver reads no environment.
+- `ListenAddr(value, def)` reads every listener setting, `LISTEN_ADDR` and `OPS_LISTEN_ADDR` alike. It cuts edge spaces and invisible runes (a zero-width space, a byte-order mark, a pasted line ending) from the raw value and answers `def` for a blank one. The app documents each `def`, such as `:9737` for `LISTEN_ADDR` and `:9738` for `OPS_LISTEN_ADDR`. With `def` `""`, a blank value turns that listener off: for `OPS_LISTEN_ADDR`, `ListenOps` binds nothing, `Addr` is nil and `RunWithOps` serves the product listeners alone. `Listen`, `CheckListenAddrs` and `ListenOps` read each address through the same trim, so a raw value passed straight to them is read as `ListenAddr` would read it. httpserver reads no environment.
 - `CheckListenAddrs` takes every TCP listener the app opens, once, and refuses any two that would bind one socket, naming both settings and the port. Ports compare as `net.Listen` resolves them (`09737` is `9737`, `http` is `80`). Two addresses on one port clash when their hosts are equal after unmapping (`[::ffff:127.0.0.1]` is `127.0.0.1`), when either host is unspecified (empty, `0.0.0.0` or `[::]`), or when either is a host name, which may resolve to the other's address. On Linux Go's `tcp` listener on `[::]` also takes IPv4, so `[::]:9737` beside `0.0.0.0:9737` is refused. A blank value, port 0 and a value with no resolvable port pass, and `net.Listen` reports the last.
 - `Listen(ctx, setting)` binds one TCP listener. A blank address is an error. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error, or `ctx` ending, fails at once. The error names the setting and the address, with control characters cleaned, and wraps the cause, so `errors.Is(err, syscall.EADDRINUSE)` and `CausedByCancellation` see through it. Bind each product listener with it.
 - `ListenOps` binds through `Listen` before it returns, `Setting` naming `Addr` in its error. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.

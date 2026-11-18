@@ -2,10 +2,10 @@ package httpserver
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"path"
 	"strconv"
@@ -25,12 +25,12 @@ type SPAConfig struct {
 const immutableCache = "public, max-age=31536000, immutable"
 
 // SPA serves a single-page app's bundle (BundlePath) for GET and HEAD. A
-// listed asset answers through StaticHandler (immutable; a BundleClassic entry
-// no-cache), a notice text/plain, /favicon.ico 204, and any other path under
-// assets/ or licenses/ a refusal, whatever the pages match; then a page path
-// answers its shell, any other the default shell with 404 (no-cache). A path
-// at or under APIPrefix, a dot segment no page matches, another method and,
-// unbuilt, a page (ui_unbuilt) answer a refusal through Errors, no-store.
+// listed asset answers through StaticHandler (immutable; a BundleClassic or
+// stable entry no-cache), a notice text/plain, /favicon.ico 204, any other
+// path under assets/ or licenses/ a refusal, whatever the pages match; then a
+// page path answers its shell, any other the default shell with 404, no-cache.
+// A path at or under APIPrefix, a dot segment no page matches, another method
+// and, unbuilt, a page (ui_unbuilt) answer a refusal through Errors, no-store.
 // Every answer carries SPAPolicy's policy and every no-cache ETag binds it.
 func SPA(c SPAConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	policy, err := SPAPolicy(c.CSPAdd)
@@ -136,12 +136,17 @@ func (s *spaServer) load(fsys fs.FS, b Bundle, pages []Page) error {
 }
 
 // loadFiles keeps the notices in memory and the listed assets' handler, every
-// other listed root file being refused as a path.
+// other listed root file, a shell, being refused as a path.
 func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
+	var err error
+	if s.static, s.served, err = bundleAssets(fsys, b, s.policy); err != nil {
+		return err
+	}
 	s.refused = map[string]bool{BundlePath: true}
 	s.notices = make(map[string]*spaFile)
 	for name, hash := range b.Files {
 		switch {
+		case s.served[name]:
 		case !strings.Contains(name, "/"):
 			s.refused[name] = true
 		case strings.HasPrefix(name, "licenses/"):
@@ -150,35 +155,35 @@ func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
 			}
 		}
 	}
-	var err error
-	s.static, s.served, err = bundleAssets(fsys, b, s.policy)
-	return err
+	return nil
 }
 
-// bundleAssets is the StaticHandler for the files b lists under assets/ with
-// a content-type table extension, and those files' tree paths: the manifest
-// hash and immutable for each, a BundleClassic entry no-cache under a tag
-// bound to policy. SPA and OutagePage both serve assets through it.
+// bundleAssets is the StaticHandler for b's stable entries and the files b
+// lists under assets/ with a content-type table extension, and those files'
+// tree paths: the manifest hash and immutable for each, a BundleClassic or
+// stable entry no-cache under a tag bound to policy. SPA and OutagePage both
+// serve assets through it.
 func bundleAssets(fsys fs.FS, b Bundle, policy string) (http.Handler, map[string]bool, error) {
-	classic := make(map[string]bool)
+	stable := stablePaths(b.Entries)
+	noCache := maps.Clone(stable)
 	for _, e := range b.Entries {
 		if e.Kind == BundleClassic {
-			classic[e.Path] = true
+			noCache[e.Path] = true
 		}
 	}
 	tags := make(map[string]string)
 	served := make(map[string]bool)
 	for name, hash := range b.Files {
 		switch {
-		case !strings.HasPrefix(name, "assets/"), contentTypes[path.Ext(name)] == "":
-		case classic[name]:
+		case !stable[name] && (!strings.HasPrefix(name, "assets/") || contentTypes[path.Ext(name)] == ""):
+		case noCache[name]:
 			served[name], tags[name] = true, policyETag(hash, policy)
 		default:
 			served[name], tags[name] = true, `"`+hash+`"`
 		}
 	}
 	h, err := StaticHandler(fsys, WithStaticETags(tags), WithStaticCacheControl(func(name string) string {
-		if classic[name] {
+		if noCache[name] {
 			return "no-cache"
 		}
 		return immutableCache
@@ -192,17 +197,35 @@ func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
 	return err
 }
 
-// CheckShell refuses a shell SPA's policy would block: one holding an inline
-// script or style element or a style attribute. SPA calls it on every shell at
-// start; a bundler calls it before writing one.
+// CheckShell refuses a shell SPA's policy would block, read as html.Parse
+// builds its document: an inline script or style element, a style or on*
+// event-handler attribute, or a script left open at end of input. It refuses a
+// shell html.Parse cannot read whole: past 512 nested elements, or a <template>
+// in an svg or math integration point such as <foreignObject> (one in svg
+// markup itself is read). Its own limit refuses over 16 <template spellings
+// after the first <svg or <math in the bytes, comments and attributes included.
+// The error names the element, and the attribute where one is the cause.
 func CheckShell(body []byte) error {
-	switch {
-	case len(InlineScriptHashes(body)) > 0:
-		return errors.New("holds an inline script element")
-	case len(InlineStyleHashes(body)) > 0:
-		return errors.New("holds an inline style element")
-	case hasStyleAttr(body):
-		return errors.New("holds a style attribute")
+	doc, err := parseShell(body)
+	if err != nil {
+		return err
+	}
+	if n := openScript(doc, body); n != nil {
+		return fmt.Errorf("leaves a <%s> element open at end of input, so it never runs", n.Data)
+	}
+	for n := range shellElements(doc) {
+		if isInlineScript(n) || isInlineStyle(n) {
+			return fmt.Errorf("holds an inline <%s> element", n.Data)
+		}
+		for _, a := range n.Attr {
+			switch {
+			case a.Namespace != "":
+			case a.Key == "style":
+				return fmt.Errorf("holds a style attribute on <%s>", n.Data)
+			case len(a.Key) > len("on") && strings.HasPrefix(a.Key, "on"):
+				return fmt.Errorf("holds the event-handler attribute %q on <%s>", a.Key, n.Data)
+			}
+		}
 	}
 	return nil
 }
@@ -307,53 +330,3 @@ func writeBody(w http.ResponseWriter, r *http.Request, body []byte) {
 		_, _ = bytes.NewReader(body).WriteTo(w)
 	}
 }
-
-// hasStyleAttr reports whether a start tag in html carries a style
-// attribute, quoted values skipped.
-func hasStyleAttr(html []byte) bool {
-	for i := 0; i+1 < len(html); i++ {
-		if html[i] != '<' || !isASCIILetter(html[i+1]) {
-			continue
-		}
-		end := openTagEnd(html, i+1)
-		if end < 0 {
-			end = len(html)
-		}
-		if hasAttr(html[i+1:end], "style") {
-			return true
-		}
-		i = end
-	}
-	return false
-}
-
-// hasAttr reports whether tag, a start tag's bytes after "<", names the
-// lowercase attribute name, ASCII case-insensitively.
-func hasAttr(tag []byte, name string) bool {
-	var quote byte
-	atName := false // the tag name comes first
-	for i := range tag {
-		switch c := tag[i]; {
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			}
-		case c == '"' || c == '\'':
-			quote, atName = c, false
-		case isASCIISpace(c) || c == '/':
-			atName = true
-		case atName:
-			if hasFoldPrefix(tag[i:], name) && attrNameEnds(tag, i+len(name)) {
-				return true
-			}
-			atName = false
-		}
-	}
-	return false
-}
-
-func attrNameEnds(tag []byte, j int) bool {
-	return j >= len(tag) || isASCIISpace(tag[j]) || tag[j] == '=' || tag[j] == '/' || tag[j] == '>'
-}
-
-func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }

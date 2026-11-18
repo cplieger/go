@@ -4,7 +4,7 @@
 
 httpserver hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy.
 
-Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `go/ssrf` and `go/textsafe`, and is licensed under Apache-2.0.
+Every piece is a plain `http.Handler` around `http.ServeMux`, so your app keeps its own routes and error codes. It ships no router, depends only on the standard library, `golang.org/x/net/html`, `go/ssrf` and `go/textsafe`, and is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -13,7 +13,7 @@ httpserver is built for a Go service on `http.ServeMux` that faces a browser or 
 - `ResolveClient` reads `X-Forwarded-For` only from a proxy you trust, so a client cannot fake its address. `ForwarderCheck` spots a container runtime's forwarder posing as a local client.
 - A Host allowlist stops DNS rebinding, and `CrossOrigin` refuses cross-site writes.
 - Every refusal is one JSON envelope with a code, a message, a remediation and the request id.
-- `SPA` serves only the files your bundle's manifest lists, with the policy on every answer and year-long caching for hashed assets. `httpservertest.CheckSPA` checks every path in a test.
+- `SPA` serves only the files your bundle's manifest lists, with the policy on every answer and year-long caching for hashed assets. A stable entry, such as a service worker, keeps one URL at the root and revalidates on every load. `httpservertest.CheckSPA` checks every path in a test.
 - The access log caps the path and method it writes, and metric labels stay bounded.
 - `New` leaves the write timeout off, so streams stay open. `Run` drains in-flight requests within a grace period, and the ops listener keeps `/healthz` answering through the drain.
 
@@ -99,12 +99,12 @@ A service that browsers reach should also refuse unknown `Host` names. Build a `
 
 - Middleware: `Chain`, `Recoverer`, `SecurityHeaders` with `HSTS`, `Gzip`, `Logging`, `RouteTimeout`, `RouteDeadline`, `RateLimiter` with its `FailedAuthRateLimit` preset, `NewKeyedRateLimiter` (`KeyedRate`, `KeyedRateLimiter`), `NoStore`.
 - Logging and metrics: `Logging`'s options with `WithProbeLogLevel` and `WithRecordRouteMetric` (`RequestMetric`), `AddLogAttrs` for a handler's own access-line attributes, the request-id helpers (`HeaderRequestID`, `NewRequestID`, `ValidRequestID`, `RequestIDFromContext`, `WithRequestID`), `StatusRecorder` and `NewStatusRecorder`.
-- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `WithHostResponder` and `LogRefusal`), `CanonicalHost`, `CrossOrigin`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
+- Trust checks: `ClientIP`, `ResolveClient` (`ClientResolution`), `ParseCIDRs`, `ParseHostList` and `HostPolicy` (with `WithLoopbackExempt`, `WithIPLiteralHosts`, `WithHostResponder`, `WithHostAllowlistLogger` and `LogRefusal`), `CanonicalHost`, `CrossOrigin`, `LoopbackOnly`, `LoopbackRequest`, `ProxiedRequest`, `ClassifyBind` and `ClassifyBindHost`, `NewForwarderCheck` (`ForwarderCheck`), `NewStaticTokenVerifier`, `NewTokenSet` (`TokenSet`, `TokenSetError` with its `Err` reasons, `MaxTokenBytes`), `NewFailureLimiter` (`FailureLimiter`, `FailureLimits`), `CheckFieldValue` (`FieldValueError` with its `Err` reasons), `SetChallenge` (`Challenge`, `AuthParam`).
 - Requests and responses: `WriteJSON`, `WriteJSONStatus`, `OK`, `JSONHeaders`, `WriteError` with `ErrorResponse`, `ErrorCode` and `ErrorResponder`, `CodeSpecs` (`CodeSpec`), `DecodeBody`, `DecodeJSONInto` with `ErrTrailingData` and `MaxJSONBody`, `LimitBody`, `RequireMethod`, `MethodNotAllowed`, `SetAllow`, `CanonicalRequestPath`.
 - Static files: `StaticHandler` with `WithStaticCacheControl` and `WithStaticETags`, `ContentTypes`, `InlineScriptHashes`, `InlineStyleHashes`.
 - Single-page apps: `SPA` (`SPAConfig`), `Page`, `CheckPages`, `NewPageMatcher` (`PageMatcher`, `PageMatch`), `NotFound`, the manifest (`BundlePath`, `ReadBundle`, `Bundle`, `BundleEntry`, `BundleKind`), `SPAPolicy`, `CheckShell`, and `OutagePage` (`OutageConfig`, `OutageFile`, `OutageClass`, `OutageCommand`).
 - Test helpers in `httpservertest`: `CheckSPA`, `CheckNoUI`, `CheckCodeSpecs`.
-- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `OpsAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`), and `Listen` and `CheckListenAddrs` over `ListenSetting`.
+- Server: `New` with `WithSlogErrorLog`, `Run` with `WithPreDrain`, `WithTeardown`, `WithServeExit` and `WithShutdownGrace`, `ErrShutdownGraceExpired`, `AwaitDone`, `CausedByCancellation`, and the ops listener for `/healthz` and `/metrics`: `ListenAddr`, `ListenOps` (`OpsConfig`, `Ops`), `RunWithOps` (`Served`), and `Listen` and `CheckListenAddrs` over `ListenSetting`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/httpserver/v2).
 
@@ -136,6 +136,10 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - A client matching `Recoverer`'s 500 message reads `internal error`.
 - `ClientResolution.IgnoredPublic` judges an ignored forwarded address as `go/ssrf`'s `IsPublicAddr` does, so a shared (RFC 6598), documentation or other non-routable address no longer sets it.
 - A `StaticHandler` file with an extension outside the content-type table, such as `.jpg` or `.woff`, now answers `application/octet-stream`. Convert it to a listed format, or serve it with your own handler.
+- Code written against `v2.0.0-dev.1` or `v2.0.0-dev.2` calls `ListenAddr` where it called `OpsAddr`, with the same arguments.
+- A shell written against `v2.0.0-dev.1` or `v2.0.0-dev.2` that carries an `on…` event-handler attribute, such as `onclick`, is now refused by `SPA` and `CheckShell`. The policy already blocked the handler in the browser, so attach it from the bundle's script with `addEventListener`.
+- A shell that ends inside a `<script>` is now refused too, because the browser never ran that script: close it with `</script>`.
+- A shell nested deeper than 512 elements, or holding a `<template>` inside an `<svg>` or `<math>` integration point such as `<foreignObject>`, is now refused, because the check cannot read all of it: flatten the nesting, or move the `<template>` out of the `<svg>` or `<math>`. A `<template>` in svg markup itself is read as usual. A shell that spells `<template` more than 16 times after the first `<svg` or `<math` in its bytes, comments and attribute values included, is refused too: move the templates before it or into the bundle ([the SPA policy](docs/spa.md#the-content-security-policy)).
 - Code written against `v2.0.0-dev.1` wraps each `OutageConfig.Commands` string as `httpserver.OutageCommand{Run: s}`, since the field is now `[]OutageCommand`. A line that explained a command moves into its `Note`, and a line about the outage as a whole into `Notice`.
 
 ## Related projects

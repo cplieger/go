@@ -53,7 +53,13 @@ The gzip and revalidation behaviour is not configurable.
 
 ## Inline script hashes
 
-`InlineScriptHashes(html)` returns one CSP source token, `'sha256-<base64>'`, for each inline `<script>` element in a page. It hashes exactly the bytes a browser hashes. A `<script>` with a `src` attribute is skipped, because `'self'` covers it.
+`InlineScriptHashes(html)` returns one CSP source token, `'sha256-<base64>'`, for each inline `<script>` element in a page, an `<svg>` `<script>` included. It reads the page through `html.Parse` from `golang.org/x/net/html`, as `CheckShell` does, and hashes each script's text as a browser hashes it, so a NUL byte is hashed as U+FFFD. It skips every script a browser never checks against the policy:
+
+- a `<script>` with a `src` attribute, or an `<svg>` `<script>` with `href`, because `'self'` covers it
+- a data block, whose `type` is not a script type, such as `application/json` or `text/template`
+- a `<script>` the end of the page closed, which never runs
+
+It returns nil for a page `CheckShell` refuses because `html.Parse` cannot read all of it: one nested deeper than 512 elements, or one holding a `<template>` inside an `<svg>` or `<math>` integration point such as `<foreignObject>` (a `<template>` in svg markup itself is read as usual). It also returns nil for a page past the check's own limit: more than 16 `<template` spellings after the first `<svg` or `<math` in its bytes, comments and attribute values included (see [the SPA policy](spa.md#the-content-security-policy)). Without those hashes the policy blocks every inline script on the page.
 
 It extracts hashes from a page your app controls. It is not an HTML sanitizer.
 
@@ -74,6 +80,6 @@ If your page is known to carry inline scripts, treat an empty result as a malfor
 
 `InlineStyleHashes(html)` does the same for inline `<style>` elements, so `style-src` can be hash-pinned instead of using `'unsafe-inline'`. The usual case is a loading overlay whose CSS must paint before the external stylesheet arrives.
 
-It shares the script scanner's core, so the two handle byte boundaries and malformed tags the same way. It has no rule to skip external sources, because a `<style>` element always carries its content inline.
+It reads the page the same way, an `<svg>` `<style>` included. It has no rule to skip external sources, because a `<style>` element always carries its content inline. A `<style>` the end of the page closed is hashed, because a browser applies it. It returns nil for the same pages `InlineScriptHashes` does.
 
 A `style-src` hash does not cover inline style attributes, `style="..."`. Those are governed by `style-src-attr` and need `'unsafe-hashes'`. An app whose markup or renderer sets style attributes cannot drop `'unsafe-inline'` on these tokens alone. A renderer that sets styles through CSSOM properties writes no attribute, so it is unaffected.

@@ -120,7 +120,7 @@ type outageView struct {
 // open: every GET or HEAD outside APIPrefix answers 503, no-store, under
 // SPAPolicy's default policy, with the title, the closing line and each file's
 // class sentence as given, and each file's Name, the Notice and each command's
-// Run and Note cleaned through textsafe. A file the bundle lists under assets/
+// Run and Note cleaned through textsafe. A listed asset or stable entry
 // answers as SPA serves it; a path at or under APIPrefix answers not_found and
 // another method method_not_allowed, through Errors, no-store. The error names
 // the refused field (a blank Title or App too), class or bundle.

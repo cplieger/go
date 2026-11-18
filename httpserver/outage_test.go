@@ -491,6 +491,24 @@ func TestOutagePageServesListedAssets(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a stable entry answers as SPA answers it", func(t *testing.T) {
+		sw := strings.Repeat("self.addEventListener('fetch', () => {});\n", 40)
+		sc, oc := spaConfig(t, nil), outageConfig(t)
+		sc.Assets, oc.Assets = stableTree(t, sw), stableTree(t, sw)
+		spa, outage := newSPA(t, sc), newOutage(t, oc)
+		for _, header := range [][]string{nil, {"Accept-Encoding", "gzip"}} {
+			want := spaServe(spa, http.MethodGet, "/"+stableAsset, header...)
+			got := spaServe(outage, http.MethodGet, "/"+stableAsset, header...)
+			if got.Code != http.StatusOK || want.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
+				t.Errorf("GET /%s %q = %d (%d bytes), SPA answers %d (%d bytes), want both 200 alike", stableAsset, header, got.Code, got.Body.Len(), want.Code, want.Body.Len())
+			}
+			for _, k := range []string{"Content-Type", "Cache-Control", "ETag", "Vary", "Content-Encoding", "Content-Security-Policy"} {
+				if g, w := got.Header().Values(k), want.Header().Values(k); !slices.Equal(g, w) {
+					t.Errorf("GET /%s %q %s = %q, SPA answers %q", stableAsset, header, k, g, w)
+				}
+			}
+		}
+	})
 	t.Run("an unlisted path answers the page", func(t *testing.T) {
 		page := spaServe(h, http.MethodGet, "/").Body.String()
 		for _, target := range []string{"/assets/missing.css", "/" + moduleAsset + ".map", "/assets/.keep", "/stray.js", "/" + noticeIndex, "/" + httpserver.BundlePath, "/index.html"} {

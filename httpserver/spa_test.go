@@ -375,6 +375,89 @@ func TestClassicEntryETagMovesWithPolicy(t *testing.T) {
 	}
 }
 
+// noCacheETag is the tag docs/spa.md gives a no-cache answer: the first 32
+// hex digits of SHA-256 over the manifest hash, a zero byte and the policy.
+func noCacheETag(fileHash, policy string) string {
+	return `"` + sha256Hex(fileHash + "\x00" + policy)[:32] + `"`
+}
+
+func TestSPAServesStableEntry(t *testing.T) {
+	const blobPolicy = defaultPolicy + "; media-src 'self' blob:"
+	sw := strings.Repeat("self.addEventListener('fetch', () => {});\n", 40)
+	c := spaConfig(t, nil)
+	c.Assets = stableTree(t, sw)
+	h := newSPA(t, c)
+	for _, policy := range []string{defaultPolicy, blobPolicy} {
+		t.Run("under "+policy, func(t *testing.T) {
+			pc := spaConfig(t, nil)
+			pc.Assets = stableTree(t, sw)
+			if policy == blobPolicy {
+				pc.CSPAdd = map[string][]string{"media-src": {"blob:"}}
+			}
+			ph := newSPA(t, pc)
+			rec := spaServe(ph, http.MethodGet, "/"+stableAsset)
+			if rec.Code != http.StatusOK || rec.Body.String() != sw {
+				t.Errorf("GET /%s = %d %q, want 200 and the file", stableAsset, rec.Code, rec.Body.String())
+			}
+			hdr := rec.Header()
+			if got := hdr.Get("Content-Type"); got != "text/javascript; charset=utf-8" {
+				t.Errorf("Content-Type = %q, want text/javascript; charset=utf-8", got)
+			}
+			if got := hdr.Get("Cache-Control"); got != "no-cache" {
+				t.Errorf("Cache-Control = %q, want no-cache", got)
+			}
+			if got, want := hdr.Get("ETag"), noCacheETag(sha256Hex(sw), policy); got != want {
+				t.Errorf("ETag = %q, want the policy-bound tag %q", got, want)
+			}
+			wantPolicy(t, rec, policy)
+			gz := spaServe(ph, http.MethodGet, "/"+stableAsset, "Accept-Encoding", "gzip")
+			if gz.Header().Get("Content-Encoding") != "gzip" || !bytes.Equal(gunzip(t, gz.Body.Bytes()), []byte(sw)) {
+				t.Errorf("gzip answer = %q encoded, want the file gzipped", gz.Header().Get("Content-Encoding"))
+			}
+			if got, want := gz.Header().Get("ETag"), strings.TrimSuffix(noCacheETag(sha256Hex(sw), policy), `"`)+`-gz"`; got != want {
+				t.Errorf("gzip ETag = %q, want %q", got, want)
+			}
+			wantPolicy(t, gz, policy)
+		})
+	}
+	t.Run("a stable module entry is no-cache too", func(t *testing.T) {
+		files := spaFiles()
+		files[stableAsset] = sw
+		mc := spaConfig(t, nil)
+		mc.Assets = bundleTree(t, files, append(slices.Clone(spaListed), stableAsset),
+			append(slices.Clone(spaEntries), httpserver.BundleEntry{Name: "sw", Kind: httpserver.BundleModule, Path: stableAsset, Stable: true}))
+		rec := spaServe(newSPA(t, mc), http.MethodGet, "/"+stableAsset)
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("Cache-Control = %q, want no-cache", got)
+		}
+		if got, want := rec.Header().Get("ETag"), noCacheETag(sha256Hex(sw), defaultPolicy); got != want {
+			t.Errorf("ETag = %q, want the policy-bound tag %q", got, want)
+		}
+	})
+	t.Run("the ETag changes when its bytes change", func(t *testing.T) {
+		old := spaServe(h, http.MethodGet, "/"+stableAsset).Header().Get("ETag")
+		next := sw + "self.skipWaiting();\n"
+		nc := spaConfig(t, nil)
+		nc.Assets = stableTree(t, next)
+		rec := spaServe(newSPA(t, nc), http.MethodGet, "/"+stableAsset, "If-None-Match", old)
+		if rec.Code != http.StatusOK || rec.Body.String() != next {
+			t.Errorf("If-None-Match of the old tag = %d %q, want 200 and the new file", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("ETag"); got == old || got != noCacheETag(sha256Hex(next), defaultPolicy) {
+			t.Errorf("ETag = %q after the bytes changed from the tag %q, want %q", got, old, noCacheETag(sha256Hex(next), defaultPolicy))
+		}
+	})
+	t.Run("an unchanged file revalidates", func(t *testing.T) {
+		etag := spaServe(h, http.MethodGet, "/"+stableAsset).Header().Get("ETag")
+		if rec := spaServe(h, http.MethodGet, "/"+stableAsset, "If-None-Match", etag); rec.Code != http.StatusNotModified {
+			t.Errorf("If-None-Match of the current tag: status %d, want 304", rec.Code)
+		}
+	})
+	t.Run("with no stable entry the path answers the 404 shell", func(t *testing.T) {
+		wantShell(t, spaServe(newSPA(t, spaConfig(t, nil)), http.MethodGet, "/"+stableAsset), http.StatusNotFound, indexHTML)
+	})
+}
+
 func TestSPAMissingAssetIsNotFoundEnvelope(t *testing.T) {
 	h := newSPA(t, spaConfig(t, nil))
 	for _, target := range []string{"/assets/missing-1.js", "/assets/", "/assets/sub/", "/assets", "/licenses/nope.txt", "/licenses/", "/" + moduleAsset + ".map", "/" + moduleAsset + "/x", "/assets/app.js"} {
@@ -778,6 +861,11 @@ func TestCheckShell(t *testing.T) {
 		"upper case STYLE":  `<P STYLE='x'>x</P>`,
 		"unquoted style":    `<p class=a style=color:red>x</p>`,
 		"style after quote": `<p title="a>b" style=x>y</p>`,
+		"script after a quote in an unquoted value":   `<script data=a"b>alert(1)</script>"`,
+		"script after a script tag in a quoted value": `<div title="<script src=x>"></div><script>alert(1)</script>`,
+		"style open at end of input":                  `<style>a{}`,
+		"svg script":                                  `<svg><script>s=1</script></svg>`,
+		"svg style":                                   `<svg><style>a{}</style></svg>`,
 	}
 	for name, html := range refused {
 		t.Run(name, func(t *testing.T) {
@@ -787,9 +875,13 @@ func TestCheckShell(t *testing.T) {
 		})
 	}
 	passed := map[string]string{
-		"external script":  `<script type="module" src="/assets/app.js"></script>`,
-		"data-style":       `<body data-style="x">style=plain text</body>`,
-		"style in a value": `<p title="style=x">y</p>`,
+		"external script":               `<script type="module" src="/assets/app.js"></script>`,
+		"data-style":                    `<body data-style="x">style=plain text</body>`,
+		"style in a value":              `<p title="style=x">y</p>`,
+		"script tags in a quoted value": `<div title="</script><script>alert(1)</script>">x</div>`,
+		"json data block":               `<script type="application/json">{"a":1}</script>`,
+		"template data block":           `<script type="text/template"><p onclick=go()>x</p></script>`,
+		"svg script with href":          `<svg><script href="/assets/a.js"></script></svg>`,
 	}
 	for name, html := range passed {
 		t.Run(name, func(t *testing.T) {
@@ -797,6 +889,209 @@ func TestCheckShell(t *testing.T) {
 				t.Errorf("CheckShell refused %q: %v", html, err)
 			}
 		})
+	}
+}
+
+func TestCheckShellRefusesEventHandlers(t *testing.T) {
+	refused := []struct {
+		name, html, element, attr string
+	}{
+		{"onload on body", `<body onload="init()">x</body>`, "<body>", `"onload"`},
+		{"mixed-case OnClick on a button", `<button type=button OnClick='go()'>x</button>`, "<button>", `"onclick"`},
+		{"after a quoted value with no space", `<a title="x"onclick=go()>x</a>`, "<a>", `"onclick"`},
+		{"after a slash", `<img/onerror=go() src=x>`, "<img>", `"onerror"`},
+		{"after an unquoted value holding a quote", `<p title=a"b onclick=go()>x</p>`, "<p>", `"onclick"`},
+		{"upper-case element", `<DIV ONMOUSEOVER=go()>x</DIV>`, "<div>", `"onmouseover"`},
+		{"style after an unquoted value holding a quote", `<p title=a"b style=x>y</p>`, "<p>", "style"},
+		{"after a comment holding an open quote", `<!-- <a title=' --><body onload="init()">x</body><!-- ' -->`, "<body>", `"onload"`},
+		{"after a title holding an open quote", `<title><a title='</title><body onload=go()>'</title>`, "<body>", `"onload"`},
+		{"after a title holding a fake tag", `<title><x onclick=go()></title><body onload=init()>x</body>`, "<body>", `"onload"`},
+		{"after a textarea holding an open quote", `<textarea><a title='</textarea><button onclick=go()>x</button>'</textarea>`, "<button>", `"onclick"`},
+		{"after a script holding an open quote", `<script src=/a.js>var s = "<a title='";</script><body onload=go()><script src=/b.js>'</script>`, "<body>", `"onload"`},
+		{"after a noscript holding an open quote", `<noscript><a title='</noscript><button onclick=go()>'</noscript>`, "<button>", `"onclick"`},
+		// HTML "in foreign content": an <img> start tag breaks out of svg, so a
+		// svg title is no raw text and the img is an element.
+		{"inside an svg title", `<svg><title><img src=x onerror=alert(1)></title></svg>`, "<img>", `"onerror"`},
+		{"on an svg element", `<svg onload=go()></svg>`, "<svg>", `"onload"`},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			err := httpserver.CheckShell([]byte(tc.html))
+			if err == nil {
+				t.Fatalf("CheckShell accepted %q", tc.html)
+			}
+			if !strings.Contains(err.Error(), tc.element) || !strings.Contains(err.Error(), tc.attr) {
+				t.Errorf("CheckShell(%q) = %q, want it to name %s and %s", tc.html, err, tc.element, tc.attr)
+			}
+		})
+	}
+	passed := map[string]string{
+		"on in a quoted title":    `<button title="onclick=go()">x</button>`,
+		"on in a single-quoted":   `<p title='a" onclick=go() "b'>x</p>`,
+		"on in an unquoted value": `<p title=onclick>x</p>`,
+		"data-on":                 `<div data-on="click">x</div>`,
+		"a bare on attribute":     `<p on="x">y</p>`,
+		"on in text":              `<p>onclick=go()</p>`,
+		"in a comment":            `<!-- <button onclick="old()">x</button> -->`,
+		"in a title":              `<title><button onclick="x">t</title>`,
+		"in a textarea":           `<textarea><img onerror=alert(1)></textarea>`,
+		"in a noscript":           `<noscript><button onclick="x">n</button></noscript>`,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
+// HTML "text" insertion mode: a script closed by end of input never runs, so
+// a shell ending inside one is broken whatever its source.
+func TestCheckShellRefusesAnOpenScript(t *testing.T) {
+	refused := map[string]string{
+		"no end tag":                     `<script src=/assets/a.js>`,
+		"an end tag missing its >":       `<script src=/assets/a.js></script`,
+		"an end tag ending in a space":   `<script src=/assets/a.js></script `,
+		"an end tag ending in attribute": `<script src=/assets/a.js></SCRIPT  a=`,
+		"an inline script":               `<script>x=1</script `,
+		"an svg script":                  `<svg><script href=/assets/a.js>`,
+	}
+	for name, html := range refused {
+		t.Run(name, func(t *testing.T) {
+			err := httpserver.CheckShell([]byte(html))
+			if err == nil {
+				t.Fatalf("CheckShell accepted %q", html)
+			}
+			if !strings.Contains(err.Error(), "<script>") || !strings.Contains(err.Error(), "open at end of input") {
+				t.Errorf("CheckShell(%q) = %q, want it to name <script> left open at end of input", html, err)
+			}
+		})
+	}
+	passed := map[string]string{
+		"a closed external script":                    `<script src=/assets/a.js></script>`,
+		"an unfinished end tag after a closed script": `<script src=/assets/a.js></script><p></script `,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
+// html.Parse refuses a document nested deeper than 512 open elements (its
+// doc comment), so no tree is checked and no hash is computed.
+func TestShellPastParserDepth(t *testing.T) {
+	deep := []byte("<html><body>" + strings.Repeat("<div>", 512) + "<script>x()</script><style>a{}</style>")
+	err := httpserver.CheckShell(deep)
+	if err == nil || !strings.Contains(err.Error(), "cannot be read as HTML") {
+		t.Errorf("CheckShell(512 nested <div>) = %v, want a refusal saying it cannot be read as HTML", err)
+	}
+	if got := httpserver.InlineScriptHashes(deep); got != nil {
+		t.Errorf("InlineScriptHashes(512 nested <div>) = %v, want nil", got)
+	}
+	if got := httpserver.InlineStyleHashes(deep); got != nil {
+		t.Errorf("InlineStyleHashes(512 nested <div>) = %v, want nil", got)
+	}
+	shallow := "<html><body>" + strings.Repeat("<div>", 500) + "x"
+	if err := httpserver.CheckShell([]byte(shallow)); err != nil {
+		t.Errorf("CheckShell(500 nested <div>) refused: %v", err)
+	}
+}
+
+// x/net/html v0.63.0 drops every HTML token after a <template> start tag that
+// arrives with an <svg> or <math> element open (parse.go inHeadIM), keeping
+// only foreign-content ones, where a browser reads on and builds the rest.
+func TestCheckShellRefusesTemplateInForeignContent(t *testing.T) {
+	refused := map[string]string{
+		"an img after a template in a foreignObject":    `<svg><foreignObject><template></template><img src=x onerror=alert(1)></foreignObject></svg>`,
+		"a script after it":                             `<svg><foreignObject><template></template><script>alert(1)</script>`,
+		"a body onload after it":                        `<svg><foreignObject><template></template><body onload=alert(1)>`,
+		"an annotation-xml template":                    `<math><annotation-xml encoding="text/html"><template></template><img src=x onerror=alert(1)>`,
+		"an svg title template":                         `<svg><title><template></template><img src=x onerror=alert(1)>`,
+		"a kept div before the template":                `<svg><foreignObject><div id=keep></div><template></template><img src=x onerror=alert(1)>`,
+		"svg content read on after foreignObject":       `<svg><foreignObject><template></template><img onerror=x></foreignObject><g></g></svg>`,
+		"an upper-case template with an attribute":      `<svg><desc><TEMPLATE id=t></TEMPLATE><img onerror=x>`,
+		"a mathml text integration point":               `<math><mi><template></template><img onerror=x>`,
+		"a template behind a cloned formatting element": `<svg></svg><p><b title="<template>">a<p>b<svg><foreignObject><template></template><img src=x onerror=alert(1)>`,
+		"an svg-markup template after the stop":         `<svg><foreignObject><template></template></foreignObject><template></template><img onerror=x>`,
+		"two templates behind two clones":               `<svg></svg><p><b title="<template>">a<p>b<p>c<svg><foreignObject><template></template><template></template><img src=x onerror=alert(1)>`,
+	}
+	for name, html := range refused {
+		t.Run(name, func(t *testing.T) {
+			err := httpserver.CheckShell([]byte(html))
+			if err == nil {
+				t.Fatalf("CheckShell accepted %q", html)
+			}
+			if !strings.Contains(err.Error(), "<template> inside <svg> or <math>") {
+				t.Errorf("CheckShell(%q) = %q, want it to name a <template> inside <svg> or <math>", html, err)
+			}
+		})
+	}
+	t.Run("a template after an svg is read", func(t *testing.T) {
+		html := `<svg></svg><template></template><img src=x onerror=alert(1)>`
+		err := httpserver.CheckShell([]byte(html))
+		if err == nil || !strings.Contains(err.Error(), `"onerror" on <img>`) {
+			t.Errorf("CheckShell(%q) = %v, want the onerror on <img> refused", html, err)
+		}
+	})
+	t.Run("at most 16 templates are read past an svg", func(t *testing.T) {
+		pair := "<template></template>"
+		for _, html := range []string{
+			"<svg></svg>" + strings.Repeat(pair, 16),
+			strings.Repeat(pair, 17) + "<svg></svg>",
+		} {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		}
+		over := map[string]string{
+			"17 templates after an svg":                 "<svg></svg>" + strings.Repeat(pair, 17),
+			"17 templates after a commented-out svg":    "<!-- <svg> -->" + strings.Repeat(pair, 17),
+			"17 template spellings in attribute values": "<svg></svg>" + strings.Repeat(`<p title="<template>"></p>`, 17),
+		}
+		for name, html := range over {
+			err := httpserver.CheckShell([]byte(html))
+			if err == nil || !strings.Contains(err.Error(), "spells <template more than 16 times after its first <svg or <math") {
+				t.Errorf("CheckShell(%s) = %v, want the limit of 16 spellings named", name, err)
+			}
+		}
+	})
+	passed := map[string]string{
+		"a template beside an svg icon":                    `<svg><path d="M0 0"/></svg><template id=row><p>x</p></template>`,
+		"a template in svg markup":                         `<svg><template></template></svg>`,
+		"a template tag in a comment":                      `<svg><foreignObject><!-- <template> --></foreignObject></svg>`,
+		"a template tag in a dropped duplicate attribute":  `<svg></svg><p title=x title="<template>">y</p>`,
+		"a template tag in an attribute value":             `<svg><foreignObject><div title="<template>"></div></foreignObject></svg>`,
+		"a longer tag name":                                `<svg><foreignObject><templates></templates></foreignObject></svg>`,
+		"a longer tag name beside a dropped attribute":     `<svg><foreignObject><templates></templates><p title=x title="<template>">y</p></foreignObject></svg>`,
+		"a template tag whose quote runs past a later one": `<svg></svg><p title="<template a='"><template></template>'>x</p>`,
+		"a template in a frameset document":                `<frameset><svg><desc><template></template></desc></svg></frameset>`,
+	}
+	for name, html := range passed {
+		t.Run(name, func(t *testing.T) {
+			if err := httpserver.CheckShell([]byte(html)); err != nil {
+				t.Errorf("CheckShell refused %q: %v", html, err)
+			}
+		})
+	}
+}
+
+func TestSPARefusalNamesShellElementAndAttribute(t *testing.T) {
+	files := spaFiles()
+	files["login.html"] = `<html><body><button OnClick="go()">x</button></body></html>`
+	c := spaConfig(t, nil)
+	c.Assets = bundleTree(t, files, spaListed, spaEntries)
+	_, err := httpserver.SPA(c)
+	if err == nil {
+		t.Fatal("SPA accepted a shell with an event handler")
+	}
+	for _, want := range []string{`"login.html"`, "<button>", `"onclick"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("SPA error %q does not name %s", err, want)
+		}
 	}
 }
 

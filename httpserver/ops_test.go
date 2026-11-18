@@ -109,43 +109,31 @@ func product(t *testing.T, h http.Handler) (httpserver.Served, string) {
 	return httpserver.Served{Server: httpserver.New(h), Listener: ln}, ln.Addr().String()
 }
 
-func TestOpsAddr(t *testing.T) {
-	for name, tc := range map[string]struct{ value, def, want string }{
-		"blank takes the default":          {"", ":9738", ":9738"},
-		"spaces only take the default":     {"  \t", ":9738", ":9738"},
-		"edge spaces cut":                  {"  127.0.0.1:9000\t", ":9738", "127.0.0.1:9000"},
-		"zero-width runes cut":             {"\u200b:9000\ufeff", ":9738", ":9000"},
-		"a pasted newline cut":             {":9000\r\n", ":9738", ":9000"},
-		"a bidi control cut":               {"\u202e:9000", ":9738", ":9000"},
-		"invisible only takes the default": {"\u200b \u2060", ":9738", ":9738"},
-		"blank with no default is off":     {" ", "", ""},
-		"a value with no default is kept":  {":9000", "", ":9000"},
+func TestListenOpsBlankAddrOpensNothing(t *testing.T) {
+	for name, addr := range map[string]string{
+		"empty":                     "",
+		"spaces":                    " \t",
+		"invisible runes and space": "\u200b \ufeff",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := httpserver.OpsAddr(tc.value, tc.def); got != tc.want {
-				t.Errorf("OpsAddr(%q, %q) = %q, want %q", tc.value, tc.def, got, tc.want)
+			o, err := httpserver.ListenOps(t.Context(), opsConfig(addr))
+			if err != nil {
+				t.Fatalf("ListenOps(Addr %q): %v", addr, err)
+			}
+			if a := o.Addr(); a != nil {
+				t.Fatalf("Addr = %v, want nil with the listener off", a)
+			}
+			done := make(chan error, 1)
+			go func() { done <- httpserver.RunWithOps(t.Context(), o) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("RunWithOps = %v, want nil", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("RunWithOps with nothing to serve did not return at once")
 			}
 		})
-	}
-}
-
-func TestOpsAddrBlankWithNoDefaultOpensNothing(t *testing.T) {
-	o, err := httpserver.ListenOps(t.Context(), opsConfig(httpserver.OpsAddr(" ", "")))
-	if err != nil {
-		t.Fatalf("ListenOps: %v", err)
-	}
-	if a := o.Addr(); a != nil {
-		t.Fatalf("Addr = %v, want nil with the listener off", a)
-	}
-	done := make(chan error, 1)
-	go func() { done <- httpserver.RunWithOps(t.Context(), o) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("RunWithOps = %v, want nil", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("RunWithOps with nothing to serve did not return at once")
 	}
 }
 

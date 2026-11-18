@@ -81,9 +81,9 @@ func checkFieldBytes(v string) error {
 
 func isFieldSpace(b byte) bool { return b == ' ' || b == '\t' }
 
-// invisibleRune reports a non-ASCII rune that draws nothing where a value is
-// read or pasted: a C1 control, a format character, or a line or paragraph
-// separator.
+// invisibleRune reports a rune that draws nothing where a value is read or
+// pasted: a control (Unicode Cc, DEL included), a format character, or a line
+// or paragraph separator.
 func invisibleRune(r rune) bool {
 	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp)
 }

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -13,19 +14,14 @@ import (
 	"github.com/cplieger/go/httpserver/v2"
 )
 
-// FuzzCanonicalHost asserts CanonicalHost never panics and holds four
-// invariants:
+// FuzzCanonicalHost holds CanonicalHost to four invariants:
 //
-//  1. Idempotence — a value it produces canonicalizes to itself. This is the
-//     property the allowlist relies on: an entry canonicalized at parse time
-//     must compare equal to a request Host canonicalized the same way.
-//  2. Lowercase — canonical output never carries uppercase, so matching is
-//     case-insensitive end to end.
-//  3. IP oracle — an input net.ParseIP accepts wholesale must canonicalize to
-//     exactly that address's canonical spelling.
-//  4. Spelling collapse (metamorphic) — every equivalent wire spelling of a
-//     canonical value (a :port, uppercase, one trailing FQDN dot for names and
-//     IPv4, brackets+port for IPv6) canonicalizes back to the same value.
+//  1. Idempotence, which the allowlist relies on to match a parsed entry.
+//  2. Lowercase output, so matching is case-insensitive end to end.
+//  3. An input net.ParseIP accepts wholesale yields that address's spelling.
+//  4. Every equivalent spelling of a canonical value (a :port, uppercase, one
+//     trailing dot for names and IPv4, brackets and a port for IPv6) maps
+//     back to it.
 func FuzzCanonicalHost(f *testing.F) {
 	for _, s := range []string{
 		"", "example.com", "example.com:9848", "Webterm.Example.COM.",
@@ -37,11 +33,8 @@ func FuzzCanonicalHost(f *testing.F) {
 		"example.com..", "example.com:1:2", "example.com:", "example.com:99999",
 		"0177.0.0.1", "1.2.3.4.5", "my_service", "[::ffff:127.0.0.1]:80",
 		"[127.0.0.1]", "wébterm.example",
-		// The two case-fold laundering runes: strings.ToLower maps U+0130 to
-		// "i" and U+212A to "k", so under a Unicode fold each of these
-		// canonicalized to an ASCII key an allowlist could hold. They must
-		// reject. Measured identical on Unicode 15 and 17, so this is a
-		// permanent property of the mapping, not a release-specific one.
+		// strings.ToLower maps U+0130 to "i" and U+212A to "k", so a Unicode
+		// fold would turn each of these into an ASCII key: they must reject.
 		"\u212Aibana.example", "k\u0130bana.example", "\u212A\u0130.example",
 		"\u212Aibana.example:443", "\u212Aibana.example.",
 	} {
@@ -55,12 +48,9 @@ func FuzzCanonicalHost(f *testing.F) {
 		if lower := strings.ToLower(got); lower != got {
 			t.Errorf("CanonicalHost(%q)=%q is not lowercase", in, got)
 		}
-		// Canonical output is pure ASCII, which is what makes the allowlist's
-		// byte-exact matching claim true. A non-ASCII byte reaching the output
-		// would mean some rune survived the ASCII fold and validHostname, and
-		// the reverse direction is the live hazard this pins: strings.ToLower
-		// maps U+0130 to "i" and U+212A to "k", so a Unicode fold here would
-		// let a non-ASCII authority produce an ASCII canonical key.
+		// Canonical output is pure ASCII, which the allowlist's byte-exact
+		// match depends on; a non-ASCII byte here means a rune survived the
+		// ASCII fold and validHostname.
 		for i := range len(got) {
 			if got[i] >= utf8.RuneSelf {
 				t.Errorf("CanonicalHost(%q)=%q carries a non-ASCII byte %#x at %d", in, got, got[i], i)
@@ -93,49 +83,45 @@ func FuzzCanonicalHost(f *testing.F) {
 	})
 }
 
-// FuzzHostPolicyAllows pins the security invariant of the gate against
-// arbitrary Host and RemoteAddr input: an ACTIVE policy admits a request ONLY
-// when the Host is a well-formed spelling of an allowlisted name, or the
-// loopback carve-out is enabled AND both the Host and the socket peer are
-// loopback. The justification is re-derived with an independent authority
-// parser written from the RFC 3986 grammar below — deliberately NOT
-// CanonicalHost, so a parser bug cannot vouch for itself. The oracle may be
-// marginally LOOSER than production on shapes production rejects (a rejection
-// is never a security failure); it must never be looser on admission.
+// FuzzHostPolicyAllows holds an active policy to admitting a request only for
+// an allowlisted name, an IP-literal Host with WithIPLiteralHosts on, or a
+// loopback Host and peer with WithLoopbackExempt on. Each admission is
+// re-derived by an oracle written from the RFC 3986 grammar, never through
+// CanonicalHost, so a parser bug cannot vouch for itself; a refusal is never a
+// security failure, so only admissions are checked.
 func FuzzHostPolicyAllows(f *testing.F) {
-	f.Add("example.com", "203.0.113.9:5000", true)
-	f.Add("127.0.0.1", "127.0.0.1:5000", true)
-	f.Add("attacker.evil", "127.0.0.1:5000", false)
-	f.Add("localhost:80", "[::1]:9", true)
-	f.Add("", "", false)
+	f.Add("example.com", "203.0.113.9:5000", true, false)
+	f.Add("127.0.0.1", "127.0.0.1:5000", true, false)
+	f.Add("attacker.evil", "127.0.0.1:5000", false, false)
+	f.Add("localhost:80", "[::1]:9", true, false)
+	f.Add("", "", false, false)
 	// Repair-collision Hosts (must never admit) and the portless-peer shape
 	// (must never satisfy the carve-out).
-	f.Add("[webterm.example.com]", "203.0.113.9:5000", false)
-	f.Add("webterm.example[.]com", "203.0.113.9:5000", false)
-	f.Add("webterm.example.com:garbage:443", "203.0.113.9:5000", false)
-	f.Add("webterm.example.com..", "203.0.113.9:5000", false)
-	f.Add("127.0.0.1", "127.0.0.1", true)
-	f.Add("[::ffff:127.0.0.1]:80", "[::1]:5", true)
-	// Case-fold laundering against the second allowlist entry. It exists
-	// BECAUSE the first one cannot express this class: "webterm.example.com"
-	// carries neither 'i' nor 'k', and those are the only two ASCII letters
-	// strings.ToLower can produce from a non-ASCII rune (U+0130 and U+212A),
-	// so no laundering input could ever have reached the old single-entry
-	// oracle. That is why the fuzzer never found the widening it was written
-	// to catch.
-	f.Add("\u212Aibana.example", "203.0.113.9:5000", false)
-	f.Add("k\u0130bana.example", "203.0.113.9:5000", false)
-	f.Add("\u212A\u0130bana.example:443", "203.0.113.9:5000", true)
+	f.Add("[webterm.example.com]", "203.0.113.9:5000", false, false)
+	f.Add("webterm.example[.]com", "203.0.113.9:5000", false, false)
+	f.Add("webterm.example.com:garbage:443", "203.0.113.9:5000", false, false)
+	f.Add("webterm.example.com..", "203.0.113.9:5000", false, false)
+	f.Add("127.0.0.1", "127.0.0.1", true, false)
+	f.Add("[::ffff:127.0.0.1]:80", "[::1]:5", true, false)
+	// Case-fold laundering against "kibana.example": 'i' and 'k' are the only
+	// ASCII letters strings.ToLower makes from a non-ASCII rune, so only an
+	// entry holding them can catch a Unicode fold.
+	f.Add("\u212Aibana.example", "203.0.113.9:5000", false, false)
+	f.Add("k\u0130bana.example", "203.0.113.9:5000", false, false)
+	f.Add("\u212A\u0130bana.example:443", "203.0.113.9:5000", true, false)
+	// IP literals under WithIPLiteralHosts, and the names it must still refuse.
+	f.Add("192.0.2.7:8080", "203.0.113.9:5000", false, true)
+	f.Add("[fe80::1%eth0]:8080", "203.0.113.9:5000", false, true)
+	f.Add("[192.0.2.7]", "203.0.113.9:5000", false, true)
+	f.Add("192.0.2.7.attacker.evil", "203.0.113.9:5000", false, true)
+	f.Add("[fe80::1%eth0]x", "203.0.113.9:5000", false, true)
 
 	// A fixed, active allowlist: one browser-facing host, plus one whose name
 	// carries the two letters a Unicode case fold can synthesize.
 	allowed := []string{"webterm.example.com", "kibana.example"}
-	f.Fuzz(func(t *testing.T, host, remoteAddr string, exempt bool) {
-		var opts []httpserver.HostAllowlistOption
-		if exempt {
-			opts = append(opts, httpserver.WithLoopbackExempt(true))
-		}
-		p, _ := httpserver.ParseHostList(allowed, opts...)
+	f.Fuzz(func(t *testing.T, host, remoteAddr string, exempt, ipLiterals bool) {
+		p, _ := httpserver.ParseHostList(allowed,
+			httpserver.WithLoopbackExempt(exempt), httpserver.WithIPLiteralHosts(ipLiterals))
 
 		req := httptest.NewRequest(http.MethodGet, "http://placeholder/x", http.NoBody)
 		req.Host = host
@@ -144,36 +130,29 @@ func FuzzHostPolicyAllows(f *testing.F) {
 		if !p.Allows(req) {
 			return // a rejection can never be a security failure for an active gate
 		}
-		// Admitted: it must be justified by exactly one of the two rules,
-		// re-derived independently below.
+		// Admitted: it must be justified by one of the three rules, re-derived
+		// independently below.
 		if name, ok := splitAuthority(host); ok && slices.Contains(allowed, strings.TrimSuffix(oracleLowerASCII(name), ".")) {
+			return
+		}
+		if ipLiterals && oracleIPLiteral(host) {
 			return
 		}
 		if exempt && oracleLoopbackHost(host) && loopbackAddr(remoteAddr) {
 			return
 		}
-		t.Errorf("active gate admitted an unjustified request: host=%q remoteAddr=%q exempt=%v", host, remoteAddr, exempt)
+		t.Errorf("active gate admitted an unjustified request: host=%q remoteAddr=%q exempt=%v ipLiterals=%v", host, remoteAddr, exempt, ipLiterals)
 	})
 }
 
-// FuzzLoopbackRequest pins the exported composite against arbitrary Host and
-// RemoteAddr input, with three invariants:
+// FuzzLoopbackRequest holds LoopbackRequest to three invariants:
 //
-//  1. Justified admission — an admitted request satisfies BOTH legs under the
-//     independent oracles below (loopbackAddr from the standard library,
-//     oracleLoopbackHost from the RFC 3986 grammar), never the package's own
-//     parser. One-directional for the same reason as FuzzHostPolicyAllows: the
-//     Host oracle is marginally LOOSER on shapes production rejects (it accepts
-//     a trailing dot on an IPv6 literal, which CanonicalHost refuses), and a
-//     rejection can never be a security failure.
-//  2. Forwarded headers are inert — X-Forwarded-For, X-Forwarded-Host and
-//     Forwarded, set to the fuzzed values themselves, never change the verdict
-//     in EITHER direction. Admitting on one would hand a remote caller the gate;
-//     refusing on one would make an app's provenance policy the library's.
-//  3. It IS HostPolicy's loopback carve-out — for an active exempt policy whose
-//     allowlist holds one non-loopback name, Allows is exactly "the Host matches
-//     that name, or LoopbackRequest". The carve-out shipped first, so it is the
-//     reference implementation; a leg dropped from either side breaks equality.
+//  1. An admission satisfies both legs under the independent oracles below,
+//     never the package's own parser; refusals are not checked.
+//  2. Forwarding headers set to the fuzzed values never change the verdict.
+//  3. An active exempt policy listing one non-loopback name allows exactly
+//     "the Host matches that name, or LoopbackRequest", so a leg dropped from
+//     either side breaks equality.
 func FuzzLoopbackRequest(f *testing.F) {
 	f.Add("localhost:9848", "127.0.0.1:5000")     // the in-container curl shape
 	f.Add("127.0.0.1", "127.0.0.1:5000")          // portless literal Host
@@ -384,6 +363,20 @@ func bracketedLoopback(host string) bool {
 	inner := host[1:end]
 	ip := net.ParseIP(inner)
 	return ip != nil && strings.Contains(inner, ":") && ip.IsLoopback()
+}
+
+// oracleIPLiteral reports whether a wire Host is an IP address once one
+// optional port, the brackets and one trailing dot are cut, read with
+// net.SplitHostPort and netip.ParseAddr alone.
+func oracleIPLiteral(host string) bool {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	} else {
+		name = strings.TrimSuffix(strings.TrimPrefix(name, "["), "]")
+	}
+	_, err := netip.ParseAddr(strings.TrimSuffix(name, "."))
+	return err == nil
 }
 
 // loopbackAddr reports whether a RemoteAddr is a loopback peer, using the

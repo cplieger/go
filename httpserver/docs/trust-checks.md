@@ -57,6 +57,7 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger. A policy with none, a zero-value policy and a nil policy log through `slog.Default` as it is at that moment.
 - `WithHostResponder(fn)` writes the refusal through your `ErrorResponder` instead of `WriteError`, so your app's catalog can add its own remediation. It receives 403, `host_not_allowed` and `host not allowed`, and the status and code are the same on every listener.
 - `WithLoopbackExempt(true)` admits a request from this host's own network stack, described below.
+- `WithIPLiteralHosts(true)` admits a request whose `Host` is an IP address, described below.
 - `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when the refusal is logged, so a policy parsed before the app installs its logger still logs through it. Pass a logger with a discarding handler to silence it.
 
 The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
@@ -66,6 +67,8 @@ Place the middleware before any cross-origin or CSRF check. A rebinding request 
 ### How matching works
 
 `CanonicalHost(hostport)` is the strict canonicalizer that both the entries and each request's `Host` go through. It lowercases ASCII only, drops the port and the brackets, allows at most one trailing FQDN dot and normalizes IP literals so different spellings of one address compare equal. It returns `""` for anything malformed.
+
+A name is ASCII labels of letters, digits, hyphens and underscores (Docker Compose service names carry underscores), each at most 63 bytes, with an optional `:port` up to 65535. An IPv6 literal takes a port only in brackets, and brackets hold only IPv6. Refused shapes include a second port, an empty label, an all-numeric dotted value that is not an IPv4 address (`127.0.0.001`, `0177.0.0.1`, which HTTP clients read differently) and a zoned IPv6 address.
 
 The lowercasing stops at ASCII on purpose. `strings.ToLower` maps U+212A and U+0130 to `k` and `i`, which would let a non-ASCII name canonicalize onto an allowlisted ASCII one. Configure a non-ASCII name as its Punycode A-label, because matching is byte-exact.
 
@@ -78,9 +81,19 @@ Activation fails closed. A nil or all-blank entry list leaves the policy inactiv
 `WithLoopbackExempt(true)` keeps a container healthcheck or an in-container client working under an allowlist meant for browsers. It admits a request in two cases:
 
 - The socket peer and the `Host` are both loopback.
-- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist. A zoned IPv6 link-local bind and a listener that is not TCP are not covered, so list such an address in the allowlist.
+- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist. A zoned IPv6 link-local bind and a listener that is not TCP are not covered. `CanonicalHost` refuses a zoned address, so no allowlist entry can name one: use `WithIPLiteralHosts` for such a bind.
 
 A rebinding attack cannot reach it, because the attack's `Host` is the attacker's name. A remote client cannot forge it: a remote peer is not loopback, and it cannot connect from the server's own address, because the reply to that address never leaves the host. That holds for a listener that receives only traffic addressed to this host. A transparent (`IP_TRANSPARENT`) listener, or a PROXY-protocol wrapper that reports the header's addresses, makes the local address a value the client or proxy chose, so do not use the exemption or `LoopbackOnly` behind one. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
+
+### IP-literal hosts
+
+`WithIPLiteralHosts(true)` admits any request whose `Host`, with the port cut, is an IP address, beside the names you list. That keeps a service reachable by address, such as `http://192.0.2.10:8080` from the LAN, without an entry per address. It reads:
+
+- an IPv4 address, in any form `CanonicalHost` accepts, such as `192.0.2.10:8080` or `192.0.2.10.`
+- an IPv6 address in brackets, such as `[2001:db8::10]:8080`, or a bare one as `CanonicalHost` accepts it
+- an IPv6 address in brackets with a zone, such as `[fe80::1%eth0]:8080`, as Go's `net/netip` parses one. The zone is any non-empty text after `%`, so `%25eth0` reads as the zone `25eth0`.
+
+Brackets around an IPv4 address, a zone outside brackets, a bad port and an IPv4 address with leading zeros are refused, as is every name. It is safe because a DNS rebinding attack needs the attacker's name in `Host`: the victim's browser sends the name of the page it loaded, and an address names no domain the attacker controls. The option admits every IP literal, not only the addresses this process listens on, and the unspecified `0.0.0.0` and `[::]` too, so an app that builds a URL from `Host`, such as a link in a reset email, must not take the host from `Host` with the option on. A page on another site can still make the browser send a simple request, such as a form `POST`, to the service by address, and the option admits it, so keep `CrossOrigin` or the app's own CSRF check on every write. `false` means the same as leaving the option out, and options resolve last-wins.
 
 ## Cross-origin writes
 
