@@ -8,7 +8,7 @@ This page lists every case `Build` refuses, for a developer reading one of its e
 
 - an empty `Src` or `Out`, a `Src` that is not a folder, an `Out` that exists and is not a folder, or an `Out` and a `Src` that overlap
 - more than 32 entries, or two entries with one logical path, such as two module entries named `app`
-- an entry with no name, a name starting with a dot, or a name holding anything but letters, digits, `-`, `_` and `.`
+- an entry with no name, or a name that is not a lower-case letter followed by lower-case letters, digits and `_`, the identifier form `BUNDLE_URLS.<name>` reads
 - an entry whose file is not a regular file under `Src`, or is a symbolic link to a file outside `Src`, a style entry that is not a `.css` file, a module or classic entry that is, or an unknown kind
 - a `Forbid` or `Allow` item that can match nothing, as [Forbid and Allow](configuration.md#forbid-and-allow) lists
 - a `Define` value that is not JSON, or a `Define` of `BUNDLE_URLS` or under it

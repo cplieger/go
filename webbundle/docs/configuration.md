@@ -27,7 +27,7 @@ This page lists every field of `Config` and `Entry`, for a developer writing an 
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `Name` | required | The logical name a shell uses, `/<Name>.js` or `/<Name>.css`. Letters, digits, `-`, `_` and `.`, with no leading dot |
+| `Name` | required | The logical name a shell uses, `/<Name>.js` or `/<Name>.css`. A lower-case letter, then lower-case letters, digits and `_`, such as `feed_worker`, so a module reads it as `BUNDLE_URLS.<Name>` |
 | `Path` | required | The source file, such as `src/main.ts` |
 | `Kind` | required | `Module`, `Classic` or `Style` |
 | `Forbid` | none | Items the entry's imports may not reach |
@@ -41,7 +41,7 @@ A script entry and a style entry may share a name, since one is `/app.js` and th
 - `Classic` is a script with its own copy of everything it imports and no chunks, such as a script that sets the theme before the first paint, or the script a shared worker loads.
 - `Style` is a stylesheet. Its `@import` rules are inlined in order, and the fonts and images its `url()` values name are written as hashed files. See [Stylesheets](stylesheets.md).
 
-Classic entries build first. Every module entry then reads their URLs through the `BUNDLE_URLS` define, such as `new SharedWorker(BUNDLE_URLS.worker)` for an entry named `worker`. A classic entry read this way needs no shell to name it.
+Classic entries build first. Every module entry then reads their URLs through the `BUNDLE_URLS` define, such as `new SharedWorker(BUNDLE_URLS.worker)` for an entry named `worker`. A classic entry read this way needs no shell to name it. The dotted read is the one form: an entry named `feed_worker` is `BUNDLE_URLS.feed_worker`.
 
 ## Forbid and Allow
 

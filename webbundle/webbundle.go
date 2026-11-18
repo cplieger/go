@@ -71,7 +71,7 @@ const (
 // the files under it by whole segments. The entry file is exempt from both,
 // and an item that can match no input fails the build.
 type Entry struct {
-	Name   string // the logical name: "/<Name>.js" or "/<Name>.css" in a shell
+	Name   string // the logical name, [a-z][a-z0-9_]*: "/<Name>.js" or "/<Name>.css" in a shell
 	Path   string // the source file under Src
 	Kind   EntryKind
 	Forbid []string // items its imports may not reach

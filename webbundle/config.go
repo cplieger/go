@@ -184,19 +184,16 @@ func (b *build) checkEntries(entries []Entry) error {
 	return nil
 }
 
-// checkEntryName keeps a logical name one plain file name: a shell names it
-// as "/<Name>.js" or "/<Name>.css", and its hashed file is
-// assets/<Name>-<hash>.<ext>.
+// checkEntryName keeps a logical name an identifier: a module reads a classic
+// entry's URL as BUNDLE_URLS.<Name>, a dotted define esbuild refuses for any
+// other name, and the same name is the file name "/<Name>.js".
 func checkEntryName(e *Entry) error {
 	if e.Name == "" {
 		return fmt.Errorf("webbundle: entry %s has no name", e.Path)
 	}
-	if strings.HasPrefix(e.Name, ".") {
-		return fmt.Errorf("webbundle: entry name %q starts with a dot", e.Name)
-	}
-	for _, r := range e.Name {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != '.' {
-			return fmt.Errorf("webbundle: entry name %q holds %q; a name is letters, digits, '-', '_' and '.'", e.Name, r)
+	for i, r := range e.Name {
+		if (r < 'a' || r > 'z') && (i == 0 || (r < '0' || r > '9') && r != '_') {
+			return fmt.Errorf("webbundle: entry name %q holds %q; a name is a lower-case letter, then lower-case letters, digits and '_', so BUNDLE_URLS.<name> reads it", e.Name, r)
 		}
 	}
 	return nil

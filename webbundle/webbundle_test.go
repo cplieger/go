@@ -151,6 +151,27 @@ shared(new SharedWorker(BUNDLE_URLS.worker));
 	}
 }
 
+func TestBuildReadsAnUnderscoredNameDotted(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{
+		"src/app.ts": `declare const BUNDLE_URLS: { feed_worker: string };
+new SharedWorker(BUNDLE_URLS.feed_worker);
+`,
+		"src/feed-worker.js": "self.addEventListener(\"connect\", () => {});\n",
+	})
+	c.Entries = append(c.Entries, webbundle.Entry{Name: "feed_worker", Path: "src/feed-worker.js", Kind: webbundle.Classic})
+	mustBuild(t, c)
+	b := readBundle(t, c.Out)
+	worker := entryPath(t, b, "feed_worker", webbundle.Classic)
+	if !strings.HasPrefix(worker, "assets/feed_worker-") {
+		t.Errorf("the classic entry feed_worker is built as %s, not under assets/feed_worker-<hash>.js", worker)
+	}
+	app := loadedJS(t, c.Out, entryPath(t, b, "app", webbundle.Module))
+	if !bytes.Contains(app, []byte(strconv.Quote("/"+worker))) {
+		t.Errorf("the module entry does not read BUNDLE_URLS.feed_worker as %q:\n%s", "/"+worker, app)
+	}
+}
+
 // A script's import of an asset gives the URL the asset is served at, which
 // the page resolves from any path: an icon factory fed such URLs draws on a
 // nested page as on the root.
@@ -378,6 +399,12 @@ func TestBuildRefusesConfig(t *testing.T) {
 		{name: "NameWithSlash", edit: func(c *webbundle.Config) { c.Entries[0].Name = "a/b" }, want: []string{"a/b"}},
 		{name: "NameDotFile", edit: func(c *webbundle.Config) { c.Entries[0].Name = ".app" }, want: []string{".app"}},
 		{name: "NameWithSpace", edit: func(c *webbundle.Config) { c.Entries[0].Name = "my app" }, want: []string{"my app"}},
+		{name: "NameWithHyphen", edit: func(c *webbundle.Config) { c.Entries[0].Name = "feed-worker" }, want: []string{"feed-worker", "BUNDLE_URLS"}},
+		{name: "NameLeadingDigit", edit: func(c *webbundle.Config) { c.Entries[0].Name = "2app" }, want: []string{"2app", "BUNDLE_URLS"}},
+		{name: "NameLeadingUnderscore", edit: func(c *webbundle.Config) { c.Entries[0].Name = "_app" }, want: []string{"_app", "BUNDLE_URLS"}},
+		{name: "NameUpperCase", edit: func(c *webbundle.Config) { c.Entries[0].Name = "App" }, want: []string{"App", "BUNDLE_URLS"}},
+		{name: "NameWithDot", edit: func(c *webbundle.Config) { c.Entries[0].Name = "app.min" }, want: []string{"app.min", "BUNDLE_URLS"}},
+		{name: "NameNotASCII", edit: func(c *webbundle.Config) { c.Entries[0].Name = "café" }, want: []string{"café", "BUNDLE_URLS"}},
 		{name: "StyleNotCSS", edit: func(c *webbundle.Config) { c.Entries[1].Path = "src/app.ts" }, want: []string{"src/app.ts"}},
 		{name: "ScriptIsCSS", edit: func(c *webbundle.Config) { c.Entries[0].Path = "src/app.css" }, want: []string{"src/app.css"}},
 		{name: "ShellNotHTML", edit: func(c *webbundle.Config) { c.Shells = []string{"index.html", "package.json"} }, want: []string{"package.json"}},
