@@ -145,7 +145,7 @@ In two cases the tree `html.Parse` builds is not the whole shell, and `SPA` refu
 - A shell nested deeper than 512 open elements, which `html.Parse` refuses. The error says the shell cannot be read as HTML.
 - A shell holding a `<template>` start tag while an `<svg>` or `<math>` element is open, such as inside `<foreignObject>`, `<desc>`, `<title>` or `<annotation-xml>`. `html.Parse` drops the markup after that tag, which a browser goes on to read. The error names the `<template>` inside `<svg>` or `<math>`. A `<template>` outside them is read as usual, and so is a `<template>` tag in svg markup itself, which is an svg element.
 
-To find that second case, the check parses the shell twice for each `<template>` tag after its first `<svg>` or `<math>`, so it refuses a shell with more than 16 of them, naming the limit. A shell is a small page with no need for templates, so the limit is generous, and templates before the first `<svg>` or `<math>` do not count.
+To find that second case, the check parses the shell twice for each `<template` start-tag spelling after the first `<svg` or `<math` in the shell's bytes, so it refuses a shell with more than 16 of them, naming the limit. The count reads bytes, not elements: a spelling inside a comment or an attribute value counts, and a `<svg` inside a comment starts the count. Spellings before the first `<svg` or `<math` do not count. A shell is a small page with no need for templates, so the limit is generous.
 
 `SPA` owns `Content-Type`, `Cache-Control`, `ETag` and `Content-Security-Policy` on its answers. `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` and HSTS stay with the app's outer `SecurityHeaders`, as on every other answer.
 

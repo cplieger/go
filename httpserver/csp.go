@@ -57,7 +57,8 @@ func InlineStyleHashes(page []byte) []string {
 
 // parseShell is page's document as html.Parse builds it with scripting on. It
 // fails where that tree is not the whole page: past html.Parse's 512 open
-// elements, and where html.Parse stops at a <template>.
+// elements, and where html.Parse stops at a <template>. It also fails past
+// maxShellTemplates, the template check's own bound, on a whole tree.
 func parseShell(page []byte) (*html.Node, error) {
 	doc, err := html.Parse(bytes.NewReader(page))
 	if err != nil {
@@ -69,9 +70,9 @@ func parseShell(page []byte) (*html.Node, error) {
 	return doc, nil
 }
 
-// maxShellTemplates bounds the template check at two parses per <template>
-// tag after a shell's first <svg> or <math>. A shell is a small page with no
-// need for templates, so the limit is generous.
+// maxShellTemplates bounds the template check at two parses per <template
+// start-tag spelling after the first <svg or <math in a shell's bytes. A shell
+// is a small page with no need for templates, so the limit is generous.
 const maxShellTemplates = 16
 
 // templateMark is text a parsed page holds wherever it is put after a
@@ -85,7 +86,8 @@ const templateProbe = "<template>" + templateMark + `"'>` + templateMark
 // foreignTemplateError refuses a <template> start tag after which html.Parse
 // ignores the HTML tokens, as x/net/html v0.63.0's inHeadIM does
 // (ignoreTheRemainingTokens) with an <svg> or <math> element open and a
-// browser does not. Each tag past the first <svg> or <math> is probed alone: a
+// browser does not. Each <template spelling past the first <svg or <math in
+// the bytes, in comments and attribute values too, is probed alone: a
 // mark count over the whole page decides nothing, since the parser clones a
 // formatting element with any mark in its attributes. An HTML <frameset> pops
 // every foreign element and admits none, so a document holding one never stops.
@@ -110,7 +112,7 @@ func foreignTemplateError(doc *html.Node, page []byte) error {
 		}
 	}
 	if len(starts) > maxShellTemplates {
-		return fmt.Errorf("holds more than %d <template> tags after an <svg> or <math>, more than the check reads", maxShellTemplates)
+		return fmt.Errorf("spells <template more than %d times after its first <svg or <math, comments and attribute values included, past the check's limit", maxShellTemplates)
 	}
 	for _, k := range starts {
 		if !readsPastTemplate(page[:k]) {

@@ -1047,10 +1047,16 @@ func TestCheckShellRefusesTemplateInForeignContent(t *testing.T) {
 				t.Errorf("CheckShell refused %q: %v", html, err)
 			}
 		}
-		html := "<svg></svg>" + strings.Repeat(pair, 17)
-		err := httpserver.CheckShell([]byte(html))
-		if err == nil || !strings.Contains(err.Error(), "more than 16 <template>") {
-			t.Errorf("CheckShell(17 templates after an svg) = %v, want the limit of 16 named", err)
+		over := map[string]string{
+			"17 templates after an svg":                 "<svg></svg>" + strings.Repeat(pair, 17),
+			"17 templates after a commented-out svg":    "<!-- <svg> -->" + strings.Repeat(pair, 17),
+			"17 template spellings in attribute values": "<svg></svg>" + strings.Repeat(`<p title="<template>"></p>`, 17),
+		}
+		for name, html := range over {
+			err := httpserver.CheckShell([]byte(html))
+			if err == nil || !strings.Contains(err.Error(), "spells <template more than 16 times after its first <svg or <math") {
+				t.Errorf("CheckShell(%s) = %v, want the limit of 16 spellings named", name, err)
+			}
 		}
 	})
 	passed := map[string]string{
