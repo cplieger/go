@@ -335,6 +335,11 @@ func TestNoticesOfFilesUnderSrc(t *testing.T) {
 		c := newFixture(t, files{"src/app.css": fontCSS, "fonts/Mark.woff2": font})
 		buildRefused(t, c, "fonts/Mark.woff2", "has no LICENSE")
 	})
+	t.Run("EmptyFontWithNone", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"src/app.css": fontCSS, "fonts/Mark.woff2": ""})
+		buildRefused(t, c, "fonts/Mark.woff2", "has no LICENSE")
+	})
 	t.Run("FontWithANoticeOffItsPath", func(t *testing.T) {
 		t.Parallel()
 		c := newFixture(t, files{"src/app.css": fontCSS, "fonts/Mark.woff2": font, "src/LICENSE": "covers src only\n"})

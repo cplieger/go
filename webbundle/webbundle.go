@@ -69,8 +69,9 @@ const (
 // file a package exports ("@scope/name/sub", the file an import of it
 // resolves to, in every installed copy of the package), or a path under Src
 // that exists there ("./<path>" where it is also a package name), covering
-// the files under it by whole segments. The entry file is exempt from both,
-// and an item that can match no input fails the build.
+// the files under it by whole segments. Both judge only the files whose code
+// the entry ships, in its built file or one it loads; the entry file is
+// exempt, and an item that can match no input fails the build.
 type Entry struct {
 	Name string // the logical name, [a-z][a-z0-9_]*: "/<Name>.js" or "/<Name>.css" in a shell
 	Path string // the source file under Src
@@ -91,7 +92,7 @@ type Entry struct {
 type Result struct {
 	Outputs map[string]Output // every script in the tree (entries and chunks), by its path under Out; bundle.json does not record it
 	Files   []string          // every written path under Out, sorted
-	Notices []string          // every bundled npm package, sorted; licenses/index.txt also lists the notices under Src
+	Notices []string          // every npm package whose code the bundle ships, sorted; licenses/index.txt also lists the notices under Src
 }
 
 // Output is what one script of the tree holds: an app can tell a chunk

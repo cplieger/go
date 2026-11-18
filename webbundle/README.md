@@ -106,7 +106,7 @@ The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/
 
 ## Licence notices
 
-`Build` copies the licence and notice files of each bundled npm package version to `licenses/<package>@<version>/`, and those beside your own bundled files under `Src` (a vendored font's `fonts/LICENSE-monaspace`) to `licenses/<path under Src>`, and lists them in `licenses/index.txt`. Ship them with one line in your Dockerfile's runtime stage:
+`Build` copies the licence and notice files of each bundled npm package version to `licenses/<package>@<version>/`, and those beside your own bundled files under `Src` (a vendored font's `fonts/LICENSE-monaspace`) to `licenses/<path under Src>`, and lists them in `licenses/index.txt`. A package or file an entry imports but whose code esbuild drops as unused ships nothing and gets no notice. Ship them with one line in your Dockerfile's runtime stage:
 
 ```dockerfile
 COPY --from=build /src/internal/webui/dist/licenses/ /usr/share/licenses/example-web/

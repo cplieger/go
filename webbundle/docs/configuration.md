@@ -56,7 +56,7 @@ The URL is one file at the root ending in `.js`. Its name may differ from the en
 
 ## Forbid and Allow
 
-`Forbid` keeps code out of an entry that must not hold it. A shared worker's entry can forbid `@cplieger/ui` and your own `src/dom` folder, so no DOM code reaches the worker. `Allow` holds an entry to the files it names. A script that sets the theme before the first paint blocks rendering, so its entry can allow only `@cplieger/ui/theme`, and any other file it pulls in fails the build. The entry's own file never counts against either list.
+`Forbid` keeps code out of an entry that must not hold it. A shared worker's entry can forbid `@cplieger/ui` and your own `src/dom` folder, so no DOM code reaches the worker. `Allow` holds an entry to the files it names. A script that sets the theme before the first paint blocks rendering, so its entry can allow only `@cplieger/ui/theme`, and any other file it pulls in fails the build. The entry's own file never counts against either list, and neither does a file whose code the entry does not ship: an import of `@cplieger/ui/theme` that pulls in a module whose exports the script never uses stays within an `Allow` of `@cplieger/ui/theme`. [What a build refuses](checks.md#imports) says which files ship.
 
 Both lists take the same items:
 

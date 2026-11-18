@@ -43,12 +43,14 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 
 `Build` reads esbuild's record of every file each entry pulls in, and refuses:
 
-- a file outside `Src`, reached by an import, an `@import` or a `url()`, or through a symbolic link whose target leaves `Src`; a link that stays inside `Src`, such as a pnpm package folder linked into `node_modules/.pnpm`, is followed
+- a file outside `Src`, reached by an import, an `@import` or a `url()`, or through a symbolic link whose target leaves `Src`; a link that stays inside `Src`, such as a pnpm package folder linked into `node_modules/.pnpm`, is followed. This holds for every file an entry imports, used or not
 - a file from an npm package that `Packages` does not match
 - a file an entry's `Forbid` names, or, when the entry has an `Allow`, a file its `Allow` does not name; the items are those of [Forbid and Allow](configuration.md#forbid-and-allow)
 - a script entry that imports CSS
 
 Each of these errors ends with the chain of imports from the entry to the refused file.
+
+`Packages`, `Forbid` and `Allow` judge only the files whose code an entry ships: those that put a byte in the entry's built file or in a file it loads, such as a shared chunk or the chunk of a dynamic `import()`, and the fonts and images its `url()` and imports write as assets. A file the entry imports but whose code esbuild drops, such as a module whose exports go unused or one that only passes another's exports on, counts for nothing, and its notice is not copied.
 
 ## Files
 

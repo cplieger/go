@@ -54,7 +54,7 @@ The hashes above are cut short, and the file holds all 64 digits. Its Go types a
 
 ## Licence notices
 
-For each npm package version the bundle holds, `Build` copies its notice files to `licenses/<package>@<version>/` and writes one `<package> <version>` line per directory to `licenses/index.txt`, sorted:
+For each npm package version whose code the bundle ships, `Build` copies its notice files to `licenses/<package>@<version>/` and writes one `<package> <version>` line per directory to `licenses/index.txt`, sorted:
 
 ```text
 @cplieger/reactive 1.4.0
@@ -63,11 +63,11 @@ For each npm package version the bundle holds, `Build` copies its notice files t
 
 A notice file is a regular file whose name, upper-cased, starts with `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` or `THIRD_PARTY_NOTICES`. A file of a type the bundle reads, such as `license.js`, `NOTICE.css` or `license.json`, is code and is left out. So `LICENSE.md`, `NOTICE`, `COPYING.LESSER` and `LICENSE-OFL-1.1` are copied, and `README.md` is not.
 
-`Build` reads the package root and every folder between the root and a file it bundles. A notice in such a folder covers the files beside it, so it keeps its path inside the package, such as `licenses/@cplieger/ui@1.3.0/fonts/LICENSE-atkinson-hyperlegible-next`. Only the root must hold one, and a package whose root holds none fails the build.
+`Build` reads the package root and every folder between the root and a file whose code it ships. A package or file an entry imports but whose code esbuild drops as unused ships nothing, so its notices are not copied. A notice in such a folder covers the files beside it, so it keeps its path inside the package, such as `licenses/@cplieger/ui@1.3.0/fonts/LICENSE-atkinson-hyperlegible-next`. Only the root must hold one, and a package whose root holds none fails the build.
 
 The version comes from the package's `package.json`. A package with no version, or a version that is not semver, fails the build. A package bundled at two versions gets two directories. Two installed copies of one version, such as pnpm's copies for two sets of peers, share a directory, and fail the build when their notices differ.
 
-Your own files under `Src`, outside `node_modules`, follow the same folder rule. For each file the bundle holds, including the icon, its committed PNGs, the manifest and the files the manifest names, `Build` copies the notice files in its folder and in every folder above it up to `Src` to `licenses/<path under Src>`. Each gets one `./<path under Src>` line in `licenses/index.txt`, sorted with the package lines:
+Your own files under `Src`, outside `node_modules`, follow the same folder rule. For each file whose code the bundle ships, including the icon, its committed PNGs, the manifest and the files the manifest names, `Build` copies the notice files in its folder and in every folder above it up to `Src` to `licenses/<path under Src>`. Each gets one `./<path under Src>` line in `licenses/index.txt`, sorted with the package lines:
 
 ```text
 ./fonts/LICENSE-monaspace

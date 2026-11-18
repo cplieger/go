@@ -140,20 +140,64 @@ func (b *build) allowed(pkg string) bool {
 	return slices.ContainsFunc(b.packages, func(p string) bool { ok, _ := path.Match(p, pkg); return ok })
 }
 
-// checkClosure walks entry i's closure in m and refuses an input outside
-// Src, one from a package Config.Packages does not list, one its Forbid
-// names, or, when it has an Allow, one its Allow does not name, naming the
-// importer chain. It returns the packages the closure bundles and its files
-// outside node_modules.
+// shipped returns the inputs whose code entry e ships: each one that puts a
+// byte in its main output or in an output that one imports, transitively
+// (a shared chunk, a dynamic import's chunk), and every input of an asset
+// the file loader wrote, which ships whole. esbuild keeps a file whose
+// exports go unused on the import graph and puts none of its bytes in an
+// output.
+func (m *metafile) shipped(e *Entry) map[string]bool {
+	seen, ins := map[string]bool{}, map[string]bool{}
+	for queue := m.mainOutputs(e); len(queue) > 0; queue = queue[1:] {
+		out := queue[0]
+		if seen[out] {
+			continue
+		}
+		seen[out] = true
+		o := m.Outputs[out]
+		asset := path.Ext(out) != jsExt && path.Ext(out) != cssExt
+		for in, use := range o.Inputs {
+			if asset || use.BytesInOutput > 0 {
+				ins[in] = true
+			}
+		}
+		for _, imp := range o.Imports {
+			queue = append(queue, imp.Path)
+		}
+	}
+	return ins
+}
+
+// mainOutputs names the metafile outputs that are entry e's built file.
+func (m *metafile) mainOutputs(e *Entry) []string {
+	want := jsExt
+	if e.Kind == Style {
+		want = cssExt
+	}
+	var outs []string
+	for out, o := range m.Outputs {
+		if o.EntryPoint != "" && path.Clean(o.EntryPoint) == e.Path && path.Ext(out) == want {
+			outs = append(outs, out)
+		}
+	}
+	return outs
+}
+
+// checkClosure refuses an input on entry i's import graph in m that lies
+// outside Src and, among the files the entry ships, one from a package
+// Config.Packages does not list, one its Forbid names, or, when it has an
+// Allow, one its Allow does not name, naming the importer chain. It returns
+// the packages the entry ships and its shipped files outside node_modules.
 func (b *build) checkClosure(m *metafile, i int) (pkgs packageRoots, own []string, err error) {
 	e, rules := b.entries[i], b.rules[i]
 	from := m.closure(e.Path)
+	if err := insideSrc(&e, from); err != nil {
+		return nil, nil, err
+	}
 	pkgs = packageRoots{}
-	for _, in := range slices.Sorted(maps.Keys(from)) {
-		// esbuild names an input by its real path, symlinks resolved, so a
-		// link out of Src shows here as a path leaving it.
-		if !filepath.IsLocal(filepath.FromSlash(in)) {
-			return nil, nil, fmt.Errorf("webbundle: entry %q bundles %s, which is outside Src: %s", e.Name, in, chain(from, in))
+	for _, in := range slices.Sorted(maps.Keys(m.shipped(&e))) {
+		if !ownInput(in) {
+			continue
 		}
 		pkg, root := packageOf(in)
 		if pkg == "" {
@@ -172,6 +216,18 @@ func (b *build) checkClosure(m *metafile, i int) (pkgs packageRoots, own []strin
 		}
 	}
 	return pkgs, own, nil
+}
+
+// insideSrc refuses an input on entry e's import graph, from, that lies
+// outside Src, shipped or not. esbuild names an input by its real path,
+// symlinks resolved, so a link out of Src shows here as a path leaving it.
+func insideSrc(e *Entry, from map[string]string) error {
+	for _, in := range slices.Sorted(maps.Keys(from)) {
+		if !filepath.IsLocal(filepath.FromSlash(in)) {
+			return fmt.Errorf("webbundle: entry %q bundles %s, which is outside Src: %s", e.Name, in, chain(from, in))
+		}
+	}
+	return nil
 }
 
 // closureRules is one entry's Forbid and Allow, parsed.

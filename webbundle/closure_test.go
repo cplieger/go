@@ -139,6 +139,12 @@ func TestBuildRefusesInputOutsideSrc(t *testing.T) {
 			want:    []string{"../outside.js", "src/app.ts", "outside Src"},
 		},
 		{
+			name:    "UnusedImport",
+			extra:   files{"src/prepaint.js": "import { mark } from \"../../outside.js\";\ndocument.documentElement.dataset.theme = \"light\";\n"},
+			outside: files{"outside.js": "export const mark = \"OUTSIDE_MARKER\";\n"},
+			want:    []string{"../outside.js", "src/prepaint.js", "outside Src"},
+		},
+		{
 			name:    "URL",
 			extra:   files{"src/app.css": ".x { background: url(../../outside.svg); }\n"},
 			outside: files{"outside.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"><!-- OUTSIDE_MARKER --></svg>\n"},
@@ -534,5 +540,204 @@ func TestBuildRefusesClosureItemMatchingNothing(t *testing.T) {
 		c := newFixture(t, files{"lit/core/x.js": "export const x = 1;\n", "node_modules/lit/package.json": `{"name": "lit", "version": "3.0.0"}`})
 		c.Entries[2].Forbid = []string{"./lit/core"}
 		mustBuild(t, c)
+	})
+}
+
+// shipFiles is a prepaint script whose imports pull in a file of the app's
+// own, a file of fixture-ui and a package outside the default Packages, each
+// with a notice in its folder; used says whether the script calls into them,
+// so that each ships, or only imports them, so that esbuild drops their code.
+func shipFiles(used bool) files {
+	const ui = "node_modules/@cplieger/fixture-ui/"
+	f := uiFiles("import { watch } from \"./lifetime/watch.js\";\nexport function apply() { document.documentElement.dataset.theme = \"THEME_MARKER\"; }\nexport function follow() { watch(); }\n")
+	maps.Copy(f, files{
+		ui + "package.json":                  `{"name": "@cplieger/fixture-ui", "version": "2.0.0", "type": "module", "exports": {"./theme": "./src/theme.js", "./lifetime": "./src/lifetime/watch.js"}}`,
+		ui + "src/lifetime/watch.js":         "export function watch() { console.log(\"WATCH_MARKER\"); }\n",
+		ui + "src/lifetime/NOTICE":           "lifetime notice\n",
+		"src/used.js":                        "export const used = \"light\";\n",
+		"src/vendor/dead.js":                 "export const dead = \"DEAD_MARKER\";\n",
+		"src/vendor/NOTICE":                  "vendor notice\n",
+		"src/pointer.js":                     "import { q } from \"sidefree\";\nexport const p = \"POINTER_MARKER\";\nexport function g() { return q; }\n",
+		"node_modules/sidefree/package.json": `{"name": "sidefree", "version": "1.0.0", "type": "module", "sideEffects": false, "main": "index.js"}`,
+		"node_modules/sidefree/index.js":     "export const q = \"SIDEFREE_MARKER\";\n",
+		"node_modules/sidefree/LICENSE":      "sidefree licence\n",
+	})
+	use := ""
+	if used {
+		use = "follow();\nconsole.log(dead, g());\n"
+	}
+	f["src/prepaint.js"] = "import { apply, follow } from \"@cplieger/fixture-ui/theme\";\nimport { used } from \"./used.js\";\nimport { dead } from \"./vendor/dead.js\";\nimport { p, g } from \"./pointer.js\";\napply();\ndocument.documentElement.dataset.theme = used + p;\n" + use
+	return f
+}
+
+// Packages, Forbid, Allow and the notices judge only the files whose code an
+// entry ships, in its own output or an output it loads; a file esbuild drops
+// as unused counts for nothing. A file outside Src still fails the build
+// wherever it sits on the import graph.
+func TestBuildJudgesOnlyTheFilesThatShip(t *testing.T) {
+	t.Parallel()
+	const (
+		uiNotice     = "licenses/@cplieger/fixture-ui@2.0.0/src/lifetime/NOTICE"
+		vendorNotice = "licenses/src/vendor/NOTICE"
+		sideLicence  = "licenses/sidefree@1.0.0/LICENSE"
+	)
+	allPackages := []string{"@cplieger/*", "sidefree"}
+	cases := []struct {
+		name     string
+		used     bool
+		packages []string
+		allow    []string
+		forbid   []string
+		want     []string // the refusal's words; nil builds
+		has      []string // files the tree holds
+		lacks    []string // files it does not
+		notices  []string // Result.Notices
+	}{
+		{
+			name:     "UnusedImports",
+			packages: allPackages,
+			lacks:    []string{uiNotice, vendorNotice, sideLicence},
+			notices:  []string{"@cplieger/fixture-a", "@cplieger/fixture-ui"},
+		},
+		{
+			name: "UnusedPackageOutsidePackages",
+		},
+		{
+			name:  "UnusedImportsUnderAllow",
+			allow: []string{"@cplieger/fixture-ui/theme", "./src/used.js", "./src/pointer.js"},
+		},
+		{
+			name:     "UnusedImportsUnderForbid",
+			packages: allPackages,
+			forbid:   []string{"./src/vendor", "@cplieger/fixture-ui/lifetime", "sidefree"},
+		},
+		{
+			name:     "UsedImports",
+			used:     true,
+			packages: allPackages,
+			has:      []string{uiNotice, vendorNotice, sideLicence},
+			notices:  []string{"@cplieger/fixture-a", "@cplieger/fixture-ui", "sidefree"},
+		},
+		{
+			name: "UsedPackageOutsidePackages",
+			used: true,
+			want: []string{"prepaint", "sidefree", "Config.Packages does not list", "src/pointer.js -> node_modules/sidefree/index.js"},
+		},
+		{
+			name:     "UsedPackageFileUnderAllow",
+			used:     true,
+			packages: allPackages,
+			allow:    []string{"@cplieger/fixture-ui/theme", "./src/used.js", "./src/vendor", "./src/pointer.js", "sidefree"},
+			want:     []string{"prepaint", "Allow", "node_modules/@cplieger/fixture-ui/src/theme.js -> node_modules/@cplieger/fixture-ui/src/lifetime/watch.js"},
+		},
+		{
+			name:     "UsedOwnFileUnderAllow",
+			used:     true,
+			packages: allPackages,
+			allow:    []string{"@cplieger/fixture-ui", "./src/used.js", "./src/pointer.js", "sidefree"},
+			want:     []string{"prepaint", "Allow", "src/prepaint.js -> src/vendor/dead.js"},
+		},
+		{
+			name:     "UsedOwnFileUnderForbid",
+			used:     true,
+			packages: allPackages,
+			forbid:   []string{"./src/vendor"},
+			want:     []string{"prepaint", "Forbid", "./src/vendor", "src/prepaint.js -> src/vendor/dead.js"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFixture(t, shipFiles(tc.used))
+			if tc.packages != nil {
+				c.Packages = tc.packages
+			}
+			c.Entries[2].Allow, c.Entries[2].Forbid = tc.allow, tc.forbid
+			if tc.want != nil {
+				buildRefused(t, c, tc.want...)
+				outMissing(t, c.Out)
+				return
+			}
+			r := mustBuild(t, c)
+			tree := readTree(t, c.Out)
+			for _, name := range tc.has {
+				if _, ok := tree[name]; !ok {
+					t.Errorf("the tree lacks %s, the notice of a file that ships", name)
+				}
+			}
+			for _, name := range tc.lacks {
+				if _, ok := tree[name]; ok {
+					t.Errorf("the tree holds %s, the notice of a file whose code esbuild dropped", name)
+				}
+			}
+			if tc.notices != nil && !slices.Equal(r.Notices, tc.notices) {
+				t.Errorf("Result.Notices = %q, want %q", r.Notices, tc.notices)
+			}
+		})
+	}
+}
+
+// esbuild lists a file that only passes bindings on, or a stylesheet of
+// comments, in the output with no byte of its own; it ships nothing.
+func TestBuildJudgesNoFileOfZeroBytes(t *testing.T) {
+	t.Parallel()
+	t.Run("ReExport", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/prepaint.js":     "import { used } from \"./barrel/index.js\";\ndocument.documentElement.dataset.theme = used;\n",
+			"src/barrel/index.js": "export { used } from \"../used.js\";\n",
+			"src/barrel/NOTICE":   "barrel notice\n",
+			"src/used.js":         "export const used = \"light\";\n",
+		})
+		c.Entries[2].Allow = []string{"./src/used.js"}
+		mustBuild(t, c)
+		if _, ok := readTree(t, c.Out)["licenses/src/barrel/NOTICE"]; ok {
+			t.Error("the tree holds licenses/src/barrel/NOTICE, the notice of a file that puts no byte in the bundle")
+		}
+	})
+	t.Run("StylesheetOfComments", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{
+			"src/app.css":         "@import \"./notes/notes.css\";\n.fixture-app { color: rgb(10 20 30); }\n",
+			"src/notes/notes.css": "/* only a comment */\n",
+			"src/notes/NOTICE":    "notes notice\n",
+		})
+		c.Entries[1].Forbid = []string{"./src/notes"}
+		mustBuild(t, c)
+		if _, ok := readTree(t, c.Out)["licenses/src/notes/NOTICE"]; ok {
+			t.Error("the tree holds licenses/src/notes/NOTICE, the notice of a file that puts no byte in the bundle")
+		}
+	})
+}
+
+// An output an entry loads, such as the chunk of a dynamic import, ships its
+// files as the entry's own output does.
+func TestBuildJudgesTheChunksAnEntryLoads(t *testing.T) {
+	t.Parallel()
+	extra := files{
+		"src/app.ts":  "import { PAGES } from \"../pages.gen\";\nimport(\"./lazy.js\").then((m) => m.run(PAGES.library));\n",
+		"src/lazy.js": "import pad from \"left-pad-fixture\";\nexport function run(to) { console.log(pad(\"hello\"), to); }\n",
+	}
+	for name, body := range outsideFiles() {
+		if strings.HasPrefix(name, "node_modules/left-pad-fixture/") {
+			extra[name] = body
+		}
+	}
+	t.Run("Default", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, extra)
+		buildRefused(t, c, "app", "left-pad-fixture", "src/app.ts -> src/lazy.js -> node_modules/left-pad-fixture/index.js")
+	})
+	t.Run("Listed", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, extra)
+		c.Packages = []string{"@cplieger/*", "left-pad-fixture"}
+		r := mustBuild(t, c)
+		if want := []string{"left-pad-fixture"}; !slices.Equal(r.Notices, want) {
+			t.Errorf("Result.Notices = %q, want %q", r.Notices, want)
+		}
+		if got := string(readFile(t, c.Out, "licenses/left-pad-fixture@0.0.1/LICENSE")); got != "left-pad-fixture licence\n" {
+			t.Errorf("licenses/left-pad-fixture@0.0.1/LICENSE = %q, want the package's licence", got)
+		}
 	})
 }
