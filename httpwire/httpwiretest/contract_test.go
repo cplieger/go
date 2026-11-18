@@ -31,6 +31,10 @@ func passingCases(t testing.TB) []httpwiretest.Case {
 		{Row: "probe.drop", Request: request(t, http.MethodDelete, "/api/probe", "")},
 		{Row: "probe.file", Request: request(t, http.MethodGet, "/api/probe/file", "")},
 		{Row: "probe.away", Request: request(t, http.MethodGet, "/api/probe/away", "")},
+		{Row: "probe.get", Request: request(t, http.MethodGet, "/api/probe?dated", "")},
+		{Row: "probe.item", Request: request(t, http.MethodGet, "/api/probe/thing", "")},
+		{Row: "probe.item", Request: request(t, http.MethodGet, "/api/probe/a%2Fb", "")},
+		{Row: "jobs.get", Request: request(t, http.MethodGet, "/api/jobs/a%2Fb", alice)},
 		{Row: "jobs.mine", Request: request(t, http.MethodGet, "/api/my/jobs", alice)},
 		{Row: "jobs.mine", Request: request(t, http.MethodGet, "/api/my/jobs", "")},
 		{Row: "jobs.own", Request: request(t, http.MethodGet, "/api/own/jobs", alice)},
@@ -65,6 +69,10 @@ func TestContractFailsAnAnswerOutsideItsShapes(t *testing.T) {
 		"a value off its enum":              {s: body(`"on"`, `"dim"`), want: []string{`"state"`, "enum"}},
 		"a string a byte over its bound":    {s: body(`"p"`, `"123456789"`), want: []string{`"name"`, "range"}},
 		"a null under a count of one":       {s: body(`["x"]`, "null"), want: []string{`"tags"`, "required"}},
+		"an array under its count":          {s: body(`["x"]`, "[]"), want: []string{`"tags"`, "range"}},
+		"a date-time with no offset":        {s: body(`"name"`, `"at":"2026-11-15T10:00:00","name"`), want: []string{"does not decode"}},
+		"a date-time off RFC 3339":          {s: body(`"name"`, `"at":"2026-11-15 10:00","name"`), want: []string{"does not decode"}},
+		"a body cut short":                  {s: script{body: goodProbe[:20]}, want: []string{`at ""`, "malformed"}},
 		"a union case with another's field": {s: body(`"radius":1`, `"radius":1,"side":2`), want: []string{"shape.side", "union"}},
 		"a union case with another's tag":   {s: body(`"circle"`, `"square"`), want: []string{"shape", "union"}},
 		"an undeclared success status":      {s: script{status: http.StatusAccepted, body: goodProbe}, want: []string{"202", "not declared"}},
@@ -131,7 +139,11 @@ func TestContractFailsACaseItCannotCheck(t *testing.T) {
 		"a Stream row":                {httpwiretest.Case{Row: "live.stream", Request: request(t, http.MethodGet, "/api/stream", alice)}, []string{`row "live.stream"`, "Stream"}},
 		"a request for another row":   {httpwiretest.Case{Row: "probe.get", Request: request(t, http.MethodGet, "/api/probe/file", "")}, []string{`row "probe.get"`, "does not reach"}},
 		"a request of another method": {httpwiretest.Case{Row: "probe.get", Request: request(t, http.MethodPost, "/api/probe", "")}, []string{`row "probe.get"`, "does not reach"}},
-		"no request":                  {httpwiretest.Case{Row: "probe.get"}, []string{`row "probe.get"`, "no Request"}},
+		"a literal path another row takes": {
+			httpwiretest.Case{Row: "probe.item", Request: request(t, http.MethodGet, "/api/probe/file", "")},
+			[]string{`row "probe.item"`, "does not reach"},
+		},
+		"no request": {httpwiretest.Case{Row: "probe.get"}, []string{`row "probe.get"`, "no Request"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

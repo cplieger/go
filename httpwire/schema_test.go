@@ -229,6 +229,8 @@ func TestCheckBody(t *testing.T) {
 		{name: "null on a required field", op: "createItem", body: `{"name":null,"count":1}`, want: []string{"name=required"}},
 		{name: "null on an optional non-null field", op: "createItem", body: item(`"color":null`), want: []string{"color=required"}},
 		{name: "null on a union field", op: "createItem", body: item(`"shape":null`), want: []string{"shape=required"}},
+		{name: "nullable field of the wrong type", op: "createItem", body: item(`"note":4`), want: []string{"note=malformed"}},
+		{name: "nullable field off its enum", op: "createItem", body: item(`"note":"blue"`), want: []string{"note=enum"}},
 		{name: "unknown field", op: "createItem", body: item(`"extra":1`), want: []string{"extra=unknown"}},
 		{name: "unknown nested field", op: "createItem", body: item(`"next":{"name":"b","count":1,"next":{"name":"c","count":1,"bogus":true}}`), want: []string{"next.next.bogus=unknown"}},
 		{name: "array item of the wrong type", op: "createItem", body: item(`"tags":["a",2]`), want: []string{"tags[1]=malformed"}},

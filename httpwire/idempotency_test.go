@@ -36,6 +36,12 @@ type (
 	noteText struct {
 		Text string `json:"text"`
 	}
+	retryParams struct {
+		ID jobID `json:"id"`
+	}
+	retryQuery struct {
+		Mode jobState `json:"mode,omitempty"`
+	}
 )
 
 // keyedTable holds Keyed rows of each shape: one with two success
@@ -76,6 +82,11 @@ func keyedTable(t testing.TB) *httpwire.Table {
 			{
 				Name: "jobs.quick", Method: http.MethodPost, Path: "/api/jobs/quick", Summary: "Run a quick job", Description: "Run a quick job.",
 				Request: reflect.TypeFor[jobBody](), Response: reflect.TypeFor[jobAnswer](), Access: session, Keyed: true, Codes: jobCodes,
+			},
+			{
+				Name: "jobs.retry", Method: http.MethodPost, Path: "/api/jobs/{id}/retry", Summary: "Retry a job", Description: "Retry a job.",
+				Params: reflect.TypeFor[retryParams](), Query: reflect.TypeFor[retryQuery](), Request: reflect.TypeFor[jobBody](),
+				Response: reflect.TypeFor[jobAnswer](), Access: session, Keyed: true,
 			},
 			{
 				Name: "notes.save", Method: http.MethodPut, Path: "/api/notes", Summary: "Save the note", Description: "Save the note.",
@@ -189,6 +200,10 @@ func (kf *keyedFixture) bindings() []httpwire.Binding {
 		httpwire.Bind("jobs.read", func(context.Context, httpwire.Call[noP, noQ, noB]) ([]jobAnswer, error) { return nil, nil }),
 		kf.jobs("jobs.start"),
 		kf.jobs("jobs.quick"),
+		httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody]) (jobAnswer, error) {
+			kf.ran("jobs.retry")
+			return jobAnswer{ID: string(c.Params.ID) + "-" + string(c.Query.Mode)}, nil
+		}),
 		httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noP, noQ, noteText]) (httpwire.None, error) {
 			kf.ran("notes.save")
 			return httpwire.None{}, nil
@@ -511,6 +526,25 @@ func TestFingerprint(t *testing.T) {
 		rec := post("/api/jobs/quick", `{"kind":"a","size":2}`, `"f"`, "Credential", "k:2")
 		if rec.Code != http.StatusOK || kf.runsOf("jobs.quick") != 2 {
 			t.Errorf("answer %d %s, want a run of its own", rec.Code, rec.Body)
+		}
+	})
+	t.Run("the request's path and query", func(t *testing.T) {
+		retry := func(target string) *httptest.ResponseRecorder {
+			return post(target, `{"kind":"a","size":1}`, `"r"`)
+		}
+		ran := retry("/api/jobs/ab/retry?mode=fast")
+		if ran.Code != http.StatusOK || kf.runsOf("jobs.retry") != 1 {
+			t.Fatalf("first retry %d %s", ran.Code, ran.Body)
+		}
+		for _, target := range []string{"/api/jobs/cd/retry?mode=fast", "/api/jobs/ab/retry?mode=slow", "/api/jobs/ab/retry"} {
+			if rec := retry(target); codeOf(t, rec) != "idempotency_key_reused" || kf.runsOf("jobs.retry") != 1 {
+				t.Errorf("%s answered %d %s after %d runs, want idempotency_key_reused and one run", target, rec.Code, rec.Body, kf.runsOf("jobs.retry"))
+			}
+		}
+		for _, target := range []string{"/api/jobs/%61b/retry?mode=%66ast", "/api/jobs/ab/retry?mode=fast&"} {
+			if rec := retry(target); rec.Code != http.StatusOK || rec.Body.String() != ran.Body.String() || kf.runsOf("jobs.retry") != 1 {
+				t.Errorf("%s answered %d %s after %d runs, want the replay", target, rec.Code, rec.Body, kf.runsOf("jobs.retry"))
+			}
 		}
 	})
 	t.Run("another If-Match tag", func(t *testing.T) {

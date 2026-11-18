@@ -159,6 +159,55 @@
         "summary": "Run a quick job"
       }
     },
+    "/api/jobs/{id}/retry": {
+      "post": {
+        "description": "Retry a job.",
+        "operationId": "jobs.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 64
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Retry a job"
+      }
+    },
     "/api/notes": {
       "put": {
         "description": "Save the note.",

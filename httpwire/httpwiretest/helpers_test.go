@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
@@ -104,10 +105,15 @@ type shape struct {
 }
 
 type probe struct {
-	Name  string   `json:"name"`
-	State string   `json:"state"`
-	Tags  []string `json:"tags"`
-	Shape shape    `json:"shape"`
+	At    *time.Time `json:"at,omitempty"`
+	Name  string     `json:"name"`
+	State string     `json:"state"`
+	Tags  []string   `json:"tags"`
+	Shape shape      `json:"shape"`
+}
+
+type probeParams struct {
+	Name string `json:"name"`
 }
 
 type (
@@ -146,6 +152,9 @@ func fixtureScripts() map[string]script {
 	return map[string]script{
 		"GET /api/probe":           {body: goodProbe},
 		"GET /api/probe?escaped":   {body: `{"name":"<b>&</b>","state":"off","tags":["<",">"],"shape":{"kind":"square","side":2}}`},
+		"GET /api/probe?dated":     {body: strings.Replace(goodProbe, `"name"`, `"at":"2026-11-15T10:00:00.5+01:00","name"`, 1)},
+		"GET /api/probe/thing":     {body: goodProbe},
+		"GET /api/probe/a%2Fb":     {body: goodProbe},
 		"GET /api/probe?missing":   {refuse: "probe_missing"},
 		"POST /api/probe":          {status: http.StatusCreated, body: goodProbe, want: `{"any":"body"}`},
 		"POST /api/probe?again":    {status: http.StatusOK, body: goodProbe},
@@ -221,12 +230,14 @@ func (f *fixture) table(personal bool) *httpwire.Table {
 	pfile.Kind, pfile.ContentType = httpwire.Raw, "text/csv"
 	paway := row("probe.away", http.MethodGet, "/api/probe/away", "Leave the probe", public)
 	paway.Kind = httpwire.Redirect
+	pitem := row("probe.item", http.MethodGet, "/api/probe/{name}", "Read a named probe", public)
+	pitem.Params, pitem.Response = reflect.TypeFor[probeParams](), reflect.TypeFor[probe]()
 	return &httpwire.Table{
 		Catalog: f.catalog, Prefix: "/api", OnePerson: personal,
 		Endpoints: []httpwire.Endpoint{mine, own, all, get, csv, stream},
 		Sources:   []httpwire.FeedSource{{Name: "store", Log: true}},
 		Kinds:     []httpwire.FeedKind{{Name: "jobs", Source: "store"}},
-		Mounts:    []httpwire.Mount{{Handler: f, Rows: []httpwire.Endpoint{pget, pmake, pdrop, pfile, paway}}},
+		Mounts:    []httpwire.Mount{{Handler: f, Rows: []httpwire.Endpoint{pget, pmake, pdrop, pfile, paway, pitem}}},
 	}
 }
 

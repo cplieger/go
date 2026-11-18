@@ -52,13 +52,13 @@ func WithSameShape(s SameShape) Option {
 }
 
 // Contract serves each case through api and fails t, naming the row, on any
-// answer outside the row's declared shapes in the OpenAPI document api was
-// built with: a success status the row does not declare, a body that does
-// not decode strictly into the status's Response type or breaks its schema,
-// a Raw answer of another media type, an error that is not an envelope of a
-// code in the row's union at the catalog's status, and an answer without
-// this API's Wire-Version or a valid X-Request-Id. A HEAD answer's body is
-// not read. A case naming no row of the table, or a Stream row, fails.
+// answer outside the row's shapes in the OpenAPI document api was built
+// with: an undeclared success status, a body that does not decode strictly
+// into the status's Response type or breaks its schema, a Raw answer of
+// another media type, an error that is not an envelope of a code in the
+// row's union at the catalog's status, and no Wire-Version of this API or
+// valid X-Request-Id. A HEAD answer's body is not read. A case naming no
+// row, a Stream row, or a request the API routes to another row fails.
 func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 	t.Helper()
 	if api == nil {
@@ -104,6 +104,7 @@ type checker struct {
 	guard   httpwire.Guard
 	catalog *httpwire.Catalog
 	rows    map[string]*httpwire.Endpoint
+	mux     *http.ServeMux
 	version string
 	order   []*httpwire.Endpoint
 }
@@ -111,12 +112,13 @@ type checker struct {
 func newChecker(t testing.TB, api *httpwire.API) *checker {
 	b := wirelink.Inspect(api)
 	tb := api.Table()
-	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}}
+	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}, mux: http.NewServeMux()}
 	c.schema, _ = b.Schema.(*httpwire.Schema)
 	c.guard, _ = b.Guard.(httpwire.Guard)
 	add := func(ep *httpwire.Endpoint) {
 		c.rows[ep.Name] = ep
 		c.order = append(c.order, ep)
+		c.mux.Handle(pattern(ep), http.NotFoundHandler())
 	}
 	for i := range tb.Endpoints {
 		add(&tb.Endpoints[i])
@@ -153,7 +155,7 @@ func (c *checker) admit(cs Case) (ep *httpwire.Endpoint, body []byte, ok bool) {
 		c.t.Errorf("httpwiretest: row %q is a Stream row, whose answer Contract cannot read", cs.Row)
 		return nil, nil, false
 	}
-	if !reaches(ep, cs.Request) {
+	if !c.reaches(ep, cs.Request) {
 		c.t.Errorf("httpwiretest: row %q: the case's %s %s does not reach the row (%s %s)", cs.Row, cs.Request.Method, cs.Request.URL.Path, ep.Method, ep.Path)
 		return nil, nil, false
 	}
@@ -167,14 +169,14 @@ func (c *checker) admit(cs Case) (ep *httpwire.Endpoint, body []byte, ok bool) {
 	return ep, body, true
 }
 
-// reaches reports whether r is routed to ep's pattern.
-func reaches(ep *httpwire.Endpoint, r *http.Request) bool {
-	mux := http.NewServeMux()
-	pattern := ep.Method + " " + ep.Path
-	mux.Handle(pattern, http.NotFoundHandler())
-	_, got := mux.Handler(r)
-	return got == pattern
+// reaches reports whether the API's routing sends r to ep, so a literal
+// row's path never reaches a parameter row beside it.
+func (c *checker) reaches(ep *httpwire.Endpoint, r *http.Request) bool {
+	_, got := c.mux.Handler(r)
+	return got == pattern(ep)
 }
+
+func pattern(ep *httpwire.Endpoint) string { return ep.Method + " " + ep.Path }
 
 // withBody is a copy of r reading body.
 func withBody(r *http.Request, body []byte) *http.Request {

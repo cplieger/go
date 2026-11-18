@@ -59,6 +59,10 @@
       "Probe": {
         "additionalProperties": false,
         "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
           "name": {
             "type": "string",
             "x-max-bytes": 8
@@ -345,6 +349,35 @@
           }
         },
         "summary": "Read the probe file"
+      }
+    },
+    "/api/probe/{name}": {
+      "get": {
+        "description": "Read a named probe.",
+        "operationId": "probe.item",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Probe"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read a named probe"
       }
     },
     "/api/stream": {
