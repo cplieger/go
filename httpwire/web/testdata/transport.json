@@ -1,0 +1,566 @@
+{
+  "wireVersion": "0123456789abcdef",
+  "errorCodes": {
+    "bad_body": {
+      "status": 400,
+      "remediation": "Fix the request body as the fields describe, then resend it."
+    },
+    "held_limit": {
+      "status": 429,
+      "remediation": "Wait for an open request or stream to end, then retry."
+    },
+    "idempotency_in_flight": {
+      "status": 409,
+      "remediation": "Wait, then resend with the same Idempotency-Key to get the first request's answer."
+    },
+    "idempotency_key_invalid": {
+      "status": 400,
+      "remediation": "Send the key as a quoted string: Idempotency-Key: \"<key>\"."
+    },
+    "idempotency_key_required": {
+      "status": 400,
+      "remediation": "Resend with an Idempotency-Key header: Idempotency-Key: \"<key>\"."
+    },
+    "idempotency_key_reused": {
+      "status": 422,
+      "remediation": "Use a new Idempotency-Key for a different request."
+    },
+    "if_match_invalid": {
+      "status": 400,
+      "remediation": "Send If-Match as the quoted tag a read of the row returned."
+    },
+    "if_match_required": {
+      "status": 428,
+      "remediation": "Read the row, then resend with If-Match set to the tag the read returned."
+    },
+    "not_found": {
+      "status": 404,
+      "remediation": "Check the path; nothing is served at it."
+    },
+    "rate_limited": {
+      "status": 429,
+      "remediation": "Wait for the Retry-After delay, then retry."
+    },
+    "stale_version": {
+      "status": 412,
+      "remediation": "Read the row again, reapply the change, and resend with the new tag."
+    },
+    "wire_mismatch": {
+      "status": 409,
+      "remediation": "Reload the client: the server's API changed since it loaded."
+    }
+  },
+  "rows": [
+    {
+      "name": "notes.read",
+      "method": "GET",
+      "path": "/api/notes/{id}",
+      "codes": ["not_found", "rate_limited"],
+      "statuses": [200]
+    },
+    {
+      "name": "notes.save",
+      "method": "PUT",
+      "path": "/api/notes/{id}",
+      "codes": [
+        "bad_body",
+        "if_match_invalid",
+        "if_match_required",
+        "not_found",
+        "stale_version",
+        "wire_mismatch"
+      ],
+      "statuses": [200]
+    },
+    {
+      "name": "users.register",
+      "method": "POST",
+      "path": "/api/users",
+      "codes": [
+        "bad_body",
+        "idempotency_in_flight",
+        "idempotency_key_invalid",
+        "idempotency_key_required",
+        "idempotency_key_reused",
+        "wire_mismatch"
+      ],
+      "statuses": [201, 200]
+    },
+    {
+      "name": "events.wait",
+      "method": "GET",
+      "path": "/api/events/wait",
+      "codes": ["held_limit"],
+      "statuses": [200, 204]
+    }
+  ],
+  "cases": [
+    {
+      "name": "read answers the tag a save sends",
+      "row": "notes.read",
+      "params": {
+        "id": "n1"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/notes/n1",
+        "headers": {}
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 200,
+        "data": {
+          "id": "n1",
+          "text": "first",
+          "tag": "0123456789abcdef.7"
+        }
+      },
+      "want": {
+        "ok": true,
+        "status": 200,
+        "data": {
+          "id": "n1",
+          "text": "first",
+          "tag": "0123456789abcdef.7"
+        }
+      }
+    },
+    {
+      "name": "save sends the read's tag as If-Match",
+      "row": "notes.save",
+      "params": {
+        "id": "n1"
+      },
+      "body": {
+        "text": "second"
+      },
+      "tag": "0123456789abcdef.7",
+      "request": {
+        "method": "PUT",
+        "path": "/api/notes/n1",
+        "headers": {
+          "If-Match": "\"0123456789abcdef.7\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 200,
+        "data": {
+          "id": "n1",
+          "text": "second",
+          "tag": "0123456789abcdef.8"
+        }
+      },
+      "want": {
+        "ok": true,
+        "status": 200,
+        "data": {
+          "id": "n1",
+          "text": "second",
+          "tag": "0123456789abcdef.8"
+        }
+      }
+    },
+    {
+      "name": "save over a newer tag is stale",
+      "row": "notes.save",
+      "params": {
+        "id": "n1"
+      },
+      "body": {
+        "text": "third"
+      },
+      "tag": "0123456789abcdef.7",
+      "request": {
+        "method": "PUT",
+        "path": "/api/notes/n1",
+        "headers": {
+          "If-Match": "\"0123456789abcdef.7\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "refuse",
+        "code": "stale_version"
+      },
+      "want": {
+        "ok": false,
+        "failure": "http",
+        "status": 412,
+        "code": "stale_version"
+      }
+    },
+    {
+      "name": "save with a bare revision sends nothing",
+      "row": "notes.save",
+      "params": {
+        "id": "n1"
+      },
+      "body": {
+        "text": "fourth"
+      },
+      "tag": "7",
+      "want": {
+        "ok": false,
+        "failure": "invalid",
+        "status": 0
+      }
+    },
+    {
+      "name": "save with a revision past 2^64-1 sends nothing",
+      "row": "notes.save",
+      "params": {
+        "id": "n1"
+      },
+      "body": {
+        "text": "fifth"
+      },
+      "tag": "0123456789abcdef.18446744073709551616",
+      "want": {
+        "ok": false,
+        "failure": "invalid",
+        "status": 0
+      }
+    },
+    {
+      "name": "register first run answers 201",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "00000000-0000-4000-8000-000000000000",
+      "request": {
+        "method": "POST",
+        "path": "/api/users",
+        "headers": {
+          "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 201,
+        "data": {
+          "id": "u1",
+          "name": "ada"
+        }
+      },
+      "want": {
+        "ok": true,
+        "status": 201,
+        "data": {
+          "id": "u1",
+          "name": "ada"
+        }
+      }
+    },
+    {
+      "name": "register resent with its key replays 200",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "00000000-0000-4000-8000-000000000000",
+      "request": {
+        "method": "POST",
+        "path": "/api/users",
+        "headers": {
+          "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 200,
+        "data": {
+          "id": "u1",
+          "name": "ada"
+        }
+      },
+      "want": {
+        "ok": true,
+        "status": 200,
+        "data": {
+          "id": "u1",
+          "name": "ada"
+        }
+      }
+    },
+    {
+      "name": "register escapes a quote and a backslash in its key",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "grace"
+      },
+      "key": "a\"b\\c",
+      "request": {
+        "method": "POST",
+        "path": "/api/users",
+        "headers": {
+          "Idempotency-Key": "\"a\\\"b\\\\c\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 201,
+        "data": {
+          "id": "u2",
+          "name": "grace"
+        }
+      },
+      "want": {
+        "ok": true,
+        "status": 201,
+        "data": {
+          "id": "u2",
+          "name": "grace"
+        }
+      }
+    },
+    {
+      "name": "register while its first run is in flight",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "00000000-0000-4000-8000-000000000000",
+      "request": {
+        "method": "POST",
+        "path": "/api/users",
+        "headers": {
+          "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "refuse",
+        "code": "idempotency_in_flight"
+      },
+      "want": {
+        "ok": false,
+        "failure": "http",
+        "status": 409,
+        "code": "idempotency_in_flight"
+      }
+    },
+    {
+      "name": "register with an empty key sends nothing",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "",
+      "want": {
+        "ok": false,
+        "failure": "invalid",
+        "status": 0
+      }
+    },
+    {
+      "name": "register with a 256-byte key sends nothing",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "want": {
+        "ok": false,
+        "failure": "invalid",
+        "status": 0
+      }
+    },
+    {
+      "name": "register refused with a code outside its union is decode",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "00000000-0000-4000-8000-000000000000",
+      "request": {
+        "method": "POST",
+        "path": "/api/users",
+        "headers": {
+          "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "raw",
+        "status": 404,
+        "headers": {
+          "Content-Type": "application/json",
+          "Wire-Version": "0123456789abcdef",
+          "X-Request-Id": "req-1"
+        },
+        "body": "{\"code\":\"not_found\",\"message\":\"not found\",\"remediation\":\"Check the path; nothing is served at it.\",\"request_id\":\"req-1\"}"
+      },
+      "want": {
+        "ok": false,
+        "failure": "decode",
+        "status": 404
+      }
+    },
+    {
+      "name": "held wait answers 200 with a body",
+      "row": "events.wait",
+      "params": {},
+      "request": {
+        "method": "GET",
+        "path": "/api/events/wait",
+        "headers": {}
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 200,
+        "data": {
+          "kind": "jobs"
+        }
+      },
+      "want": {
+        "ok": true,
+        "status": 200,
+        "data": {
+          "kind": "jobs"
+        }
+      }
+    },
+    {
+      "name": "held wait answers 204 with none",
+      "row": "events.wait",
+      "params": {},
+      "request": {
+        "method": "GET",
+        "path": "/api/events/wait",
+        "headers": {}
+      },
+      "answer": {
+        "kind": "answer",
+        "status": 204
+      },
+      "want": {
+        "ok": true,
+        "status": 204
+      }
+    },
+    {
+      "name": "held wait answering an undeclared 202 is decode",
+      "row": "events.wait",
+      "params": {},
+      "request": {
+        "method": "GET",
+        "path": "/api/events/wait",
+        "headers": {}
+      },
+      "answer": {
+        "kind": "raw",
+        "status": 202,
+        "headers": {
+          "Content-Type": "application/json",
+          "Wire-Version": "0123456789abcdef",
+          "X-Request-Id": "req-1"
+        },
+        "body": "{\"kind\":\"jobs\"}"
+      },
+      "want": {
+        "ok": false,
+        "failure": "decode",
+        "status": 202
+      }
+    },
+    {
+      "name": "read refused with a body that is no envelope is decode",
+      "row": "notes.read",
+      "params": {
+        "id": "n1"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/notes/n1",
+        "headers": {}
+      },
+      "answer": {
+        "kind": "raw",
+        "status": 500,
+        "headers": {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Wire-Version": "0123456789abcdef",
+          "X-Request-Id": "req-1"
+        },
+        "body": "oops"
+      },
+      "want": {
+        "ok": false,
+        "failure": "decode",
+        "status": 500
+      }
+    },
+    {
+      "name": "register answering an undeclared 202 is decode",
+      "row": "users.register",
+      "params": {},
+      "body": {
+        "name": "ada"
+      },
+      "key": "00000000-0000-4000-8000-000000000000",
+      "request": {
+        "method": "POST",
+        "path": "/api/users",
+        "headers": {
+          "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
+          "Wire-Version": "0123456789abcdef"
+        }
+      },
+      "answer": {
+        "kind": "raw",
+        "status": 202,
+        "headers": {
+          "Content-Type": "application/json",
+          "Wire-Version": "0123456789abcdef",
+          "X-Request-Id": "req-1"
+        },
+        "body": "{\"id\":\"u1\",\"name\":\"ada\"}"
+      },
+      "want": {
+        "ok": false,
+        "failure": "decode",
+        "status": 202
+      }
+    },
+    {
+      "name": "read answering a note with no tag is decode",
+      "row": "notes.read",
+      "params": {
+        "id": "n1"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/notes/n1",
+        "headers": {}
+      },
+      "answer": {
+        "kind": "raw",
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "Wire-Version": "0123456789abcdef",
+          "X-Request-Id": "req-1"
+        },
+        "body": "{\"id\":\"n1\",\"text\":\"first\"}"
+      },
+      "want": {
+        "ok": false,
+        "failure": "decode",
+        "status": 200
+      }
+    }
+  ]
+}
