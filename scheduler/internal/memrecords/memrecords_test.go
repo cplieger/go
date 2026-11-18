@@ -1,6 +1,7 @@
 package memrecords_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -13,6 +14,13 @@ import (
 
 func TestRecordsContract(t *testing.T) {
 	schedulertest.Records(t, func() scheduler.Records { return memrecords.New() })
+}
+
+func TestEndInContract(t *testing.T) {
+	schedulertest.EndIn(t, func() (scheduler.Records, schedulertest.EndInFunc) {
+		s := memrecords.New()
+		return s, func(_ context.Context, id scheduler.ID, e scheduler.End) error { return s.EndIn(id, e) }
+	})
 }
 
 func id(n int) scheduler.ID { return scheduler.ID(fmt.Sprintf("%032x", n)) }

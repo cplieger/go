@@ -104,15 +104,17 @@ func (s *Store) All() []scheduler.Record {
 	return out
 }
 
-// EndIn writes e as id's end, as a kind's own commit does through its
-// store: ErrNotRunning for a record that is not running, writing nothing.
-func (s *Store) EndIn(id scheduler.ID, e scheduler.End) error {
+// EndIn writes e as id's end with its lines closed by scheduler.CloseLines,
+// as a kind's own commit does through its store: ErrNotRunning for a record
+// that is not running, writing nothing.
+func (s *Store) EndIn(id scheduler.ID, e scheduler.End) error { //nolint:gocritic // hugeParam: jobstore's EndIn signature
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.recs[id]
 	if !ok || r.State != scheduler.StateRunning {
 		return ErrNotRunning
 	}
+	r.Lines, e = scheduler.CloseLines(r.Lines, e)
 	s.end(&r, e)
 	return nil
 }

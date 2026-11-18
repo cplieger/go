@@ -39,9 +39,7 @@ func line(state scheduler.LineState, reason string) scheduler.Line {
 func (r *rig) wantLines(t *testing.T, id scheduler.ID, want ...scheduler.Line) {
 	t.Helper()
 	got := r.rec(t, id).Lines
-	if !slices.EqualFunc(got, want, func(a, b scheduler.Line) bool {
-		return a.State == b.State && a.Reason == b.Reason && string(a.Facts) == string(b.Facts)
-	}) {
+	if !slices.EqualFunc(got, want, sameLine) {
 		t.Errorf("record %q lines %v, want %v", id, got, want)
 	}
 }
@@ -385,4 +383,31 @@ func TestBatchMaxItems(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestCloseLines(t *testing.T) {
+	t.Run("answers a copy and leaves the lines it was given", func(t *testing.T) {
+		in := []scheduler.Line{line(scheduler.LineDone, ""), line(scheduler.LineQueued, "")}
+		got, end := scheduler.CloseLines(in, scheduler.End{Result: scheduler.ResultOK})
+		if want := []scheduler.Line{line(scheduler.LineDone, ""), line(scheduler.LineReview, scheduler.ReasonNotRun)}; !slices.EqualFunc(got, want, sameLine) {
+			t.Errorf("lines %v, want %v", got, want)
+		}
+		if end.Result != scheduler.ResultPartial {
+			t.Errorf("result %s, want partial", end.Result)
+		}
+		if in[1].State != scheduler.LineQueued {
+			t.Errorf("the given line 1 reads %s, want it left queued", in[1].State)
+		}
+	})
+	t.Run("no lines answers the end unchanged", func(t *testing.T) {
+		in := scheduler.End{Result: scheduler.ResultOK, Reasons: []scheduler.Reason{{Code: "slow"}}, Facts: json.RawMessage(`{"n":1}`)}
+		lines, end := scheduler.CloseLines(nil, in)
+		if len(lines) != 0 || end.Result != scheduler.ResultOK || !slices.Equal(end.Reasons, in.Reasons) || string(end.Facts) != `{"n":1}` {
+			t.Errorf("CloseLines(nil, ok) = %v, %+v; want no lines and %+v", lines, end, in)
+		}
+	})
+}
+
+func sameLine(a, b scheduler.Line) bool {
+	return a.State == b.State && a.Reason == b.Reason && string(a.Facts) == string(b.Facts)
 }

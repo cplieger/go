@@ -120,6 +120,16 @@ func (e *Executor[P]) setLine(en *job[P], i int, l Line) {
 	e.put(en)
 }
 
+// CloseLines is a batch's close at its end: each line still queued or
+// running goes to review with reason not_run, or cancelled or interrupted for
+// such an end, and an ok end answers partial when any line is then skipped or
+// in review. It answers a copy and leaves lines as they are; with no lines it
+// answers end unchanged. A store's own-commit end calls it, as the executor
+// does for an end it writes.
+func CloseLines(lines []Line, end End) ([]Line, End) {
+	return slices.Clone(lines), end
+}
+
 // closeLines puts each line still queued in review for end, as Item's godoc
 // states, writes the record when a line moved and answers the batch's end.
 func (e *Executor[P]) closeLines(en *job[P], end End) End {
