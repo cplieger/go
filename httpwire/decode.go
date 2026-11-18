@@ -2,6 +2,7 @@ package httpwire
 
 import (
 	"cmp"
+	"context"
 	"encoding"
 	"encoding/json"
 	"errors"
@@ -195,8 +196,9 @@ func readBody(r *http.Request, limit int) ([]byte, *Error) {
 
 // decodeBody reads ep's Request from b, the request's body: one JSON value
 // with no unknown field, held to the bound methods of its types and to the
-// row's request schema.
-func (a *API) decodeBody(b []byte, ep *Endpoint) (any, *Error) {
+// row's request schema. The decoder's own error stays in a DEBUG line,
+// since its text names Go types.
+func (a *API) decodeBody(ctx context.Context, b []byte, ep *Endpoint) (any, *Error) {
 	v := reflect.New(ep.Request)
 	err := json.Unmarshal(b, v.Interface())
 	w := boundWalk{refusals: map[string]string{}}
@@ -210,6 +212,9 @@ func (a *API) decodeBody(b []byte, ep *Endpoint) (any, *Error) {
 		w.add(jsonErrorPath(err), codeMalformed, "does not decode as this request's body")
 	}
 	if len(w.out) > 0 {
+		if err != nil {
+			a.log().DebugContext(ctx, "httpwire: a request body did not decode", "row", ep.Name, "error", err)
+		}
 		for i := range w.out {
 			if code, ok := w.refusals[w.out[i].Path]; ok {
 				w.out[i].Code = code

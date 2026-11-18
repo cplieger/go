@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"reflect"
@@ -143,7 +144,7 @@ type decodeAPI struct {
 	file   bool
 }
 
-func newDecodeAPI(t *testing.T, doc []byte) *decodeAPI {
+func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI {
 	t.Helper()
 	d := &decodeAPI{}
 	api, err := httpwire.New(decodeTable(), []httpwire.Binding{
@@ -167,7 +168,7 @@ func newDecodeAPI(t *testing.T, doc []byte) *decodeAPI {
 			d.raw, _ = io.ReadAll(r.Body)
 			w.Header().Set("Content-Type", "text/plain")
 		})),
-	}, httpwire.WithSchema(doc))
+	}, append([]httpwire.Option{httpwire.WithSchema(doc)}, opts...)...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -415,9 +416,10 @@ func TestDecodeHandsARawRowItsCheckedBody(t *testing.T) {
 	})
 }
 
-// TestDecodeHoldsBoundsTheSchemaLacks serves a document that states none of
-// the types' bounds and leaves the body open: the decode refuses on its own.
-func TestDecodeHoldsBoundsTheSchemaLacks(t *testing.T) {
+// openItemDoc is the decode document stating none of the types' bounds,
+// with the body open.
+func openItemDoc(t *testing.T) []byte {
+	t.Helper()
 	var doc map[string]any
 	if err := json.Unmarshal(decodeDoc(t), &doc); err != nil {
 		t.Fatal(err)
@@ -441,6 +443,13 @@ func TestDecodeHoldsBoundsTheSchemaLacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return plain
+}
+
+// TestDecodeHoldsBoundsTheSchemaLacks serves a document that states none of
+// the types' bounds and leaves the body open: the decode refuses on its own.
+func TestDecodeHoldsBoundsTheSchemaLacks(t *testing.T) {
+	plain := openItemDoc(t)
 	for name, tc := range map[string]struct {
 		member, raw, want string
 	}{
@@ -475,4 +484,69 @@ func TestDecodeHoldsBoundsTheSchemaLacks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBodyRefusalsNameNoGoInternals sends bodies whose decode fails in
+// encoding/json, in a type's own decoder and in the schema check: no
+// refusal's text names the server's Go types or a decoder's own error.
+func TestBodyRefusalsNameNoGoInternals(t *testing.T) {
+	internals := []string{"Go ", "struct", "json", "itemBody", "httpwire", "cannot unmarshal", "invalid character", "unexpected", "odd", "comma list"}
+	closed, open := decodeDoc(t), openItemDoc(t)
+	for name, tc := range map[string]struct {
+		doc  []byte
+		body string
+	}{
+		"a string under an integer":         {closed, withItem(t, "n", `"1"`)},
+		"an object under a list":            {closed, withItem(t, "tags", `{}`)},
+		"a text its type refuses":           {closed, withItem(t, "keys", `"A"`)},
+		"a value its own decoder refuses":   {closed, withItem(t, "even", "3")},
+		"a syntax error":                    {closed, `{"name":}`},
+		"a cut body":                        {closed, `{"name":"a"`},
+		"two values":                        {closed, validItem + " {}"},
+		"past a Go type the document lacks": {open, withItem(t, "small", "300")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := serve(newDecodeAPI(t, tc.doc).api, http.MethodPost, "/api/items", tc.body)
+			env := envelopeOf(t, rec)
+			if env.Code != "bad_body" || len(env.Fields) == 0 {
+				t.Fatalf("answer %d %s %v, want bad_body with fields", rec.Code, env.Code, env.Fields)
+			}
+			text := env.Message
+			for _, f := range env.Fields {
+				text += " | " + f.Message
+			}
+			for _, word := range internals {
+				if strings.Contains(text, word) {
+					t.Errorf("refusal %q names %q", text, word)
+				}
+			}
+		})
+	}
+}
+
+// TestBodyDecoderErrorIsLoggedAtDebug keeps the decoder's own text, which
+// never crosses the wire, in a DEBUG line naming the row.
+func TestBodyDecoderErrorIsLoggedAtDebug(t *testing.T) {
+	for name, tc := range map[string]struct{ body, text string }{
+		"the JSON decoder's refusal": {withItem(t, "n", `"1"`), "cannot unmarshal"},
+		"a type's own decoder":       {withItem(t, "even", "3"), "odd"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sink := &logSink{}
+			d := newDecodeAPI(t, decodeDoc(t), httpwire.WithLogger(slog.New(sink)))
+			if rec := serve(d.api, http.MethodPost, "/api/items", tc.body); rec.Code != http.StatusBadRequest {
+				t.Fatalf("answer %d %s", rec.Code, rec.Body)
+			}
+			if !sink.has("DEBUG", "row=items.put", tc.text) {
+				t.Errorf("no DEBUG line naming the row and %q: %q", tc.text, sink.all())
+			}
+		})
+	}
+	t.Run("an accepted body logs nothing", func(t *testing.T) {
+		sink := &logSink{}
+		d := newDecodeAPI(t, decodeDoc(t), httpwire.WithLogger(slog.New(sink)))
+		if rec := serve(d.api, http.MethodPost, "/api/items", validItem); rec.Code != http.StatusNoContent || len(sink.all()) != 0 {
+			t.Errorf("answer %d, lines %q", rec.Code, sink.all())
+		}
+	})
 }

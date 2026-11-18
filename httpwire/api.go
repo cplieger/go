@@ -343,7 +343,7 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 		if b, e = readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody)); e != nil {
 			return nil, nil, e
 		}
-		if d.body, e = a.decodeBody(b, ep); e != nil {
+		if d.body, e = a.decodeBody(r.Context(), b, ep); e != nil {
 			return nil, nil, e
 		}
 	}
