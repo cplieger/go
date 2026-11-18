@@ -13,7 +13,8 @@ const MaxReasonBytes = 64
 
 // Count is an API row's figure for a count read elsewhere: the last whole
 // read's value and time, and how the latest read went. Value and AsOf are
-// both null before the first whole read, and both set after it.
+// both null before the first whole read, and both set after it. Build it
+// with CountOf: the zero Count's state is empty, which no decoder takes.
 type Count struct {
 	// Value is the last whole read's value, never a later cut read's.
 	Value *float64          `json:"value"`
@@ -58,7 +59,8 @@ func CountOf(last *float64, r measure.Read) (Count, error) {
 
 // Read is how a read went, on the wire: beside a figure that is not a
 // count, such as a list's total, and as a frame's read when the read was not
-// whole.
+// whole. Build it with ReadOf: the zero Read's state is empty, which no
+// decoder takes.
 type Read struct {
 	State measure.ReadState `json:"state"`
 	// AsOf is the last whole read's instant, an RFC 3339 string; null
@@ -104,9 +106,9 @@ func frameRead(r *measure.Read) (*Read, error) {
 	return &Read{State: state, AsOf: asOf, Reason: r.Reason}, nil
 }
 
-// checkRead refuses what rule read refuses on a Count, a Read and a frame's
-// read, naming each field after prefix, and returns r's state, the zero one
-// as unread, and a copy of its AsOf, nil when zero.
+// checkRead refuses what rule read refuses on all three of a Count, a Read
+// and a frame's read, naming each field after prefix, and returns r's
+// state, the zero one as unread, and a copy of its AsOf, nil when zero.
 func checkRead(prefix string, r measure.Read) (measure.ReadState, *time.Time, error) {
 	state := cmp.Or(r.State, measure.ReadUnread)
 	if !slices.Contains(measure.ReadStates(), string(state)) {

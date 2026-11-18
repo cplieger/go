@@ -168,6 +168,10 @@ func TestFrameReadRefusals(t *testing.T) {
 		{name: "countUnknownState", rule: chartdata.RuleRead, field: "state", build: count(&five, whole.Cut("stale", ""))},
 		{name: "countCompleteWithReason", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadComplete, "rate_limited"))},
 		{name: "countReasonUppercase", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, "Rate_limited"))},
+		{name: "countReasonBeforeA", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, "page`cap"))},
+		{name: "countReasonAfterZ", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, "page{cap"))},
+		{name: "countReasonBefore0", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, "page/cap"))},
+		{name: "countReasonAfter9", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, "page:cap"))},
 		{name: "countReasonPast64Bytes", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, longest+"a"))},
 		{name: "countAsOfPastYear9999", rule: chartdata.RuleRead, field: "as_of", build: count(&five, measure.Whole(past))},
 		{name: "countAsOfBeforeYear0", rule: chartdata.RuleRead, field: "as_of", build: count(&five, measure.Whole(beforeYear0))},
@@ -195,6 +199,19 @@ func TestFrameReadRefusals(t *testing.T) {
 		}
 		if err := alone(whole.Cut(measure.ReadPartial, longest))(); err != nil {
 			t.Errorf("a read with a 64-byte reason: %v, want it taken", err)
+		}
+	})
+	t.Run("reasonEdgeBytes", func(t *testing.T) {
+		t.Parallel()
+		edges := whole.Cut(measure.ReadPartial, "az09_")
+		if err := frame(edges)(); err != nil {
+			t.Errorf("a frame read with reason az09_: %v, want it taken", err)
+		}
+		if err := count(&five, edges)(); err != nil {
+			t.Errorf("a count with reason az09_: %v, want it taken", err)
+		}
+		if err := alone(edges)(); err != nil {
+			t.Errorf("a read with reason az09_: %v, want it taken", err)
 		}
 	})
 }
