@@ -42,7 +42,7 @@ type KindSpec[P any] struct {
 	// Slot "" runs at once beside anything; a named slot runs one job at a
 	// time, in class order.
 	Slot   string
-	Phases []Phase // the pipeline, for step N of M; at most 32
+	Phases []Phase // the pipeline, for step N of M; each phase once, at most 32
 	// Kept is how long an ended record is kept: 0 writes no record, else 15
 	// minutes to 400 days.
 	Kept     time.Duration
@@ -154,8 +154,8 @@ type Executor[P any] struct {
 // NewExecutor checks cfg and answers an executor that does nothing until Run.
 // It refuses a duplicate or ill-formed Kind, Kept outside its bound, a batch
 // MaxItems outside 1 to 500, MaxItems without Items or Items without
-// MaxItems, more than 32 phases, a queue bound outside its range, and a
-// missing Records when a kind keeps records.
+// MaxItems, more than 32 phases or a phase listed twice, a queue bound
+// outside its range, and a missing Records when a kind keeps records.
 func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 	maxQueued := cmp.Or(cfg.MaxQueued, defaultMaxQueued)
 	if maxQueued < 1 || maxQueued > maxMaxQueued {
@@ -207,8 +207,6 @@ func (k *KindSpec[P]) check() error {
 		return errors.New("kind outside code grammar")
 	case k.Run == nil:
 		return errors.New("no Run")
-	case len(k.Phases) > maxPhases:
-		return fmt.Errorf("%d phases, more than %d", len(k.Phases), maxPhases)
 	case k.Kept != 0 && (k.Kept < minKept || k.Kept > maxKept):
 		return fmt.Errorf("kept %v, want 0 or %v to %v", k.Kept, minKept, maxKept)
 	case k.MaxItems < 0 || k.MaxItems > maxBatchItems:
@@ -218,9 +216,19 @@ func (k *KindSpec[P]) check() error {
 	case k.MaxItems == 0 && k.Items != nil:
 		return errors.New("an item count (Items) on a kind that is not a batch")
 	}
-	for _, p := range k.Phases {
+	return checkPhases(k.Phases)
+}
+
+func checkPhases(phases []Phase) error {
+	if len(phases) > maxPhases {
+		return fmt.Errorf("%d phases, more than %d", len(phases), maxPhases)
+	}
+	for i, p := range phases {
 		if !validCode(string(p)) {
 			return fmt.Errorf("phase %q outside code grammar", p)
+		}
+		if slices.Contains(phases[:i], p) {
+			return fmt.Errorf("phase %q listed twice", p)
 		}
 	}
 	return nil
@@ -247,11 +255,12 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 	e.mu.Lock()
 	e.closed = true
 	e.stopTimersLocked()
+	var dequeued []*job[P]
 	for _, en := range slices.Clone(e.live) {
 		switch en.state {
 		case stateQueued:
 			e.dequeueLocked(en, End{Result: ResultInterrupted})
-			e.removeLocked(en)
+			dequeued = append(dequeued, en)
 		case stateRunning:
 			// A job in its commit step finishes and keeps its own end.
 			if !en.committing && !en.returned {
@@ -261,6 +270,9 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 		}
 	}
 	e.mu.Unlock()
+	for _, en := range dequeued {
+		e.ended(ctx, en, *en.stopEnd)
+	}
 	e.wg.Wait()
 	return nil
 }
@@ -303,6 +315,7 @@ type job[P any] struct {
 	stopped     bool // its ctx was cancelled, so Commit answers false
 	returned    bool // its Run returned, so a cancel has nothing left to stop
 	committing  bool // Commit answered true, so Cancel answers ErrCommitting
+	inserted    bool // its admission wrote its record and queued it
 	// factsDropped is a line's facts dropped, so the end carries
 	// facts_too_large.
 	factsDropped bool
@@ -418,11 +431,12 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 		end = *en.stopEnd
 	}
 	e.mu.Unlock()
-	stored, at := e.end(context.Background(), en, e.bounded(en, end))
+	stored, at, kept := e.end(context.Background(), en, e.bounded(en, end))
 	e.mu.Lock()
 	en.state = stateEnded
 	e.removeLocked(en)
-	if moving(stored.Result) {
+	// An end the store does not hold moves nothing a restart would not read.
+	if kept && moving(stored.Result) {
 		e.noteEndLocked(en, stored.Result, at)
 		if en.spec.Fresh != nil {
 			e.noteRecentLocked(en, at)
@@ -441,18 +455,19 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 }
 
 // end writes en's end and answers the stored one, which an end the job's own
-// commit wrote wins over, and its time.
-func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (End, time.Time) {
+// commit wrote wins over, and its time. kept is false when the store refused
+// the write, leaving the record open for its next open to mark.
+func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (stored End, at time.Time, kept bool) {
 	end = e.closeLines(en, end)
 	if en.spec.Kept == 0 {
-		return end, time.Now()
+		return end, time.Now(), true
 	}
 	rec, err := e.records.End(context.WithoutCancel(ctx), en.j.ID, end)
 	if err != nil || rec.End == nil {
 		e.log.Error("job end not recorded", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID, "err", err)
-		return end, time.Now()
+		return end, time.Now(), false
 	}
-	return *rec.End, rec.EndedAt
+	return *rec.End, rec.EndedAt, true
 }
 
 // put writes the job's record after a change.

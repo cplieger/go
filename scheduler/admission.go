@@ -66,12 +66,17 @@ func (e *Executor[P]) matchLocked(ctx context.Context, spec *KindSpec[P], j *Job
 		}
 		e.mu.Unlock()
 		select {
-		case <-admitting:
+		case <-admitting.admitted:
 		case <-ctx.Done():
 			e.mu.Lock()
 			return Started{}, false, ctx.Err()
 		}
 		e.mu.Lock()
+		// It may have started meanwhile; j still came before its run, so it
+		// joins as it would have while the job was queued.
+		if admitting.inserted && admitting.stopEnd == nil {
+			return Started{Job: admitting.j.ID, Position: admitting.position(), Joined: true}, true, nil
+		}
 	}
 }
 
@@ -97,6 +102,7 @@ func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 		return Started{}, err
 	}
 	en.state = stateQueued
+	en.inserted = true
 	if en.waits() {
 		en.w = en.slot.join(tierOf(en.class))
 	}
@@ -164,11 +170,11 @@ func (e *Executor[P]) newJob(spec *KindSpec[P], j Job[P]) (*job[P], error) {
 
 // joinLocked answers j from a waiting job: one of its kind and scope (rule 1),
 // else one whose kind covers it (rule 2). A match whose record is still being
-// written answers its admitted channel to wait on instead.
-func (e *Executor[P]) joinLocked(j *Job[P]) (s Started, admitting <-chan struct{}, ok bool) {
-	match := func(q *job[P]) (Started, <-chan struct{}, bool) {
+// written answers that job to wait on instead.
+func (e *Executor[P]) joinLocked(j *Job[P]) (s Started, admitting *job[P], ok bool) {
+	match := func(q *job[P]) (Started, *job[P], bool) {
 		if q.state == stateAdmitting {
-			return Started{}, q.admitted, false
+			return Started{}, q, false
 		}
 		return Started{Job: q.j.ID, Position: q.position(), Joined: true}, nil, true
 	}
@@ -257,7 +263,7 @@ func (e *Executor[P]) refuse(ctx context.Context, en *job[P]) error {
 // ended writes the end of a job that never ran, takes it out of the live
 // jobs and tells the Observer.
 func (e *Executor[P]) ended(ctx context.Context, en *job[P], end End) {
-	stored, at := e.end(ctx, en, end)
+	stored, at, _ := e.end(ctx, en, end)
 	e.mu.Lock()
 	e.removeLocked(en)
 	e.mu.Unlock()

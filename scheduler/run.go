@@ -68,7 +68,8 @@ func (r *Run[P]) Commit() bool {
 // or an executor phase with n 0, and writes it once per change.
 func (e *Executor[P]) reach(en *job[P], p Phase, n int) {
 	en.recMu.Lock()
-	if en.rec.Phase == p {
+	// A pipeline may name an executor phase (started) as its own first step.
+	if en.rec.Phase == p && (n == 0 || en.rec.Step.N == n) {
 		en.recMu.Unlock()
 		return
 	}
