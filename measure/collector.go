@@ -323,11 +323,11 @@ func (e *Emitter) Emit(d *Desc, value float64, labelValues ...string) {
 // Keep is what a collect function whose own read failed (its store read, its
 // snapshot) calls instead of emitting, so that a scrape never withholds a
 // series an alert reads. The run serves the samples of the collector's
-// latest successful run again, and nothing before its first, discarding
-// what it emitted and anything emitted after; [Registry.Gather] reports no
-// error for it, and the failure, with err, is logged once when it starts
-// and once when a run succeeds again. A Keep after collect returned does
-// nothing.
+// latest-started successful run again, and nothing before its first,
+// discarding what it emitted and anything emitted after; [Registry.Gather]
+// reports no error for it, and the failure, with err, is logged once when it
+// starts and once when a run succeeds again. A Keep after collect returned
+// does nothing.
 func (e *Emitter) Keep(err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -544,8 +544,9 @@ func (c *Collector) run(ctx context.Context) ([]Family, error) {
 	return fams, droppedErr(e.problems)
 }
 
-// serveKept answers a run that called Keep: a copy of the latest successful
-// run's families and its drops, or every family empty before the first.
+// serveKept answers a run that called Keep: a copy of the latest-started
+// successful run's families and its drops, or every family empty before the
+// first.
 func (c *Collector) serveKept(cause error) ([]Family, error) {
 	c.mu.Lock()
 	last := c.last

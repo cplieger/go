@@ -77,10 +77,11 @@ func (r Read) Cut(state ReadState, reason string) Read {
 
 // Under returns r as read through parent, since a read is never more
 // complete than what it is read through. A read neither complete nor partial
-// is kept, and so is any read under a complete or excluded parent, the
-// latter with its own AsOf; under a blind parent it is blind, under any
-// other it is partial. Otherwise AsOf is the older of the two, zero when
-// either is. A state that changes takes the parent's reason.
+// is kept, and so is any read under a complete or excluded parent; under a
+// blind parent it is blind, under any other it is partial. A read neither
+// complete nor partial keeps its own AsOf, and so does any read under an
+// excluded parent; otherwise AsOf is the older of the two, zero when either
+// is. A state that changes takes the parent's reason.
 func (r Read) Under(parent Read) Read {
 	own, ps := r.State.norm(), parent.State.norm()
 	r.State = own
