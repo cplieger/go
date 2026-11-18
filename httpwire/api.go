@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -191,6 +192,8 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 	capped := own && ep.Kind == Raw && isWrite(ep.Method) && ep.Request == nil
 	limit := cmp.Or(ep.MaxBody, a.table.MaxBody)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aw := &answerWriter{ResponseWriter: w, a: a, r: r, ep: ep, own: own}
+		defer a.recoverRow(aw)
 		d, body, e := a.decode(r, ep)
 		if e == nil && capped && r.ContentLength > int64(limit) {
 			e = tooLarge(limit)
@@ -199,7 +202,6 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 			a.table.Catalog.WriteError(w, r, e)
 			return
 		}
-		aw := &answerWriter{ResponseWriter: w, a: a, r: r, ep: ep, own: own}
 		if len(ep.Changes) > 0 {
 			aw.position = a.o.feed.Position(r, ep.Changes)
 		}
@@ -219,6 +221,26 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 		}
 		a.runOwn(aw, r, b, d)
 	})
+}
+
+// recoverRow, deferred, answers a row's panic once the claim and the spool
+// file, if any, are released: internal_error while nothing of the answer
+// is written, else an abort, so a client never reads a cut answer as
+// whole. http.ErrAbortHandler passes untouched (net/http's silent abort).
+func (a *API) recoverRow(aw *answerWriter) {
+	v := recover()
+	switch v {
+	case nil:
+		return
+	case http.ErrAbortHandler:
+		panic(v)
+	}
+	a.log().ErrorContext(aw.r.Context(), "httpwire: a row's handler panicked", "row", aw.ep.Name, "panic", v, "stack", string(debug.Stack()))
+	if aw.wrote {
+		panic(http.ErrAbortHandler)
+	}
+	dropHandlerHeaders(aw.Header())
+	a.table.Catalog.WriteError(aw.ResponseWriter, aw.r, &Error{Code: codeInternal})
 }
 
 // runSpooled runs a Keyed Raw write over its spooled body, which the

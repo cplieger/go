@@ -252,14 +252,9 @@ func TestKeyedRawBodyOverTheCap(t *testing.T) {
 func TestKeyedRawPanicLeavesNoSpoolFile(t *testing.T) {
 	sf := newSpool(t)
 	sf.panics = true
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("the handler's panic did not reach the caller")
-			}
-		}()
-		sf.send("archive", `"k1"`, 0)
-	}()
+	if rec := sf.send("archive", `"k1"`, 0); rec.Code != http.StatusInternalServerError || codeOf(t, rec) != "internal_error" {
+		t.Errorf("a panicking run answered %d %q, want 500 internal_error", rec.Code, rec.Body)
+	}
 	if got := dirNames(sf.dir); len(got) != 0 {
 		t.Errorf("directory after a panic = %v, want it empty", got)
 	}

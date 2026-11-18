@@ -96,16 +96,21 @@ func (w *answerWriter) undeclared(code int) bool {
 	return success && !declared
 }
 
-// refuseBody drops every header the handler set, keeping the binder's own.
+// refuseBody replaces the handler's answer with the cap's refusal.
 func (w *answerWriter) refuseBody() {
-	h := w.Header()
+	dropHandlerHeaders(w.Header())
+	w.wrote, w.dropped = true, true
+	w.a.table.Catalog.WriteError(w.ResponseWriter, w.r, tooLarge(w.body.limit))
+}
+
+// dropHandlerHeaders drops every header but the binder's own, before a
+// refusal replaces a handler's answer.
+func dropHandlerHeaders(h http.Header) {
 	for k := range h {
 		if k != headerWireVersion && k != http.CanonicalHeaderKey(httpserver.HeaderRequestID) {
 			delete(h, k)
 		}
 	}
-	w.wrote, w.dropped = true, true
-	w.a.table.Catalog.WriteError(w.ResponseWriter, w.r, tooLarge(w.body.limit))
 }
 
 // cappedBody notes when its reader hits the cap http.MaxBytesReader holds

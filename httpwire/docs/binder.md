@@ -46,6 +46,8 @@ Every row's union ends with the codes any row may answer: `accounts_unavailable`
 
 A `Raw` row's handler writes its own answer, which must use the row's `ContentType`. Its refusals go through `Catalog.WriteError`.
 
+A panic while a row decodes or runs is logged at ERROR with its stack and keeps nothing: a `Keyed` row's claim is released and its spool file removed. While nothing of the answer is written it answers `internal_error`, with every header the handler set dropped. Once the answer has started, the binder panics with `http.ErrAbortHandler`, so net/http cuts the connection and the client never reads a cut answer as a whole one. A handler's own `http.ErrAbortHandler` passes through untouched.
+
 ## Person-only actions
 
 A `PersonOnly` row refuses every API key whatever its scopes. An action decided inside a row, such as archiving an account, is checked by the code that knows the stored value: it calls `RequirePerson(ctx, action)` with an action the row lists in `PersonActions`. A key then gets `person_required`, with the action as its reason, and a session that did not authenticate recently gets the guard's step-up refusal.

@@ -211,12 +211,11 @@ func TestJoinAfterAPanickingClaimantRunsAgain(t *testing.T) {
 			}
 			return jobAnswer{ID: "one"}, nil
 		}
-		var recovered any
+		var first *httptest.ResponseRecorder
 		claimant := make(chan struct{})
 		go func() {
 			defer close(claimant)
-			defer func() { recovered = recover() }()
-			kf.quickJob(`"j"`)
+			first = kf.quickJob(`"j"`)
 		}()
 		synctest.Wait()
 		var waiter *httptest.ResponseRecorder
@@ -229,8 +228,8 @@ func TestJoinAfterAPanickingClaimantRunsAgain(t *testing.T) {
 		close(release)
 		<-claimant
 		<-done
-		if recovered != "boom" {
-			t.Errorf("the claimant's panic reached its caller as %v", recovered)
+		if first.Code != http.StatusInternalServerError || codeOf(t, first) != "internal_error" {
+			t.Errorf("the panicking claimant answered %d %q, want 500 internal_error", first.Code, first.Body)
 		}
 		if waiter.Code != http.StatusOK || waiter.Body.String() != quickOne || kf.runsOf("jobs.quick") != 2 {
 			t.Errorf("waiter answered %d %q after %d runs, want a second run's answer", waiter.Code, waiter.Body, kf.runsOf("jobs.quick"))
