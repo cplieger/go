@@ -43,7 +43,7 @@ type timed struct {
 // later of Run's start and the call. It refuses, changing nothing, an unknown
 // kind (ErrUnknownKind), a scope outside its grammar (ErrScope), a zero lease
 // (ErrLease) and a new scope past 64 (ErrTooManyScopes).
-func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
+func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence, changed time.Time) error {
 	spec, ok := e.kinds[kind]
 	switch {
 	case !ok:

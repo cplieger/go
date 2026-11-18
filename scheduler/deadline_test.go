@@ -332,8 +332,10 @@ func TestPassedDeadlineClearsOnScheduleChange(t *testing.T) {
 		name   string
 	}{
 		{name: "Unschedule", change: func(r *rig) error { r.ex.Unschedule("scan", "source:a"); return nil }},
-		{name: "a TriggerOnly Schedule", change: func(r *rig) error { return r.ex.Schedule("scan", "source:a", scheduler.TriggerOnly()) }},
-		{name: "a changed cadence", change: func(r *rig) error { return r.ex.Schedule("scan", "source:a", scheduler.Scheduled(2*time.Hour)) }},
+		{name: "a TriggerOnly Schedule", change: func(r *rig) error { return r.ex.Schedule("scan", "source:a", scheduler.TriggerOnly(), time.Time{}) }},
+		{name: "a changed cadence", change: func(r *rig) error {
+			return r.ex.Schedule("scan", "source:a", scheduler.Scheduled(2*time.Hour), time.Time{})
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

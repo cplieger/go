@@ -407,6 +407,128 @@ func TestRestartDoesNotRerunDaily(t *testing.T) {
 	})
 }
 
+func TestScheduleCountsFromTheGivenChange(t *testing.T) {
+	cfg := scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("quick", "passes")}}
+
+	t.Run("a first schedule counts from a change after the last end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			before, stop := base.openUntil(t, cfg)
+			before.schedule(t, "quick", "", scheduler.Scheduled(6*time.Hour))
+			ran := before.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			lastEnd := before.rec(t, ran.Job).EndedAt
+			changed := lastEnd.Add(time.Hour)
+			sleepUntil(lastEnd.Add(90 * time.Minute))
+			stop()
+
+			r := base.open(t, cfg)
+			synctest.Wait()
+			r.scheduleAt(t, "quick", "", scheduler.Scheduled(6*time.Hour), changed)
+			if got, want := r.ex.Deadline("quick", ""), changed.Add(18*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after a restart = %v, want %v: the change, later than the last end, plus the lease", got, want)
+			}
+			r.nextWake(t, "quick", "", changed, 6*time.Hour)
+		})
+	})
+
+	t.Run("a first schedule counts from the last end after the change", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			before, stop := base.openUntil(t, cfg)
+			before.schedule(t, "quick", "", scheduler.Scheduled(6*time.Hour))
+			time.Sleep(time.Hour)
+			changed := time.Now()
+			time.Sleep(time.Hour)
+			ran := before.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			lastEnd := before.rec(t, ran.Job).EndedAt
+			sleepUntil(lastEnd.Add(time.Hour))
+			stop()
+
+			r := base.open(t, cfg)
+			synctest.Wait()
+			r.scheduleAt(t, "quick", "", scheduler.Scheduled(6*time.Hour), changed)
+			if got, want := r.ex.Deadline("quick", ""), lastEnd.Add(18*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after a restart = %v, want %v: the last end, later than the change, plus the lease", got, want)
+			}
+			r.nextWake(t, "quick", "", lastEnd, 6*time.Hour)
+		})
+	})
+
+	t.Run("a restart after a shortening save reads fresh", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			before, stop := base.openUntil(t, cfg)
+			before.schedule(t, "quick", "", scheduler.Scheduled(6*time.Hour))
+			ran := before.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			lastEnd := before.rec(t, ran.Job).EndedAt
+			sleepUntil(lastEnd.Add(4 * time.Hour))
+			changed := time.Now()
+			before.scheduleAt(t, "quick", "", scheduler.Scheduled(15*time.Minute), changed)
+			sleepUntil(changed.Add(10 * time.Minute))
+			stop()
+
+			r := base.open(t, cfg)
+			synctest.Wait()
+			r.scheduleAt(t, "quick", "", scheduler.Scheduled(15*time.Minute), changed)
+			if got, want := r.ex.Deadline("quick", ""), changed.Add(45*time.Minute); !got.Equal(want) {
+				t.Errorf("Deadline after a restart = %v, want %v: the saved change plus three 15-minute intervals", got, want)
+			}
+			if !r.ex.Fresh("quick", "").Healthy() {
+				t.Error("Fresh unhealthy after a restart 10 minutes past a save to a shorter cadence, want healthy")
+			}
+			r.nextWake(t, "quick", "", changed, 15*time.Minute)
+		})
+	})
+
+	t.Run("a change given before a late call counts from the change", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, cfg)
+			r.schedule(t, "quick", "", scheduler.Scheduled(6*time.Hour))
+			ran := r.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			sleepUntil(r.rec(t, ran.Job).EndedAt.Add(4 * time.Hour))
+			changed := time.Now()
+			time.Sleep(10 * time.Minute)
+			r.scheduleAt(t, "quick", "", scheduler.Scheduled(2*time.Hour), changed)
+			if got, want := r.ex.Deadline("quick", ""), changed.Add(6*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after a change saved 10 minutes before the call = %v, want %v: the change plus three 2-hour intervals", got, want)
+			}
+			r.nextWake(t, "quick", "", changed, 2*time.Hour)
+		})
+	})
+
+	t.Run("a change in the future counts from the call", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, cfg)
+			r.schedule(t, "quick", "", scheduler.Scheduled(6*time.Hour))
+			time.Sleep(4 * time.Hour)
+			call := time.Now()
+			r.scheduleAt(t, "quick", "", scheduler.Scheduled(2*time.Hour), call.Add(time.Hour))
+			if got, want := r.ex.Deadline("quick", ""), call.Add(6*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after a change dated an hour ahead = %v, want %v: the call plus three 2-hour intervals", got, want)
+			}
+			r.nextWake(t, "quick", "", call, 2*time.Hour)
+		})
+	})
+
+	t.Run("the same cadence with a later change keeps the wait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, cfg)
+			t0 := time.Now()
+			r.schedule(t, "quick", "", scheduler.Scheduled(time.Hour))
+			time.Sleep(20 * time.Minute)
+			r.scheduleAt(t, "quick", "", scheduler.Scheduled(time.Hour), time.Now())
+			if got, want := r.ex.Deadline("quick", ""), t0.Add(3*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after the same cadence with a later change = %v, want it unmoved at %v", got, want)
+			}
+			r.nextWake(t, "quick", "", t0, time.Hour)
+		})
+	})
+}
+
 func TestScheduledScopesBound(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newRig(t, scheduler.Config[payload]{MaxQueued: 256, MaxQueuedPerOwner: 4, Kinds: []scheduler.KindSpec[payload]{spec("refresh", "")}})
@@ -414,7 +536,7 @@ func TestScheduledScopesBound(t *testing.T) {
 		for i := range 64 {
 			r.schedule(t, "refresh", fmt.Sprintf("connection:%d", i), scheduler.Scheduled(time.Hour))
 		}
-		if err := r.ex.Schedule("refresh", "connection:64", scheduler.Scheduled(time.Hour)); !errors.Is(err, scheduler.ErrTooManyScopes) {
+		if err := r.ex.Schedule("refresh", "connection:64", scheduler.Scheduled(time.Hour), time.Time{}); !errors.Is(err, scheduler.ErrTooManyScopes) {
 			t.Fatalf("Schedule(a 65th scope) = %v, want ErrTooManyScopes", err)
 		}
 		if got := r.ex.Deadline("refresh", "connection:64"); !got.IsZero() {
@@ -451,7 +573,7 @@ func TestRefusedScheduleLeavesTheFirstSchedule(t *testing.T) {
 			r.schedule(t, "refresh", fmt.Sprintf("connection:%d", i), scheduler.Scheduled(24*time.Hour))
 		}
 		sleepUntil(lastEnd.Add(time.Hour))
-		if err := r.ex.Schedule("refresh", "connection:64", scheduler.Scheduled(time.Hour)); !errors.Is(err, scheduler.ErrTooManyScopes) {
+		if err := r.ex.Schedule("refresh", "connection:64", scheduler.Scheduled(time.Hour), time.Time{}); !errors.Is(err, scheduler.ErrTooManyScopes) {
 			t.Fatalf("Schedule(a 65th scope) = %v, want ErrTooManyScopes", err)
 		}
 		r.ex.Unschedule("refresh", "connection:0")
@@ -530,7 +652,7 @@ func TestWatchLeaseFollowsTheCadence(t *testing.T) {
 			endA, endB := r.rec(t, ranA.Job).EndedAt, r.rec(t, ranB.Job).EndedAt
 			sleepUntil(endA.Add(time.Minute))
 
-			if err := r.ex.Schedule("scan", "source:a", scheduler.Scheduled(2*time.Hour)); !errors.Is(err, scheduler.ErrLease) {
+			if err := r.ex.Schedule("scan", "source:a", scheduler.Scheduled(2*time.Hour), time.Time{}); !errors.Is(err, scheduler.ErrLease) {
 				t.Errorf("Schedule(a cadence whose lease is zero) = %v, want ErrLease", err)
 			}
 			if got, want := r.ex.Deadline("scan", "source:a"), endA.Add(45*time.Minute); !got.Equal(want) {
@@ -538,7 +660,7 @@ func TestWatchLeaseFollowsTheCadence(t *testing.T) {
 			}
 			r.nextWake(t, "scan", "source:a", endA, 15*time.Minute)
 
-			if err := r.ex.Schedule("scan", "source:b", scheduler.Scheduled(2*time.Hour)); !errors.Is(err, scheduler.ErrLease) {
+			if err := r.ex.Schedule("scan", "source:b", scheduler.Scheduled(2*time.Hour), time.Time{}); !errors.Is(err, scheduler.ErrLease) {
 				t.Errorf("first Schedule with a zero lease = %v, want ErrLease", err)
 			}
 			if got := r.ex.Deadline("scan", "source:b"); !got.IsZero() {

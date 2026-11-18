@@ -209,7 +209,7 @@ func TestCoalescingRules(t *testing.T) {
 			gate := make(chan struct{})
 			running := r.start(t, api("scan", "source:a", "alice", payload{Gate: gate}))
 			synctest.Wait()
-			if err := r.ex.Schedule("scan", "source:a", scheduler.Scheduled(time.Hour)); err != nil {
+			if err := r.ex.Schedule("scan", "source:a", scheduler.Scheduled(time.Hour), time.Time{}); err != nil {
 				t.Fatalf("Schedule = %v", err)
 			}
 			if s := r.start(t, timer("scan", "source:a", payload{})); s != (scheduler.Started{Job: running.Job, Joined: true}) {
@@ -605,52 +605,52 @@ func TestScheduleRefuses(t *testing.T) {
 		every := scheduler.Scheduled(time.Hour)
 		long := "s" + strings.Repeat("a", 127)
 
-		if err := r.ex.Schedule("nope", "", every); !errors.Is(err, scheduler.ErrUnknownKind) {
+		if err := r.ex.Schedule("nope", "", every, time.Time{}); !errors.Is(err, scheduler.ErrUnknownKind) {
 			t.Errorf("Schedule(an unknown kind) = %v, want ErrUnknownKind", err)
 		}
 		for _, scope := range []string{"Source:A", "source a", long + "a"} {
-			if err := r.ex.Schedule("scan", scope, every); !errors.Is(err, scheduler.ErrScope) {
+			if err := r.ex.Schedule("scan", scope, every, time.Time{}); !errors.Is(err, scheduler.ErrScope) {
 				t.Errorf("Schedule(scope %q) = %v, want ErrScope", scope, err)
 			}
 		}
-		if err := r.ex.Schedule("scan", long, every); err != nil {
+		if err := r.ex.Schedule("scan", long, every, time.Time{}); err != nil {
 			t.Errorf("Schedule(a 128-byte scope) = %v, want nil", err)
 		}
-		if err := r.ex.Schedule("scan", "", every); err != nil {
+		if err := r.ex.Schedule("scan", "", every, time.Time{}); err != nil {
 			t.Errorf("Schedule(scope \"\") = %v, want nil", err)
 		}
 		for i := range 31 {
-			if err := r.ex.Schedule("scan", fmt.Sprintf("source:%d", i), every); err != nil {
+			if err := r.ex.Schedule("scan", fmt.Sprintf("source:%d", i), every, time.Time{}); err != nil {
 				t.Fatalf("Schedule(scan scope %d) = %v", i, err)
 			}
 		}
 		for i := range 31 {
-			if err := r.ex.Schedule("sweep", fmt.Sprintf("store:%d", i), every); err != nil {
+			if err := r.ex.Schedule("sweep", fmt.Sprintf("store:%d", i), every, time.Time{}); err != nil {
 				t.Fatalf("Schedule(sweep scope %d) = %v", i, err)
 			}
 		}
 		// 64 scheduled across both kinds; the refusals above counted nothing.
-		if err := r.ex.Schedule("sweep", "store:31", every); !errors.Is(err, scheduler.ErrTooManyScopes) {
+		if err := r.ex.Schedule("sweep", "store:31", every, time.Time{}); !errors.Is(err, scheduler.ErrTooManyScopes) {
 			t.Errorf("Schedule(a 65th scope) = %v, want ErrTooManyScopes", err)
 		}
-		if err := r.ex.Schedule("scan", "source:0", scheduler.Scheduled(2*time.Hour).Retry(time.Minute)); err != nil {
+		if err := r.ex.Schedule("scan", "source:0", scheduler.Scheduled(2*time.Hour).Retry(time.Minute), time.Time{}); err != nil {
 			t.Errorf("re-scheduling a scope at the bound = %v, want nil", err)
 		}
 		r.ex.Unschedule("scan", "source:99")
-		if err := r.ex.Schedule("sweep", "store:31", every); !errors.Is(err, scheduler.ErrTooManyScopes) {
+		if err := r.ex.Schedule("sweep", "store:31", every, time.Time{}); !errors.Is(err, scheduler.ErrTooManyScopes) {
 			t.Errorf("Schedule after unscheduling a scope never scheduled = %v, want ErrTooManyScopes", err)
 		}
-		if err := r.ex.Schedule("scan", "source:0", scheduler.TriggerOnly()); err != nil {
+		if err := r.ex.Schedule("scan", "source:0", scheduler.TriggerOnly(), time.Time{}); err != nil {
 			t.Errorf("Schedule(TriggerOnly) = %v, want nil", err)
 		}
-		if err := r.ex.Schedule("sweep", "store:31", every); err != nil {
+		if err := r.ex.Schedule("sweep", "store:31", every, time.Time{}); err != nil {
 			t.Errorf("Schedule after TriggerOnly freed a scope = %v, want nil", err)
 		}
-		if err := r.ex.Schedule("sweep", "store:32", every); !errors.Is(err, scheduler.ErrTooManyScopes) {
+		if err := r.ex.Schedule("sweep", "store:32", every, time.Time{}); !errors.Is(err, scheduler.ErrTooManyScopes) {
 			t.Errorf("Schedule(a 65th scope) = %v, want ErrTooManyScopes", err)
 		}
 		r.ex.Unschedule("sweep", "store:31")
-		if err := r.ex.Schedule("sweep", "store:32", every); err != nil {
+		if err := r.ex.Schedule("sweep", "store:32", every, time.Time{}); err != nil {
 			t.Errorf("Schedule after Unschedule freed a scope = %v, want nil", err)
 		}
 	})

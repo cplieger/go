@@ -121,7 +121,7 @@ func ExampleNewExecutor() {
 	stopped := make(chan error, 1)
 	go func() { stopped <- ex.Run(ctx) }()
 
-	if err := ex.Schedule("refresh", "", scheduler.Scheduled(6*time.Hour).Retry(15*time.Minute)); err != nil {
+	if err := ex.Schedule("refresh", "", scheduler.Scheduled(6*time.Hour).Retry(15*time.Minute), time.Time{}); err != nil {
 		fmt.Println(err)
 	}
 	if _, err := ex.Start(ctx, scheduler.Job[struct{}]{Kind: "refresh", Scope: "connection:3", Trigger: scheduler.TriggerAPI, Owner: "key:7"}); err != nil {

@@ -154,8 +154,14 @@ func (r *rig) run(t *testing.T, ctx context.Context, cfg scheduler.Config[payloa
 // schedule sets kind and scope's cadence and fails the test on an error.
 func (r *rig) schedule(t *testing.T, kind scheduler.Kind, scope string, c scheduler.Cadence) {
 	t.Helper()
-	if err := r.ex.Schedule(kind, scope, c); err != nil {
-		t.Fatalf("Schedule(%s %q) = %v, want nil", kind, scope, err)
+	r.scheduleAt(t, kind, scope, c, time.Time{})
+}
+
+// scheduleAt is schedule with changed, the instant the app committed c.
+func (r *rig) scheduleAt(t *testing.T, kind scheduler.Kind, scope string, c scheduler.Cadence, changed time.Time) {
+	t.Helper()
+	if err := r.ex.Schedule(kind, scope, c, changed); err != nil {
+		t.Fatalf("Schedule(%s %q, changed %v) = %v, want nil", kind, scope, changed, err)
 	}
 }
 

@@ -244,7 +244,7 @@ func TestExecutorReportsStoredEnd(t *testing.T) {
 			}
 			seen := &transitions{}
 			r = newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{full}, Observer: seen.observer()})
-			if err := r.ex.Schedule("full", "", scheduler.Scheduled(time.Hour)); err != nil {
+			if err := r.ex.Schedule("full", "", scheduler.Scheduled(time.Hour), time.Time{}); err != nil {
 				t.Fatalf("Schedule = %v", err)
 			}
 			s := r.start(t, api("full", "", "alice", payload{}))
