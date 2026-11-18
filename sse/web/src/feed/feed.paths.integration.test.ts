@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFeedSession } from "../test-helpers/feed-client.js";
-import workerUrl from "../test-helpers/worker-entry.ts?sharedworker&url";
+import hooksUrl from "../test-helpers/worker-entry.ts?sharedworker&url";
 import {
   ACCOUNTS,
   CASE_MS,
@@ -15,13 +15,14 @@ import {
   sleep,
   waitFor,
 } from "./test-helpers/feed-cases.js";
+import entryUrl from "./worker.ts?sharedworker&url";
 
 const fixture = import.meta.env["SSE_FIXTURE"];
 const sharedWorker = typeof SharedWorker !== "undefined";
 const HB = 300;
 const WATCHDOG_MS = 3 * HB;
 
-const { open, detachAll } = pageOpener(workerUrl);
+const { open, detachAll } = pageOpener(entryUrl);
 afterEach(detachAll);
 
 /** The rows that reach both the worker setup and the per-tab fallback. */
@@ -188,7 +189,7 @@ describe.skipIf(!fixture || !sharedWorker)("the feed's path table over a SharedW
     "worker restart: a silent worker's tab shows the first kind's commit after one catch-up from its own watermark",
     async () => {
       const session = await createFeedSession(fixtureUrl(), [STORE]);
-      const page = open(session, { heartbeatMs: HB, freshRespawn: true });
+      const page = open(session, { workerUrl: hooksUrl, heartbeatMs: HB, freshRespawn: true });
       const runs = await page.watch("runs");
       const budgets = await page.watch("budgets");
       await waitFor("the listening frame", () => listenings(page) === 1);

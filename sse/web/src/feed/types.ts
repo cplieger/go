@@ -1,4 +1,6 @@
+import type { LifecycleEvent } from "../lifecycle.js";
 import type { Frame } from "../stream.js";
+import type { TabAttachment } from "../tab.js";
 import type { TimingConfig } from "../timing.js";
 
 /** The `changes.read` answer: the rows of every asked kind changed since the request's revision. */
@@ -45,7 +47,37 @@ export interface FeedSink<Row> {
   stale(): PromiseLike<unknown>;
 }
 
-export interface FeedOptions<R extends Record<string, unknown>> {
+/** The stream every tab shares through the shipped `@cplieger/sse/feed/worker` entry. */
+export interface FeedStream {
+  /** The stream's root-relative path, such as `/api/events`. */
+  readonly path: string;
+  /** The entry's served URL: the app bundle's `BUNDLE_URLS` value for it. */
+  readonly worker: string;
+  /** How the worker loads; default `"classic"`, as a webbundle `Classic` entry is built. */
+  readonly type?: WorkerType;
+  /**
+   * Receives the tab's lifecycle records, from the shared stream or the tab's own: `state` for a
+   * connection status, `auth_lost` for a credential the server no longer takes.
+   */
+  readonly onLifecycle?: (ev: LifecycleEvent) => void;
+}
+
+/**
+ * `reconnect`: the app attaches the stream itself and passes each frame to `onFrame`. `stream`:
+ * `createFeed` attaches the tab to the shared worker, or to its own stream where there is no
+ * `SharedWorker`.
+ */
+export type FeedOptions<R extends Record<string, unknown>> = FeedOptionsBase<R> &
+  (
+    | {
+        /** Reconnects the stream; called once per lost-track episode. */
+        readonly reconnect: () => void;
+        readonly stream?: never;
+      }
+    | { readonly stream: FeedStream; readonly reconnect?: never }
+  );
+
+interface FeedOptionsBase<R extends Record<string, unknown>> {
   /** The generated `FEED_VERSION`; `createFeed` throws `FeedVersionMismatch` unless it is this package's. */
   readonly feedVersion: number;
   /** The generated `KINDS`: each kind's source. */
@@ -57,8 +89,6 @@ export interface FeedOptions<R extends Record<string, unknown>> {
   readonly coalesceMs?: number;
   /** Receives each listening frame's `wire`, in any feed format, before anything else is read. A throw is reported with `reportError`. */
   readonly onWire?: (serverVersion: string) => void;
-  /** Reconnects the stream; called once per lost-track episode. */
-  readonly reconnect: () => void;
   /** A failed read's backoff curve; default `DEFAULT_TIMING`'s. */
   readonly timing?: Pick<TimingConfig, "baseMs" | "capMs">;
   /** In [0, 1): the backoff's jitter; default `Math.random`. */
@@ -87,4 +117,6 @@ export interface Feed<R extends Record<string, unknown>> {
   onFrame(frame: Frame): boolean;
   /** Called after each applied listening frame of `source`; returns the unsubscribe. */
   onListening(source: string, listener: () => void): () => void;
+  /** This tab's attachment to the stream `stream` named; null when the app attaches it itself. */
+  readonly attachment: TabAttachment | null;
 }

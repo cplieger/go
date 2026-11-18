@@ -7,6 +7,7 @@ export type {
   Feed,
   FeedOptions,
   FeedSink,
+  FeedStream,
   Subscription,
 } from "./types.js";
 export { FEED_VERSION, FeedVersionMismatch } from "./version.js";

@@ -86,7 +86,7 @@ Three compiled examples in `example_test.go` cover the next steps, and `go test`
 - `Hello`, `Verdict`, `Cursor`, `ParseCursor`, `Wire`, `MaxOffset` and `MaxFrameBytes` describe the wire. `PresenceEvent`, with its `PresenceKind`, `PresenceCause` and `PresenceWrite` values, is what the presence hook receives.
 - `feedwire` encodes and decodes the change feed's `changed` and `listening` frames and its `Feed-Position` header, with `Version`, `MaxRev` and the name checks.
 - `ssetest` holds `Serve`, `ReadFrames`, `FrameReader`, `Recorder` and `RetryEvent` for your tests.
-- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, `connectionOf`, and the types they take and return. Its parser, reducer and tab fold are internal. The `./feed` entry exports `createFeed`, `retainListening`, `FEED_VERSION`, `FeedVersionMismatch` and their types.
+- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, `connectionOf`, and the types they take and return. Its parser, reducer and tab fold are internal. The `./feed` entry exports `createFeed`, `retainListening`, `FEED_VERSION`, `FeedVersionMismatch` and their types, and `./feed/worker` is a ready `SharedWorker` script that shares one feed stream between tabs.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/sse/v2) and [JSR](https://jsr.io/@cplieger/sse/doc). [Running the hub](docs/hub.md) covers every option and method.
 

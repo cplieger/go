@@ -65,17 +65,19 @@ export interface FeedPage {
 
 export interface FeedPageOptions {
   readonly session: FeedSession;
-  readonly fixtureUrl: string;
   /** Kind to source, as a generated client declares them. */
   readonly kinds: Readonly<Record<string, string>>;
   readonly logged: readonly string[];
-  /** `test-helpers/worker-entry.ts?sharedworker&url`, which only a test file can import. */
+  /**
+   * The shipped `feed/worker.ts?sharedworker&url`, or `test-helpers/worker-entry.ts` for a page
+   * that sets `heartbeatMs` or sends a test message; only a test file can import either.
+   */
   readonly workerUrl: string;
   /** Names the SharedWorker: pages with one name share a worker. */
   readonly worker: string;
   /** `false` takes the per-tab fallback. */
   readonly supported?: boolean;
-  /** Worker URL query options of `worker-entry.ts` beyond the session. */
+  /** Worker URL query options of `worker-entry.ts` beyond the stream. */
   readonly query?: Readonly<Record<string, string>>;
   readonly coalesceMs?: number;
   readonly random?: () => number;
@@ -113,7 +115,12 @@ export async function readKind(session: FeedSession, kind: string): Promise<Kind
   }
 }
 
-function catchUpOf(session: FeedSession): CatchUp<Rows> {
+/** The session's stream as the root path the feed worker's `stream` parameter takes. */
+export const streamPath = (session: FeedSession): string =>
+  `${new URL(session.base).pathname}/events`;
+
+/** The session's `changes.read` as a feed's `catchUp`. */
+export function catchUpOf(session: FeedSession): CatchUp<Rows> {
   return async (q, signal) => {
     const params = new URLSearchParams({
       source: q.source,
@@ -176,9 +183,7 @@ export function feedPage(opts: FeedPageOptions): FeedPage {
     events.push(event);
   };
   const query = new URLSearchParams({
-    fixture: opts.fixtureUrl,
-    feed: opts.session.id,
-    retain: "1",
+    stream: streamPath(opts.session),
     ...(opts.heartbeatMs === undefined ? {} : { heartbeat: String(opts.heartbeatMs) }),
     ...opts.query,
   });

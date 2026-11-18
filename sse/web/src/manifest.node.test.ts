@@ -17,10 +17,11 @@ describe("package manifests", () => {
     expect(readManifest("package.json").dependencies).toBeUndefined();
   });
 
-  it("exports . and ./feed", () => {
+  it("exports ., ./feed and the feed's worker entry", () => {
     expect(readManifest("package.json").exports).toEqual({
       ".": "./src/index.ts",
       "./feed": "./src/feed/index.ts",
+      "./feed/worker": "./src/feed/worker.ts",
     });
     expect(readManifest("jsr.json").exports).toEqual(readManifest("package.json").exports);
   });

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { type FeedSession, createFeedSession } from "../test-helpers/feed-client.js";
-import workerUrl from "../test-helpers/worker-entry.ts?sharedworker&url";
 import {
   ACCOUNTS,
   CASE_MS,
@@ -17,11 +16,12 @@ import {
   waitFor,
 } from "./test-helpers/feed-cases.js";
 import type { FeedPage } from "./test-helpers/feed-page.js";
+import entryUrl from "./worker.ts?sharedworker&url";
 
 const fixture = import.meta.env["SSE_FIXTURE"];
 const sharedWorker = typeof SharedWorker !== "undefined";
 
-const { open, detachAll } = pageOpener(workerUrl);
+const { open, detachAll } = pageOpener(entryUrl);
 afterEach(detachAll);
 
 const changedFrames = (page: FeedPage): number =>

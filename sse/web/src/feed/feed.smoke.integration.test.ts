@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFeedSession } from "../test-helpers/feed-client.js";
 import { FIXTURE_PROXY_PREFIX } from "../test-helpers/fixture-client.js";
-import workerUrl from "../test-helpers/worker-entry.ts?sharedworker&url";
 import { type FeedPage, feedPage } from "./test-helpers/feed-page.js";
+import workerUrl from "./worker.ts?sharedworker&url";
 
 const fixture = import.meta.env["SSE_FIXTURE"];
 const available = Boolean(fixture) && typeof SharedWorker !== "undefined";
@@ -33,7 +33,6 @@ describe.skipIf(!available)("the change feed over a worker against the sse fixtu
     ]);
     const page = feedPage({
       session,
-      fixtureUrl,
       kinds: { runs: "store" },
       logged: ["store"],
       workerUrl,

@@ -214,12 +214,10 @@ describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the sse fi
     await sleep(HIDDEN + 300);
     expect(a.attachment.state()?.kind).toBe("open");
     setHidden(true);
-    await waitFor(
-      "hidden_closed",
-      () => a.attachment.state()?.kind === "hidden_closed",
-      HIDDEN + 3000,
-    );
+    // The state message reaches the tab before the hidden_closed record.
+    await waitFor("hidden_closed", () => a.ofKind("hidden_closed").length > 0, HIDDEN + 3000);
     expect(a.ofKind("hidden_closed")).toHaveLength(1);
+    expect(a.attachment.state()?.kind).toBe("hidden_closed");
     await waitFor("server saw close", async () => (await client.state()).clients === 0);
     const revalidates = a.ofKind("revalidate").length;
     setHidden(false);

@@ -1,16 +1,12 @@
 import { createDigestClient } from "../digest.js";
-import { retainListening } from "../feed/index.js";
+import { feedHostOptions } from "../feed/host-options.js";
 import type { RevalidateContext } from "../stream.js";
 import { createVersionMap } from "../versions.js";
 import { type TabSet, createWorkerHost } from "../worker.js";
 
-/**
- * The SharedWorker script of the browser suites. The fixture URL and timing overrides ride the
- * worker URL's query (`fixture`, `heartbeat`, `hidden`); `feed=<id>` streams a change-feed
- * session with no revalidation, `retain=1` passes `retainListening`, and `silent=1` posts nothing
- * to any port. Test-only messages on a port (`test:close`, `test:block`, `test:pause`,
- * `test:suppress-alive`, `test:silence`) drive the failure cases.
- */
+// The browser suites' SharedWorker. Query: `fixture`, `heartbeat`, `hidden`, `silent=1` (posts
+// nothing), and `stream`, which runs the feed entry's host. Port messages `test:close`,
+// `test:block`, `test:pause`, `test:suppress-alive` and `test:silence` drive the failure cases.
 
 interface SharedScope {
   onconnect: ((event: MessageEvent) => void) | null;
@@ -30,7 +26,6 @@ const params = new URL(scope.location.href).searchParams;
 const fixture = params.get("fixture") ?? "";
 const heartbeatMs = Number(params.get("heartbeat") ?? "5000");
 const hiddenCloseAfterMs = Number(params.get("hidden") ?? "60000");
-const feed = params.get("feed");
 
 let paused = false;
 let suppressAlive = false;
@@ -79,14 +74,12 @@ async function revalidate(ctx: RevalidateContext, tabs: TabSet): Promise<void> {
 }
 
 const host = createWorkerHost({
-  url: feed === null ? `${fixture}/events` : `${fixture}/feed/${feed}/events`,
+  ...(params.has("stream")
+    ? feedHostOptions(scope.location.href)
+    : { url: `${fixture}/events`, versions, alive: { url: `${fixture}/alive` }, revalidate }),
   fetch: gatedFetch,
-  versions,
   heartbeatMs,
   timing: { hiddenCloseAfterMs },
-  alive: { url: `${fixture}/alive` },
-  revalidate: feed === null ? revalidate : () => Promise.resolve(),
-  ...(params.get("retain") === "1" ? { retain: retainListening } : {}),
 });
 
 function isTestMessage(value: unknown): value is TestMessage {

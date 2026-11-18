@@ -45,9 +45,12 @@ export const LIVE: FeedSourceSpec = { name: "live", kinds: ["queue"], rev: 7 };
 const KINDS = { runs: "store", budgets: "store", users: "accounts", queue: "live" } as const;
 const LOGGED = ["store", "accounts"];
 
-export type OpenOptions = Partial<Omit<FeedPageOptions, "session" | "fixtureUrl" | "workerUrl">>;
+export type OpenOptions = Partial<Omit<FeedPageOptions, "session">>;
 
-/** Opens feed pages on the suite's worker script and detaches every one of them at `detachAll`. */
+/**
+ * Opens feed pages on `workerUrl` unless a page names its own, and detaches every one of them at
+ * `detachAll`.
+ */
 export function pageOpener(workerUrl: string): {
   open(session: FeedSession, extra?: OpenOptions): FeedPage;
   detachAll(): void;
@@ -59,10 +62,9 @@ export function pageOpener(workerUrl: string): {
         kinds: KINDS,
         logged: LOGGED,
         worker: `feed-${session.id}`,
+        workerUrl,
         ...extra,
         session,
-        fixtureUrl: fixtureUrl(),
-        workerUrl,
       });
       pages.push(page);
       return page;
