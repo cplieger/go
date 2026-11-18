@@ -65,15 +65,13 @@ func fontExtensions() map[string]bool {
 	return exts
 }
 
-// writeNotices copies the notice files of each bundled package version to
-// licenses/<package>@<version>/, and those of the app's own bundled files
-// to licenses/<path under Src>, then writes licenses/index.txt: one
-// "<package> <version>" line per package directory and one "./<path under
-// Src>" line per own notice, sorted. Every version gets its own directory,
-// so a bundle holding two versions of a package ships both licence texts. A
-// notice beside bundled files keeps its path inside the package
-// (fonts/LICENSE-x), since it covers those files only. A package root with
-// no notice file, or an own font with none on its path, fails the build.
+// writeNotices copies each bundled package version's notice files to
+// licenses/<package>@<version>/ and those of the app's own bundled files to
+// licenses/<path under Src>, then writes licenses/index.txt, one sorted line
+// per directory ("<package> <version>" or "./<path under Src>"). A notice
+// beside bundled files keeps its path inside the package (fonts/LICENSE-x),
+// since it covers those files only. A package root with no notice file, or
+// an own font with none on its path, fails the build.
 func writeNotices(t *tree, src string, pkgs packageRoots, own map[string]bool) error {
 	owned, err := ownNotices(src, own)
 	if err != nil || len(pkgs) == 0 && len(owned) == 0 {

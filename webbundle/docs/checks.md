@@ -10,6 +10,7 @@ This page lists every case `Build` refuses, for a developer reading one of its e
 - more than 32 entries, or two entries with one logical path, such as two module entries named `app`
 - an entry with no name, or a name that is not a lower-case letter followed by lower-case letters, digits and `_`, the identifier form `BUNDLE_URLS.<name>` reads
 - an entry whose file is not a regular file under `Src`, or is a symbolic link to a file outside `Src`, a style entry that is not a `.css` file, a module or classic entry that is, or an unknown kind
+- a `URL` on an entry that is not classic, a `URL` that is not `/<file>.js` with a file name of ASCII letters, digits, `-`, `.`, `_` and `~` not starting with `.`, or a `URL` that is, ignoring case, another entry's `URL` or logical path
 - a `Forbid` or `Allow` item that can match nothing, as [Forbid and Allow](configuration.md#forbid-and-allow) lists
 - a `Define` value that is not JSON, or a `Define` of `BUNDLE_URLS` or under it
 - `Shells` without `index.html`, a shell that is not an `.html` file at the root of `Src`, a shell listed twice, or a page whose `Shell` is not in `Shells`
@@ -28,10 +29,9 @@ Run `go generate` to write both files again. [Pages](pages.md) describes them.
 
 ## Shells
 
-`Build` reads a shell as a browser's HTML tokenizer does, so a tag inside a comment, or inside the text of a `<title>`, `<textarea>`, `<noscript>` or `<script>` element, is text: it is neither checked nor rewritten. It refuses a shell that `httpserver.SPA`'s Content-Security-Policy would block, or that names entries wrongly:
+`Build` reads a shell as `html.Parse` from `golang.org/x/net/html` does, which follows the HTML parsing rules a browser does. A tag inside a comment, inside an attribute value, or inside the text of a `<title>`, `<textarea>`, `<noscript>` or `<script>` element is text: it is neither checked nor rewritten. Inside `<svg>` or `<math>` a tag is an element of that markup, and a tag in one of its HTML parts, such as an svg `<title>` or `<desc>`, is an HTML element again. It refuses a shell that `httpserver.SPA`'s Content-Security-Policy would block, or that names entries wrongly:
 
-- an inline `<script>` or `<style>` element, or a `style` attribute
-- an event handler attribute such as `onclick`, which the policy blocks as it blocks an inline script
+- what `httpserver.CheckShell` refuses, the check `SPA` runs at start: an inline `<script>` or `<style>` element, a `style` attribute, an event handler attribute such as `onclick`, which the policy blocks as it blocks an inline script, and a shell `html.Parse` cannot read whole. A `<script>` of a type that is no script, such as `text/template`, never runs and passes
 - a root path ending in `.js` or `.css`, such as `/main.js`, that is no entry's logical path
 - one logical path named twice in the shell
 - a logical path in a tag that does not load its entry's kind: a module entry needs `<script type="module" src>`, a classic entry a `<script src>` with no type or a JavaScript one, and a style entry a `<link rel="stylesheet" href>` that is not an alternate stylesheet

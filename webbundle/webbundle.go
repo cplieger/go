@@ -71,9 +71,17 @@ const (
 // the files under it by whole segments. The entry file is exempt from both,
 // and an item that can match no input fails the build.
 type Entry struct {
-	Name   string // the logical name, [a-z][a-z0-9_]*: "/<Name>.js" or "/<Name>.css" in a shell
-	Path   string // the source file under Src
-	Kind   EntryKind
+	Name string // the logical name, [a-z][a-z0-9_]*: "/<Name>.js" or "/<Name>.css" in a shell
+	Path string // the source file under Src
+	Kind EntryKind
+	// URL is "" for a hashed path under /assets/. On a Classic entry it may
+	// be "/<file>.js": the entry is written there unhashed, the same URL in
+	// every build, and bundle.json lists it as stable. A service worker
+	// needs one, since the browser looks for its update at the URL it
+	// registered; a hashed URL changes with every build, and scope is no
+	// reason, since a Service-Worker-Allowed header lets one under /assets/
+	// control /.
+	URL    string
 	Forbid []string // items its imports may not reach
 	Allow  []string // when set, the only items its imports may reach
 }
@@ -94,7 +102,7 @@ type Output struct {
 }
 
 // Build builds c's tree into c.Out: the classic entries first, then the
-// module entries (which read the classic entries' hashed URLs through the
+// module entries (which read the classic entries' served URLs through the
 // BUNDLE_URLS define), then the style entries, the shells with their logical
 // paths replaced, and bundle.json. The tree is built beside Out and swapped
 // in whole, so a refused or failed build leaves Out as it was; Out/.gitignore
@@ -190,7 +198,7 @@ func (b *build) write(t *tree, shells []shell, named []bool) (Result, error) {
 	}
 	entries := make([]httpserver.BundleEntry, len(b.entries))
 	for i, e := range b.entries {
-		entries[i] = httpserver.BundleEntry{Name: e.Name, Kind: httpserver.BundleKind(e.Kind), Path: eb.hashed[i]}
+		entries[i] = httpserver.BundleEntry{Name: e.Name, Kind: httpserver.BundleKind(e.Kind), Path: eb.hashed[i], Stable: e.URL != ""}
 	}
 	files, err := t.manifest(entries)
 	if err != nil {

@@ -22,16 +22,14 @@ import (
 	"github.com/cplieger/go/webbundle"
 )
 
-// The rendered icons in testdata/icons must match their cairosvg renders
-// within these bounds: at most iconChannelTolerance of 255 per channel on at
-// least iconWithinShare of the pixels, and no channel off by more than
-// iconPixelLimit. seadex-scout and subflux are unraid-templates' icons at
-// 6f1cdbd, rendered by its scripts/icons.py through cairosvg; marotte is
-// marotte's static/favicon.svg at 1da7e83ca and transformed holds each
-// transform form, both rendered by resvg 0.45.1 (`resvg -w 512 -h 512`),
-// since cairosvg bends two corners of a rounded rect. Measured at 512 px:
-// seadex-scout 99.82% within 8 and worst 46, subflux 99.93% and 43,
-// marotte 99.52% and 63, transformed 99.71% and 43.
+// Each icon in testdata/icons must match its reference render within these
+// bounds: at most iconChannelTolerance of 255 per channel on at least
+// iconWithinShare of the pixels, none over iconPixelLimit. The seadex-scout
+// and subflux references are unraid-templates' cairosvg renders at 6f1cdbd;
+// marotte (its favicon.svg at 1da7e83ca) and transformed are resvg 0.45.1's
+// (`resvg -w 512 -h 512`), since cairosvg bends a rounded rect's corners.
+// Measured at 512 px (within 8, worst): seadex-scout 99.82% 46, subflux
+// 99.93% 43, marotte 99.52% 63, transformed 99.71% 43.
 const (
 	iconChannelTolerance = 8
 	iconWithinShare      = 0.995

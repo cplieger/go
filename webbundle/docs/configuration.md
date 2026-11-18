@@ -30,6 +30,7 @@ This page lists every field of `Config` and `Entry`, for a developer writing an 
 | `Name` | required | The logical name a shell uses, `/<Name>.js` or `/<Name>.css`. A lower-case letter, then lower-case letters, digits and `_`, such as `feed_worker`, so a module reads it as `BUNDLE_URLS.<Name>` |
 | `Path` | required | The source file, such as `src/main.ts` |
 | `Kind` | required | `Module`, `Classic` or `Style` |
+| `URL` | hashed | For a classic entry, a root URL such as `/sw.js` to write it at unhashed. See [An entry at its own URL](#an-entry-at-its-own-url) |
 | `Forbid` | none | Items the entry's imports may not reach |
 | `Allow` | none | When set, the only items the entry's imports may reach |
 
@@ -42,6 +43,16 @@ A script entry and a style entry may share a name, since one is `/app.js` and th
 - `Style` is a stylesheet. Its `@import` rules are inlined in order, and the fonts and images its `url()` values name are written as hashed files. See [Stylesheets](stylesheets.md).
 
 Classic entries build first. Every module entry then reads their URLs through the `BUNDLE_URLS` define, such as `new SharedWorker(BUNDLE_URLS.worker)` for an entry named `worker`. A classic entry read this way needs no shell to name it. The dotted read is the one form: an entry named `feed_worker` is `BUNDLE_URLS.feed_worker`.
+
+## An entry at its own URL
+
+A classic entry with a `URL` is written at that path instead of under `assets/` with a hash, and keeps it in every build. A service worker needs one, because the browser looks for a worker's update at the URL it registered, and a hashed URL changes with every build. The scope is not the reason: a `Service-Worker-Allowed` header would let a worker under `/assets/` control `/`.
+
+```go
+webbundle.Entry{Name: "sw", Path: "src/sw.ts", Kind: webbundle.Classic, URL: "/sw.js"}
+```
+
+The URL is one file at the root ending in `.js`. Its name may differ from the entry's, though one rule still holds: a module entry reads it as `BUNDLE_URLS.sw`, such as `navigator.serviceWorker.register(BUNDLE_URLS.sw)`, or a shell names it. `bundle.json` marks the entry `"stable": true`, and `SPA` serves it with `Cache-Control: no-cache`, so every load asks whether it changed.
 
 ## Forbid and Allow
 

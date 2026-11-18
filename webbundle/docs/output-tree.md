@@ -7,13 +7,14 @@ This page describes what `Build` writes to `Out`, for a developer serving it wit
 | Path | What it holds |
 | --- | --- |
 | `<shell>.html` | Each shell, with its logical paths replaced by hashed ones (each tag naming one written back with its attributes double-quoted) and, with an icon, the icon links |
-| `assets/<name>-<hash>.<ext>` | Each entry's output, the fonts and images it uses, and the icon files |
+| `<file>.js` | Each classic entry with a `URL`, such as `sw.js`, unhashed |
+| `assets/<name>-<hash>.<ext>` | Each other entry's output, the fonts and images it uses, and the icon files |
 | `assets/chunks/<name>-<hash>.js` | The code module entries share, and each dynamic `import()` |
 | `licenses/` | The licence notices of the bundled npm packages and of the bundled files under `Src` |
 | `bundle.json` | Every file above with its SHA-256, and every entry |
 | `.gitignore` | Your committed file, kept byte for byte, when `Out` had one |
 
-Every file under `assets/` carries a content hash in its name, so `SPA` can cache it for a year. Built scripts, stylesheets and their files take esbuild's hash. The icon files and `manifest.webmanifest` take the first 16 hex digits of their SHA-256. Every URL the tree writes is a root path, such as `/assets/logo-KQ3W7N2X.svg`, so a page at `/library/a` loads the same files as `/`.
+Every file under `assets/` carries a content hash in its name, so `SPA` can cache it for a year. A classic entry with a `URL` keeps its name in every build, so `SPA` serves it `no-cache`. Built scripts, stylesheets and their files take esbuild's hash. The icon files and `manifest.webmanifest` take the first 16 hex digits of their SHA-256. Every URL the tree writes is a root path, such as `/assets/logo-KQ3W7N2X.svg`, so a page at `/library/a` loads the same files as `/`.
 
 ## Scripts and stylesheets
 
@@ -23,7 +24,7 @@ The browser versions `Engines` returns are pinned in webbundle's source. In this
 
 ## bundle.json
 
-`bundle.json` is the manifest `SPA` reads at start. It lists every file in the tree, except itself and `.gitignore`, with its SHA-256 in lowercase hex, and every entry with its logical name, kind and hashed path:
+`bundle.json` is the manifest `SPA` reads at start. It lists every file in the tree, except itself and `.gitignore`, with its SHA-256 in lowercase hex, and every entry with its logical name, kind and path. An entry with a `URL` is marked `"stable": true`, and the key is left out for the others:
 
 ```json
 {
@@ -33,9 +34,11 @@ The browser versions `Engines` returns are pinned in webbundle's source. In this
     "assets/prepaint-FWXNCLNH.js": "0f3c41d0a6e2b7a9...",
     "index.html": "5be0c7e43f1d92a8...",
     "licenses/@cplieger/ui@1.3.0/LICENSE": "9a1e6f20c4d3b857...",
-    "licenses/index.txt": "e2c4a7f9013b6d58..."
+    "licenses/index.txt": "e2c4a7f9013b6d58...",
+    "sw.js": "96568d665ef6b61a..."
   },
   "entries": [
+    {"name": "sw", "kind": "classic", "path": "sw.js", "stable": true},
     {"name": "prepaint", "kind": "classic", "path": "assets/prepaint-FWXNCLNH.js"},
     {"name": "app", "kind": "module", "path": "assets/app-XHG7BGA7.js"},
     {"name": "app", "kind": "style", "path": "assets/app-DMFFLALO.css"}

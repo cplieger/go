@@ -269,6 +269,10 @@ func defines(user, urls map[string]string) (map[string]string, error) {
 func (b *build) buildClassic(e *Entry, outdir string) (built, error) {
 	opts := options(b.src, outdir, true)
 	opts.EntryPointsAdvanced = []api.EntryPoint{entryPoint(e)}
+	if e.URL != "" {
+		opts.EntryPointsAdvanced[0].OutputPath = strings.TrimSuffix(strings.TrimPrefix(e.URL, "/"), jsExt)
+		opts.EntryNames = "[name]"
+	}
 	opts.Format = api.FormatIIFE
 	opts.Define = b.define
 	return runBuild(&opts, "classic entry "+e.Name, false)

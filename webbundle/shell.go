@@ -32,12 +32,11 @@ type link struct {
 	attr       int
 }
 
-// readShell reads a shell as the HTML tokenizer does, so a comment or a
-// raw-text element's body holds no tags, and refuses what httpserver.SPA's
-// policy would block: an inline script or style element, a style attribute,
-// and an inline event handler (an on* attribute, which script-src 'self'
-// blocks as it does an inline script). It also refuses a logical path named
-// twice, by a tag that does not load its entry's kind, or one no entry is.
+// readShell refuses a shell httpserver.CheckShell refuses, which is what
+// httpserver.SPA's policy would block, then reads it as html.Parse does, so
+// a comment or a raw-text element's body holds no tags. It also refuses a
+// logical path named twice, by a tag that does not load its entry's kind,
+// or one no entry is.
 func (b *build) readShell(name string) (shell, error) {
 	body, err := os.ReadFile(filepath.Join(b.src, name))
 	if err != nil {
@@ -100,8 +99,8 @@ func (r *shellReader) walk() error {
 
 // tag checks one start tag and records it when it names an entry.
 func (r *shellReader) tag(tok html.Token, inHTML bool, start, end int) error {
-	if err := r.handlers(tok); err != nil || !inHTML {
-		return err
+	if !inHTML {
+		return nil
 	}
 	for i, a := range tok.Attr {
 		if err := r.iconRel(tok, a); err != nil {
@@ -116,16 +115,6 @@ func (r *shellReader) tag(tok html.Token, inHTML bool, start, end int) error {
 			return err
 		}
 		r.links = append(r.links, link{tok: tok, entry: e, start: start, end: end, attr: i})
-	}
-	return nil
-}
-
-// handlers refuses an on* attribute, an inline event handler.
-func (r *shellReader) handlers(tok html.Token) error {
-	for _, a := range tok.Attr {
-		if len(a.Key) > len("on") && strings.HasPrefix(a.Key, "on") {
-			return fmt.Errorf("webbundle: shell %s: <%s> carries %s, an inline event handler the policy blocks", r.name, tok.Data, a.Key)
-		}
 	}
 	return nil
 }

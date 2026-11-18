@@ -20,7 +20,7 @@ const (
 	maxOutput  = 64 << 20
 
 	// bundleURLs is the define every module entry reads its classic entries'
-	// hashed URLs from.
+	// served URLs from.
 	bundleURLs = "BUNDLE_URLS"
 
 	jsExt  = ".js"
@@ -181,7 +181,57 @@ func (b *build) checkEntries(entries []Entry) error {
 		e.Path, e.Forbid, e.Allow = p, slices.Clone(e.Forbid), slices.Clone(e.Allow)
 		b.entries = append(b.entries, e)
 	}
+	return checkEntryURLs(b.entries)
+}
+
+// checkEntryURLs refuses a URL that is not one file "/<file>.js" at the
+// root, one on an entry that is not Classic, and one equal, ignoring case,
+// to another entry's URL or logical path: two files whose names differ only
+// in case are one file on a case-insensitive file system, and a shell's
+// logical path would name the other entry.
+func checkEntryURLs(entries []Entry) error {
+	taken := map[string]string{}
+	for _, e := range entries {
+		taken[strings.ToLower(logicalPath(&e))] = fmt.Sprintf("%s entry %q", e.Kind, e.Name)
+	}
+	for _, e := range entries {
+		if e.URL == "" {
+			continue
+		}
+		if e.Kind != Classic {
+			return fmt.Errorf("webbundle: %s entry %q has URL %q; only a classic entry, a script with its whole closure, is written at a URL of its own", e.Kind, e.Name, e.URL)
+		}
+		if !rootScriptURL(e.URL) {
+			return fmt.Errorf("webbundle: classic entry %q has URL %q; a URL is \"/<file>.js\" at the root, the file name of ASCII letters, digits, '-', '.', '_' and '~', not starting with '.'", e.Name, e.URL)
+		}
+		key := strings.ToLower(e.URL)
+		if other, ok := taken[key]; ok && key != strings.ToLower(logicalPath(&e)) {
+			return fmt.Errorf("webbundle: classic entry %q has URL %q, which is also %s", e.Name, e.URL, other)
+		}
+		taken[key] = fmt.Sprintf("the URL of classic entry %q", e.Name)
+	}
 	return nil
+}
+
+// rootScriptURL reports whether u is "/<file>.js", the file name of URL
+// unreserved characters (RFC 3986 section 2.3), so it is served at u as
+// written, and not a dot-file, which httpserver.ReadBundle refuses.
+func rootScriptURL(u string) bool {
+	name, ok := strings.CutPrefix(u, "/")
+	stem, js := strings.CutSuffix(name, jsExt)
+	if !ok || !js || stem == "" || name[0] == '.' {
+		return false
+	}
+	for _, r := range name {
+		if !unreserved(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func unreserved(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-._~", r)
 }
 
 // checkEntryName keeps a logical name an identifier: a module reads a classic

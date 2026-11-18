@@ -10,7 +10,7 @@ It replaces the bundle program each app writes around esbuild's Go API. It runs 
 
 webbundle is built for a Go server that serves a TypeScript front end through `httpserver.SPA`.
 
-- Every built file has a content-hashed name, and two builds of the same inputs write the same bytes.
+- Every built file has a content-hashed name, except a classic entry you give a URL of its own, such as a service worker at `/sw.js`. Two builds of the same inputs write the same bytes.
 - Syntax newer than the pinned browser versions is lowered, or the build fails naming the feature.
 - A shell with an inline script, an inline style or an event handler fails the build, so the strict Content-Security-Policy of `SPA` never blocks your page.
 - An import of a package you did not allow fails the build with the chain of imports that reached it.
