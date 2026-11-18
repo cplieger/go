@@ -19,11 +19,9 @@ type transportFixture struct {
 		Remediation string `json:"remediation"`
 	} `json:"errorCodes"`
 	Rows []struct {
-		Name     string   `json:"name"`
-		Method   string   `json:"method"`
-		Path     string   `json:"path"`
-		Codes    []string `json:"codes"`
-		Statuses []int    `json:"statuses"`
+		Name   string   `json:"name"`
+		Method string   `json:"method"`
+		Codes  []string `json:"codes"`
 	} `json:"rows"`
 	Cases []transportCase `json:"cases"`
 }
@@ -36,14 +34,11 @@ type transportCase struct {
 	Body    any     `json:"body"`
 	Request *struct {
 		Method  string            `json:"method"`
-		Path    string            `json:"path"`
 		Headers map[string]string `json:"headers"`
 	} `json:"request"`
 	Answer *struct {
-		Kind    string            `json:"kind"`
-		Status  int               `json:"status"`
-		Code    string            `json:"code"`
-		Headers map[string]string `json:"headers"`
+		Kind string `json:"kind"`
+		Code string `json:"code"`
 	} `json:"answer"`
 	Want struct {
 		OK      bool   `json:"ok"`

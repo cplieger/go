@@ -188,7 +188,7 @@ type logSink struct {
 	mu    sync.Mutex
 }
 
-func (s *logSink) Enabled(context.Context, slog.Level) bool { return true }
+func (*logSink) Enabled(context.Context, slog.Level) bool { return true }
 
 func (s *logSink) Handle(_ context.Context, r slog.Record) error {
 	var b bytes.Buffer

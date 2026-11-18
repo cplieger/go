@@ -57,7 +57,7 @@ type statusAnswer interface {
 	answer() (code int, body any)
 }
 
-func (s Status[T]) statusType() reflect.Type     { return reflect.TypeFor[Status[T]]() }
+func (Status[T]) statusType() reflect.Type       { return reflect.TypeFor[Status[T]]() }
 func (Status[T]) bodyType() reflect.Type         { return reflect.TypeFor[T]() }
 func (s Status[T]) answer() (code int, body any) { return s.Code, s.Body }
 

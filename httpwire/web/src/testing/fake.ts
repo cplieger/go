@@ -91,7 +91,6 @@ type Matcher = (pathname: string) => Record<string, string> | undefined;
 interface Route {
   readonly ep: GeneratedEndpoint<unknown>;
   readonly match: Matcher;
-  readonly literals: number;
 }
 
 interface Registered {

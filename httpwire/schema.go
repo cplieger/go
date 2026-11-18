@@ -370,7 +370,7 @@ func (p *parser) resolve() {
 // and oneOf alone: validating it would never reach a member or an element.
 func (p *parser) refuseCycles() {
 	const (
-		unseen = iota
+		_ = iota
 		visiting
 		done
 	)
