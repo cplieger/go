@@ -2,14 +2,12 @@ package webbundle
 
 import (
 	"bytes"
-	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"image"
 	"image/png"
 	"io"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,8 +20,8 @@ import (
 	"github.com/srwiley/rasterx"
 )
 
-// The PNG sizes Build writes from Icon: the browser tab, apple-touch-icon,
-// and the manifest's two icons.
+// The PNG sizes Build writes: the browser tab, apple-touch-icon, and the
+// manifest's two icons.
 const (
 	tabIcon   = 32
 	touchIcon = 180
@@ -31,94 +29,145 @@ const (
 	largeIcon = 512
 )
 
-var iconSizes = []int{tabIcon, touchIcon, smallIcon, largeIcon}
+// pngSizes are the PNGs each purpose's SVG gives; a maskable icon is shown
+// only by an installed app, from the manifest.
+var pngSizes = map[IconPurpose][]int{
+	PurposeAny:      {tabIcon, touchIcon, smallIcon, largeIcon},
+	PurposeMaskable: {smallIcon, largeIcon},
+}
+
+var purposes = []IconPurpose{PurposeAny, PurposeMaskable}
+
+func purposeName(p IconPurpose) string {
+	if p == PurposeAny {
+		return "any"
+	}
+	return string(p)
+}
 
 var hexColour = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
-// checkIcon checks Icon, IconPNGs and Manifest and, when Build renders the
-// PNGs, that the renderer draws every element and attribute of the icon.
-func (b *build) checkIcon() error {
-	if b.icon == "" {
-		switch {
-		case b.iconPNGs != nil:
-			return errors.New("webbundle: Config.IconPNGs is set and Config.Icon is not; the PNGs are the icon's")
-		case b.manifest != nil:
-			return errors.New("webbundle: Config.Manifest is set and Config.Icon is not; the manifest's icons come from it")
-		}
-		return nil
+// iconArt is one SVG under Src and the PNGs Build writes from it.
+type iconArt struct {
+	pngs    map[int]string // committed PNGs by size; nil renders the SVG
+	svg     string
+	purpose IconPurpose
+}
+
+// checkIcons checks Icon, MaskableIcon, IconPNGs and Manifest and, for each
+// SVG Build renders, that the renderer draws every element and attribute.
+func (b *build) checkIcons(c *Config) error {
+	switch {
+	case c.Manifest != "" && c.Icon == "":
+		return errors.New("webbundle: Config.Manifest is set and Config.Icon is not; the manifest's icons come from it")
+	case c.MaskableIcon != "" && c.Manifest == "":
+		return errors.New("webbundle: Config.MaskableIcon is set and Config.Manifest is not; a maskable icon is listed only in the manifest")
 	}
-	p, err := b.srcFile("icon", b.icon)
+	committed, err := splitIconPNGs(c.IconPNGs)
 	if err != nil {
 		return err
 	}
+	for _, a := range []struct {
+		dst     **iconArt
+		field   string
+		svg     string
+		purpose IconPurpose
+	}{
+		{dst: &b.icon, field: "Icon", svg: c.Icon, purpose: PurposeAny},
+		{dst: &b.maskable, field: "MaskableIcon", svg: c.MaskableIcon, purpose: PurposeMaskable},
+	} {
+		pngs := committed[a.purpose]
+		if a.svg == "" {
+			if pngs != nil {
+				return fmt.Errorf("webbundle: Config.IconPNGs holds %s PNGs and Config.%s is not set; the PNGs are its", purposeName(a.purpose), a.field)
+			}
+			continue
+		}
+		if *a.dst, err = b.checkArt(a.field, a.svg, a.purpose, pngs); err != nil {
+			return err
+		}
+	}
+	if c.Manifest != "" {
+		b.manifest, err = b.readManifest(c.Manifest)
+	}
+	return err
+}
+
+// splitIconPNGs sorts IconPNGs by purpose, refusing a purpose or size Build
+// writes no PNG for and a purpose missing one of its sizes.
+func splitIconPNGs(pngs map[IconPNG]string) (map[IconPurpose]map[int]string, error) {
+	out := map[IconPurpose]map[int]string{}
+	for k, name := range pngs {
+		sizes, ok := pngSizes[k.Purpose]
+		switch {
+		case !ok:
+			return nil, fmt.Errorf("webbundle: Config.IconPNGs holds purpose %q; the purposes are PurposeAny and PurposeMaskable", k.Purpose)
+		case !slices.Contains(sizes, k.Size):
+			return nil, fmt.Errorf("webbundle: Config.IconPNGs holds a %d px %s PNG; the %s sizes are %v", k.Size, purposeName(k.Purpose), purposeName(k.Purpose), sizes)
+		case out[k.Purpose] == nil:
+			out[k.Purpose] = map[int]string{}
+		}
+		out[k.Purpose][k.Size] = name
+	}
+	for _, p := range purposes {
+		for _, size := range pngSizes[p] {
+			if _, ok := out[p][size]; out[p] != nil && !ok {
+				return nil, fmt.Errorf("webbundle: Config.IconPNGs has no %d px %s PNG; it names one for each of %v", size, purposeName(p), pngSizes[p])
+			}
+		}
+	}
+	return out, nil
+}
+
+// checkArt checks one SVG named by Config.<field> and the PNGs committed for
+// it, or, with none, that the renderer can draw it.
+func (b *build) checkArt(field, name string, purpose IconPurpose, committed map[int]string) (*iconArt, error) {
+	p, err := b.srcFile(field, name)
+	if err != nil {
+		return nil, err
+	}
 	if path.Ext(p) != ".svg" {
-		return fmt.Errorf("webbundle: icon %s is not an .svg file", b.icon)
+		return nil, fmt.Errorf("webbundle: %s %s is not an .svg file", field, name)
 	}
-	b.icon = p
-	if bad := b.checkManifest(); bad != nil {
-		return bad
-	}
-	if b.iconPNGs != nil {
-		return b.checkIconPNGs()
+	art := &iconArt{svg: p, purpose: purpose}
+	if committed != nil {
+		art.pngs, err = b.checkIconPNGs(purpose, committed)
+		return art, err
 	}
 	svg, err := os.ReadFile(filepath.Join(b.src, filepath.FromSlash(p)))
 	if err != nil {
-		return fmt.Errorf("webbundle: icon %s: %w", p, err)
+		return nil, fmt.Errorf("webbundle: %s %s: %w", field, p, err)
 	}
 	if _, bad := readIcon(svg); bad != nil {
-		return fmt.Errorf("webbundle: icon %s: %w; commit its PNGs as Config.IconPNGs instead", p, bad)
+		return nil, fmt.Errorf("webbundle: %s %s: %w; commit its PNGs as Config.IconPNGs instead", field, p, bad)
 	}
-	return nil
+	return art, nil
 }
 
-func (b *build) checkManifest() error {
-	m := b.manifest
-	if m == nil {
-		return nil
-	}
-	if m.Name == "" {
-		return errors.New("webbundle: Config.Manifest.Name is empty")
-	}
-	for _, c := range []struct{ field, value string }{{"ThemeColor", m.ThemeColor}, {"BackgroundColor", m.BackgroundColor}} {
-		if !hexColour.MatchString(c.value) {
-			return fmt.Errorf("webbundle: Config.Manifest.%s is %q, not a #rrggbb colour", c.field, c.value)
-		}
-	}
-	return nil
-}
-
-func (b *build) checkIconPNGs() error {
-	for _, size := range slices.Sorted(maps.Keys(b.iconPNGs)) {
-		if !slices.Contains(iconSizes, size) {
-			return fmt.Errorf("webbundle: Config.IconPNGs holds a %d px PNG; the sizes are %v", size, iconSizes)
-		}
-	}
-	pngs := make(map[int]string, len(iconSizes))
-	for _, size := range iconSizes {
-		name, ok := b.iconPNGs[size]
-		if !ok {
-			return fmt.Errorf("webbundle: Config.IconPNGs has no %d px PNG; it names one for each of %v", size, iconSizes)
-		}
-		p, err := b.srcFile("icon PNG", name)
+// checkIconPNGs checks that each committed PNG is a PNG file of its size
+// and returns their resolved paths by size.
+func (b *build) checkIconPNGs(purpose IconPurpose, committed map[int]string) (map[int]string, error) {
+	pngs := make(map[int]string, len(committed))
+	for _, size := range pngSizes[purpose] {
+		p, err := b.srcFile("icon PNG", committed[size])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		f, err := os.Open(filepath.Join(b.src, filepath.FromSlash(p)))
 		if err != nil {
-			return fmt.Errorf("webbundle: icon PNG %s: %w", p, err)
+			return nil, fmt.Errorf("webbundle: icon PNG %s: %w", p, err)
 		}
 		cfg, err := png.DecodeConfig(f)
 		f.Close()
 		switch {
 		case err != nil:
-			return fmt.Errorf("webbundle: icon PNG %s is no PNG: %w", p, err)
+			return nil, fmt.Errorf("webbundle: icon PNG %s is no PNG: %w", p, err)
 		case cfg.Width != size || cfg.Height != size:
-			return fmt.Errorf("webbundle: icon PNG %s is %dx%d, not %d px square", p, cfg.Width, cfg.Height, size)
+			return nil, fmt.Errorf("webbundle: icon PNG %s is %dx%d, not %d px square", p, cfg.Width, cfg.Height, size)
 		}
 		pngs[size] = p
 	}
-	b.iconPNGs = pngs
-	return nil
+	return pngs, nil
 }
 
 const svgRoot = "svg"
@@ -296,89 +345,89 @@ func renderIcon(svg []byte, size int) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// webManifest is manifest.webmanifest in the field order Build writes it.
-type webManifest struct {
-	Name            string         `json:"name"`
-	ShortName       string         `json:"short_name,omitempty"`
-	ThemeColor      string         `json:"theme_color"`
-	BackgroundColor string         `json:"background_color"`
-	StartURL        string         `json:"start_url"`
-	Display         string         `json:"display"`
-	Icons           []manifestIcon `json:"icons"`
-}
-
-type manifestIcon struct {
-	Src   string `json:"src"`
-	Sizes string `json:"sizes"`
-	Type  string `json:"type"`
-}
-
-// writeIcons writes the icon, its PNGs and the manifest into t as hashed
+// writeIcons writes the icon, the PNGs and the manifest into t as hashed
 // files under assets/ and returns the link lines each shell's head ends with.
 func (b *build) writeIcons(t *tree) ([]byte, error) {
-	if b.icon == "" {
+	if b.icon == nil {
 		return nil, nil
 	}
-	svg, err := os.ReadFile(filepath.Join(b.src, filepath.FromSlash(b.icon)))
+	svg, err := os.ReadFile(filepath.Join(b.src, filepath.FromSlash(b.icon.svg)))
 	if err != nil {
-		return nil, fmt.Errorf("webbundle: icon %s: %w", b.icon, err)
+		return nil, fmt.Errorf("webbundle: icon %s: %w", b.icon.svg, err)
 	}
-	stem := strings.TrimSuffix(path.Base(b.icon), ".svg")
-	svgPath, err := t.writeHashed(stem, ".svg", svg)
+	svgPath, err := t.writeHashed(strings.TrimSuffix(path.Base(b.icon.svg), ".svg"), ".svg", svg)
 	if err != nil {
 		return nil, err
 	}
-	pngs := make(map[int]string, len(iconSizes))
-	for _, size := range iconSizes {
+	pngs, err := b.writePNGs(t, b.icon)
+	if err != nil {
+		return nil, err
+	}
+	var links bytes.Buffer
+	fmt.Fprintf(&links, "<link rel=\"icon\" href=\"/%s\" type=\"image/svg+xml\">\n", svgPath)
+	fmt.Fprintf(&links, "<link rel=\"icon\" href=\"/%s\" sizes=\"%[2]dx%[2]d\" type=\"image/png\">\n", pngs[tabIcon], tabIcon)
+	fmt.Fprintf(&links, "<link rel=\"apple-touch-icon\" href=\"/%s\">\n", pngs[touchIcon])
+	if b.manifest == nil {
+		return links.Bytes(), nil
+	}
+	icons := manifestIcons(pngs, PurposeAny)
+	if b.maskable != nil {
+		masks, merr := b.writePNGs(t, b.maskable)
+		if merr != nil {
+			return nil, merr
+		}
+		icons = append(icons, manifestIcons(masks, PurposeMaskable)...)
+	}
+	p, err := b.manifest.write(t, b.src, icons)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(&links, "<link rel=\"manifest\" href=\"/%s\">\n", p)
+	return links.Bytes(), nil
+}
+
+// writePNGs writes art's PNGs, committed or rendered, and returns their
+// paths in the tree by size.
+func (b *build) writePNGs(t *tree, art *iconArt) (map[int]string, error) {
+	svg, err := os.ReadFile(filepath.Join(b.src, filepath.FromSlash(art.svg)))
+	if err != nil {
+		return nil, fmt.Errorf("webbundle: icon %s: %w", art.svg, err)
+	}
+	stem := strings.TrimSuffix(path.Base(art.svg), ".svg")
+	pngs := make(map[int]string, len(pngSizes[art.purpose]))
+	for _, size := range pngSizes[art.purpose] {
 		var body []byte
 		name := stem + "-" + strconv.Itoa(size)
-		if p, ok := b.iconPNGs[size]; ok {
+		if p, ok := art.pngs[size]; ok {
 			body, err = os.ReadFile(filepath.Join(b.src, filepath.FromSlash(p)))
 			name = strings.TrimSuffix(path.Base(p), ".png")
 		} else {
 			body, err = renderIcon(svg, size)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("webbundle: icon %s at %d px: %w", b.icon, size, err)
+			return nil, fmt.Errorf("webbundle: icon %s at %d px: %w", art.svg, size, err)
 		}
 		if pngs[size], err = t.writeHashed(name, ".png", body); err != nil {
 			return nil, err
 		}
 	}
-	var links bytes.Buffer
-	fmt.Fprintf(&links, "<link rel=\"icon\" href=\"/%s\" type=\"image/svg+xml\">\n", svgPath)
-	fmt.Fprintf(&links, "<link rel=\"icon\" href=\"/%s\" sizes=\"%[2]dx%[2]d\" type=\"image/png\">\n", pngs[tabIcon], tabIcon)
-	fmt.Fprintf(&links, "<link rel=\"apple-touch-icon\" href=\"/%s\">\n", pngs[touchIcon])
-	if b.manifest != nil {
-		p, err := b.writeManifest(t, pngs)
-		if err != nil {
-			return nil, err
-		}
-		fmt.Fprintf(&links, "<link rel=\"manifest\" href=\"/%s\">\n", p)
-	}
-	return links.Bytes(), nil
+	return pngs, nil
 }
 
-func (b *build) writeManifest(t *tree, pngs map[int]string) (string, error) {
-	m := webManifest{
-		Name:            b.manifest.Name,
-		ShortName:       b.manifest.ShortName,
-		ThemeColor:      b.manifest.ThemeColor,
-		BackgroundColor: b.manifest.BackgroundColor,
-		StartURL:        "/",
-		Display:         "standalone",
-	}
+// manifestIcons lists the manifest's 192 and 512 px icons of one purpose;
+// an icon is never listed as "any maskable", since art drawn for a mask's
+// safe zone looks small unmasked and art drawn to the edge loses its edges
+// under a mask (https://www.w3.org/TR/appmanifest/#icon-masks).
+func manifestIcons(pngs map[int]string, purpose IconPurpose) []any {
+	icons := make([]any, 0, 2)
 	for _, size := range []int{smallIcon, largeIcon} {
-		m.Icons = append(m.Icons, manifestIcon{Src: "/" + pngs[size], Sizes: fmt.Sprintf("%[1]dx%[1]d", size), Type: "image/png"})
+		icon := map[string]any{srcMember: "/" + pngs[size], "sizes": fmt.Sprintf("%[1]dx%[1]d", size), "type": "image/png"}
+		if purpose != PurposeAny {
+			icon["purpose"] = string(purpose)
+		}
+		icons = append(icons, icon)
 	}
-	var body bytes.Buffer
-	enc := json.NewEncoder(&body)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(m); err != nil {
-		return "", fmt.Errorf("webbundle: manifest: %w", err)
-	}
-	return t.writeHashed("manifest", ".webmanifest", body.Bytes())
+	return icons
 }
 
 // iconRels are the link relations Build writes for the icon, so a shell

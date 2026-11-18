@@ -1,6 +1,6 @@
 # Configuration
 
-This page lists every field of `Config`, `Entry` and `Manifest`, for a developer writing an app's bundle program. Every path below is a slash path under `Src` unless the row says otherwise.
+This page lists every field of `Config` and `Entry`, for a developer writing an app's bundle program. Every path below is a slash path under `Src` unless the row says otherwise.
 
 ## Config
 
@@ -17,8 +17,9 @@ This page lists every field of `Config`, `Entry` and `Manifest`, for a developer
 | `Packages` | `["@cplieger/*"]` | The npm packages a bundle may include, as `path.Match` patterns |
 | `Define` | none | esbuild defines, each value a JSON value. `BUNDLE_URLS` is reserved |
 | `Icon` | none | The app's icon, an `.svg` file. See [Icons](icons.md) |
-| `IconPNGs` | none | Committed PNGs by size, used instead of rendering the icon |
-| `Manifest` | none | The web app manifest. It needs `Icon` |
+| `MaskableIcon` | none | An `.svg` file drawn for a mask, listed in the manifest as `maskable`. It needs `Manifest` |
+| `IconPNGs` | none | Committed PNGs by size and purpose, used instead of rendering `Icon` or `MaskableIcon` |
+| `Manifest` | none | The web app manifest, a JSON file. It needs `Icon`. See [The manifest](icons.md#the-manifest) |
 
 `Src` and `Out` may be relative to the working directory. Symbolic links in them are resolved before `Build` checks that `Out` sits beside `Src`. An entry's path may run through a symbolic link, such as a pnpm package folder, as long as its target is under `Src`. `Build` runs `httpserver.NewPageMatcher` over `Pages` and `APIPrefix`, so an empty prefix or a page at or under it fails the build.
 
@@ -56,12 +57,3 @@ Both lists take the same items:
 | `./lit/core` | a path under `Src` whose first segment is also the name of an installed package |
 
 An item that exists under `Src` is a path. Any other item is a package or a file a package exports. An item that can match nothing fails the build before anything is built: an empty item or `.`, a path leaving `Src`, a path under `node_modules` (name the package instead), a package `Packages` does not match, a package file that resolves to no file or to another package's file, and a path that is also a package name, written without `./`.
-
-## Manifest
-
-| Field | Default | Description |
-| --- | --- | --- |
-| `Name` | required | The app's name |
-| `ShortName` | none | The name under a home screen icon. Left out of the manifest when empty |
-| `ThemeColor` | required | A `#rrggbb` colour |
-| `BackgroundColor` | required | A `#rrggbb` colour |

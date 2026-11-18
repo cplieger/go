@@ -13,28 +13,44 @@ import (
 
 // Config is one app's bundle: where its sources are, where the tree goes,
 // and what it holds.
+//
+// Manifest's members pass through to the built manifest, which gains
+// "icons" from Icon and MaskableIcon; each "src" member names a file by its
+// path from the manifest's folder, written as a hashed asset and named by
+// its served URL. Its id, start_url, scope, shortcut urls and
+// share_target.action are root-relative, and all but id lie inside scope.
 type Config struct {
-	Define         map[string]string // esbuild defines, each value JSON
-	Manifest       *Manifest         // the web app manifest; nil writes none
-	IconPNGs       map[int]string    // committed PNGs under Src by size (32, 180, 192, 512), copied instead of rendered; nil renders
-	Src            string            // the static-src root, holding package.json and node_modules
-	Out            string            // the output tree the UI package embeds, replaced whole
-	PagesFile      string            // the TypeScript page table under Src; "" is "pages.gen.ts"
-	APIPrefix      string            // the API's path prefix ("/api"), as httpserver.SPAConfig.APIPrefix
-	PageCorpusFile string            // the page corpus under Src; "" is "pages.corpus.gen.json"
-	Icon           string            // the app's icon, an SVG under Src; "" is none
-	Shells         []string          // the shells under Src; nil is ["index.html"]
+	Define         map[string]string  // esbuild defines, each value JSON
+	IconPNGs       map[IconPNG]string // committed PNGs under Src, copied instead of rendered; nil renders
+	Src            string             // the static-src root, holding package.json and node_modules
+	Out            string             // the output tree the UI package embeds, replaced whole
+	PagesFile      string             // the TypeScript page table under Src; "" is "pages.gen.ts"
+	APIPrefix      string             // the API's path prefix ("/api"), as httpserver.SPAConfig.APIPrefix
+	PageCorpusFile string             // the page corpus under Src; "" is "pages.corpus.gen.json"
+	Icon           string             // the app's icon, an SVG under Src; "" is none
+	MaskableIcon   string             // an SVG under Src drawn for a mask, listed only in the manifest; "" is none
+	Manifest       string             // the web app manifest, a JSON file under Src; "" writes none
+	Shells         []string           // the shells under Src; nil is ["index.html"]
 	Entries        []Entry
 	Pages          []httpserver.Page // the UI package's pages
 	Packages       []string          // npm packages a bundle may include; nil is ["@cplieger/*"]
 }
 
-// Manifest is the web app manifest Build writes beside the icons.
-type Manifest struct {
-	Name, ShortName string
-	ThemeColor      string // #rrggbb
-	BackgroundColor string // #rrggbb
+// IconPNG names one PNG Build writes for the icons: Icon's at 32, 180, 192
+// and 512 px, MaskableIcon's at 192 and 512 px.
+type IconPNG struct {
+	Purpose IconPurpose
+	Size    int // in px, the PNG being square
 }
+
+// IconPurpose is the purpose a manifest lists an icon with.
+type IconPurpose string
+
+// The icon purposes.
+const (
+	PurposeAny      IconPurpose = ""         // Icon's PNGs, listed with no purpose, which is "any"
+	PurposeMaskable IconPurpose = "maskable" // MaskableIcon's PNGs, listed as "maskable"
+)
 
 // EntryKind is how an entry is built.
 type EntryKind string

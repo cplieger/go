@@ -8,37 +8,72 @@ With `Config.Icon` set to an `.svg` file under `Src`, `Build` writes these files
 
 - the SVG itself, as it is in `Src`
 - PNGs of 32 px for the browser tab, 180 px for `apple-touch-icon`, and 192 and 512 px for the manifest
-- with `Config.Manifest`, `manifest.webmanifest`
+- with `Config.Manifest`, `manifest.webmanifest`, and the files its `src` members name
+- with `Config.MaskableIcon`, PNGs of it at 192 and 512 px for the manifest
 
 It then adds these lines at the end of each shell's `<head>`, right before `</head>`:
 
 ```html
-<link rel="icon" href="/assets/icon-63110c2b911e935f.svg" type="image/svg+xml">
-<link rel="icon" href="/assets/icon-32-10206ba89b65252f.png" sizes="32x32" type="image/png">
-<link rel="apple-touch-icon" href="/assets/icon-180-e8a9809e7ea91485.png">
-<link rel="manifest" href="/assets/manifest-71b66b32fde31b8c.webmanifest">
+<link rel="icon" href="/assets/icon-84ec58577e86f6b6.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icon-32-17bfe12faa092c13.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icon-180-2fb7d3acde97a5c4.png">
+<link rel="manifest" href="/assets/manifest-9d84059a25eb421c.webmanifest">
 ```
 
 A shell that already carries an `icon`, `apple-touch-icon` or `manifest` link fails the build, and so does a shell with no `</head>`. With no `Icon`, the shells are left as they are, and `SPA` answers `/favicon.ico` with an empty 204.
 
 ## The manifest
 
+`Config.Manifest` names your manifest, a JSON file under `Src` holding every member but `icons`:
+
 ```json
 {
   "name": "Example",
   "short_name": "Example",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
   "theme_color": "#1d4ed8",
   "background_color": "#ffffff",
-  "start_url": "/",
-  "display": "standalone",
-  "icons": [
-    {"src": "/assets/icon-192-ad7f663711a8f9c0.png", "sizes": "192x192", "type": "image/png"},
-    {"src": "/assets/icon-512-f2fd495ad549f315.png", "sizes": "512x512", "type": "image/png"}
+  "shortcuts": [
+    {"name": "Library", "url": "/library", "icons": [{"src": "icons/library.png", "sizes": "96x96", "type": "image/png"}]}
   ]
 }
 ```
 
-`short_name` is left out when `ShortName` is empty.
+`Build` passes every member through, so a new member needs no new webbundle release. It writes `icons` itself, and replaces each `src` member, at any depth, with the served URL of that file written as a hashed asset. A `src` is the path of an image file under `Src` from the manifest's folder, as a browser resolves it from the manifest's URL. The manifest above, with `Icon` and `MaskableIcon` set, is written as:
+
+```json
+{
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "icons": [
+    {"sizes": "192x192", "src": "/assets/icon-192-b94dbe2a375f68a2.png", "type": "image/png"},
+    {"sizes": "512x512", "src": "/assets/icon-512-1a88ae90e125883d.png", "type": "image/png"},
+    {"purpose": "maskable", "sizes": "192x192", "src": "/assets/maskable-192-ad7f663711a8f9c0.png", "type": "image/png"},
+    {"purpose": "maskable", "sizes": "512x512", "src": "/assets/maskable-512-f2fd495ad549f315.png", "type": "image/png"}
+  ],
+  "name": "Example",
+  "scope": "/",
+  "short_name": "Example",
+  "shortcuts": [
+    {"icons": [{"sizes": "96x96", "src": "/assets/library-9c61ea8739f4a0dd.png", "type": "image/png"}], "name": "Library", "url": "/library"}
+  ],
+  "start_url": "/",
+  "theme_color": "#1d4ed8"
+}
+```
+
+The members come out sorted by name, indented one per line. `Build` checks the members it knows:
+
+- `name` is a string that is not blank.
+- `theme_color` and `background_color`, when present, are `#rrggbb` colours.
+- `id`, `start_url`, `scope`, each shortcut's `url` and `share_target.action` are root-relative URLs, such as `/library?view=grid`, with no dot segment.
+- All of them but `id` lie inside the scope, as the [manifest spec](https://www.w3.org/TR/appmanifest/#dfn-within-scope) defines it: the scope's path is a prefix of theirs. The scope is the `scope` member or, with none, the folder of `start_url`. With neither, the scope is the folder of the page the app is installed from, and `Build` checks only that each URL is root-relative.
+
+## Maskable icons
+
+An installed app's launcher may crop its icon to a circle or another shape. Set `Config.MaskableIcon` to an SVG drawn for that mask, with its art inside the central circle the [manifest spec](https://www.w3.org/TR/appmanifest/#icon-masks) calls the safe zone. `Build` lists its 192 and 512 px PNGs with `"purpose": "maskable"` and `Icon`'s with no purpose. It never lists one icon as `"any maskable"`: art drawn for the safe zone looks small unmasked, and art drawn to the edge loses its edges under a mask. Without `MaskableIcon`, the manifest lists no maskable icon. The shells never link a maskable icon.
 
 ## Which SVGs render
 
@@ -55,4 +90,4 @@ webbundle's tests render two icons drawn with a filled rectangle, arcs and round
 
 ## Committed PNGs
 
-For an icon the renderer cannot draw, render the PNGs with another tool and commit them. Set `Config.IconPNGs` to their paths under `Src` by size, one each for 32, 180, 192 and 512. `Build` then checks that each file is a PNG of that size and copies it, hashed, instead of rendering. The SVG is still copied and linked.
+For an icon the renderer cannot draw, render the PNGs with another tool and commit them. Set `Config.IconPNGs` to their paths under `Src`, keyed by `IconPNG{Purpose, Size}`: one each for 32, 180, 192 and 512 px with `PurposeAny` for `Icon`, and for 192 and 512 px with `PurposeMaskable` for `MaskableIcon`. A purpose's PNGs are committed all together or not at all, so `Icon` can render while `MaskableIcon` is committed. `Build` checks that each file is a PNG of its size and copies it, hashed, instead of rendering. `Icon`'s SVG is still copied and linked.

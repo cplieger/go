@@ -63,7 +63,7 @@ func main() {
 			{Name: "app", Path: "src/app.css", Kind: webbundle.Style},
 		},
 		Icon:     "icon.svg",
-		Manifest: &webbundle.Manifest{Name: "Example", ThemeColor: "#1d4ed8", BackgroundColor: "#ffffff"},
+		Manifest: "manifest.json",
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -98,7 +98,7 @@ Commit an `Out/.gitignore` that ignores everything else in the folder, so `//go:
 
 ## API
 
-- Building: `Build` with `Config`, `Entry`, `EntryKind` (`Module`, `Classic`, `Style`), `Manifest` and `Result` (with `Output`, what each built script holds), and `Engines` (`Engine`) for the pinned browser versions.
+- Building: `Build` with `Config`, `Entry`, `EntryKind` (`Module`, `Classic`, `Style`), `IconPNG` (`IconPurpose`: `PurposeAny`, `PurposeMaskable`) and `Result` (with `Output`, what each built script holds), and `Engines` (`Engine`) for the pinned browser versions.
 - Page files: `RenderPages` and `RenderPageCorpus`.
 - One stylesheet: `BuildStyle` (`Stylesheet`) and the `cmd/style` command.
 

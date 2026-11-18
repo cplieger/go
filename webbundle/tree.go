@@ -88,13 +88,17 @@ func (t *tree) write(name string, body []byte, perm fs.FileMode) error {
 }
 
 // writeHashed writes body as assets/<stem>-<hash><ext>, the hash being the
-// first 8 bytes of its SHA-256 in hex, and returns that path. A second file
-// whose stem, extension and 8-byte hash prefix match is refused, never
-// written over.
+// first 8 bytes of its SHA-256 in hex, and returns that path. The same
+// bytes written twice under one stem and extension are one file; other
+// bytes whose name and 8-byte hash prefix match are refused, never written
+// over.
 func (t *tree) writeHashed(stem, ext string, body []byte) (string, error) {
 	sum := sha256.Sum256(body)
 	name := "assets/" + stem + "-" + hex.EncodeToString(sum[:8]) + ext
-	if _, err := t.root.Lstat(name); err == nil {
+	if have, err := t.root.ReadFile(name); err == nil {
+		if bytes.Equal(have, body) {
+			return name, nil
+		}
 		return "", fmt.Errorf("webbundle: two files are %s", name)
 	}
 	return name, t.write(name, body, 0o644)

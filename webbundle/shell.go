@@ -50,7 +50,7 @@ func (b *build) readShell(name string) (shell, error) {
 	for i, e := range b.entries {
 		logical[logicalPath(&e)] = i
 	}
-	sh := shell{name: name, body: body, head: -1, iconRels: b.icon != ""}
+	sh := shell{name: name, body: body, head: -1, iconRels: b.icon != nil}
 	r := shellReader{shell: &sh, entries: b.entries, logical: logical, named: map[string]bool{}}
 	if err := r.walk(); err != nil {
 		return shell{}, err

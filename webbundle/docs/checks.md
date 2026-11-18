@@ -14,7 +14,10 @@ This page lists every case `Build` refuses, for a developer reading one of its e
 - a `Define` value that is not JSON, or a `Define` of `BUNDLE_URLS` or under it
 - `Shells` without `index.html`, a shell that is not an `.html` file at the root of `Src`, a shell listed twice, or a page whose `Shell` is not in `Shells`
 - a `PagesFile` or `PageCorpusFile` outside `Src`, or a `Packages` pattern `path.Match` rejects
-- an `Icon` that is not an `.svg` file, an `IconPNGs` or a `Manifest` without an `Icon`, a `Manifest` with no `Name`, or a colour that is not `#rrggbb`
+- an `Icon` or `MaskableIcon` that is not an `.svg` file, a `Manifest` without an `Icon`, a `MaskableIcon` without a `Manifest`, or `IconPNGs` naming PNGs of an icon that is not set
+- a manifest that is not one JSON object, has no `name`, holds `icons`, or has a `theme_color` or `background_color` that is not `#rrggbb`
+- a manifest `id`, `start_url`, `scope`, shortcut `url` or `share_target.action` that is not a root-relative URL or holds a dot segment, or, but for `id`, lies outside the scope
+- a manifest `src` that is not a path from the manifest's folder to an image file under `Src` that `httpserver` serves
 
 ## Pages
 
@@ -67,6 +70,6 @@ Each of these errors ends with the chain of imports from the entry to the refuse
 
 - an SVG the renderer cannot draw as a browser does, naming the element or attribute, such as `<text>`
 - a root that is not `<svg>`, or a `viewBox` that is not square
-- an `IconPNGs` map that lacks one of 32, 180, 192 and 512, holds another size, or names a file that is not a PNG of its size
+- an `IconPNGs` map that holds a purpose other than `PurposeAny` and `PurposeMaskable`, lacks one of a purpose's sizes (32, 180, 192 and 512 for `PurposeAny`, 192 and 512 for `PurposeMaskable`), holds another size, or names a file that is not a PNG of its size
 
 [Icons](icons.md) lists what the renderer draws.

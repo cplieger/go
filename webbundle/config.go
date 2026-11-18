@@ -36,14 +36,14 @@ var defaultPackages = []string{"@cplieger/*"}
 // each entry's path in the slash form esbuild's metafile names it by.
 type build struct {
 	define     map[string]string
-	manifest   *Manifest
-	iconPNGs   map[int]string
+	icon       *iconArt     // nil is no icon
+	maskable   *iconArt     // nil is no maskable icon
+	manifest   *appManifest // nil writes none
 	src        string
 	out        string
 	apiPrefix  string
 	pagesFile  string
 	corpusFile string
-	icon       string
 	shells     []string
 	entries    []Entry
 	rules      []closureRules // each entry's Forbid and Allow, by index
@@ -85,9 +85,6 @@ func newBuild(c *Config) (*build, error) {
 		pagesFile:  cmpOr(c.PagesFile, defaultPagesFile),
 		corpusFile: cmpOr(c.PageCorpusFile, defaultCorpusFile),
 		define:     maps.Clone(c.Define),
-		icon:       c.Icon,
-		iconPNGs:   maps.Clone(c.IconPNGs),
-		manifest:   c.Manifest,
 	}
 	for _, check := range []func() error{
 		func() error { return b.checkEntries(c.Entries) },
@@ -95,7 +92,7 @@ func newBuild(c *Config) (*build, error) {
 		func() error { return b.checkShells(c.Pages) },
 		b.checkFiles,
 		b.checkClosureItems,
-		b.checkIcon,
+		func() error { return b.checkIcons(c) },
 	} {
 		if err := check(); err != nil {
 			return nil, err

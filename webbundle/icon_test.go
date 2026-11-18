@@ -2,6 +2,7 @@ package webbundle_test
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -9,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -94,9 +96,8 @@ func attr(tag, name string) string {
 func TestIconWritesHashedFilesAndLinks(t *testing.T) {
 	t.Parallel()
 	icon := seedIcon(t, "subflux.svg")
-	c := newFixture(t, files{"icon.svg": icon})
-	c.Icon = "icon.svg"
-	c.Manifest = &webbundle.Manifest{Name: "Fixture App", ShortName: "Fixture", ThemeColor: "#112233", BackgroundColor: "#f7f5f4"}
+	c := newFixture(t, files{"icon.svg": icon, "manifest.json": `{"name": "Fixture App"}`})
+	c.Icon, c.Manifest = "icon.svg", "manifest.json"
 	mustBuild(t, c)
 	b := readBundle(t, c.Out)
 
@@ -112,33 +113,16 @@ func TestIconWritesHashedFilesAndLinks(t *testing.T) {
 	if len(manifests) != 1 {
 		t.Fatalf("listed manifests %q, want one", manifests)
 	}
-
-	var m struct {
-		Name            string `json:"name"`
-		ShortName       string `json:"short_name"`
-		ThemeColor      string `json:"theme_color"`
-		BackgroundColor string `json:"background_color"`
-		StartURL        string `json:"start_url"`
-		Display         string `json:"display"`
-		Icons           []struct {
-			Src, Sizes, Type string
-		} `json:"icons"`
+	got := decodeJSON(t, readFile(t, c.Out, manifests[0]))
+	want := map[string]any{
+		"name": "Fixture App",
+		"icons": []any{
+			map[string]any{"src": "/" + pngs[192], "sizes": "192x192", "type": "image/png"},
+			map[string]any{"src": "/" + pngs[512], "sizes": "512x512", "type": "image/png"},
+		},
 	}
-	dec := json.NewDecoder(bytes.NewReader(readFile(t, c.Out, manifests[0])))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&m); err != nil {
-		t.Fatalf("decode %s: %v", manifests[0], err)
-	}
-	if m.Name != "Fixture App" || m.ShortName != "Fixture" || m.ThemeColor != "#112233" || m.BackgroundColor != "#f7f5f4" ||
-		m.StartURL != "/" || m.Display != "standalone" {
-		t.Errorf("manifest fields %+v", m)
-	}
-	var icons []string
-	for _, i := range m.Icons {
-		icons = append(icons, i.Src+" "+i.Sizes+" "+i.Type)
-	}
-	if want := []string{"/" + pngs[192] + " 192x192 image/png", "/" + pngs[512] + " 512x512 image/png"}; !slices.Equal(icons, want) {
-		t.Errorf("manifest icons %q, want %q", icons, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("manifest %v, want %v", got, want)
 	}
 
 	shell := string(readFile(t, c.Out, "index.html"))
@@ -313,112 +297,215 @@ func TestIconStrokeWidthInitialValue(t *testing.T) {
 	}
 }
 
-func TestManifestWithoutShortName(t *testing.T) {
-	t.Parallel()
-	c := newFixture(t, files{"icon.svg": seedIcon(t, "subflux.svg")})
-	c.Icon = "icon.svg"
-	c.Manifest = &webbundle.Manifest{Name: "Fixture App", ThemeColor: "#112233", BackgroundColor: "#f7f5f4"}
-	mustBuild(t, c)
-	b := readBundle(t, c.Out)
-	manifests := listed(b, regexp.MustCompile(`^assets/[^/]+\.webmanifest$`))
-	if len(manifests) != 1 {
-		t.Fatalf("listed manifests %q, want one", manifests)
+// committedPNGs adds a solid PNG to tree for each key, drawn at the size
+// the key maps to, and returns IconPNGs naming them.
+func committedPNGs(t testing.TB, tree files, sizes map[webbundle.IconPNG]int) map[webbundle.IconPNG]string {
+	t.Helper()
+	names := map[webbundle.IconPNG]string{}
+	for k, drawn := range sizes {
+		names[k] = "icons/" + cmp.Or(string(k.Purpose), "any") + "-" + strconv.Itoa(k.Size) + ".png"
+		tree[names[k]] = solidPNG(t, drawn)
 	}
-	var m map[string]any
-	if err := json.Unmarshal(readFile(t, c.Out, manifests[0]), &m); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := m["short_name"]; ok {
-		t.Errorf("the manifest holds short_name %v with no ShortName set", m["short_name"])
-	}
+	return names
 }
+
+var (
+	anyPNGs      = map[webbundle.IconPNG]int{{Size: 32}: 32, {Size: 180}: 180, {Size: 192}: 192, {Size: 512}: 512}
+	maskablePNGs = map[webbundle.IconPNG]int{{Purpose: webbundle.PurposeMaskable, Size: 192}: 192, {Purpose: webbundle.PurposeMaskable, Size: 512}: 512}
+)
 
 func TestIconPNGs(t *testing.T) {
 	t.Parallel()
-	committed := func(t testing.TB, sizes map[int]int) (files, map[int]string) {
-		t.Helper()
-		tree, names := files{"icon.svg": textIcon}, map[int]string{}
-		for size, drawn := range sizes {
-			names[size] = "icons/icon-" + strconv.Itoa(size) + ".png"
-			tree[names[size]] = solidPNG(t, drawn)
-		}
-		return tree, names
+	with := func(base map[webbundle.IconPNG]int, edit func(map[webbundle.IconPNG]int)) map[webbundle.IconPNG]int {
+		m := maps.Clone(base)
+		edit(m)
+		return m
 	}
 	t.Run("CopiedNotRendered", func(t *testing.T) {
 		t.Parallel()
-		tree, names := committed(t, map[int]int{32: 32, 180: 180, 192: 192, 512: 512})
+		tree := files{"icon.svg": textIcon}
+		names := committedPNGs(t, tree, anyPNGs)
 		c := newFixture(t, tree)
 		c.Icon, c.IconPNGs = "icon.svg", names
 		mustBuild(t, c)
 		pngs := pngsBySize(t, c.Out, readBundle(t, c.Out))
-		for _, size := range iconSizes {
-			if got := readFile(t, c.Out, pngs[size]); string(got) != tree[names[size]] {
-				t.Errorf("the %d px PNG %q does not hold %s's bytes", size, pngs[size], names[size])
+		for k, name := range names {
+			if got := readFile(t, c.Out, pngs[k.Size]); string(got) != tree[name] {
+				t.Errorf("the %d px PNG %q does not hold %s's bytes", k.Size, pngs[k.Size], name)
 			}
-			if want := hashedName(path.Base(names[size])); !want.MatchString(pngs[size]) {
-				t.Errorf("the %d px PNG is at %q, want %s", size, pngs[size], want)
+			if want := hashedName(path.Base(name)); !want.MatchString(pngs[k.Size]) {
+				t.Errorf("the %d px PNG is at %q, want %s", k.Size, pngs[k.Size], want)
 			}
 		}
 	})
-	t.Run("WrongSize", func(t *testing.T) {
+	t.Run("MaskableCopiedNotRendered", func(t *testing.T) {
 		t.Parallel()
-		tree, names := committed(t, map[int]int{32: 16, 180: 180, 192: 192, 512: 512})
+		tree := files{"maskable.svg": textIcon, "manifest.json": `{"name": "Fixture App"}`, "icon.svg": seedIcon(t, "subflux.svg")}
+		names := committedPNGs(t, tree, maskablePNGs)
 		c := newFixture(t, tree)
-		c.Icon, c.IconPNGs = "icon.svg", names
-		buildRefused(t, c, "icons/icon-32.png", "32")
+		c.Icon, c.MaskableIcon, c.Manifest, c.IconPNGs = "icon.svg", "maskable.svg", "manifest.json", names
+		mustBuild(t, c)
+		masks := manifestIconsOf(t, c.Out, "maskable")
+		for _, size := range []int{192, 512} {
+			name := names[webbundle.IconPNG{Purpose: webbundle.PurposeMaskable, Size: size}]
+			got, ok := masks[size]
+			if !ok {
+				t.Errorf("the manifest lists no %d px maskable icon", size)
+				continue
+			}
+			if string(readFile(t, c.Out, got)) != tree[name] {
+				t.Errorf("the %d px maskable icon %q does not hold %s's bytes", size, got, name)
+			}
+		}
 	})
-	t.Run("SizeMissing", func(t *testing.T) {
-		t.Parallel()
-		tree, names := committed(t, map[int]int{32: 32, 192: 192, 512: 512})
-		c := newFixture(t, tree)
-		c.Icon, c.IconPNGs = "icon.svg", names
-		buildRefused(t, c, "180")
-	})
-	t.Run("ExtraSize", func(t *testing.T) {
-		t.Parallel()
-		tree, names := committed(t, map[int]int{32: 32, 64: 64, 180: 180, 192: 192, 512: 512})
-		c := newFixture(t, tree)
-		c.Icon, c.IconPNGs = "icon.svg", names
-		buildRefused(t, c, "64")
-	})
+	refusals := []struct {
+		sizes map[webbundle.IconPNG]int
+		edit  func(c *webbundle.Config)
+		name  string
+		want  []string
+	}{
+		{name: "WrongSize", sizes: with(anyPNGs, func(m map[webbundle.IconPNG]int) { m[webbundle.IconPNG{Size: 32}] = 16 }), want: []string{"icons/any-32.png", "32"}},
+		{name: "SizeMissing", sizes: with(anyPNGs, func(m map[webbundle.IconPNG]int) { delete(m, webbundle.IconPNG{Size: 180}) }), want: []string{"180"}},
+		{name: "ExtraSize", sizes: with(anyPNGs, func(m map[webbundle.IconPNG]int) { m[webbundle.IconPNG{Size: 64}] = 64 }), want: []string{"64"}},
+		{name: "WithoutIcon", sizes: anyPNGs, edit: func(c *webbundle.Config) { c.Icon = "" }, want: []string{"Icon"}},
+		{name: "MaskableWithoutMaskableIcon", sizes: maskablePNGs, edit: func(c *webbundle.Config) { c.MaskableIcon = "" }, want: []string{"MaskableIcon"}},
+		{name: "MaskableTabSize", sizes: with(maskablePNGs, func(m map[webbundle.IconPNG]int) {
+			m[webbundle.IconPNG{Purpose: webbundle.PurposeMaskable, Size: 32}] = 32
+		}), want: []string{"32", "maskable"}},
+		{name: "MaskableSizeMissing", sizes: with(maskablePNGs, func(m map[webbundle.IconPNG]int) {
+			delete(m, webbundle.IconPNG{Purpose: webbundle.PurposeMaskable, Size: 512})
+		}), want: []string{"512", "maskable"}},
+		{name: "MaskableWrongSize", sizes: with(maskablePNGs, func(m map[webbundle.IconPNG]int) {
+			m[webbundle.IconPNG{Purpose: webbundle.PurposeMaskable, Size: 192}] = 180
+		}), want: []string{"icons/maskable-192.png", "192"}},
+		{name: "UnknownPurpose", sizes: map[webbundle.IconPNG]int{{Purpose: "any", Size: 192}: 192}, want: []string{`"any"`}},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tree := files{"icon.svg": seedIcon(t, "subflux.svg"), "maskable.svg": seedIcon(t, "seadex-scout.svg"), "manifest.json": `{"name": "Fixture App"}`}
+			names := committedPNGs(t, tree, tc.sizes)
+			c := newFixture(t, tree)
+			c.Icon, c.MaskableIcon, c.Manifest, c.IconPNGs = "icon.svg", "maskable.svg", "manifest.json", names
+			if tc.edit != nil {
+				tc.edit(&c)
+			}
+			buildRefused(t, c, tc.want...)
+		})
+	}
 	t.Run("NotPNG", func(t *testing.T) {
 		t.Parallel()
-		tree, names := committed(t, map[int]int{32: 32, 180: 180, 192: 192, 512: 512})
-		tree[names[180]] = "not a png"
+		tree := files{"icon.svg": textIcon}
+		names := committedPNGs(t, tree, anyPNGs)
+		tree[names[webbundle.IconPNG{Size: 180}]] = "not a png"
 		c := newFixture(t, tree)
 		c.Icon, c.IconPNGs = "icon.svg", names
-		buildRefused(t, c, names[180])
-	})
-	t.Run("WithoutIcon", func(t *testing.T) {
-		t.Parallel()
-		tree, names := committed(t, map[int]int{32: 32, 180: 180, 192: 192, 512: 512})
-		c := newFixture(t, tree)
-		c.IconPNGs = names
-		buildRefused(t, c, "Icon")
+		buildRefused(t, c, names[webbundle.IconPNG{Size: 180}])
 	})
 }
 
-func TestManifestRefuses(t *testing.T) {
-	t.Parallel()
-	good := webbundle.Manifest{Name: "Fixture App", ShortName: "Fixture", ThemeColor: "#112233", BackgroundColor: "#f7f5f4"}
-	cases := []struct {
-		edit func(m *webbundle.Manifest, c *webbundle.Config)
-		name string
-		want string
-	}{
-		{name: "ThemeColorNotHex", edit: func(m *webbundle.Manifest, _ *webbundle.Config) { m.ThemeColor = "red" }, want: "red"},
-		{name: "BackgroundShortHex", edit: func(m *webbundle.Manifest, _ *webbundle.Config) { m.BackgroundColor = "#fff" }, want: "#fff"},
-		{name: "NoName", edit: func(m *webbundle.Manifest, _ *webbundle.Config) { m.Name = "" }, want: "Name"},
-		{name: "NoIcon", edit: func(_ *webbundle.Manifest, c *webbundle.Config) { c.Icon = "" }, want: "Icon"},
+// manifestIconsOf reads the built manifest's icons of one purpose ("" for
+// those listed with none) by size, failing on a purpose other than
+// "maskable", a size listed twice, or an icon not listed in bundle.json.
+func manifestIconsOf(t testing.TB, out, purpose string) map[int]string {
+	t.Helper()
+	b := readBundle(t, out)
+	manifests := listed(b, regexp.MustCompile(`^assets/[^/]+\.webmanifest$`))
+	if len(manifests) != 1 {
+		t.Fatalf("listed manifests %q, want one", manifests)
 	}
-	for _, tc := range cases {
+	var m struct {
+		Icons []struct{ Src, Sizes, Type, Purpose string } `json:"icons"`
+	}
+	if err := json.Unmarshal(readFile(t, out, manifests[0]), &m); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]string{}
+	for _, i := range m.Icons {
+		if i.Purpose != "" && i.Purpose != "maskable" {
+			t.Errorf("icon %s has purpose %q; want none or \"maskable\"", i.Src, i.Purpose)
+		}
+		if i.Purpose != purpose {
+			continue
+		}
+		w, h, _ := strings.Cut(i.Sizes, "x")
+		size, err := strconv.Atoi(w)
+		if err != nil || w != h || i.Type != "image/png" {
+			t.Fatalf("icon %+v: want a square image/png", i)
+		}
+		file := strings.TrimPrefix(i.Src, "/")
+		if _, ok := b.Files[file]; !ok || !strings.HasPrefix(i.Src, "/assets/") {
+			t.Errorf("icon src %q is not a listed file under /assets/", i.Src)
+		}
+		if _, dup := got[size]; dup {
+			t.Errorf("two %q icons of %d px", purpose, size)
+		}
+		got[size] = file
+	}
+	return got
+}
+
+func TestMaskableIcon(t *testing.T) {
+	t.Parallel()
+	t.Run("RenderedAt192And512", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"icon.svg": seedIcon(t, "subflux.svg"), "brand/mask.svg": seedIcon(t, "seadex-scout.svg"), "manifest.json": `{"name": "Fixture App"}`})
+		c.Icon, c.MaskableIcon, c.Manifest = "icon.svg", "brand/mask.svg", "manifest.json"
+		mustBuild(t, c)
+		plain, masks := manifestIconsOf(t, c.Out, ""), manifestIconsOf(t, c.Out, "maskable")
+		for _, size := range []int{192, 512} {
+			if plain[size] == "" || masks[size] == "" {
+				t.Fatalf("the manifest lists %v with no purpose and %v as maskable; want 192 and 512 px of each", plain, masks)
+			}
+			if b := decodePNG(t, readFile(t, c.Out, masks[size])).Bounds(); b.Dx() != size || b.Dy() != size {
+				t.Errorf("the %d px maskable icon is %v", size, b)
+			}
+			if bytes.Equal(readFile(t, c.Out, masks[size]), readFile(t, c.Out, plain[size])) {
+				t.Errorf("the %d px maskable icon holds Icon's render, not MaskableIcon's", size)
+			}
+			if !hashedName("mask-" + strconv.Itoa(size) + ".png").MatchString(masks[size]) {
+				t.Errorf("the %d px maskable icon is at %q", size, masks[size])
+			}
+		}
+		if len(plain) != 2 || len(masks) != 2 {
+			t.Errorf("the manifest lists %v and %v; want two of each", plain, masks)
+		}
+		shell := string(readFile(t, c.Out, "index.html"))
+		for _, p := range masks {
+			if strings.Contains(shell, p) {
+				t.Errorf("index.html links the maskable icon %s; only the manifest lists it", p)
+			}
+		}
+	})
+	t.Run("NoneWithoutMaskableIcon", func(t *testing.T) {
+		t.Parallel()
+		c := newFixture(t, files{"icon.svg": seedIcon(t, "subflux.svg"), "manifest.json": `{"name": "Fixture App"}`})
+		c.Icon, c.Manifest = "icon.svg", "manifest.json"
+		mustBuild(t, c)
+		if masks := manifestIconsOf(t, c.Out, "maskable"); len(masks) != 0 {
+			t.Errorf("the manifest lists maskable icons %v with no MaskableIcon", masks)
+		}
+	})
+	refusals := []struct {
+		edit func(c *webbundle.Config)
+		name string
+		want []string
+	}{
+		{name: "WithoutManifest", edit: func(c *webbundle.Config) { c.Manifest = "" }, want: []string{"MaskableIcon", "Manifest"}},
+		{name: "NotSVGFile", edit: func(c *webbundle.Config) { c.MaskableIcon = "mask.png" }, want: []string{"mask.png", ".svg"}},
+		{name: "WithText", edit: func(c *webbundle.Config) { c.MaskableIcon = "text.svg" }, want: []string{"text.svg", "text"}},
+		{name: "Missing", edit: func(c *webbundle.Config) { c.MaskableIcon = "none.svg" }, want: []string{"none.svg"}},
+	}
+	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := newFixture(t, files{"icon.svg": seedIcon(t, "subflux.svg")})
-			m := good
-			c.Icon, c.Manifest = "icon.svg", &m
-			tc.edit(&m, &c)
-			buildRefused(t, c, tc.want)
+			c := newFixture(t, files{
+				"icon.svg": seedIcon(t, "subflux.svg"), "mask.svg": seedIcon(t, "seadex-scout.svg"),
+				"mask.png": solidPNG(t, 192), "text.svg": textIcon, "manifest.json": `{"name": "Fixture App"}`,
+			})
+			c.Icon, c.MaskableIcon, c.Manifest = "icon.svg", "mask.svg", "manifest.json"
+			tc.edit(&c)
+			buildRefused(t, c, tc.want...)
 		})
 	}
 }
