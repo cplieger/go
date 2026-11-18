@@ -80,7 +80,7 @@ A constructor returns a `*RefusalError` for a frame it refuses, and never a part
 | `empty` | an empty name, node or required list, such as a tree group with no parts, or a nil `Grid` |
 | `shape` | parts that do not fit together, such as a box with some of its five numbers, a grid axis with both names and edges, a flow link naming a node `nodes` does not list, a flow loop, a state its state set does not declare, a meter value outside its range, or a calendar start that is not the first instant of a day or not in an IANA zone |
 | `limit` | a frame past one of the limits below |
-| `read` | a read state a frame or a `Count` cannot carry: a state outside the six, a complete read with a reason, a reason that is no code or past 64 bytes, an `as_of` RFC 3339 cannot write, on a `Count` a value and an `as_of` not set together, and on a `Count` or a read alone a complete one with no `as_of` ([Read state](read-state.md#what-rule-read-refuses)) |
+| `read` | a read state a frame, a `Count` or a `Read` cannot carry: a state outside the six, a complete read with a reason, a reason that is no code or past 64 bytes, an `as_of` RFC 3339 cannot write, on a `Count` a value and an `as_of` not set together, and on a `Count` or a read alone a complete one with no `as_of` ([Read state](read-state.md#what-rule-read-refuses)) |
 
 The rules are stable. The refusal fixtures carry them, so the chart elements refuse the same frames by the same rule. `declaration` and `option` have no fixture, since no frame on the wire can break them.
 

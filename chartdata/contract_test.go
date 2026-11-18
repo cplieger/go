@@ -177,7 +177,7 @@ func refusalFixtures(t *testing.T) []fixture {
 		raw   string
 		// rule is the rule a fixture named for a case of it breaks.
 		rule chartdata.Rule
-		// field is set on a frame no constructor writes, whose fixture
+		// field is set on a body no constructor writes, whose fixture
 		// names the field a reader refuses.
 		field string
 	}

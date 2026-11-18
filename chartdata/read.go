@@ -83,9 +83,9 @@ func ReadOf(r measure.Read) (Read, error) {
 // WithRead marks the frame as built from r. It is refused by [RuleRead] for
 // a state outside the six, a complete read with a reason, a reason past
 // [MaxReasonBytes] or outside [a-z0-9_], and an AsOf time.Time's JSON cannot
-// write. Any complete r adds nothing, one with no AsOf included, so a frame
-// built from a whole read encodes as one built with no option. Every frame
-// takes it.
+// write. A complete r those lines do not refuse adds nothing, one with no
+// AsOf included, so a frame built from a whole read encodes as one built
+// with no option. Every frame takes it.
 func WithRead(r measure.Read) Option {
 	return func(o *options) { o.read, o.used = &r, o.used|optRead }
 }

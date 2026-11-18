@@ -36,7 +36,7 @@ const (
 	RuleShape Rule = "shape"
 	// RuleLimit is a frame past one of the limits in [MaxValues] and beside it.
 	RuleLimit Rule = "limit"
-	// RuleRead is a read state a frame or a [Count] cannot carry.
+	// RuleRead is a read state a frame, a [Count] or a [Read] cannot carry.
 	RuleRead Rule = "read"
 )
 
