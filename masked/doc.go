@@ -7,6 +7,8 @@
 // decoded string with [NewSecret] where the secret enters and calls Reveal
 // where it is sent (a header, a seal, a hash).
 //
-// Package maskedtest checks, in a caller's tests, that no field of its
-// types holds a secret in clear and that no printer output contains one.
+// Package maskedtest checks, in a caller's tests, that no field of the types
+// that hold its secrets carries one in clear, that no wire field named like
+// a credential carries text unreviewed, and that no printer output contains
+// a secret.
 package masked

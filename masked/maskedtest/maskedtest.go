@@ -1,8 +1,11 @@
-// Package maskedtest finds a secret a printer could show. [Unmasked] checks
-// types: it reports every field of a type graph that can carry text and is
-// neither a masked type nor a reviewed non-secret field. [Leak] checks a
-// printer's output for a secret's text, its HMAC pad forms, and their hex
-// or base64. Import it only from _test.go files.
+// Package maskedtest finds a secret a printer or an answer could show.
+// [Unmasked] checks the types that hold secrets (configuration, client,
+// connection): it reports every field that can carry text and is neither a
+// masked type nor a reviewed non-secret field. [SecretNamed] checks wire
+// types by name, where every title and path is text: it reports a text field
+// named like a credential. [Leak] checks a printer's output for a secret's
+// text, its HMAC pad forms, and their hex or base64. Import it only from
+// _test.go files.
 package maskedtest
 
 import (
