@@ -37,10 +37,11 @@ func TestInlineScriptHashes(t *testing.T) {
 		{"scriptfoo is not a script tag", `<scriptfoo>nope</scriptfoo>`, nil},
 		{"gt inside quoted attribute does not end the tag", `<script data-x="a>b">q=6</script>`, []string{hashToken("q=6")}},
 		{"srcset is not src", `<script srcset="x">r=7</script>`, []string{hashToken("r=7")}},
-		// A bare "src" is not the external form the skip rule names ("src="), and
-		// the scanner must not read past the attribute bytes looking for the '='
-		// that is not there.
-		{"src with no value is not the external form", `<script src>x=8</script>`, []string{hashToken("x=8")}},
+		// HTML "prepare the script element": a script with a src attribute, even
+		// an empty one, never runs its inline text.
+		{"src with no value is external", `<script src>x=8</script>`, nil},
+		{"src right after a quoted value is external", `<script title="x"src=/x.js></script>`, nil},
+		{"a quote in an unquoted value opens no quoted value", `<script data=a"b>alert(1)</script>"`, []string{hashToken("alert(1)")}},
 		{"src with spaces around its = is still external", `<script src = "/x.js"></script>`, nil},
 		{"unclosed script yields nothing", `<script>never closed`, nil},
 		{"open tag never terminated yields nothing", `<script type=module`, nil},
@@ -84,6 +85,7 @@ func TestInlineStyleHashes(t *testing.T) {
 		{"case-insensitive tag", `<STYLE>c{top:0}</STYLE>`, []string{hashToken("c{top:0}")}},
 		{"newlines hashed verbatim", "<style>\n  d{left:0}\n</style>", []string{hashToken("\n  d{left:0}\n")}},
 		{"styles is not a style tag", `<styles>nope</styles>`, nil},
+		{"a quote in an unquoted value opens no quoted value", `<style data=a'b>k{z:0}</style>'`, []string{hashToken("k{z:0}")}},
 		{"unclosed style yields nothing", `<style>never closed`, nil},
 		// A quote that never closes swallows the rest of the input into the
 		// opening tag, so the later "</style>" is attribute bytes, not an end tag.

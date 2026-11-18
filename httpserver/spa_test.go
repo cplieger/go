@@ -778,6 +778,7 @@ func TestCheckShell(t *testing.T) {
 		"upper case STYLE":  `<P STYLE='x'>x</P>`,
 		"unquoted style":    `<p class=a style=color:red>x</p>`,
 		"style after quote": `<p title="a>b" style=x>y</p>`,
+		"script after a quote in an unquoted value": `<script data=a"b>alert(1)</script>"`,
 	}
 	for name, html := range refused {
 		t.Run(name, func(t *testing.T) {
