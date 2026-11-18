@@ -38,7 +38,8 @@ type Records interface {
 	// ("" on the last).
 	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
 	// LastEnds answers each scheduled scope's last moving end: the end of a
-	// job that started and did not end cancelled or interrupted.
+	// job that started and did not end cancelled or interrupted, the one
+	// written last among ends at one instant.
 	LastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error)
 }
 

@@ -49,6 +49,7 @@ type Store struct {
 	fail     map[Op]error
 	calls    map[Op]int
 	order    []scheduler.ID
+	ended    []scheduler.ID // in the order their ends were written
 	capacity int
 	mu       sync.Mutex
 }
@@ -123,6 +124,7 @@ func (s *Store) Crash() *Store {
 	defer s.mu.Unlock()
 	c := New()
 	c.order = slices.Clone(s.order)
+	c.ended = slices.Clone(s.ended)
 	for id := range s.recs {
 		r := s.recs[id]
 		c.recs[id] = clone(&r)
@@ -349,8 +351,9 @@ func (s *Store) History(_ context.Context, kind scheduler.Kind, after string, n 
 }
 
 // LastEnds answers each kind and scope's last moving end: the latest end of
-// a record that started and did not end cancelled or interrupted. It answers
-// every scope, scheduled or not, so the executor can apply covering.
+// a record that started and did not end cancelled or interrupted, the one
+// written last among ends at one instant. It answers every scope, scheduled
+// or not, so the executor can apply covering.
 func (s *Store) LastEnds(_ context.Context) (map[scheduler.ScheduledScope]scheduler.LastEnd, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -358,14 +361,14 @@ func (s *Store) LastEnds(_ context.Context) (map[scheduler.ScheduledScope]schedu
 		return nil, err
 	}
 	out := map[scheduler.ScheduledScope]scheduler.LastEnd{}
-	for id := range s.recs {
+	for _, id := range s.ended {
 		r := s.recs[id]
-		if r.End == nil || r.StartedAt.IsZero() ||
+		if r.StartedAt.IsZero() ||
 			r.End.Result == scheduler.ResultCancelled || r.End.Result == scheduler.ResultInterrupted {
 			continue
 		}
 		k := scheduler.ScheduledScope{Kind: r.Kind, Scope: r.Scope}
-		if old, ok := out[k]; !ok || r.EndedAt.After(old.At) {
+		if old, ok := out[k]; !ok || !r.EndedAt.Before(old.At) {
 			out[k] = scheduler.LastEnd{At: r.EndedAt, Result: r.End.Result}
 		}
 	}
@@ -387,6 +390,7 @@ func (s *Store) end(r *scheduler.Record, e scheduler.End) {
 	r.EndedAt = time.Now()
 	r.Rev++
 	s.recs[r.ID] = *r
+	s.ended = append(s.ended, r.ID)
 }
 
 func (s *Store) byKey(credential, row, key string) (scheduler.Record, bool) {

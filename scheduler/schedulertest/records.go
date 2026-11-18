@@ -34,6 +34,9 @@ func Records(t *testing.T, open func() scheduler.Records) {
 		synctest.Test(t, func(t *testing.T) { history(t, open()) })
 	})
 	t.Run("last ends", func(t *testing.T) { synctest.Test(t, func(t *testing.T) { lastEnds(t, open()) }) })
+	t.Run("of ends at one instant the later written is last", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) { lastEndsTie(t, open()) })
+	})
 }
 
 // The values the cases share.
@@ -482,6 +485,30 @@ func lastEnds(t *testing.T, r scheduler.Records) {
 	}
 	if le, ok := got[scheduler.ScheduledScope{Kind: "check", Scope: "b"}]; ok {
 		t.Errorf("LastEnds[check b] = %+v; want none, its only end was cancelled", le)
+	}
+}
+
+// lastEndsTie ends several jobs of each scope at one instant, the failed one
+// written last, so a store resolving the tie in any other order is caught.
+func lastEndsTie(t *testing.T, r scheduler.Records) {
+	f := &fixture{t: t, r: r}
+	scopes := []string{"a", "b", "c", "d"}
+	want := map[string]*scheduler.Record{}
+	for _, scope := range scopes {
+		for range 7 {
+			f.ran("scan", scope, scheduler.ResultOK)
+		}
+		want[scope] = f.ran("scan", scope, scheduler.ResultFailed)
+	}
+	got, err := r.LastEnds(t.Context())
+	if err != nil {
+		t.Fatalf("LastEnds = %v", err)
+	}
+	for _, scope := range scopes {
+		le, ok := got[scheduler.ScheduledScope{Kind: "scan", Scope: scope}]
+		if !ok || le.Result != scheduler.ResultFailed || !le.At.Equal(want[scope].EndedAt) {
+			t.Errorf("LastEnds[scan %s] = %+v found %v; want the failed end written last at %v", scope, le, ok, want[scope].EndedAt)
+		}
 	}
 }
 
