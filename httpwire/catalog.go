@@ -24,6 +24,7 @@ const (
 	codeInternal    = "internal_error"
 	codeNotFound    = "not_found"
 	codeBadBody     = "bad_body"
+	codeMediaType   = "unsupported_media_type"
 	codeWire        = "wire_mismatch"
 	codeAccounts    = "accounts_unavailable"
 	codeMaintenance = "maintenance"
@@ -46,6 +47,7 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	codeBadBody:                   {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
 	"bad_query":                   {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
 	"body_too_large":              {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
+	codeMediaType:                 {Status: http.StatusUnsupportedMediaType, Remediation: "Send the body as JSON, with Content-Type: application/json.", NoEffect: true},
 	codeCursor:                    {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},
 	codeIfMatchReq:                {Status: http.StatusPreconditionRequired, Remediation: "Read the row, then resend with If-Match set to the tag the read returned."},
 	codeIfMatchBad:                {Status: http.StatusBadRequest, Remediation: "Send If-Match as the quoted tag a read of the row returned."},

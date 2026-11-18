@@ -252,10 +252,10 @@ func TestUnionOfEachRow(t *testing.T) {
 	want := map[string][]string{
 		"jobs.list": join([]string{"bad_query", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
 		"jobs.get":  join([]string{"job_missing", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
-		"jobs.start": join([]string{"job_busy", "bad_body", "body_too_large"}, keyedCodes,
+		"jobs.start": join([]string{"job_busy", "unsupported_media_type", "bad_body", "body_too_large"}, keyedCodes,
 			[]string{"wire_mismatch", "cross_origin_refused", "rate_limited", "upgrade_required", "store_unavailable", "auth_required", "auth_forbidden"}, everyRow),
 		"settings.save": join([]string{
-			"bad_body", "body_too_large", "if_match_required", "if_match_invalid", "stale_version", "idempotency_key_unsupported",
+			"unsupported_media_type", "bad_body", "body_too_large", "if_match_required", "if_match_invalid", "stale_version", "idempotency_key_unsupported",
 			"wire_mismatch", "cross_origin_refused", "person_required", "upgrade_required", "store_unavailable", "auth_required", "auth_recent_auth_required",
 		}, everyRow),
 		"archive.export": join([]string{

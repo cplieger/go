@@ -114,6 +114,7 @@ func newNoteStore(t *testing.T, doc []byte) *noteStore {
 // line.
 func serveIfMatch(api http.Handler, method, target, body string, ifMatch ...string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	for _, v := range ifMatch {
 		r.Header.Add("If-Match", v)
 	}

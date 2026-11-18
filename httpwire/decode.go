@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"mime"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -180,6 +181,19 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 		return e.Code, e.Message
 	}
 	return "", ""
+}
+
+// jsonMediaType refuses a body r does not send as application/json in
+// UTF-8, the one encoding RFC 8259 section 8.1 allows between systems.
+func jsonMediaType(r *http.Request) *Error {
+	media, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != "application/json" {
+		return &Error{Code: codeMediaType, Message: "the body is not sent as application/json"}
+	}
+	if cs, ok := params["charset"]; ok && !strings.EqualFold(cs, "utf-8") {
+		return &Error{Code: codeMediaType, Message: "the body's charset is not utf-8"}
+	}
+	return nil
 }
 
 // readBody reads r's body up to limit bytes.

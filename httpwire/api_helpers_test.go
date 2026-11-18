@@ -163,8 +163,12 @@ func serve(api http.Handler, method, target, body string) *httptest.ResponseReco
 	if body != "" {
 		rd = strings.NewReader(body)
 	}
+	r := httptest.NewRequest(method, target, rd)
+	if method != http.MethodGet && method != http.MethodHead {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	rec := httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest(method, target, rd))
+	api.ServeHTTP(rec, r)
 	return rec
 }
 

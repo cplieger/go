@@ -399,6 +399,7 @@ func driveRowFeatures(d *drove) {
 	d.send("jobs.get", "job_missing", header(hHandler, "ErrRunMissing"))
 	d.send("jobs.get", "internal_error", header(hHandler, "stray"))
 
+	d.send("settings.save", "unsupported_media_type", func(tg *rowTarget) { tg.header = append(tg.header, "Content-Type", "text/plain") })
 	d.send("settings.save", "bad_body", func(tg *rowTarget) { tg.body = `{"name":1}` })
 	d.send("settings.save", "body_too_large", func(tg *rowTarget) { tg.body = `{"name":"` + strings.Repeat("n", 64<<10) + `"}` })
 	d.send("settings.save", "if_match_required", func(tg *rowTarget) { tg.header = nil })
@@ -420,6 +421,9 @@ func driveRowFeatures(d *drove) {
 // credential and at most 1 KiB of it.
 func driveKeyed(d *drove) {
 	const row = "jobs.start"
+	d.send(row, "unsupported_media_type", func(tg *rowTarget) {
+		tg.header = append(tg.header, "Content-Type", "application/x-www-form-urlencoded")
+	})
 	d.send(row, "bad_body", func(tg *rowTarget) { tg.body = `{"kind":1}` })
 	d.send(row, "body_too_large", func(tg *rowTarget) { tg.body = `{"kind":"` + strings.Repeat("k", 64<<10) + `"}` })
 	d.send(row, "job_busy", header(hHandler, "job_busy", hCred, "s:busy"))

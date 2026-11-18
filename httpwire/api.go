@@ -339,7 +339,10 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 	}
 	var b []byte
 	if ep.Request != nil {
-		var e *Error
+		e := jsonMediaType(r)
+		if e != nil {
+			return nil, nil, e
+		}
 		if b, e = readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody)); e != nil {
 			return nil, nil, e
 		}

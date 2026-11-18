@@ -74,6 +74,9 @@ func request(method, target, body string, header ...string) *http.Request {
 	for i := 0; i+1 < len(header); i += 2 {
 		r.Header.Add(header[i], header[i+1])
 	}
+	if r.Header.Get("Content-Type") == "" && method != http.MethodGet && method != http.MethodHead {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	return r
 }
 

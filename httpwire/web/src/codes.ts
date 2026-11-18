@@ -30,6 +30,7 @@ export const WIRE_CODES = Object.freeze([
   "timeout",
   "too_many_auth_failures",
   "ui_unbuilt",
+  "unsupported_media_type",
   "upgrade_required",
   "wire_mismatch",
 ] as const);

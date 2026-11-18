@@ -56,6 +56,9 @@ async function call(c: TransportCase, fetchFn: typeof fetch): Promise<Result> {
   if (ep.method !== "GET" && ep.method !== "HEAD") {
     headers["Wire-Version"] = TRANSPORT_FIXTURE.wireVersion;
   }
+  if (c.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
   const path = ep.path.replace(/\{(\w+)\}/g, (_: string, k: string) =>
     encodeURIComponent(c.params[k] ?? ""),
   );
@@ -162,7 +165,7 @@ describe("TRANSPORT_FIXTURE", () => {
     }
     expect(req.method).toBe(c.request.method);
     expect(new URL(req.url).pathname).toBe(c.request.path);
-    for (const name of ["Wire-Version", "If-Match", "Idempotency-Key"]) {
+    for (const name of ["Content-Type", "Wire-Version", "If-Match", "Idempotency-Key"]) {
       expect(req.headers.get(name) ?? undefined, name).toBe(c.request.headers[name]);
     }
     const body = await req.text();

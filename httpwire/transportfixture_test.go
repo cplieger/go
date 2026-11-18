@@ -33,6 +33,7 @@ type transportCase struct {
 	Row     string  `json:"row"`
 	Tag     *string `json:"tag"`
 	Key     *string `json:"key"`
+	Body    any     `json:"body"`
 	Request *struct {
 		Method  string            `json:"method"`
 		Path    string            `json:"path"`
@@ -109,8 +110,11 @@ func TestTransportFixtureHeadersParse(t *testing.T) {
 				t.Errorf("%s: Idempotency-Key %q parses to %q %v, want the key %q", c.Name, h["Idempotency-Key"], key, ok, *c.Key)
 			}
 		}
+		if v, ok := h["Content-Type"]; ok != (c.Body != nil) || (ok && v != "application/json") {
+			t.Errorf("%s: Content-Type %q (sent %v); a body goes as application/json, no body with none", c.Name, v, ok)
+		}
 		for name := range h {
-			if !slices.Contains([]string{"Wire-Version", "If-Match", "Idempotency-Key"}, name) {
+			if !slices.Contains([]string{"Content-Type", "Wire-Version", "If-Match", "Idempotency-Key"}, name) {
 				t.Errorf("%s: header %q is not one the transport writes", c.Name, name)
 			}
 		}

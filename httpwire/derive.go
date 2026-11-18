@@ -134,7 +134,7 @@ func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount boo
 			}
 		}
 	}
-	u.addIf(ep.Request != nil, codeBadBody, "body_too_large")
+	u.addIf(ep.Request != nil, codeMediaType, codeBadBody, "body_too_large")
 	u.addIf(ep.Kind == Raw && write, "body_too_large")
 	u.addIf(ep.Query != nil, "bad_query")
 	u.addIf(ep.IfMatch, ifMatchUnion...)

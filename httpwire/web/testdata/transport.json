@@ -139,6 +139,7 @@
         "method": "PUT",
         "path": "/api/notes/n1",
         "headers": {
+          "Content-Type": "application/json",
           "If-Match": "\"0123456789abcdef.7\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -176,6 +177,7 @@
         "method": "PUT",
         "path": "/api/notes/n1",
         "headers": {
+          "Content-Type": "application/json",
           "If-Match": "\"0123456789abcdef.7\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -235,6 +237,7 @@
         "method": "POST",
         "path": "/api/users",
         "headers": {
+          "Content-Type": "application/json",
           "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -268,6 +271,7 @@
         "method": "POST",
         "path": "/api/users",
         "headers": {
+          "Content-Type": "application/json",
           "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -301,6 +305,7 @@
         "method": "POST",
         "path": "/api/users",
         "headers": {
+          "Content-Type": "application/json",
           "Idempotency-Key": "\"a\\\"b\\\\c\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -334,6 +339,7 @@
         "method": "POST",
         "path": "/api/users",
         "headers": {
+          "Content-Type": "application/json",
           "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -389,6 +395,7 @@
         "method": "POST",
         "path": "/api/users",
         "headers": {
+          "Content-Type": "application/json",
           "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
           "Wire-Version": "0123456789abcdef"
         }
@@ -515,6 +522,7 @@
         "method": "POST",
         "path": "/api/users",
         "headers": {
+          "Content-Type": "application/json",
           "Idempotency-Key": "\"00000000-0000-4000-8000-000000000000\"",
           "Wire-Version": "0123456789abcdef"
         }

@@ -180,7 +180,11 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
       request: {
         method: "PUT",
         path: "/api/notes/n1",
-        headers: { "If-Match": '"0123456789abcdef.7"', "Wire-Version": "0123456789abcdef" },
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": '"0123456789abcdef.7"',
+          "Wire-Version": "0123456789abcdef",
+        },
       },
       answer: {
         kind: "answer",
@@ -202,7 +206,11 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
       request: {
         method: "PUT",
         path: "/api/notes/n1",
-        headers: { "If-Match": '"0123456789abcdef.7"', "Wire-Version": "0123456789abcdef" },
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": '"0123456789abcdef.7"',
+          "Wire-Version": "0123456789abcdef",
+        },
       },
       answer: { kind: "refuse", code: "stale_version" },
       want: { ok: false, failure: "http", status: 412, code: "stale_version" },
@@ -233,6 +241,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
         method: "POST",
         path: "/api/users",
         headers: {
+          "Content-Type": "application/json",
           "Idempotency-Key": '"00000000-0000-4000-8000-000000000000"',
           "Wire-Version": "0123456789abcdef",
         },
@@ -250,6 +259,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
         method: "POST",
         path: "/api/users",
         headers: {
+          "Content-Type": "application/json",
           "Idempotency-Key": '"00000000-0000-4000-8000-000000000000"',
           "Wire-Version": "0123456789abcdef",
         },
@@ -266,7 +276,11 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
       request: {
         method: "POST",
         path: "/api/users",
-        headers: { "Idempotency-Key": '"a\\"b\\\\c"', "Wire-Version": "0123456789abcdef" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": '"a\\"b\\\\c"',
+          "Wire-Version": "0123456789abcdef",
+        },
       },
       answer: { kind: "answer", status: 201, data: { id: "u2", name: "grace" } },
       want: { ok: true, status: 201, data: { id: "u2", name: "grace" } },
@@ -281,6 +295,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
         method: "POST",
         path: "/api/users",
         headers: {
+          "Content-Type": "application/json",
           "Idempotency-Key": '"00000000-0000-4000-8000-000000000000"',
           "Wire-Version": "0123456789abcdef",
         },
@@ -314,6 +329,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
         method: "POST",
         path: "/api/users",
         headers: {
+          "Content-Type": "application/json",
           "Idempotency-Key": '"00000000-0000-4000-8000-000000000000"',
           "Wire-Version": "0123456789abcdef",
         },
@@ -390,6 +406,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
         method: "POST",
         path: "/api/users",
         headers: {
+          "Content-Type": "application/json",
           "Idempotency-Key": '"00000000-0000-4000-8000-000000000000"',
           "Wire-Version": "0123456789abcdef",
         },

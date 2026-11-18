@@ -4,7 +4,10 @@ import type { ErrorCodeSpec, GeneratedEndpoints } from "./fake.js";
 export interface TransportRequest {
   readonly method: string;
   readonly path: string;
-  /** `Wire-Version`, `If-Match` and `Idempotency-Key` as sent; a header not listed is not sent. */
+  /**
+   * `Content-Type` (`application/json` with a body), `Wire-Version`, `If-Match` and
+   * `Idempotency-Key` as sent; a header not listed is not sent.
+   */
   readonly headers: Readonly<Record<string, string>>;
 }
 

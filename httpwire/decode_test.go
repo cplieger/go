@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"slices"
@@ -412,6 +413,77 @@ func TestDecodeHandsARawRowItsCheckedBody(t *testing.T) {
 		rec := serve(d.api, http.MethodPost, "/api/items/import", withItem(t, "kind", `"tape"`))
 		if env := envelopeOf(t, rec); env.Code != "bad_body" || !slices.Equal(fieldCodes(env), []string{"kind=enum"}) || d.ran() {
 			t.Errorf("answer %d %s %v, handler ran %v", rec.Code, env.Code, fieldCodes(env), d.ran())
+		}
+	})
+}
+
+// openItemDoc is the decode document stating none of the types' bounds,
+// A body the binder decodes is JSON (RFC 8259 section 11), so a request
+// naming another media type, or none, answers 415 before the body is read;
+// a Raw row that reads its own body takes whatever type it is sent.
+func TestBodyMediaTypeRefusals(t *testing.T) {
+	post := func(api http.Handler, target, body, ct string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+		if ct != "" {
+			r.Header.Set("Content-Type", ct)
+		}
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, r)
+		return rec
+	}
+	for name, ct := range map[string]string{
+		"text/plain":                   "text/plain",
+		"a form":                       "application/x-www-form-urlencoded",
+		"no Content-Type":              "",
+		"another charset":              "application/json; charset=latin1",
+		"an unparsable type":           "application/json; charset",
+		"a type the JSON one prefixes": "application/jsonl",
+		"a structured suffix":          "application/json-patch+json",
+	} {
+		for _, target := range []string{"/api/items", "/api/items/import"} {
+			t.Run(name+" "+target, func(t *testing.T) {
+				d := newDecodeAPI(t, decodeDoc(t))
+				rec := post(d.api, target, validItem, ct)
+				if env := envelopeOf(t, rec); rec.Code != http.StatusUnsupportedMediaType || env.Code != "unsupported_media_type" || d.ran() {
+					t.Errorf("answer %d %s, handler ran %v; want 415 unsupported_media_type and no run", rec.Code, env.Code, d.ran())
+				}
+			})
+		}
+	}
+	for name, ct := range map[string]string{
+		"application/json":  "application/json",
+		"another case":      "Application/JSON",
+		"utf-8":             "application/json; charset=utf-8",
+		"UTF-8":             "application/json; charset=UTF-8",
+		"another parameter": "application/json; v=1",
+	} {
+		t.Run("passes "+name, func(t *testing.T) {
+			d := newDecodeAPI(t, decodeDoc(t))
+			if rec := post(d.api, "/api/items", validItem, ct); rec.Code != http.StatusNoContent || d.body == nil {
+				t.Errorf("answer %d %q, want the body decoded", rec.Code, rec.Body)
+			}
+		})
+	}
+	t.Run("an empty JSON body is still a missing body", func(t *testing.T) {
+		d := newDecodeAPI(t, decodeDoc(t))
+		if env := envelopeOf(t, post(d.api, "/api/items", "", "application/json")); env.Code != "bad_body" || !slices.Equal(fieldCodes(env), []string{"=required"}) {
+			t.Errorf("answered %s %v, want bad_body =required", env.Code, fieldCodes(env))
+		}
+	})
+	t.Run("a Raw row with no declared body", func(t *testing.T) {
+		sf := newSpool(t)
+		if rec := sf.send("plain text", `"k"`, 0); rec.Code != http.StatusOK || sf.runs() != 1 {
+			t.Errorf("answer %d %q after %d runs, want the handler run", rec.Code, rec.Body, sf.runs())
+		}
+	})
+	t.Run("before the idempotency key", func(t *testing.T) {
+		kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
+		r := keyedRequest(http.MethodPost, "/api/jobs/quick", `{"kind":"a","size":1}`, "")
+		r.Header.Set("Content-Type", "text/plain")
+		rec := httptest.NewRecorder()
+		kf.api.ServeHTTP(rec, r)
+		if codeOf(t, rec) != "unsupported_media_type" || kf.runsOf("jobs.quick") != 0 {
+			t.Errorf("a keyless text/plain request answered %s after %d runs, want unsupported_media_type", codeOf(t, rec), kf.runsOf("jobs.quick"))
 		}
 	})
 }
