@@ -55,7 +55,8 @@ func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err er
 // ends the caller writes, and each running job's finished channel.
 func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan struct{}) {
 	e.holds++
-	e.readGen++ // ends a retryResume of an earlier resume
+	e.readGen++ // ends an earlier resume's read and its retryResume
+	e.noted = nil
 	e.stopTimersLocked()
 	clear(e.proposals)
 	for _, en := range e.live {
@@ -78,9 +79,10 @@ func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan
 
 // resume ends one hold. The last one re-reads the last ends, since the file
 // they came from may have been replaced, and rebuilds the Fresh windows and
-// every scheduled scope's count from them (resumeEndsLocked). A failed read
-// arms no timer and counts each deadline from now until retryResume's read
-// answers.
+// every scheduled scope's count from them and from the ends noted during the
+// read, which the reopened store holds too (resumeEndsLocked). A
+// failed read arms no timer and counts each deadline from now until
+// retryResume's read answers; a hold during the read discards it.
 func (e *Executor[P]) resume(ctx context.Context) {
 	e.mu.Lock()
 	e.holds--
@@ -94,16 +96,21 @@ func (e *Executor[P]) resume(ctx context.Context) {
 		e.mu.Unlock()
 		return
 	}
+	gen := e.readGen
+	e.noted = map[ScheduledScope]LastEnd{}
 	e.mu.Unlock()
 	ends, err := e.lastEnds(ctx)
 	now := time.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.holds > 0 {
+	if e.readGen != gen {
 		return
 	}
+	noted := e.noted
+	e.noted = nil
 	e.ends = map[ScheduledScope]LastEnd{}
 	clear(e.recent)
+	e.mergeEndsLocked(noted)
 	e.countFrom = now
 	for _, t := range e.scheduled {
 		t.watch = NewWatch(t.lease)

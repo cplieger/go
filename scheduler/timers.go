@@ -306,8 +306,12 @@ func (e *Executor[P]) noteEndLocked(en *job[P], r Result, at time.Time) {
 	if t == nil && en.spec.Proposes {
 		return
 	}
+	end := LastEnd{At: at, Result: r}
 	if have, ok := e.ends[key]; !ok || !at.Before(have.At) {
-		e.ends[key] = LastEnd{At: at, Result: r}
+		e.ends[key] = end
+	}
+	if have, ok := e.noted[key]; e.noted != nil && (!ok || !at.Before(have.At)) {
+		e.noted[key] = end
 	}
 	if t != nil && e.endsRead {
 		e.movedLocked(key, t, at, workDone(r))

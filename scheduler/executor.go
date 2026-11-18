@@ -148,6 +148,9 @@ type Executor[P any] struct {
 	// ends is each scope's last moving end, read from Records at Run and
 	// kept from each later end.
 	ends map[ScheduledScope]LastEnd
+	// noted is each scope's last moving end noted during a resume's LastEnds
+	// read, nil outside one: resume drops every other end it held.
+	noted map[ScheduledScope]LastEnd
 	// countFrom is when Run started or the last hold resumed: a scheduled
 	// scope with no last end counts from it.
 	countFrom time.Time
@@ -162,7 +165,7 @@ type Executor[P any] struct {
 	maxQueued, maxPerOwner int
 	waiting                int
 	holds                  int    // Hold(all) calls not yet resumed
-	readGen                uint64 // moved by each hold, so a superseded retryResume stops
+	readGen                uint64 // moved by each hold, so a superseded resume read stops
 	started, closed        bool
 	endsRead               bool // Run has read Records.LastEnds, so timers may be armed
 	stale                  bool // the last resume's LastEnds read has not answered yet

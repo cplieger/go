@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -428,5 +429,108 @@ func TestShutdownKeepsACommittingJobsEnd(t *testing.T) {
 		if got := ends[scheduler.ScheduledScope{Kind: "full", Scope: ""}]; got.Result != scheduler.ResultOK {
 			t.Errorf("LastEnds[full] after a shutdown that waited out its commit = %+v, want its ok end", got)
 		}
+	})
+}
+
+// pausedEnds is a store whose next LastEnds after pause reads the ends, then
+// waits for the channel pause returned to close before answering them, so a
+// job can end while a read is in flight.
+type pausedEnds struct {
+	*memrecords.Store
+	release chan struct{}
+	mu      sync.Mutex
+}
+
+func (p *pausedEnds) pause() chan<- struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.release = make(chan struct{})
+	return p.release
+}
+
+func (p *pausedEnds) LastEnds(ctx context.Context) (map[scheduler.ScheduledScope]scheduler.LastEnd, error) {
+	ends, err := p.Store.LastEnds(ctx)
+	p.mu.Lock()
+	release := p.release
+	p.release = nil
+	p.mu.Unlock()
+	if release != nil {
+		<-release
+	}
+	return ends, err
+}
+
+// endDuringResumeRead runs a refresh job ended ok 30 minutes before a second
+// one that is in its commit step through a Hold(all), then resumes with a
+// LastEnds read that answers the ends held before the second job ended, and
+// answers that job's stored end.
+func endDuringResumeRead(t *testing.T) (*rig, time.Time) {
+	t.Helper()
+	committed := make(chan struct{})
+	refresh := spec("refresh", "")
+	refresh.Fresh = forgeFresh
+	refresh.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+		if gate := run.Job().Payload.Gate; gate != nil {
+			if !run.Commit() {
+				return scheduler.End{Result: scheduler.ResultFailed}
+			}
+			<-gate
+		}
+		return scheduler.End{Result: scheduler.ResultOK}
+	}
+	base := &rig{store: memrecords.New(), log: &runLog{}}
+	store := &pausedEnds{Store: base.store}
+	r := base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{refresh}, Records: store})
+	synctest.Wait()
+	r.schedule(t, "refresh", "", scheduler.Scheduled(time.Hour))
+	r.start(t, api("refresh", "", "alice", payload{}))
+	synctest.Wait()
+	time.Sleep(30 * time.Minute)
+	committing := r.start(t, api("refresh", "", "alice", payload{Gate: committed}))
+	synctest.Wait()
+	resume, err := r.ex.Hold(t.Context(), true)
+	if err != nil {
+		t.Fatalf("Hold(all) = %v, want nil", err)
+	}
+
+	release := store.pause()
+	resumed := make(chan struct{})
+	go func() {
+		defer close(resumed)
+		resume()
+	}()
+	synctest.Wait()
+	close(committed)
+	synctest.Wait()
+	ended := r.rec(t, committing.Job).EndedAt
+	if ended.IsZero() {
+		t.Fatal("the committing job did not end during the resume's read")
+	}
+	close(release)
+	<-resumed
+	synctest.Wait()
+	return r, ended
+}
+
+func TestResumeKeepsEndStoredDuringRead(t *testing.T) {
+	t.Run("a Start inside the end's Fresh window is refused", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r, ended := endDuringResumeRead(t)
+			_, err := r.ex.Start(t.Context(), api("refresh", "", "bob", payload{}))
+			var recent *scheduler.RecentError
+			if !errors.As(err, &recent) || !recent.Until.Equal(ended.Add(60*time.Second)) {
+				t.Errorf("Start just after an end stored during the resume's read = %v, want *RecentError until the end plus 60 s", err)
+			}
+		})
+	})
+
+	t.Run("the deadline and the next wake count from the end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r, ended := endDuringResumeRead(t)
+			if got, want := r.ex.Deadline("refresh", ""), ended.Add(3*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after the resume = %v, want %v: the end stored during the read plus the lease", got, want)
+			}
+			r.nextWake(t, "refresh", "", ended, time.Hour)
+		})
 	})
 }
