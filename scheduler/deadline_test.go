@@ -114,6 +114,39 @@ func TestDeadlineMovesOnlyOnResults(t *testing.T) {
 		})
 	})
 
+	t.Run("a covering kind's end moves the covered scope with none queued and after a restart", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			quick := spec("quick", "passes")
+			quick.Watch = hourLease
+			full := spec("full", "passes")
+			full.Covers = func(_, other scheduler.Job[payload]) bool { return other.Kind == "quick" }
+			cfg := scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{quick, full}}
+			before, stop := base.openUntil(t, cfg)
+			before.schedule(t, "quick", "", scheduler.Scheduled(24*time.Hour))
+			time.Sleep(10 * time.Minute)
+			before.start(t, api("quick", "", "alice", payload{}))
+			synctest.Wait()
+			time.Sleep(10 * time.Minute)
+			f := before.start(t, api("full", "", "bob", payload{}))
+			synctest.Wait()
+			fullEnd := before.rec(t, f.Job).EndedAt
+			if got, want := before.ex.Deadline("quick", ""), fullEnd.Add(time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after the covering kind ended with nothing queued = %v, want %v", got, want)
+			}
+			stop()
+
+			reopened := &rig{store: base.store.Crash(), log: base.log}
+			time.Sleep(10 * time.Minute)
+			r := reopened.open(t, cfg)
+			synctest.Wait()
+			r.schedule(t, "quick", "", scheduler.Scheduled(24*time.Hour))
+			if got, want := r.ex.Deadline("quick", ""), fullEnd.Add(time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after a restart = %v, want %v: the covering kind's end is the later moving end", got, want)
+			}
+		})
+	})
+
 	t.Run("an interrupted job leaves the deadline at the end before it", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			base := &rig{store: memrecords.New(), log: &runLog{}}
