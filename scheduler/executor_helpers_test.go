@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cplieger/go/scheduler/v2"
@@ -80,8 +81,34 @@ func newRig(t *testing.T, cfg scheduler.Config[payload]) *rig {
 	return r.open(t, cfg)
 }
 
-// open runs a new executor of cfg over r's store and log.
+// open runs a new executor of cfg over r's store and log until the test
+// ends.
 func (r *rig) open(t *testing.T, cfg scheduler.Config[payload]) *rig {
+	t.Helper()
+	opened, done := r.run(t, t.Context(), cfg)
+	t.Cleanup(func() { <-done }) // t.Context ends before cleanups run
+	return opened
+}
+
+// openUntil runs a new executor of cfg over r's store and log until stop,
+// which cancels its Run and answers once Run has returned.
+func (r *rig) openUntil(t *testing.T, cfg scheduler.Config[payload]) (opened *rig, stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	opened, done := r.run(t, ctx, cfg)
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return opened, func() {
+		cancel()
+		<-done
+	}
+}
+
+// run starts Run of a new executor of cfg over r's store and log; done
+// closes when Run returns.
+func (r *rig) run(t *testing.T, ctx context.Context, cfg scheduler.Config[payload]) (opened *rig, done <-chan struct{}) {
 	t.Helper()
 	cfg.Kinds = slices.Clone(cfg.Kinds)
 	for i := range cfg.Kinds {
@@ -97,14 +124,75 @@ func (r *rig) open(t *testing.T, cfg scheduler.Config[payload]) *rig {
 	if err != nil || ex == nil {
 		t.Fatalf("NewExecutor = (%v, %v), want an executor", ex, err)
 	}
-	ctx := t.Context()
-	done := make(chan struct{})
+	ran := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(ran)
 		_ = ex.Run(ctx)
 	}()
-	t.Cleanup(func() { <-done }) // t.Context ends before cleanups run
-	return &rig{ex: ex, store: r.store, log: r.log}
+	return &rig{ex: ex, store: r.store, log: r.log}, ran
+}
+
+// schedule sets kind and scope's cadence and fails the test on an error.
+func (r *rig) schedule(t *testing.T, kind scheduler.Kind, scope string, c scheduler.Cadence) {
+	t.Helper()
+	if err := r.ex.Schedule(kind, scope, c); err != nil {
+		t.Fatalf("Schedule(%s %q) = %v, want nil", kind, scope, err)
+	}
+}
+
+// wakes answers the records the timer of kind and scope wrote, in the order
+// it wrote them.
+func (r *rig) wakes(kind scheduler.Kind, scope string) []scheduler.Record {
+	var out []scheduler.Record
+	for _, rec := range r.store.All() {
+		if rec.Kind == kind && rec.Scope == scope && rec.Trigger == scheduler.TriggerSchedule {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// nextWake steps the clock a second at a time from just before the jitter
+// band of a wake d after base, and answers the first timer record of kind and
+// scope queued after base. It fails the test unless that record lies in the
+// band, so a wake before it is caught too.
+func (r *rig) nextWake(t *testing.T, kind scheduler.Kind, scope string, base time.Time, d time.Duration) scheduler.Record {
+	t.Helper()
+	lo, hi := jitterBand(d)
+	sleepUntil(base.Add(lo - time.Second))
+	for {
+		for _, rec := range r.wakes(kind, scope) {
+			if !rec.QueuedAt.After(base) {
+				continue
+			}
+			if off := rec.QueuedAt.Sub(base); !inBand(off, d) {
+				t.Fatalf("timer of %s %q woke %v after %v, want within [%v, %v]", kind, scope, off, base, lo, hi)
+			}
+			return rec
+		}
+		if time.Since(base) > hi {
+			t.Fatalf("timer of %s %q did not wake within %v of %v, want a wake in [%v, %v]", kind, scope, hi, base, lo, hi)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+	}
+}
+
+// sleepUntil advances the bubble's clock to at and waits for every goroutine
+// to block.
+func sleepUntil(at time.Time) {
+	time.Sleep(time.Until(at))
+	synctest.Wait()
+}
+
+// jitterBand is the range a wake d after its base falls in: Scheduled
+// jitters each wait by ±10 %.
+func jitterBand(d time.Duration) (lo, hi time.Duration) { return d - d/10, d + d/10 }
+
+// inBand reports whether got lies in d's jitter band.
+func inBand(got, d time.Duration) bool {
+	lo, hi := jitterBand(d)
+	return got >= lo && got <= hi
 }
 
 // start answers Start's Started and fails the test on an error.
