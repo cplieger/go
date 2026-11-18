@@ -10,6 +10,7 @@ var (
 	ErrUnknownKind   = errors.New("scheduler: unknown kind")
 	ErrScope         = errors.New("scheduler: scope outside its grammar")
 	ErrTooManyScopes = errors.New("scheduler: more than 64 scheduled scopes")
+	ErrLease         = errors.New("scheduler: a kind's watch lease is zero")  // Schedule
 	ErrCovered       = errors.New("scheduler: covered by a job that started") // matched through *CoveredError
 	ErrYieldTooLong  = errors.New("scheduler: yield more than 24 hours ahead")
 	ErrBatchSize     = errors.New("scheduler: batch item count outside 1 to MaxItems") // Start; the wire refuses the count first

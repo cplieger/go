@@ -41,7 +41,7 @@ func TestErrorsMatch(t *testing.T) {
 	t.Run("distinct", func(t *testing.T) {
 		t.Parallel()
 		all := []error{
-			ErrUnknownKind, ErrScope, ErrTooManyScopes, ErrCovered, ErrYieldTooLong, ErrBatchSize, ErrProposed,
+			ErrUnknownKind, ErrScope, ErrTooManyScopes, ErrLease, ErrCovered, ErrYieldTooLong, ErrBatchSize, ErrProposed,
 			ErrQueueFull, ErrCapacity, ErrRecent, ErrUnknownJob, ErrNotCancellable,
 			ErrCommitting, ErrUnknownLine, ErrStoreUnavailable,
 		}

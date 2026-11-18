@@ -25,7 +25,7 @@ type timed struct {
 	base    time.Time
 	since   time.Time    // the Schedule call that added it
 	changed time.Time    // the last cadence change; zero for a first Schedule
-	lease   health.Lease // the kind's Watch, or {every, Cycles: 3}
+	lease   health.Lease // the kind's Watch(every), or {every, Cycles: 3}
 	cadence Cadence
 	gen     uint64 // bumped at each arm, so a superseded timer's func does nothing
 	done    bool   // base is an end whose work was done, or no end, so the wait is the interval
@@ -42,7 +42,8 @@ type timed struct {
 // executor's life counts both from its last moving end in Records.LastEnds,
 // else from the later of Run's start and the call. Before changing anything it
 // refuses an unknown kind (ErrUnknownKind), a scope outside its grammar
-// (ErrScope) and a new scope past 64 (ErrTooManyScopes).
+// (ErrScope), a lease whose Duration() is 0 (ErrLease) and a new scope past 64
+// (ErrTooManyScopes).
 func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	spec, ok := e.kinds[kind]
 	switch {
@@ -51,7 +52,11 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	case !validScope(scope):
 		return ErrScope
 	}
-	every, scheduled := c.Every()
+	lease, err := leaseOf(spec, c)
+	if err != nil {
+		return err
+	}
+	_, scheduled := c.Every()
 	key := ScheduledScope{Kind: kind, Scope: scope}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -69,10 +74,6 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 		return ErrTooManyScopes
 	}
 	e.seen[key] = struct{}{}
-	lease := health.Lease{Interval: every, Cycles: 3}
-	if spec.Watch != nil {
-		lease = *spec.Watch
-	}
 	now := time.Now()
 	if t == nil {
 		t = &timed{since: now, fromEnds: !again}
@@ -92,6 +93,24 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence) error {
 	e.armLocked(key, t)
 	e.watchLocked(key, t)
 	return nil
+}
+
+// leaseOf answers the lease of a scope of spec at cadence c: none for
+// TriggerOnly, else spec's Watch at its interval, refused with ErrLease when
+// its Duration() is 0.
+func leaseOf[P any](spec *KindSpec[P], c Cadence) (health.Lease, error) {
+	every, scheduled := c.Every()
+	switch {
+	case !scheduled:
+		return health.Lease{}, nil
+	case spec.Watch == nil:
+		return health.Lease{Interval: every, Cycles: 3}, nil
+	}
+	l := spec.Watch(every)
+	if l.Duration() == 0 {
+		return health.Lease{}, ErrLease
+	}
+	return l, nil
 }
 
 // Unschedule removes a scheduled scope's timer and watch, so Deadline answers

@@ -15,8 +15,9 @@ import (
 	"github.com/cplieger/go/scheduler/v2/internal/memrecords"
 )
 
-// hourLease puts a scope's deadline an hour after its last moving end.
-var hourLease = &health.Lease{Interval: time.Hour, Cycles: 1}
+// hourLease puts a scope's deadline an hour after its last moving end,
+// whatever its interval.
+func hourLease(time.Duration) health.Lease { return health.Lease{Interval: time.Hour, Cycles: 1} }
 
 // endsBy is a Run that waits on the job's Gate, if any, then ends with
 // results[Payload.N].

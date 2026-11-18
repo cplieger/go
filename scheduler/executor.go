@@ -33,9 +33,12 @@ type KindSpec[P any] struct {
 	// Items is a batch kind's item count, read from the payload at Start;
 	// required with MaxItems > 0 and refused without it.
 	Items func(p P) int
-	// Watch is the lease a scheduled scope of this kind must end a job by;
-	// nil is {Interval: every, Cycles: 3}.
-	Watch *health.Lease
+	// Watch answers the lease a scheduled scope of this kind must end a job
+	// by, given the scope's interval. Schedule calls it each time it is given
+	// a scheduled cadence, outside the executor's lock; nil is {Interval:
+	// every, Cycles: 3}, and a lease whose Duration() is 0 makes Schedule
+	// answer ErrLease.
+	Watch func(every time.Duration) health.Lease
 	// Run does the job's work and must return once ctx is done.
 	Run  func(ctx context.Context, r *Run[P]) End
 	Kind Kind

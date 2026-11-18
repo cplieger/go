@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/cplieger/go/health/v2"
 	"github.com/cplieger/go/scheduler/v2"
 	"github.com/cplieger/go/scheduler/v2/internal/memrecords"
 )
@@ -456,6 +457,96 @@ func TestRefusedScheduleLeavesTheFirstSchedule(t *testing.T) {
 		if got, want := r.ex.Deadline("refresh", "connection:64"), lastEnd.Add(72*time.Hour); !got.Equal(want) {
 			t.Errorf("Deadline after a refused Schedule = %v, want %v: the refusal changed nothing, so this first Schedule counts from the last end", got, want)
 		}
+	})
+}
+
+// floorWatch is a kind's Watch with a 3-hour floor, so a short cadence's
+// lease is the floor and a long one's is three intervals.
+func floorWatch(calls *[]time.Duration) func(time.Duration) health.Lease {
+	return func(every time.Duration) health.Lease {
+		*calls = append(*calls, every)
+		return health.Lease{Interval: every, Cycles: 3, Floor: 3 * time.Hour}
+	}
+}
+
+func TestWatchLeaseFollowsTheCadence(t *testing.T) {
+	t.Run("a kind's Watch is read with the scope's interval at each change", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var calls []time.Duration
+			s := spec("scan", "")
+			s.Watch = floorWatch(&calls)
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{s}})
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(15*time.Minute))
+			ran := r.start(t, api("scan", "source:a", "alice", payload{}))
+			synctest.Wait()
+			lastEnd := r.rec(t, ran.Job).EndedAt
+			if got, want := r.ex.Deadline("scan", "source:a"), lastEnd.Add(3*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline on a 15-minute cadence = %v, want %v: the lease's 3-hour floor", got, want)
+			}
+			sleepUntil(lastEnd.Add(time.Minute))
+			changed := time.Now()
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(6*time.Hour))
+			if got, want := r.ex.Deadline("scan", "source:a"), changed.Add(18*time.Hour); !got.Equal(want) {
+				t.Errorf("Deadline after a swap to 6 hours = %v, want %v: three 6-hour intervals from the change", got, want)
+			}
+			if want := []time.Duration{15 * time.Minute, 6 * time.Hour}; !slices.Equal(calls, want) {
+				t.Errorf("Watch called with %v, want %v", calls, want)
+			}
+		})
+	})
+
+	t.Run("the default lease follows a swap to a longer cadence", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "")}})
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(15*time.Minute))
+			ran := r.start(t, api("scan", "source:a", "alice", payload{}))
+			synctest.Wait()
+			sleepUntil(r.rec(t, ran.Job).EndedAt.Add(time.Minute))
+			changed := time.Now()
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(6*time.Hour))
+			sleepUntil(changed.Add(2 * time.Hour))
+			if !r.ex.Fresh("scan", "source:a").Healthy() {
+				t.Errorf("Fresh 2 hours after a swap from 15 minutes to 6 hours = false, want true: the lease is three 6-hour intervals")
+			}
+		})
+	})
+
+	t.Run("a zero lease is refused and changes nothing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := spec("scan", "")
+			s.Watch = func(every time.Duration) health.Lease {
+				if every >= time.Hour {
+					return health.Lease{}
+				}
+				return health.Lease{Interval: every, Cycles: 3}
+			}
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{s}})
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(15*time.Minute))
+			ranA := r.start(t, api("scan", "source:a", "alice", payload{}))
+			ranB := r.start(t, api("scan", "source:b", "alice", payload{}))
+			synctest.Wait()
+			endA, endB := r.rec(t, ranA.Job).EndedAt, r.rec(t, ranB.Job).EndedAt
+			sleepUntil(endA.Add(time.Minute))
+
+			if err := r.ex.Schedule("scan", "source:a", scheduler.Scheduled(2*time.Hour)); !errors.Is(err, scheduler.ErrLease) {
+				t.Errorf("Schedule(a cadence whose lease is zero) = %v, want ErrLease", err)
+			}
+			if got, want := r.ex.Deadline("scan", "source:a"), endA.Add(45*time.Minute); !got.Equal(want) {
+				t.Errorf("Deadline after a refused change = %v, want %v: the 15-minute lease kept", got, want)
+			}
+			r.nextWake(t, "scan", "source:a", endA, 15*time.Minute)
+
+			if err := r.ex.Schedule("scan", "source:b", scheduler.Scheduled(2*time.Hour)); !errors.Is(err, scheduler.ErrLease) {
+				t.Errorf("first Schedule with a zero lease = %v, want ErrLease", err)
+			}
+			if got := r.ex.Deadline("scan", "source:b"); !got.IsZero() {
+				t.Errorf("Deadline of a scope whose Schedule was refused = %v, want zero: not scheduled", got)
+			}
+			r.schedule(t, "scan", "source:b", scheduler.Scheduled(15*time.Minute))
+			if got, want := r.ex.Deadline("scan", "source:b"), endB.Add(45*time.Minute); !got.Equal(want) {
+				t.Errorf("Deadline after a refused first Schedule = %v, want %v: the refusal changed nothing, so this first Schedule counts from the last end", got, want)
+			}
+		})
 	})
 }
 
