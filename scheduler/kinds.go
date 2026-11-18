@@ -61,7 +61,7 @@ const (
 	ReasonCovered         = "covered"          // Subject is the covering job's ID
 	ReasonQueueFull       = "queue_full"       // the queue refused a request whose record was written
 	ReasonCredentialEnded = "credential_ended" //nolint:gosec // G101: a reason code, not a credential
-	ReasonFactsTooLarge   = "facts_too_large"  // End.Facts or Line.Facts was dropped
+	ReasonFactsTooLarge   = "facts_too_large"  // the end's own Facts were dropped
 	ReasonRunPanicked     = "run_panicked"
 	ReasonInterrupted     = "interrupted"
 	ReasonCancelled       = "cancelled"

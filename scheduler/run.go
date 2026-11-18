@@ -109,39 +109,37 @@ const (
 	maxFacts   = 2048
 )
 
-// Cut is what CloseEnd dropped from an end, zero when nothing was.
+// Cut is what CloseEnd dropped from an end, zero when nothing was: Reasons
+// counts the end's reasons not kept and FactsBytes the length of its facts
+// dropped. Its caller logs a non-zero Cut at ERROR with the job's fields.
 type Cut struct{ Reasons, FactsBytes int }
 
-// CloseEnd closes an end.
+// CloseEnd is the one close of an end, its bounds included. Each line still
+// queued or running goes to review with reason not_run, or cancelled or
+// interrupted for such an end, and an ok end answers partial when any line
+// is then skipped or in review. The end keeps its 32 most severe reasons,
+// and facts that are not a JSON object of at most 2 KiB are dropped for the
+// reason facts_too_large, added once within the 32. It answers copies and
+// leaves what it was given as it is.
 func CloseEnd(lines []Line, end End) ([]Line, End, Cut) {
 	lines, end = closeBatch(lines, end)
-	return lines, end, Cut{}
-}
-
-// bounded answers end within its bounds, logging each cut at ERROR: reasons
-// past the 32 most severe are dropped, and facts that are not a JSON object of
-// at most 2 KiB are dropped for the reason facts_too_large, kept within the 32
-// and added once for the end's facts and its lines' alike.
-func (e *Executor[P]) bounded(en *job[P], end End) End {
-	if n := len(end.Reasons); n > maxReasons {
-		e.log.Error("job end reasons dropped", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
-			"reasons", n, "kept", maxReasons)
-		end.Reasons = end.Reasons[:maxReasons]
-	}
-	en.recMu.Lock()
-	dropped := en.factsDropped
-	en.recMu.Unlock()
+	var cut Cut
 	if len(end.Facts) > 0 && !validFacts(end.Facts) {
-		e.log.Error("job end facts dropped", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
-			"bytes", len(end.Facts), "reason", ReasonFactsTooLarge)
+		cut.FactsBytes = len(end.Facts)
 		end.Facts = nil
-		dropped = true
 	}
-	if dropped && !slices.ContainsFunc(end.Reasons, func(r Reason) bool { return r.Code == ReasonFactsTooLarge }) {
-		kept := end.Reasons[:min(len(end.Reasons), maxReasons-1)]
-		end.Reasons = append(slices.Clone(kept), Reason{Code: ReasonFactsTooLarge})
+	n := min(len(end.Reasons), maxReasons)
+	add := cut.FactsBytes > 0 && !slices.ContainsFunc(end.Reasons[:n], func(r Reason) bool { return r.Code == ReasonFactsTooLarge })
+	if add {
+		n = min(n, maxReasons-1)
 	}
-	return end
+	cut.Reasons = len(end.Reasons) - n
+	reasons := slices.Clone(end.Reasons[:n])
+	if add {
+		reasons = append(reasons, Reason{Code: ReasonFactsTooLarge})
+	}
+	end.Reasons = reasons
+	return lines, end, cut
 }
 
 // validFacts reports whether b is a JSON object of at most 2 KiB.

@@ -320,7 +320,7 @@ const (
 
 // job is one admitted job. state, cancel, startedAt, stopEnd, stopped,
 // returned, committing, yield, proposal, the counts and w's ownership are
-// guarded by the executor's mu; rec, claimed and factsDropped are guarded by recMu once the
+// guarded by the executor's mu; rec and claimed are guarded by recMu once the
 // job runs, which also orders its record writes.
 type job[P any] struct {
 	spec      *KindSpec[P]
@@ -348,9 +348,6 @@ type job[P any] struct {
 	returned    bool // its Run returned, so a cancel has nothing left to stop
 	committing  bool // Commit answered true, so Cancel answers ErrCommitting
 	inserted    bool // its admission wrote its record and queued it
-	// factsDropped is a line's facts dropped, so the end carries
-	// facts_too_large.
-	factsDropped bool
 }
 
 // stopLocked cancels a running job's ctx; it then commits nothing and ends
@@ -468,7 +465,7 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 		end = *en.stopEnd
 	}
 	e.mu.Unlock()
-	stored, at, kept := e.end(context.Background(), en, e.bounded(en, end))
+	stored, at, kept := e.end(context.Background(), en, end)
 	e.mu.Lock()
 	en.state = stateEnded
 	e.removeLocked(en)
@@ -495,7 +492,7 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 // commit wrote wins over, and its time. kept is false when the store refused
 // the write, leaving the record open for its next open to mark.
 func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (stored End, at time.Time, kept bool) {
-	end = e.closeLines(en, end)
+	end = e.closeEnd(en, end)
 	if en.spec.Kept == 0 {
 		return end, time.Now(), true
 	}

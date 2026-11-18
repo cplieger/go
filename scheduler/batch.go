@@ -11,8 +11,9 @@ import (
 // It answers ctx's error once the job is cancelled, ErrUnknownLine for an i
 // outside the batch, and nil, running nothing, for a line already taken. A
 // panic in fn or a line that is not an end ends the batch failed, the line in
-// review, both with run_panicked. At the job's end CloseEnd closes the
-// lines still open.
+// review, both with run_panicked. A line's facts that are not a JSON object
+// of at most 2 KiB are dropped, the end unchanged. At the job's end CloseEnd
+// closes the lines still open.
 func (r *Run[P]) Item(ctx context.Context, i int, fn func(ctx context.Context) Line) error {
 	en, e := r.en, r.e
 	if claimed, err := en.claim(i); !claimed {
@@ -37,11 +38,8 @@ func (r *Run[P]) Item(ctx context.Context, i int, fn func(ctx context.Context) L
 	}
 	if len(l.Facts) > 0 && !validFacts(l.Facts) {
 		e.log.Error("job line facts dropped", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
-			"line", i, "bytes", len(l.Facts), "reason", ReasonFactsTooLarge)
+			"line", i, "bytes", len(l.Facts))
 		l.Facts = nil
-		en.recMu.Lock()
-		en.factsDropped = true
-		en.recMu.Unlock()
 	}
 	e.setLine(en, i, l)
 	ended = true
@@ -145,12 +143,16 @@ func closeBatch(lines []Line, end End) ([]Line, End) {
 
 func lineOpen(l Line) bool { return l.State == LineQueued || l.State == LineRunning }
 
-// closeLines applies CloseEnd to en's record, writing it when a line
-// moved, and answers the batch's end.
-func (e *Executor[P]) closeLines(en *job[P], end End) End {
+// closeEnd applies CloseEnd to en's record, writing it when a line moved,
+// logs what it cut and answers the end.
+func (e *Executor[P]) closeEnd(en *job[P], end End) End {
 	en.recMu.Lock()
 	defer en.recMu.Unlock()
-	closed, end, _ := CloseEnd(en.rec.Lines, end)
+	closed, end, cut := CloseEnd(en.rec.Lines, end)
+	if cut != (Cut{}) {
+		e.log.Error("job end cut to its bounds", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID,
+			"reasons_dropped", cut.Reasons, "facts_bytes", cut.FactsBytes)
+	}
 	if slices.ContainsFunc(en.rec.Lines, lineOpen) {
 		en.rec.Lines = closed
 		e.put(en)

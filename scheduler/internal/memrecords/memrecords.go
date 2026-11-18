@@ -49,9 +49,9 @@ type Store struct {
 	recs     map[scheduler.ID]scheduler.Record
 	fail     map[Op]error
 	calls    map[Op]int
+	log      *slog.Logger
 	order    []scheduler.ID
 	ended    []scheduler.ID // in the order their ends were written
-	log      *slog.Logger
 	capacity int
 	mu       sync.Mutex
 }
@@ -68,7 +68,7 @@ func New() *Store {
 	}
 }
 
-// Logger sets where EndIn logs.
+// Logger sets where EndIn logs, slog.Default until set.
 func (s *Store) Logger(l *slog.Logger) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,9 +114,9 @@ func (s *Store) All() []scheduler.Record {
 	return out
 }
 
-// EndIn writes e as id's end with its lines closed by scheduler.CloseLines,
-// as a kind's own commit does through its store: ErrNotRunning for a record
-// that is not running, writing nothing.
+// EndIn writes e as id's end closed by scheduler.CloseEnd, as a kind's own
+// commit does through its store, logging what it cut at ERROR:
+// ErrNotRunning for a record that is not running, writing nothing.
 func (s *Store) EndIn(id scheduler.ID, e scheduler.End) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,7 +124,12 @@ func (s *Store) EndIn(id scheduler.ID, e scheduler.End) error {
 	if !ok || r.State != scheduler.StateRunning {
 		return ErrNotRunning
 	}
-	r.Lines, e, _ = scheduler.CloseEnd(r.Lines, e)
+	var cut scheduler.Cut
+	r.Lines, e, cut = scheduler.CloseEnd(r.Lines, e)
+	if cut != (scheduler.Cut{}) {
+		s.log.Error("job end cut to its bounds", "kind", r.Kind, "scope", r.Scope, "job", r.ID,
+			"reasons_dropped", cut.Reasons, "facts_bytes", cut.FactsBytes)
+	}
 	s.end(&r, e)
 	return nil
 }

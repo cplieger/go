@@ -26,7 +26,7 @@ A keyed start (`Job.Key`) writes its idempotency key in that same insert, and th
 
 A kind whose work ends in one commit of its own writes its end inside that commit, through the store's own call, after `Run.Commit()` answered true. When `Run` returns, the executor leaves an end already stored as it is and reports the stored end, so a crash after the app's commit never leaves a committed write whose record reads `interrupted`.
 
-Facts that are not a JSON object, or are above 2 KiB, are dropped: the end gains the reason `facts_too_large`, one ERROR line is logged, and the end is still written.
+An end keeps its 32 most severe reasons. Its facts, when they are not a JSON object or are above 2 KiB, are dropped: the end gains the reason `facts_too_large` within the 32, one ERROR line is logged, and the end is still written. `CloseEnd(lines, end)` is that close, with the batch's below, and answers what it cut: the executor applies it to every end it writes, and a store's own-commit end applies it too, logging the cut, so an end reads the same whichever path commits it. A line's facts are bounded alike when `Item` writes the line, which logs at ERROR and adds no reason to the end.
 
 ## What a request does
 
@@ -64,7 +64,7 @@ A kind with `MaxItems` (1 to 500) is a batch. `Items(payload)` gives its item co
 
 `Run.Item(ctx, i, fn)` takes the kind's slot in `Batch` class, runs `fn` and records the `Line` it answers: `done`, `skipped` or `review`, with the app's reason code and optional facts. An index outside the batch answers `ErrUnknownLine`, and a line that already ended runs nothing.
 
-At the batch's end, a line still `queued` or `running` goes to review: as `cancelled` or `interrupted` with such an end, otherwise as `not_run`. The batch keeps the result its `Run` gave, except that an `ok` end reads `partial` when any line is skipped or in review, so a batch cut short never reads `ok`. `CloseLines(lines, end)` is that close as one function: the executor applies it to an end it writes, and a store's own-commit end (`EndIn`, written in the app's transaction) applies it too, so a batch that commits its end early reads the same. A line in review stays on the record until a person dismisses it, which moves it to `skipped` with its reason kept. A dismiss can land while the batch still runs: the executor's later writes of the record never move a `skipped` line back to review, so the dismiss survives them and the batch's close.
+At the batch's end, a line still `queued` or `running` goes to review: as `cancelled` or `interrupted` with such an end, otherwise as `not_run`. The batch keeps the result its `Run` gave, except that an `ok` end reads `partial` when any line is skipped or in review, so a batch cut short never reads `ok`. `CloseEnd` closes the lines too, so a batch that commits its end early in its own transaction reads the same. A line in review stays on the record until a person dismisses it, which moves it to `skipped` with its reason kept. A dismiss can land while the batch still runs: the executor's later writes of the record never move a `skipped` line back to review, so the dismiss survives them and the batch's close.
 
 ## Proposals
 
