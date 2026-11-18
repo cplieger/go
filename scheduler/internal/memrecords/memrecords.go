@@ -103,9 +103,8 @@ func (s *Store) All() []scheduler.Record {
 	return out
 }
 
-// EndIn writes e as id's end, as an app's own commit does through
-// jobstore.EndIn: ErrNotRunning for a record that is not running, writing
-// nothing.
+// EndIn writes e as id's end, as a kind's own commit does through its
+// store: ErrNotRunning for a record that is not running, writing nothing.
 func (s *Store) EndIn(id scheduler.ID, e scheduler.End) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,7 +130,7 @@ func (s *Store) Crash() *Store {
 	return c
 }
 
-// Reopen does what jobstore.OnOpen does at each open: every queued or
+// Reopen does what a store does when it opens after a restart: every queued or
 // running record ends interrupted, and each of its lines that had not ended
 // goes to review with reason interrupted.
 func (s *Store) Reopen() {

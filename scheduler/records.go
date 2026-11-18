@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Records stores one record per job. bolttable/jobstore is the implementation
-// an app wires; every method is safe for concurrent use.
+// Records stores one record per job; every method is safe for concurrent use.
 type Records interface {
 	// Insert writes a new record. With a key it first looks the key up and,
 	// when a record holds it, answers that record and true without writing

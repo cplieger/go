@@ -92,7 +92,7 @@ type Observer struct {
 	// Moved is called when a count Live answers moved: a Progress, a queue
 	// position, a yield or its wake. It is called at most once a second
 	// while counts move, with one trailing call after the last move, from
-	// Run's goroutine, and never once Run has returned.
+	// one goroutine Run starts for it, and never once Run has returned.
 	Moved func()
 }
 

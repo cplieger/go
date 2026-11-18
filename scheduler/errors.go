@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// The executor's errors. jobhttp maps each to its wire code one to one.
+// The executor's errors.
 var (
 	ErrUnknownKind   = errors.New("scheduler: unknown kind")
 	ErrScope         = errors.New("scheduler: scope outside its grammar")
@@ -22,7 +22,7 @@ var (
 	ErrNotCancellable   = errors.New("scheduler: job not cancellable")      // job_not_cancellable
 	ErrCommitting       = errors.New("scheduler: job is committing")        // job_committing
 	ErrUnknownLine      = errors.New("scheduler: unknown line")             // line_unknown; Records.Dismiss
-	ErrStoreUnavailable = errors.New("scheduler: record store unavailable") // wraps a failed Records write at admission; store_unavailable
+	ErrStoreUnavailable = errors.New("scheduler: record store unavailable") // wraps a failed Records call: an admission write, or Cancel's read of a job no longer live; store_unavailable
 )
 
 // CoveredError is Yield's answer when a job whose kind covers the yielded one
