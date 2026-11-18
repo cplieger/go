@@ -65,13 +65,12 @@ const (
 
 // Entry is one bundle entry point.
 //
-// A Forbid or Allow item names an npm package ("@scope/name" or "name"), a
-// file a package exports ("@scope/name/sub", the file an import of it
-// resolves to, in every installed copy of the package), or a path under Src
-// that exists there ("./<path>" where it is also a package name), covering
-// the files under it by whole segments. Both judge only the files whose code
-// the entry ships, in its built file or one it loads; the entry file is
-// exempt, and an item that can match no input fails the build.
+// A Forbid or Allow item names an npm package ("@scope/name"), a file a
+// package exports ("@scope/name/sub") or a path under Src ("src/wire", or
+// "./<path>" where it is also a package name), by whole path segments. Both
+// judge only the files whose code the entry ships; the entry file is exempt,
+// and an item that can match no input fails the build. docs/configuration.md
+// gives the full rules.
 type Entry struct {
 	Name string // the logical name, [a-z][a-z0-9_]*: "/<Name>.js" or "/<Name>.css" in a shell
 	Path string // the source file under Src
