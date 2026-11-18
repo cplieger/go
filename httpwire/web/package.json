@@ -1,7 +1,7 @@
 {
   "name": "@cplieger/httpwire",
   "version": "0.0.0",
-  "description": "Decode the error envelope, list pages and idempotency keys of a Go httpwire JSON API in the browser",
+  "description": "Typed error envelope, cursor pages and idempotency keys for the cplieger web APIs. The TypeScript half of httpwire.",
   "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
