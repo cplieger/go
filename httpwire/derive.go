@@ -29,7 +29,7 @@ var (
 	}
 	ifMatchUnion  = []string{codeIfMatchReq, codeIfMatchBad, "stale_version"}
 	writeUnion    = []string{codeWire, "cross_origin_refused"}
-	everyRowUnion = []string{codeAccounts, "maintenance", "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
+	everyRowUnion = []string{codeAccounts, codeMaintenance, "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
 )
 
 var (

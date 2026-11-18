@@ -26,6 +26,7 @@ const (
 	codeBadBody     = "bad_body"
 	codeWire        = "wire_mismatch"
 	codeAccounts    = "accounts_unavailable"
+	codeMaintenance = "maintenance"
 	codeIfMatchReq  = "if_match_required"
 	codeIfMatchBad  = "if_match_invalid"
 	codeCursor      = "cursor_invalid"
@@ -62,7 +63,7 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	codePerson:                    {Status: http.StatusForbidden, Remediation: "Do this from a signed-in session; an API key cannot."},
 	"store_unavailable":           {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
 	codeAccounts:                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
-	"maintenance":                 {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
+	codeMaintenance:               {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
 }
 
 // Catalog is the one code table of an app's listeners: every code any layer

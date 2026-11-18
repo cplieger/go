@@ -2,6 +2,7 @@ package httpwire
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -67,7 +68,8 @@ func (a *API) writeError(w http.ResponseWriter, r *http.Request, ep *Endpoint, e
 
 // mapError answers a handler's error: its *Error when the row's union holds
 // the code, else the first owner sentinel it wraps, with the sentinel's own
-// text, since the wrapped text may name paths. Anything else is a bug,
+// text, since the wrapped text may name paths. Any other error of a
+// request QuietAll cancelled is maintenance; anything else is a bug,
 // answered internal_error.
 func (a *API) mapError(r *http.Request, ep *Endpoint, err error) *Error {
 	ctx := r.Context()
@@ -75,15 +77,11 @@ func (a *API) mapError(r *http.Request, ep *Endpoint, err error) *Error {
 	if isErr && e != nil && slices.Contains(ep.Errors, e.Code) {
 		return e
 	}
-	for _, o := range ep.Owners {
-		for _, oc := range o.Codes {
-			if errors.Is(err, oc.Err) {
-				if spec, _ := a.table.Catalog.Lookup(oc.Code); spec.Status >= http.StatusInternalServerError {
-					a.log().WarnContext(ctx, "httpwire: a handler answered a server-side owner code", "row", ep.Name, "code", oc.Code)
-				}
-				return &Error{Code: oc.Code, Message: oc.Err.Error()}
-			}
-		}
+	if owned := a.ownerError(ctx, ep, err); owned != nil {
+		return owned
+	}
+	if errors.Is(context.Cause(ctx), errQuiesced) {
+		return maintenance()
 	}
 	level := slog.LevelError
 	if ctx.Err() != nil {
@@ -98,4 +96,20 @@ func (a *API) mapError(r *http.Request, ep *Endpoint, err error) *Error {
 		a.log().Log(ctx, level, "httpwire: a handler's error matches no code of its row", "row", ep.Name, "error", err)
 	}
 	return &Error{Code: codeInternal}
+}
+
+// ownerError answers the code of the first owner sentinel err wraps, or
+// nil.
+func (a *API) ownerError(ctx context.Context, ep *Endpoint, err error) *Error {
+	for _, o := range ep.Owners {
+		for _, oc := range o.Codes {
+			if errors.Is(err, oc.Err) {
+				if spec, _ := a.table.Catalog.Lookup(oc.Code); spec.Status >= http.StatusInternalServerError {
+					a.log().WarnContext(ctx, "httpwire: a handler answered a server-side owner code", "row", ep.Name, "code", oc.Code)
+				}
+				return &Error{Code: oc.Code, Message: oc.Err.Error()}
+			}
+		}
+	}
+	return nil
 }

@@ -29,6 +29,7 @@ type API struct {
 	sealer  *sealer
 	idem    *keyedRuns
 	version string
+	quiet   quietState
 	o       options
 }
 
@@ -146,7 +147,7 @@ func (a *API) allowed(r *http.Request) string {
 }
 
 // rowHandler is ep's handler under the binder's order: the cross-origin
-// check on a write, the client floor, the outage, the guard, the principal's
+// check on a write, the client floor, maintenance, the outage, the guard, the principal's
 // credential, the key rate, the held-request cap, then the wire version on
 // a write, decoding and the handler. So a refused principal is never
 // decoded and a key over its rate costs no decode.
@@ -168,6 +169,7 @@ func (a *API) rowHandler(ep *Endpoint, b *Binding) http.Handler {
 	if a.o.outage != nil && !ep.DuringOutage {
 		h = a.outage(false, h)
 	}
+	h = a.quieted(ep, h)
 	if a.o.floor != nil {
 		h = a.clientFloor(h)
 	}
@@ -277,7 +279,8 @@ func (a *API) wireCheck(next http.Handler) http.Handler {
 }
 
 // mountHandler is a mount row's wrap, outside the mount's own guard: the
-// client floor, the accounts outage, and the wire version on a write. Each
+// client floor, maintenance, the accounts outage, and the wire version on
+// a write. Each
 // refusal runs nothing and names nothing about the principal.
 func (a *API) mountHandler(ep *Endpoint, h http.Handler) http.Handler {
 	if isWrite(ep.Method) {
@@ -286,6 +289,7 @@ func (a *API) mountHandler(ep *Endpoint, h http.Handler) http.Handler {
 	if a.o.outage != nil {
 		h = a.outage(true, h)
 	}
+	h = a.quieted(ep, h)
 	if a.o.floor != nil {
 		h = a.clientFloor(h)
 	}
