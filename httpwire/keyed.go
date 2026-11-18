@@ -18,14 +18,17 @@ const defaultRowDeadline = 2 * time.Minute
 // the same slot joins, beside the store of settled answers. The join is in
 // memory whatever the store.
 type keyedRuns struct {
-	claims  map[IdempotencyKey]*claim
-	byCred  map[string]int
-	store   IdempotencyStore
-	mem     *memStore // the store, when it is the default one
-	observe func(IdempotencyEvent)
-	logged  map[string]bool // rows whose oversize answer with no Result was logged
-	lim     idemLimits
-	mu      sync.Mutex
+	claims map[IdempotencyKey]*claim
+	byCred map[string]int
+	store  IdempotencyStore
+	// mem is the store when it is the default one, else the fallback that
+	// keeps an answer the store failed to save.
+	mem      *memStore
+	observe  func(IdempotencyEvent)
+	logged   map[string]bool // rows whose oversize answer with no Result was logged
+	lim      idemLimits
+	mu       sync.Mutex
+	fallback bool
 }
 
 // claim is one run in flight. kept is set before done closes, and stays
@@ -47,23 +50,25 @@ const (
 )
 
 func newKeyedRuns(o IdempotencyOptions, l idemLimits, t *Table) *keyedRuns {
-	s := &keyedRuns{claims: map[IdempotencyKey]*claim{}, byCred: map[string]int{}, store: o.Store, observe: o.Observer, logged: map[string]bool{}, lim: l}
-	if s.store == nil {
-		maxKept := map[string]int{}
-		for i := range t.Endpoints {
-			if ep := &t.Endpoints[i]; ep.MaxKept > 0 {
-				maxKept[ep.Name] = ep.MaxKept
-			}
+	maxKept := map[string]int{}
+	for i := range t.Endpoints {
+		if ep := &t.Endpoints[i]; ep.MaxKept > 0 {
+			maxKept[ep.Name] = ep.MaxKept
 		}
-		s.mem = newMemStore(l.maxBytes, maxKept)
+	}
+	s := &keyedRuns{claims: map[IdempotencyKey]*claim{}, byCred: map[string]int{}, store: o.Store, observe: o.Observer, logged: map[string]bool{}, lim: l}
+	s.mem = newMemStore(l.maxBytes, maxKept)
+	s.fallback = s.store != nil
+	if !s.fallback {
 		s.store = s.mem
 	}
 	return s
 }
 
 // claim answers what a request on slot k with fingerprint fp meets: a run
-// in flight to join or refuse by fingerprint, an answer the in-memory
-// store holds, the store's bounds, or a new run of its own.
+// in flight to join or refuse by fingerprint, an answer held in memory,
+// the memory's bounds, or a new run of its own. The fallback's bounds
+// count only the answers it holds, so a store that saves caps no run.
 func (s *keyedRuns) claim(k IdempotencyKey, fp [32]byte) (*claim, *KeptAnswer, claimState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,13 +78,15 @@ func (s *keyedRuns) claim(k IdempotencyKey, fp [32]byte) (*claim, *KeptAnswer, c
 		}
 		return c, nil, claimJoin
 	}
-	if s.mem != nil {
-		if a, ok, _ := s.mem.Load(context.Background(), k); ok {
-			return nil, &a, claimKept
-		}
-		if !s.mem.admit(k.Credential, s.byCred[k.Credential], len(s.claims), &s.lim) {
-			return nil, nil, claimFull
-		}
+	if a, ok, _ := s.mem.Load(context.Background(), k); ok {
+		return nil, &a, claimKept
+	}
+	claims, all := s.byCred[k.Credential], len(s.claims)
+	if s.fallback {
+		claims, all = 0, 0
+	}
+	if !s.mem.admit(k.Credential, claims, all, &s.lim) {
+		return nil, nil, claimFull
 	}
 	c := &claim{fp: fp, done: make(chan struct{})}
 	s.claims[k] = c
@@ -136,14 +143,14 @@ func (a *API) keyed(w http.ResponseWriter, r *http.Request, ep *Endpoint, d *dec
 			continue
 		case claimMine:
 		}
-		if s.mem != nil || !a.loaded(w, r, ep, k, c) {
+		if !s.fallback || !a.loaded(w, r, ep, k, c) {
 			a.runClaim(w, r, ep, k, c, run)
 		}
 		return
 	}
 }
 
-// loaded answers slot k from a store other than the in-memory one, which
+// loaded answers slot k from a store other than the default one, which
 // claim already read, reporting whether it answered. Its answer is handed
 // to the claim's waiters too.
 func (a *API) loaded(w http.ResponseWriter, r *http.Request, ep *Endpoint, k IdempotencyKey, c *claim) bool {
@@ -186,8 +193,9 @@ func (a *API) join(w http.ResponseWriter, r *http.Request, ep *Endpoint, fp [32]
 }
 
 // runClaim runs the handler for slot k under the row's deadline and keeps
-// its answer by the kept rule. The claim is released when the handler
-// returns, a panic included, which keeps nothing.
+// its answer by the kept rule, in the fallback when the store fails to
+// save it. The claim is released when the handler returns, a panic
+// included, which keeps nothing.
 func (a *API) runClaim(w http.ResponseWriter, r *http.Request, ep *Endpoint, k IdempotencyKey, c *claim, run http.HandlerFunc) {
 	var kept *KeptAnswer
 	defer func() { a.idem.release(k, c, kept) }()
@@ -205,7 +213,8 @@ func (a *API) runClaim(w http.ResponseWriter, r *http.Request, ep *Endpoint, k I
 		a.logOversize(r, ep)
 	}
 	if err := a.idem.store.Save(context.WithoutCancel(r.Context()), k, ans); err != nil {
-		a.log().ErrorContext(r.Context(), "httpwire: the idempotency store could not save an answer", "row", ep.Name, "error", err)
+		a.log().ErrorContext(r.Context(), "httpwire: the idempotency store could not save an answer, which is kept in memory until it expires", "row", ep.Name, "error", err)
+		_ = a.idem.mem.Save(r.Context(), k, ans)
 	}
 	kept = &ans
 }

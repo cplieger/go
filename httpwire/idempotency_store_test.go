@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -240,12 +241,88 @@ func TestStoreErrors(t *testing.T) {
 			t.Errorf("answered %d %s after %d runs, log %q; want internal_error, no run, an ERROR line", rec.Code, rec.Body, kf.runsOf("jobs.quick"), kf.log.all())
 		}
 	})
-	t.Run("save", func(t *testing.T) {
-		kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{save: errors.New("disk full")}}, nil)
-		rec := kf.quickJob(`"s"`)
-		if rec.Code != http.StatusOK || !kf.log.has("ERROR", "row=jobs.quick", "disk full") {
-			t.Errorf("answered %d %s, log %q; want the answer and an ERROR line", rec.Code, rec.Body, kf.log.all())
+}
+
+func TestFailedSaveKeepsTheAnswerInMemory(t *testing.T) {
+	diskFull := httpwire.IdempotencyOptions{Store: failingStore{save: errors.New("disk full")}}
+	t.Run("the resend replays", func(t *testing.T) {
+		kf := newKeyed(t, diskFull, nil)
+		first := kf.quickJob(`"s"`)
+		if first.Code != http.StatusOK || !kf.log.has("ERROR", "row=jobs.quick", "disk full") {
+			t.Errorf("answered %d %s, log %q; want the answer and an ERROR line", first.Code, first.Body, kf.log.all())
 		}
+		if rec := kf.quickJob(`"s"`); rec.Code != http.StatusOK || rec.Body.String() != first.Body.String() || kf.runsOf("jobs.quick") != 1 {
+			t.Errorf("the resend answered %d %s after %d runs, want the first answer replayed and one run", rec.Code, rec.Body, kf.runsOf("jobs.quick"))
+		}
+		if rec := kf.do(http.MethodPost, "/api/jobs/quick", `{"kind":"other","size":1}`, `"s"`); codeOf(t, rec) != "idempotency_key_reused" || kf.runsOf("jobs.quick") != 1 {
+			t.Errorf("the key with another body answered %d %s after %d runs, want idempotency_key_reused and no run", rec.Code, rec.Body, kf.runsOf("jobs.quick"))
+		}
+	})
+	t.Run("until it expires", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			kf := newKeyed(t, diskFull, func(tb *httpwire.Table) { row(tb, "jobs.quick").Window = time.Minute })
+			kf.quickJob(`"s"`)
+			time.Sleep(59 * time.Second)
+			kf.quickJob(`"s"`)
+			if runs := kf.runsOf("jobs.quick"); runs != 1 {
+				t.Errorf("inside the window, %d runs, want 1", runs)
+			}
+			time.Sleep(time.Second)
+			kf.quickJob(`"s"`)
+			if runs := kf.runsOf("jobs.quick"); runs != 2 {
+				t.Errorf("at the window's end, %d runs, want a new run", runs)
+			}
+		})
+	})
+	t.Run("under the default count", func(t *testing.T) {
+		kf := newKeyed(t, diskFull, nil)
+		a := asCredential("s:a")
+		for i := range 1_000 {
+			if rec := kf.quickJob(`"`+strconv.Itoa(i)+`"`, a...); rec.Code != http.StatusOK {
+				t.Fatalf("key %d answered %d %s", i, rec.Code, rec.Body)
+			}
+		}
+		if rec := kf.quickJob(`"more"`, a...); codeOf(t, rec) != "idempotency_store_full" || kf.runsOf("jobs.quick") != 1_000 {
+			t.Errorf("past the default count, answered %d %s after %d runs, want idempotency_store_full and no run", rec.Code, rec.Body, kf.runsOf("jobs.quick"))
+		}
+		if rec := kf.quickJob(`"more"`, asCredential("s:b")...); rec.Code != http.StatusOK || kf.runsOf("jobs.quick") != 1_001 {
+			t.Errorf("another credential answered %d %s, want its run", rec.Code, rec.Body)
+		}
+	})
+	t.Run("a store that saved keeps nothing in memory", func(t *testing.T) {
+		kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{}}, nil)
+		kf.quickJob(`"s"`)
+		kf.quickJob(`"s"`)
+		if runs := kf.runsOf("jobs.quick"); runs != 2 {
+			t.Errorf("with the answer saved and not loaded, %d runs, want the store's answer to decide, 2", runs)
+		}
+	})
+	t.Run("a store that saves caps no run in flight", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			// MaxAnswer 1 MiB makes the default byte share 8 MiB, eight runs in flight.
+			kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{}, MaxAnswer: mib}, nil)
+			release := make(chan struct{})
+			kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+				<-release
+				return jobAnswer{ID: "one"}, nil
+			}
+			codes := make([]int, 20)
+			var wg sync.WaitGroup
+			for i := range codes {
+				wg.Go(func() { codes[i] = kf.quickJob(`"` + strconv.Itoa(i) + `"`).Code })
+			}
+			synctest.Wait()
+			if runs := kf.runsOf("jobs.quick"); runs != len(codes) {
+				t.Errorf("%d runs in flight, want all %d", runs, len(codes))
+			}
+			close(release)
+			wg.Wait()
+			for i, code := range codes {
+				if code != http.StatusOK {
+					t.Errorf("key %d answered %d, want 200", i, code)
+				}
+			}
+		})
 	})
 }
 

@@ -43,6 +43,9 @@ type KeptAnswer struct {
 // flight is always in memory. A store that writes the key in the work's
 // own transaction reads it with Idempotency inside the handler, answers it
 // from Load, and makes Save a no-op. A Load error answers internal_error.
+// A Save error is logged and the answer is kept in memory, under the
+// default store's bounds, until Expires: a resend to this process replays
+// it, and one after a restart runs again.
 type IdempotencyStore interface {
 	Load(ctx context.Context, k IdempotencyKey) (KeptAnswer, bool, error)
 	Save(ctx context.Context, k IdempotencyKey, a KeptAnswer) error
