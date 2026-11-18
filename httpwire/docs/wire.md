@@ -63,4 +63,6 @@ A tag is `<16 lowercase hex>.<decimal>`, the decimal with no sign or leading zer
 - `$ref`, `anyOf`, `oneOf`, `discriminator`
 - the annotations `description`, `format`, `contentEncoding` and `default`
 
+A `Keyed` operation carries `x-idempotency`, the policy the binder enforces: `window_s` (the row's window in seconds), `scope: "credential,operation"`, `concurrent: "join"`, `kept: "success_and_effectful_refusals"`, and `max_kept` and `result` when the row sets them. It is part of the wire version's normal form, so a changed window is a new wire version. A query parameter that repeats is `type: array` with `items`, `maxItems`, `style: form` and `explode: true`; a client sends one `name=value` per element.
+
 A `pattern` must be one of the six `Pattern*` constants, which both halves match with one verdict. It also refuses an unresolved `$ref`, a `$ref` cycle with no object between, and an OpenAPI member wiregen never writes. An object with `properties` and no `additionalProperties` admits no other member. Numbers are read exactly, an integer as `int64` or `uint64`.

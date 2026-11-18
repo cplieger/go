@@ -123,6 +123,11 @@ func decodeTable() *httpwire.Table {
 				Query: reflect.TypeFor[itemQuery](), Response: reflect.TypeFor[[]itemOut](), Access: public,
 			},
 			{
+				Name: "items.holders", Method: http.MethodGet, Path: "/api/holders", Summary: "Read the holders",
+				Description: "Reads who holds each path.", Query: reflect.TypeFor[holdersQuery](), Response: reflect.TypeFor[[]string](),
+				Access: public,
+			},
+			{
 				Name: "items.put", Method: http.MethodPost, Path: "/api/items", Summary: "Store an item", Description: "Stores one item.",
 				Request: reflect.TypeFor[itemBody](), Access: public,
 			},
@@ -140,6 +145,7 @@ type decodeAPI struct {
 	api    *httpwire.API
 	params *itemParams
 	query  *itemQuery
+	held   *holdersQuery
 	body   *itemBody
 	raw    []byte
 	file   bool
@@ -161,6 +167,10 @@ func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI 
 			d.query = &c.Query
 			return nil, nil
 		}),
+		httpwire.Bind("items.holders", func(_ context.Context, c httpwire.Call[noP, holdersQuery, noB]) ([]string, error) {
+			d.held = &c.Query
+			return nil, nil
+		}),
 		httpwire.Bind("items.put", func(_ context.Context, c httpwire.Call[noP, noQ, itemBody]) (httpwire.None, error) {
 			d.body = &c.Body
 			return httpwire.None{}, nil
@@ -178,7 +188,7 @@ func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI 
 }
 
 func (d *decodeAPI) ran() bool {
-	return d.params != nil || d.query != nil || d.body != nil || d.raw != nil || d.file
+	return d.params != nil || d.query != nil || d.held != nil || d.body != nil || d.raw != nil || d.file
 }
 
 // fieldCodes lists an envelope's fields as sorted "path=code" pairs.

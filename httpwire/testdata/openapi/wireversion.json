@@ -62,7 +62,8 @@
           "required": true
         },
         "responses": { "204": { "description": "No Content" } },
-        "summary": "Replace one entry."
+        "summary": "Replace one entry.",
+        "x-idempotency": { "concurrent": "join", "kept": "success_and_effectful_refusals", "scope": "credential,operation", "window_s": 600 }
       }
     },
     "/v1/events": {

@@ -156,6 +156,8 @@ func TestWireVersionMovesOnWireEdits(t *testing.T) {
 		wireEdit{name: "error code no effect", path: under(notFoundPath, "x-error-codes", "not_found"), edit: set("no_effect", false)},
 		wireEdit{name: "error code added", path: under(notFoundPath, "x-error-codes"), edit: set("gone", map[string]any{"status": json.Number("404"), "no_effect": true, "remediation": "x"})},
 		wireEdit{name: "feed format version", path: feedPath, edit: set("version", json.Number("2"))},
+		wireEdit{name: "idempotency window", path: under(putEntryPath, "x-idempotency"), edit: set("window_s", json.Number("86400"))},
+		wireEdit{name: "idempotency window dropped", path: putEntryPath, edit: del("x-idempotency")},
 		wireEdit{name: "words inside an extension value", path: feedPath, edit: set("description", "Other words.")},
 		wireEdit{name: "event schema description", path: []string{"paths", "/v1/events", "get", "responses", "200", "content", "text/event-stream", "x-events", "changed"}, edit: set("description", "Other words.")},
 		wireEdit{name: "operation id", path: getEntryPath, edit: set("operationId", "readEntry")},

@@ -16,6 +16,7 @@ type (
 	ranged   interface{ Range() (lo, hi int64) }
 	maxBytes interface{ MaxBytes() int }
 	counted  interface{ Count() (lo, hi int) }
+	listed   interface{ MaxItems() int }
 	// refuser names the field code a refused value of the type answers, in
 	// place of the field-code map's.
 	refuser interface{ Refusal() string }
@@ -105,6 +106,7 @@ type textField struct {
 	pointer  bool
 	optional bool // a pointer, omitempty or omitzero: a query may leave it out
 	cursor   bool // a Page's Cursor, which only opening it checks
+	list     bool // a query value repeated, one element per occurrence
 }
 
 // textFields lists struct t's fields by wire name, an embedded struct's
@@ -128,9 +130,9 @@ func textFields(t reflect.Type) (fields []textField, problems []string) {
 			case seen[tf.name]:
 				problems = append(problems, fmt.Sprintf("field %q is declared twice", tf.name))
 			default:
-				if !inBinderSet(tf.typ) {
-					problems = append(problems, fmt.Sprintf("field %q is %s, outside the types a path or query value parses into: "+
-						"a TextUnmarshaler, a string type with MaxBytes, an integer type with Range, a uint64 or a bool", tf.name, f.Type))
+				tf.list = isList(tf.typ)
+				if p := fieldTypeProblem(tf, f.Type); p != "" {
+					problems = append(problems, p)
 				}
 				if tf.typ == cursorType && !inPage {
 					problems = append(problems, fmt.Sprintf("field %q is an httpwire.Cursor, which only an embedded httpwire.Page carries", tf.name))
@@ -143,6 +145,35 @@ func textFields(t reflect.Type) (fields []textField, problems []string) {
 	}
 	walk(t, nil, false)
 	return fields, problems
+}
+
+// isList reports whether t is a slice type with MaxItems, which a query
+// sends as one occurrence per element.
+func isList(t reflect.Type) bool {
+	_, ok := methodOf[listed](t)
+	return ok && t.Kind() == reflect.Slice && !isTextType(t)
+}
+
+// fieldTypeProblem says why tf, declared as t, cannot be parsed from text.
+func fieldTypeProblem(tf *textField, t reflect.Type) string {
+	if !tf.list {
+		if inBinderSet(tf.typ) {
+			return ""
+		}
+		return fmt.Sprintf("field %q is %s, outside the types a path or query value parses into: "+
+			"a TextUnmarshaler, a string type with MaxBytes, an integer type with Range, a uint64 or a bool, "+
+			"or in a query a slice of one of them with MaxItems", tf.name, t)
+	}
+	m, _ := methodOf[listed](tf.typ)
+	switch elem := tf.typ.Elem(); {
+	case tf.pointer:
+		return fmt.Sprintf("field %q is a query list behind a pointer; omitempty makes it optional", tf.name)
+	case !inBinderSet(elem) || elem == cursorType:
+		return fmt.Sprintf("field %q is a list of %s, outside the types a query value parses into", tf.name, elem)
+	case m.MaxItems() < 1:
+		return fmt.Sprintf("field %q's MaxItems is %d; a query list takes at least 1", tf.name, m.MaxItems())
+	}
+	return ""
 }
 
 // textFieldOf reads one struct field as encoding/json names it: nil for a

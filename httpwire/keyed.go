@@ -200,7 +200,7 @@ func (a *API) runClaim(w http.ResponseWriter, r *http.Request, ep *Endpoint, k I
 		return
 	}
 	ans.Fingerprint = c.fp
-	ans.Expires = time.Now().Add(a.window(ep))
+	ans.Expires = time.Now().Add(ep.Window)
 	if ans.Oversize && ep.Result == "" {
 		a.logOversize(r, ep)
 	}
@@ -208,13 +208,6 @@ func (a *API) runClaim(w http.ResponseWriter, r *http.Request, ep *Endpoint, k I
 		a.log().ErrorContext(r.Context(), "httpwire: the idempotency store could not save an answer", "row", ep.Name, "error", err)
 	}
 	kept = &ans
-}
-
-func (a *API) window(ep *Endpoint) time.Duration {
-	if ep.Window != 0 {
-		return ep.Window
-	}
-	return a.idem.lim.window
 }
 
 func (a *API) logOversize(r *http.Request, ep *Endpoint) {

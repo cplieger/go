@@ -413,6 +413,9 @@ func TestDeriveRefusesTableShape(t *testing.T) {
 		"prefix trailing slash": {func(tb *httpwire.Table) { tb.Prefix = "/api/" }, []string{"Prefix"}},
 		"prefix wildcard":       {func(tb *httpwire.Table) { tb.Prefix = "/{v}" }, []string{"Prefix"}},
 		"negative MaxBody":      {func(tb *httpwire.Table) { tb.MaxBody = -1 }, []string{"MaxBody"}},
+		"window under minute":   {func(tb *httpwire.Table) { tb.Window = 59 * time.Second }, []string{"the table's Window"}},
+		"window over 7 days":    {func(tb *httpwire.Table) { tb.Window = 7*24*time.Hour + time.Second }, []string{"the table's Window"}},
+		"negative window":       {func(tb *httpwire.Table) { tb.Window = -time.Minute }, []string{"the table's Window"}},
 		"client header token":   {func(tb *httpwire.Table) { tb.ClientHeader = "Fixture Version" }, []string{"ClientHeader"}},
 		"mount with no handler": {func(tb *httpwire.Table) { tb.Mounts[0].Handler = nil }, []string{"mount", "Handler"}},
 		"source name uppercase": {func(tb *httpwire.Table) { tb.Sources[0].Name = "Store" }, []string{`source "Store"`}},
@@ -618,6 +621,36 @@ type (
 
 func (o *oneWayText) UnmarshalText(b []byte) error { o.v = string(b); return nil }
 func (o *oneWayJSON) UnmarshalJSON(b []byte) error { o.v = string(b); return nil }
+
+// The window a client may resend within is the table's, so the client
+// generator, which reads only the table, publishes each Keyed row's.
+func TestDeriveFillsEachKeyedRowsWindow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		table, own, want time.Duration
+	}{
+		"the default":    {0, 0, 10 * time.Minute},
+		"the table's":    {time.Hour, 0, time.Hour},
+		"the row's own":  {time.Hour, 24 * time.Hour, 24 * time.Hour},
+		"the low bound":  {time.Minute, 0, time.Minute},
+		"the high bound": {7 * 24 * time.Hour, 0, 7 * 24 * time.Hour},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tb := fixtureTable(t)
+			tb.Window = tc.table
+			row(tb, "jobs.start").Window = tc.own
+			d, err := httpwire.Derive(tb, guardCodes)
+			if err != nil {
+				t.Fatalf("Derive: %v", err)
+			}
+			if got := row(d, "jobs.start").Window; got != tc.want {
+				t.Errorf("the Keyed row's Window = %v, want %v", got, tc.want)
+			}
+			if got := row(d, "settings.save").Window; got != 0 {
+				t.Errorf("a row that is not Keyed has Window %v, want none", got)
+			}
+		})
+	}
+}
 
 func TestDeriveAcceptsKeyedBounds(t *testing.T) {
 	for name, w := range map[string]time.Duration{"one minute": time.Minute, "seven days": 7 * 24 * time.Hour} {

@@ -1,6 +1,7 @@
 package httpwire
 
 import (
+	"cmp"
 	"encoding"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ const (
 	maxSourceName  = 32
 	minWindow      = time.Minute
 	maxWindow      = 7 * 24 * time.Hour
+	defaultWindow  = 10 * time.Minute
 )
 
 // The codes the union adds for a row's features.
@@ -68,6 +70,12 @@ func derive(t *Table, guardCodes func(Access) []string) (*Table, []error) {
 		c.row(r, names)
 	}
 	c.patterns(refs)
+	d.Window = cmp.Or(d.Window, defaultWindow)
+	for _, r := range refs {
+		if r.ep.Keyed && r.ep.Window == 0 {
+			r.ep.Window = d.Window
+		}
+	}
 	return d, c.errs
 }
 
@@ -222,6 +230,9 @@ func (c *tableChecker) table() {
 	}
 	if t.MaxBody < 0 {
 		c.fail("the table's MaxBody is negative: %d", t.MaxBody)
+	}
+	if t.Window != 0 && (t.Window < minWindow || t.Window > maxWindow) {
+		c.fail("the table's Window %v is outside 1 minute to 7 days", t.Window)
 	}
 	if t.ClientHeader != "" && !isToken(t.ClientHeader) {
 		c.fail("ClientHeader %q is not a header name", t.ClientHeader)
@@ -387,6 +398,8 @@ func (c *tableChecker) pathParams(ep *Endpoint, at string, mount bool) {
 			c.fail("%s: Params field %q names no path wildcard", at, f.name)
 		case f.optional && !mount:
 			c.fail("%s: Params field %q is optional; a path value is always present", at, f.name)
+		case f.list && !mount:
+			c.fail("%s: Params field %q is a list; only a query value repeats", at, f.name)
 		}
 	}
 	if !mount {

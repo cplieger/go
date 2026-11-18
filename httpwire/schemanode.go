@@ -682,15 +682,8 @@ func (s *Schema) CheckParam(operation, in, name string, value any) *FieldError {
 	if n == nil {
 		return &FieldError{Path: name, Code: codeUnknown, Message: "not a declared " + in + " parameter"}
 	}
-	var v any
-	switch x := value.(type) {
-	case string, bool:
-		v = x
-	case int64:
-		v = json.Number(strconv.FormatInt(x, 10))
-	case uint64:
-		v = json.Number(strconv.FormatUint(x, 10))
-	default:
+	v, ok := paramJSON(value)
+	if !ok {
 		return &FieldError{Path: name, Code: codeMalformed, Message: "a parameter value is a string, int64, uint64 or bool"}
 	}
 	var c checker
@@ -699,4 +692,32 @@ func (s *Schema) CheckParam(operation, in, name string, value any) *FieldError {
 		return nil
 	}
 	return &c.out[0]
+}
+
+// checkParamItem validates one element of a repeated query parameter
+// against the array's items, naming it at; New has matched the array's
+// maxItems with the field's MaxItems, which the decode checks first.
+func (s *Schema) checkParamItem(operation, name, at string, value any) []FieldError {
+	p := s.ops[operation].params[paramKey{inQuery, name}]
+	items := p.schema.final().items
+	if items == nil {
+		return nil
+	}
+	v, _ := paramJSON(value)
+	var c checker
+	c.check(items, v, at, nil)
+	return c.out
+}
+
+// paramJSON is a parameter's scalar as a decoded JSON value.
+func paramJSON(value any) (any, bool) {
+	switch x := value.(type) {
+	case string, bool:
+		return x, true
+	case int64:
+		return json.Number(strconv.FormatInt(x, 10)), true
+	case uint64:
+		return json.Number(strconv.FormatUint(x, 10)), true
+	}
+	return nil, false
 }

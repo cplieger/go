@@ -72,9 +72,6 @@ type IdempotencyOptions struct {
 	Store IdempotencyStore
 	// Observer is told of each outcome other than a first run.
 	Observer func(IdempotencyEvent)
-	// Window is how long a row with no Window of its own keeps an answer:
-	// 10 minutes when zero, else 1 minute to 7 days.
-	Window time.Duration
 	// MaxAnswer is the largest body kept: 64 KiB when zero, else 1 KiB to
 	// 1 MiB. A larger answer is sent whole and kept as Oversize.
 	MaxAnswer int
@@ -122,7 +119,6 @@ const (
 
 // idemLimits are IdempotencyOptions with each default filled in.
 type idemLimits struct {
-	window       time.Duration
 	maxAnswer    int
 	maxBytes     int
 	perCredBytes int
@@ -132,7 +128,6 @@ type idemLimits struct {
 // limits checks o against each bound, answering every refusal.
 func (o IdempotencyOptions) limits() (l idemLimits, problems []string) {
 	l = idemLimits{
-		window:    cmp.Or(o.Window, 10*time.Minute),
 		maxAnswer: cmp.Or(o.MaxAnswer, 64<<10),
 		maxBytes:  cmp.Or(o.MaxBytes, 64<<20),
 		perCred:   cmp.Or(o.MaxPerCredential, 1000),
@@ -143,7 +138,6 @@ func (o IdempotencyOptions) limits() (l idemLimits, problems []string) {
 			problems = append(problems, fmt.Sprintf("%s %d is outside %d to %d%s", name, v, lo, hi, unit))
 		}
 	}
-	bound("Window", o.Window != 0, int64(o.Window), int64(minWindow), int64(maxWindow), " nanoseconds (1 minute to 7 days)")
 	bound("MaxAnswer", o.MaxAnswer != 0, int64(o.MaxAnswer), 1<<10, 1<<20, " bytes")
 	bound("MaxBytes", o.MaxBytes != 0, int64(o.MaxBytes), 1<<20, 1<<30, " bytes")
 	bound("MaxBytesPerCredential", o.MaxBytesPerCredential != 0, int64(o.MaxBytesPerCredential), int64(l.maxAnswer), int64(l.maxBytes), " bytes (MaxAnswer to MaxBytes)")

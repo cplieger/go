@@ -32,6 +32,9 @@ type paramKey struct{ in, name string }
 type param struct {
 	schema   *node
 	required bool
+	// form is style form with explode true, stated: a repeated query
+	// parameter's one value per occurrence (OpenAPI 3.1 section 4.8.12.4).
+	form bool
 }
 
 // requestBody's schema is nil when the body has no application/json media.
@@ -221,7 +224,7 @@ func (p *parser) parameters(op *operation, v any, at string) {
 	}
 	for i, e := range list {
 		pat := pointer(at, strconv.Itoa(i))
-		m, ok := p.object(e, pat, true, "name", "in", "required", "schema", "description", "deprecated")
+		m, ok := p.object(e, pat, true, "name", "in", "required", "schema", "description", "deprecated", "style", "explode")
 		if !ok {
 			continue
 		}
@@ -238,9 +241,23 @@ func (p *parser) parameters(op *operation, v any, at string) {
 			p.fail(pat, "parameter %s %q declared twice", in, name)
 		default:
 			required, _ := m["required"].(bool)
-			op.params[paramKey{in, name}] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required}
+			op.params[paramKey{in, name}] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required, form: p.form(m, pat)}
 		}
 	}
+}
+
+// form reads a parameter's style and explode: only form, and a boolean
+// explode, are ones wiregen writes.
+func (p *parser) form(m map[string]any, at string) bool {
+	style, hasStyle := m["style"]
+	explode, hasExplode := m["explode"]
+	if hasStyle && style != "form" {
+		p.fail(pointer(at, "style"), "style %v is not form", style)
+	}
+	if _, isBool := explode.(bool); hasExplode && !isBool {
+		p.fail(pointer(at, "explode"), "explode is not a boolean")
+	}
+	return style == "form" && explode == true
 }
 
 func (p *parser) requestBody(v any, at string) *requestBody {

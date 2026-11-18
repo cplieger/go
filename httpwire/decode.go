@@ -143,6 +143,10 @@ func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
 	fields, _ := textFields(ep.Query)
 	var c checker
 	for _, f := range fields {
+		if f.list {
+			c.out = append(c.out, a.queryList(qv, ep, &f, vals[f.name])...)
+			continue
+		}
 		code, message := a.queryField(qv, ep, &f, vals[f.name])
 		if code != "" {
 			c.add(f.name, refusalCode(f.typ, code), message)
@@ -181,6 +185,37 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 		return e.Code, e.Message
 	}
 	return "", ""
+}
+
+// queryList parses every occurrence of a list field, in order, naming each
+// refused element by its index.
+func (a *API) queryList(qv reflect.Value, ep *Endpoint, f *textField, given []string) []FieldError {
+	var c checker
+	m, _ := methodOf[listed](f.typ)
+	switch {
+	case len(given) == 0 && f.optional:
+		return nil
+	case len(given) == 0:
+		c.add(f.name, codeRequired, "required")
+		return c.out
+	case len(given) > m.MaxItems():
+		c.add(f.name, codeRange, "at most "+strconv.Itoa(m.MaxItems())+" values")
+		return c.out
+	}
+	list := reflect.MakeSlice(f.typ, len(given), len(given))
+	for i, text := range given {
+		ev := list.Index(i)
+		at := f.name + "[" + strconv.Itoa(i) + "]"
+		if code, message := parseText(ev, text); code != "" {
+			c.add(at, refusalCode(f.typ.Elem(), code), message)
+			continue
+		}
+		c.out = append(c.out, a.schema.checkParamItem(ep.Name, f.name, at, paramValue(ev, text))...)
+	}
+	if len(c.out) == 0 {
+		qv.FieldByIndex(f.index).Set(list)
+	}
+	return c.out
 }
 
 // jsonMediaType refuses a body r does not send as application/json in

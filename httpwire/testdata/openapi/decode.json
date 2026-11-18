@@ -126,6 +126,54 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/holders": {
+      "get": {
+        "description": "Reads who holds each path.",
+        "operationId": "items.holders",
+        "parameters": [
+          {
+            "explode": true,
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "items": {
+                "minLength": 2,
+                "type": "string",
+                "x-max-bytes": 8
+              },
+              "maxItems": 3,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ItemKind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the holders"
+      }
+    },
     "/api/items": {
       "get": {
         "description": "Lists the items.",

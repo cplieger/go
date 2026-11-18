@@ -175,15 +175,16 @@ func TestMaxKeptEvictsTheCredentialsOldestOfTheRow(t *testing.T) {
 }
 
 func TestWindowBoundsTheKeptAnswer(t *testing.T) {
+	ownWindow := func(tb *httpwire.Table) { tb.Window = 5 * time.Minute; row(tb, "jobs.quick").Window = time.Minute }
 	for name, tc := range map[string]struct {
 		opts   httpwire.IdempotencyOptions
 		edit   func(*httpwire.Table)
 		target string
 		window time.Duration
 	}{
-		"the row's own":   {httpwire.IdempotencyOptions{Window: 5 * time.Minute}, func(tb *httpwire.Table) { row(tb, "jobs.quick").Window = time.Minute }, "/api/jobs/quick", time.Minute},
-		"the API default": {httpwire.IdempotencyOptions{}, nil, "/api/jobs/quick", 10 * time.Minute},
-		"the API's":       {httpwire.IdempotencyOptions{Window: 5 * time.Minute}, nil, "/api/jobs", 5 * time.Minute},
+		"the row's own":     {httpwire.IdempotencyOptions{}, ownWindow, "/api/jobs/quick", time.Minute},
+		"the table default": {httpwire.IdempotencyOptions{}, nil, "/api/jobs/quick", 10 * time.Minute},
+		"the table's":       {httpwire.IdempotencyOptions{}, func(tb *httpwire.Table) { tb.Window = 5 * time.Minute }, "/api/jobs", 5 * time.Minute},
 	} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -254,9 +255,6 @@ func TestNewRefusesIdempotencyOptionsOutOfBounds(t *testing.T) {
 		opts httpwire.IdempotencyOptions
 		want string
 	}{
-		"a short window":            {httpwire.IdempotencyOptions{Window: 59 * time.Second}, "Window"},
-		"a long window":             {httpwire.IdempotencyOptions{Window: 7*24*time.Hour + time.Second}, "Window"},
-		"a negative window":         {httpwire.IdempotencyOptions{Window: -time.Minute}, "Window"},
 		"a small MaxAnswer":         {httpwire.IdempotencyOptions{MaxAnswer: kib - 1}, "MaxAnswer"},
 		"a large MaxAnswer":         {httpwire.IdempotencyOptions{MaxAnswer: mib + 1}, "MaxAnswer"},
 		"a small MaxBytes":          {httpwire.IdempotencyOptions{MaxBytes: mib - 1}, "MaxBytes"},
@@ -280,9 +278,9 @@ func TestNewRefusesIdempotencyOptionsOutOfBounds(t *testing.T) {
 	}
 	for name, opts := range map[string]httpwire.IdempotencyOptions{
 		"the defaults":    {},
-		"the low bounds":  {Window: time.Minute, MaxAnswer: kib, MaxBytes: mib, MaxBytesPerCredential: kib, MaxPerCredential: 1},
-		"the high bounds": {Window: 7 * 24 * time.Hour, MaxAnswer: mib, MaxBytes: 1 << 30, MaxBytesPerCredential: 1 << 30, MaxPerCredential: 10_000},
-		"a store":         {Store: store, Window: time.Hour, MaxAnswer: mib},
+		"the low bounds":  {MaxAnswer: kib, MaxBytes: mib, MaxBytesPerCredential: kib, MaxPerCredential: 1},
+		"the high bounds": {MaxAnswer: mib, MaxBytes: 1 << 30, MaxBytesPerCredential: 1 << 30, MaxPerCredential: 10_000},
+		"a store":         {Store: store, MaxAnswer: mib},
 	} {
 		t.Run("accepts "+name, func(t *testing.T) {
 			if _, _, err := buildKeyed(t, opts, nil); err != nil {

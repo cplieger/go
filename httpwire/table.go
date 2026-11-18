@@ -58,7 +58,7 @@ type Endpoint struct {
 	// table's.
 	MaxBody int
 	// Window is a Keyed row's idempotency window, 1 minute to 7 days; zero
-	// is the API's.
+	// is the table's.
 	Window time.Duration
 	// MaxKept is a Keyed row's answers kept per credential; zero is no count
 	// bound.
@@ -165,6 +165,10 @@ type Table struct {
 	Mounts []Mount
 	// MaxBody is the request body cap; zero is 64 KiB.
 	MaxBody int
+	// Window is how long a Keyed row with no Window of its own keeps an
+	// answer: 10 minutes when zero, else 1 minute to 7 days. Derive copies
+	// it onto each such row, so the document publishes every row's window.
+	Window time.Duration
 	// OnePerson says only one person can sign in, so a Personal read may
 	// name kinds.
 	OnePerson bool

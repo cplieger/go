@@ -654,6 +654,30 @@ func (c *newChecker) ifMatchParam(at string, ep *Endpoint, op *operation) {
 	}
 }
 
+// listParam matches a query list field with an array parameter of its
+// MaxItems sent once per element, and any other field with no array.
+func (c *newChecker) listParam(at string, f *textField, p *param) {
+	n := p.schema.final()
+	isArray := n.types == typeArray
+	if !f.list {
+		if isArray {
+			c.fail("%s: Query field %q is one value, but the document's parameter is an array", at, f.name)
+		}
+		return
+	}
+	m, _ := methodOf[listed](f.typ)
+	switch {
+	case !isArray:
+		c.fail("%s: Query field %q is a list, but the document's parameter is not an array", at, f.name)
+	case n.maxItems != m.MaxItems():
+		c.fail("%s: Query field %q takes maxItems %d, but the document's parameter says %d", at, f.name, m.MaxItems(), n.maxItems)
+	case n.minItems >= 0:
+		c.fail("%s: Query field %q has no minItems bound, but the document's parameter declares one", at, f.name)
+	case !p.form:
+		c.fail("%s: Query field %q is sent once per value, so the document's parameter needs style form and explode true", at, f.name)
+	}
+}
+
 // fieldParams matches each field of t, decoded from the in parameters, with
 // op's parameter of its name, marking it in declared.
 func (c *newChecker) fieldParams(at string, t reflect.Type, in string, op *operation, declared map[paramKey]bool) {
@@ -671,6 +695,8 @@ func (c *newChecker) fieldParams(at string, t reflect.Type, in string, op *opera
 			c.fail("%s: %s field %q is optional, but the document's parameter is required", at, partOf[in], f.name)
 		case !f.optional && !p.required:
 			c.fail("%s: %s field %q is required, but the document's parameter is optional", at, partOf[in], f.name)
+		default:
+			c.listParam(at, &f, p)
 		}
 	}
 }
