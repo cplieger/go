@@ -1,0 +1,78 @@
+[
+  {
+    "key": "a",
+    "header": "\"a\""
+  },
+  {
+    "key": "00000000-0000-4000-8000-000000000000",
+    "header": "\"00000000-0000-4000-8000-000000000000\""
+  },
+  {
+    "key": " ",
+    "header": "\" \""
+  },
+  {
+    "key": "a\"b",
+    "header": "\"a\\\"b\""
+  },
+  {
+    "key": "a\\b",
+    "header": "\"a\\\\b\""
+  },
+  {
+    "key": "\"",
+    "header": "\"\\\"\""
+  },
+  {
+    "key": "\\",
+    "header": "\"\\\\\""
+  },
+  {
+    "key": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+    "header": "\" !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\""
+  },
+  {
+    "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    "header": "\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\""
+  },
+  {
+    "key": "~",
+    "header": "\"~\""
+  },
+  {
+    "key": "",
+    "header": null
+  },
+  {
+    "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    "header": null
+  },
+  {
+    "key": "\u00e9",
+    "header": null
+  },
+  {
+    "key": "a\tb",
+    "header": null
+  },
+  {
+    "key": "a\nb",
+    "header": null
+  },
+  {
+    "key": "\u007f",
+    "header": null
+  },
+  {
+    "key": "a\u0000b",
+    "header": null
+  },
+  {
+    "key": "\u20ac\u20ac\u20ac",
+    "header": null
+  },
+  {
+    "key": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u00ff",
+    "header": null
+  }
+]
