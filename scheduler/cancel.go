@@ -9,6 +9,14 @@ import "context"
 // for an ended job and ErrUnknownJob for an unknown id; a repeat answers as
 // the first cancel did.
 func (e *Executor[P]) Cancel(ctx context.Context, id ID) (stopping bool, err error) {
+	e.mu.Lock()
+	if en := e.findLocked(id); en != nil && en.state == stateQueued {
+		e.dequeueLocked(en)
+		e.mu.Unlock()
+		e.ended(ctx, en, End{Result: ResultCancelled})
+		return false, nil
+	}
+	e.mu.Unlock()
 	return false, errStub
 }
 

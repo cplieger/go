@@ -1,9 +1,13 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/cplieger/go/health/v2"
@@ -19,7 +23,8 @@ type KindSpec[P any] struct {
 	// run that ended less than that ago.
 	Fresh func(scope string) time.Duration
 	// Covers is optional: when a job of this kind starts, each queued or
-	// yielded job it covers ends without running its own work.
+	// yielded job it covers ends without running its own work. The executor
+	// calls it holding its lock, so it must not call the executor.
 	Covers func(started, other Job[P]) bool
 	// Items is a batch kind's item count, read from the payload at Start;
 	// required with MaxItems > 0 and refused without it.
@@ -94,10 +99,34 @@ type Started struct {
 	Joined   bool // a job already queued or running answered the request
 }
 
+// The bounds NewExecutor checks.
+const (
+	maxPhases         = 32
+	maxBatchItems     = 500
+	minKept           = 15 * time.Minute
+	maxKept           = 400 * 24 * time.Hour
+	defaultMaxQueued  = 16
+	maxMaxQueued      = 256
+	defaultQueuedEach = 4
+)
+
 // Executor runs an app's jobs: its timers, its slots and its records. It is
 // safe for concurrent use.
 type Executor[P any] struct {
-	cfg Config[P]
+	records  Records
+	log      *slog.Logger
+	kinds    map[Kind]*KindSpec[P]
+	slots    map[string]*slot
+	owners   map[string]int // waiting jobs per credential
+	ready    chan struct{}  // closed by Run
+	observer Observer
+	live     []*job[P] // admitting, queued and running jobs, in admission order
+	wg       sync.WaitGroup
+	mu       sync.Mutex
+
+	maxQueued, maxPerOwner int
+	waiting                int
+	started, closed        bool
 }
 
 // NewExecutor checks cfg and answers an executor that does nothing until Run.
@@ -106,12 +135,316 @@ type Executor[P any] struct {
 // MaxItems, more than 32 phases, a queue bound outside its range, and a
 // missing Records when a kind keeps records.
 func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
-	return &Executor[P]{cfg: cfg}, nil
+	maxQueued := cmp.Or(cfg.MaxQueued, defaultMaxQueued)
+	if maxQueued < 1 || maxQueued > maxMaxQueued {
+		return nil, fmt.Errorf("scheduler: MaxQueued %d outside 1 to %d", cfg.MaxQueued, maxMaxQueued)
+	}
+	perOwner := cmp.Or(cfg.MaxQueuedPerOwner, min(defaultQueuedEach, maxQueued))
+	if perOwner < 1 || perOwner > maxQueued {
+		return nil, fmt.Errorf("scheduler: MaxQueuedPerOwner %d outside 1 to %d", cfg.MaxQueuedPerOwner, maxQueued)
+	}
+	e := &Executor[P]{
+		records:     cfg.Records,
+		log:         cmp.Or(cfg.Logger, slog.Default()),
+		kinds:       map[Kind]*KindSpec[P]{},
+		slots:       map[string]*slot{},
+		owners:      map[string]int{},
+		ready:       make(chan struct{}),
+		observer:    cfg.Observer,
+		maxQueued:   maxQueued,
+		maxPerOwner: perOwner,
+	}
+	for i := range cfg.Kinds {
+		k := cfg.Kinds[i]
+		if err := k.check(); err != nil {
+			return nil, fmt.Errorf("scheduler: kind %q: %w", k.Kind, err)
+		}
+		if _, dup := e.kinds[k.Kind]; dup {
+			return nil, fmt.Errorf("scheduler: kind %q declared twice", k.Kind)
+		}
+		if k.Kept > 0 && cfg.Records == nil {
+			return nil, fmt.Errorf("scheduler: kind %q keeps records and Config.Records is nil", k.Kind)
+		}
+		k.Phases = slices.Clone(k.Phases)
+		e.kinds[k.Kind] = &k
+		if k.Slot != "" && e.slots[k.Slot] == nil {
+			e.slots[k.Slot] = newSlot()
+		}
+	}
+	return e, nil
+}
+
+func (k *KindSpec[P]) check() error {
+	switch {
+	case !validCode(string(k.Kind)):
+		return errors.New("kind outside code grammar")
+	case k.Run == nil:
+		return errors.New("no Run")
+	case len(k.Phases) > maxPhases:
+		return fmt.Errorf("%d phases, more than %d", len(k.Phases), maxPhases)
+	case k.Kept != 0 && (k.Kept < minKept || k.Kept > maxKept):
+		return fmt.Errorf("kept %v, want 0 or %v to %v", k.Kept, minKept, maxKept)
+	case k.MaxItems < 0 || k.MaxItems > maxBatchItems:
+		return fmt.Errorf("MaxItems %d outside 0 to %d", k.MaxItems, maxBatchItems)
+	case k.MaxItems > 0 && k.Items == nil:
+		return errors.New("a batch (MaxItems > 0) with no Items")
+	case k.MaxItems == 0 && k.Items != nil:
+		return errors.New("an item count (Items) on a kind that is not a batch")
+	}
+	for _, p := range k.Phases {
+		if !validCode(string(p)) {
+			return fmt.Errorf("phase %q outside code grammar", p)
+		}
+	}
+	return nil
 }
 
 // Run drives the timers, slots and dispatch until ctx ends, then cancels each
-// running job and returns once every one has returned.
+// running job and returns once every one has returned. A second call answers
+// an error at once.
 func (e *Executor[P]) Run(ctx context.Context) error {
+	e.mu.Lock()
+	if e.started {
+		e.mu.Unlock()
+		return errors.New("scheduler: Run called twice")
+	}
+	e.started = true
+	close(e.ready)
+	e.mu.Unlock()
+
 	<-ctx.Done()
+	e.mu.Lock()
+	e.closed = true
+	for _, en := range slices.Clone(e.live) {
+		switch en.state {
+		case stateQueued:
+			e.dequeueLocked(en)
+		case stateRunning:
+			en.cancel()
+		case stateAdmitting, stateEnded:
+		}
+	}
+	e.mu.Unlock()
+	e.wg.Wait()
 	return nil
+}
+
+type jobState uint8
+
+const (
+	stateAdmitting jobState = iota // its record is being written
+	stateQueued
+	stateRunning
+	stateEnded
+)
+
+// job is one admitted job. state, cancel and w's ownership are guarded by the
+// executor's mu; rec is the job goroutine's once the job runs.
+type job[P any] struct {
+	spec     *KindSpec[P]
+	slot     *slot
+	w        *waiter            // its take of a named slot; nil when it waits for none
+	admitted chan struct{}      // closed once its record is written or refused
+	gone     chan struct{}      // closed when it leaves the queue without running
+	cancel   context.CancelFunc // set when it runs
+	relay    relay
+	j        Job[P]
+	rec      Record
+	class    Class
+	state    jobState
+}
+
+// waits reports whether the job takes its kind's slot before its Run starts:
+// a batch's items take it instead.
+func (en *job[P]) waits() bool { return en.slot != nil && en.spec.MaxItems == 0 }
+
+// position counts the jobs its slot serves before it.
+func (en *job[P]) position() int {
+	if en.w == nil {
+		return 0
+	}
+	return en.slot.ahead(en.w)
+}
+
+// classOf is a job's class: Automatic for the timer's, else Interactive.
+func classOf(t Trigger) Class {
+	if t == TriggerSchedule {
+		return Automatic
+	}
+	return Interactive
+}
+
+// await waits for Run and the job's slot, then runs it; a job that leaves
+// the queue first runs nothing.
+func (e *Executor[P]) await(en *job[P]) {
+	defer e.wg.Done()
+	select {
+	case <-e.ready:
+	case <-en.gone:
+		return
+	}
+	if en.w != nil {
+		select {
+		case <-en.w.ready:
+		case <-en.gone:
+			return
+		}
+	}
+	e.begin(en)
+}
+
+// begin runs a job that holds its slot, unless it left the queue as its
+// grant came.
+func (e *Executor[P]) begin(en *job[P]) {
+	e.mu.Lock()
+	if en.state != stateQueued {
+		e.mu.Unlock()
+		return
+	}
+	e.unwaitLocked(en)
+	en.state = stateRunning
+	ctx, cancel := context.WithCancel(context.Background())
+	en.cancel = cancel
+	e.mu.Unlock()
+	defer cancel()
+
+	if en.w != nil && e.observer.SlotWait != nil {
+		e.observer.SlotWait(en.spec.Slot, en.class, en.slot.waited(en.w))
+	}
+	now := time.Now()
+	en.rec.State, en.rec.StartedAt, en.rec.Phase = StateRunning, now, PhaseStarted
+	e.put(en)
+	e.emit(en, &Transition{Phase: PhaseStarted, At: now})
+	end := en.spec.Run(ctx, &Run[P]{job: en.j, class: en.class})
+	e.finish(en, end)
+}
+
+// finish writes a run job's end, frees its slot and reports the stored end.
+func (e *Executor[P]) finish(en *job[P], end End) {
+	stored, at := e.end(context.Background(), en, end)
+	e.mu.Lock()
+	en.state = stateEnded
+	e.removeLocked(en)
+	e.mu.Unlock()
+	if en.w != nil {
+		en.slot.drop(en.w)
+	}
+	e.emit(en, &Transition{Phase: en.rec.Phase, Result: stored.Result, At: at})
+}
+
+// end writes en's end and answers the stored one, which an end the job's own
+// commit wrote wins over, and its time.
+func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (End, time.Time) {
+	if en.spec.Kept == 0 {
+		return end, time.Now()
+	}
+	rec, err := e.records.End(context.WithoutCancel(ctx), en.j.ID, end)
+	if err != nil || rec.End == nil {
+		e.log.Error("job end not recorded", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID, "err", err)
+		return end, time.Now()
+	}
+	return *rec.End, rec.EndedAt
+}
+
+// put writes the job's record after a change.
+func (e *Executor[P]) put(en *job[P]) {
+	if en.spec.Kept == 0 {
+		return
+	}
+	en.rec.Rev++
+	if err := e.records.Put(context.Background(), en.rec); err != nil {
+		e.log.Error("job record not written", "kind", en.j.Kind, "scope", en.j.Scope, "job", en.j.ID, "err", err)
+	}
+}
+
+// dequeueLocked takes a queued job out of the queue without running it; its
+// record is the caller's to end.
+func (e *Executor[P]) dequeueLocked(en *job[P]) {
+	e.unwaitLocked(en)
+	en.state = stateEnded
+	e.removeLocked(en)
+	close(en.gone)
+	if en.w != nil {
+		en.slot.drop(en.w)
+	}
+}
+
+func (e *Executor[P]) waitLocked(en *job[P]) {
+	e.waiting++
+	if o := en.j.Owner; o != "" {
+		e.owners[o]++
+	}
+}
+
+// unwaitLocked frees an admitting or queued job's place in the bounds.
+func (e *Executor[P]) unwaitLocked(en *job[P]) {
+	if en.state != stateAdmitting && en.state != stateQueued {
+		return
+	}
+	e.waiting--
+	if o := en.j.Owner; o != "" {
+		e.owners[o]--
+		if e.owners[o] == 0 {
+			delete(e.owners, o)
+		}
+	}
+}
+
+func (e *Executor[P]) removeLocked(en *job[P]) {
+	if i := slices.Index(e.live, en); i >= 0 {
+		e.live = slices.Delete(e.live, i, i+1)
+	}
+}
+
+func (e *Executor[P]) findLocked(id ID) *job[P] {
+	for _, en := range e.live {
+		if en.j.ID == id {
+			return en
+		}
+	}
+	return nil
+}
+
+// relay delivers one job's transitions in order without holding a lock
+// across the Observer: a transition posted while another is being delivered
+// is delivered by that caller after it.
+type relay struct {
+	pending []Transition
+	mu      sync.Mutex
+	busy    bool
+}
+
+// emit posts tr for en and delivers what is pending.
+func (e *Executor[P]) emit(en *job[P], tr *Transition) {
+	e.post(en, tr)
+	e.flush(en)
+}
+
+func (e *Executor[P]) post(en *job[P], tr *Transition) {
+	if e.observer.Transition == nil {
+		return
+	}
+	tr.Job, tr.Kind, tr.Scope = en.j.ID, en.j.Kind, en.j.Scope
+	en.relay.mu.Lock()
+	defer en.relay.mu.Unlock()
+	en.relay.pending = append(en.relay.pending, *tr)
+}
+
+func (e *Executor[P]) flush(en *job[P]) {
+	r := &en.relay
+	r.mu.Lock()
+	if r.busy {
+		r.mu.Unlock()
+		return
+	}
+	r.busy = true
+	for len(r.pending) > 0 {
+		tr := r.pending[0]
+		r.pending = r.pending[1:]
+		r.mu.Unlock()
+		e.observer.Transition(tr)
+		r.mu.Lock()
+	}
+	r.busy = false
+	r.mu.Unlock()
 }
