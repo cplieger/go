@@ -188,6 +188,9 @@ func refusalFixtures(t *testing.T) []fixture {
 		}
 	}
 	long := strings.Repeat("a", 65)
+	// year10000 is an as_of only a wire written by hand carries:
+	// time.Time's JSON refuses to write a year past 9999.
+	const year10000 = "10000-01-01T00:00:00Z"
 	checks := []check{
 		{name: "length", frame: map[string]any{
 			"type": "series", "name": "depth", "unit": "count", "x": []float64{1, 2},
@@ -282,12 +285,36 @@ func refusalFixtures(t *testing.T) []fixture {
 			},
 		},
 		{
-			name: "read-count-value", rule: chartdata.RuleRead,
+			name: "read-as-of-year", rule: chartdata.RuleRead, field: "read.as_of",
+			frame: readFrame(map[string]any{"state": "partial", "as_of": year10000}),
+		},
+		{
+			name: "read-count-value-without-as-of", rule: chartdata.RuleRead,
 			count: map[string]any{"value": 5, "state": "partial", "as_of": nil},
 			build: func() error {
 				_, err := chartdata.CountOf(new(5.0), measure.Read{State: measure.ReadPartial})
 				return err
 			},
+		},
+		{
+			name: "read-count-as-of-without-value", rule: chartdata.RuleRead,
+			count: map[string]any{"value": nil, "state": "partial", "as_of": readAt},
+			build: func() error {
+				_, err := chartdata.CountOf(nil, whole.Cut(measure.ReadPartial, ""))
+				return err
+			},
+		},
+		{
+			name: "read-count-complete-without-as-of", rule: chartdata.RuleRead,
+			count: map[string]any{"value": 5, "state": "complete", "as_of": nil},
+			build: func() error {
+				_, err := chartdata.CountOf(new(5.0), measure.Read{State: measure.ReadComplete})
+				return err
+			},
+		},
+		{
+			name: "read-count-as-of-year", rule: chartdata.RuleRead, field: "as_of",
+			count: map[string]any{"value": 5, "state": "complete", "as_of": year10000},
 		},
 	}
 	out := make([]fixture, len(checks))

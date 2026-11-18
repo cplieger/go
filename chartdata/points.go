@@ -69,6 +69,7 @@ func NewPointsFrame(m Measures, series []Points, opts ...Option) (PointsFrame, e
 		Series: out,
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 	}, nil
 }
 
@@ -152,6 +153,7 @@ func NewGridFrame(d measure.Declared, g *Grid, opts ...Option) (GridFrame, error
 		Values: cells,
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 	}, nil
 }
 

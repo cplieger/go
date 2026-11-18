@@ -50,7 +50,7 @@ func NewEventsFrame(d measure.Declared, rows []Times, opts ...Option) (EventsFra
 		}
 		out[i] = FrameTimes{Key: r.Key, At: at}
 	}
-	return EventsFrame{Type: TypeEvents, Name: decl.Name, Rows: out, Refs: o.refs, Notes: o.notes}, nil
+	return EventsFrame{Type: TypeEvents, Name: decl.Name, Rows: out, Refs: o.refs, Notes: o.notes, Read: o.frameRead}, nil
 }
 
 // NewStatesFrame builds a StatesFrame of d's observations, oldest first, with
@@ -78,7 +78,7 @@ func NewStatesFrame(d measure.Declared, states []State, opts ...Option) (StatesF
 		key := s.Key
 		keys[i] = &key
 	}
-	return StatesFrame{Type: TypeStates, Name: decl.Name, Keys: keys, At: at, Refs: o.refs, Notes: o.notes}, nil
+	return StatesFrame{Type: TypeStates, Name: decl.Name, Keys: keys, At: at, Refs: o.refs, Notes: o.notes, Read: o.frameRead}, nil
 }
 
 // NewValueFrame builds a ValueFrame of d's meters, each with a key no other
@@ -97,7 +97,7 @@ func NewValueFrame(d measure.Declared, meters []FrameMeter, opts ...Option) (Val
 			return ValueFrame{}, err
 		}
 	}
-	return ValueFrame{Type: TypeValue, Name: decl.Name, Unit: string(decl.Unit), Meters: out, Refs: o.refs, Notes: o.notes}, nil
+	return ValueFrame{Type: TypeValue, Name: decl.Name, Unit: string(decl.Unit), Meters: out, Refs: o.refs, Notes: o.notes, Read: o.frameRead}, nil
 }
 
 func buildMeter(field string, m FrameMeter) (FrameMeter, error) {

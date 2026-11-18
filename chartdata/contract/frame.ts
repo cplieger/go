@@ -6,6 +6,8 @@ export type FrameEventKind = "append" | "replace" | "reset" | "set";
 
 export type FrameType = "series" | "bins" | "categories" | "boxes" | "points" | "grid" | "calendar" | "tree" | "flow" | "events" | "states" | "value";
 
+export type ReadState = "complete" | "partial" | "blind" | "unread" | "unsupported" | "excluded";
+
 /**
  * FrameEvent changes a frame already drawn, sent on the app's own event
  * stream. Key names the frame the page drew; each kind sets only its own
@@ -77,6 +79,8 @@ export interface BinsFrame {
   /** Domain is the span the axis covers, from and to. */
   domain?: number[];
   resets?: number[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
   /** Open says the last bin is still filling. */
@@ -93,6 +97,8 @@ export interface BoxesFrame {
   unit: string;
   names: string[];
   series: FrameBoxes[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -110,6 +116,8 @@ export interface CalendarFrame {
   /** Zone is the IANA time zone the days are in. */
   zone: string;
   values: (number | null)[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
   start: number;
@@ -128,8 +136,29 @@ export interface CategoriesFrame {
   unit: string;
   names: string[];
   series: FrameSeries[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
+}
+
+/**
+ * Count is an API row's figure for a count read elsewhere, built with
+ * [CountOf]: the last whole read's value and time, and how the latest read
+ * went. Value and AsOf are both null before the first whole read, and both
+ * set after it.
+ */
+export interface Count {
+  /** Value is the last whole read's value, never a later cut read's. */
+  value: number | null;
+  state: ReadState;
+  /** AsOf is the last whole read's instant, an RFC 3339 string. */
+  as_of: string | null;
+  /**
+   * Reason is the app's code for why the read is not whole, absent when
+   * it is.
+   */
+  reason?: string;
 }
 
 /** EventsFrame is rows of instants, drawn as a dot timeline strip. */
@@ -137,6 +166,8 @@ export interface EventsFrame {
   type: "events";
   name: string;
   rows: FrameTimes[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -153,6 +184,8 @@ export interface FlowFrame {
   nodes?: FrameFlowNode[];
   stages?: string[];
   links: FrameFlowLink[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -237,6 +270,18 @@ export interface FramePoints {
   r?: (number | null)[];
 }
 
+/** FrameRead is how the read behind a frame went, when it was not whole. */
+export interface FrameRead {
+  state: ReadState;
+  /**
+   * AsOf is the last whole read's instant, an RFC 3339 string; null
+   * before the first.
+   */
+  as_of: string | null;
+  /** Reason is the app's code for why the read is not whole. */
+  reason?: string;
+}
+
 /**
  * FrameRef is a reference value the server computed, such as a median, a
  * p95 or a threshold, drawn as a rule. Key is data; the page holds its words.
@@ -298,6 +343,8 @@ export interface GridFrame {
   x: FrameGridAxis;
   y: FrameGridAxis;
   values: (number | null)[][];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -311,6 +358,8 @@ export interface PointsFrame {
   name: string;
   units: FrameUnits;
   series: FramePoints[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -336,6 +385,8 @@ export interface SeriesFrame {
    * there instead of joining across them.
    */
   resets?: number[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
   /** Open says the last column is still filling. */
@@ -351,6 +402,8 @@ export interface StatesFrame {
   name: string;
   keys: (string | null)[];
   at: number[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -366,6 +419,8 @@ export interface TreeFrame {
   unit: string;
   parts?: FrameTreePart[];
   groups?: FrameTreeGroup[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }
@@ -379,6 +434,8 @@ export interface ValueFrame {
   name: string;
   unit: string;
   meters: FrameMeter[];
+  /** Read is how the read behind the frame went, absent when it was whole. */
+  read?: FrameRead;
   refs?: FrameRef[];
   notes?: FrameNote[];
 }

@@ -45,6 +45,7 @@ func NewCalendarFrame(d measure.Declared, zone string, start time.Time, values [
 		Values: days,
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 		Open:   o.open,
 	}, nil
 }

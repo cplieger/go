@@ -34,7 +34,7 @@ func NewTreeFrame(d measure.Declared, parts []TreePart, opts ...Option) (TreeFra
 	}
 	return TreeFrame{
 		Type: TypeTree, Name: decl.Name, Unit: string(decl.Unit),
-		Parts: out, Refs: o.refs, Notes: o.notes,
+		Parts: out, Refs: o.refs, Notes: o.notes, Read: o.frameRead,
 	}, nil
 }
 
@@ -70,7 +70,7 @@ func NewGroupedTreeFrame(d measure.Declared, groups []TreeGroup, opts ...Option)
 	}
 	return TreeFrame{
 		Type: TypeTree, Name: decl.Name, Unit: string(decl.Unit),
-		Groups: out, Refs: o.refs, Notes: o.notes,
+		Groups: out, Refs: o.refs, Notes: o.notes, Read: o.frameRead,
 	}, nil
 }
 

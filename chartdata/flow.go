@@ -52,7 +52,7 @@ func NewFlowFrame(d measure.Declared, f Flow, opts ...Option) (FlowFrame, error)
 	return FlowFrame{
 		Type: TypeFlow, Name: decl.Name, Unit: string(decl.Unit),
 		Nodes: nodes, Stages: slices.Clone(f.Stages), Links: links,
-		Refs: o.refs, Notes: o.notes,
+		Refs: o.refs, Notes: o.notes, Read: o.frameRead,
 	}, nil
 }
 

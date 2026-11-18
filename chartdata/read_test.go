@@ -105,6 +105,8 @@ func TestFrameReadRefusals(t *testing.T) {
 	whole := measure.Whole(readAt)
 	longest := strings.Repeat("a", 64)
 	past := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	beforeYear0 := time.Date(-1, 12, 31, 0, 0, 0, 0, time.UTC)
+	farZone := readAt.In(time.FixedZone("", 24*3600))
 	runRefusals(t, []refusalCase{
 		{name: "frameUnknownState", rule: chartdata.RuleRead, field: "read.state", build: frame(whole.Cut("stale", ""))},
 		{name: "frameCompleteWithReason", rule: chartdata.RuleRead, field: "read.reason", build: frame(whole.Cut(measure.ReadComplete, "rate_limited"))},
@@ -118,6 +120,8 @@ func TestFrameReadRefusals(t *testing.T) {
 		{name: "countReasonUppercase", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, "Rate_limited"))},
 		{name: "countReasonPast64Bytes", rule: chartdata.RuleRead, field: "reason", build: count(&five, whole.Cut(measure.ReadPartial, longest+"a"))},
 		{name: "countAsOfPastYear9999", rule: chartdata.RuleRead, field: "as_of", build: count(&five, measure.Whole(past))},
+		{name: "countAsOfBeforeYear0", rule: chartdata.RuleRead, field: "as_of", build: count(&five, measure.Whole(beforeYear0))},
+		{name: "frameAsOfZonePast23Hours", rule: chartdata.RuleRead, field: "read.as_of", build: frame(measure.Whole(farZone).Cut(measure.ReadBlind, ""))},
 		{name: "countCompleteWithNoTime", rule: chartdata.RuleRead, field: "as_of", build: count(&five, measure.Read{State: measure.ReadComplete})},
 		{name: "countValueWithNoWholeRead", rule: chartdata.RuleRead, field: "value", build: count(&five, measure.Read{State: measure.ReadPartial})},
 		{name: "countWholeReadWithNoValue", rule: chartdata.RuleRead, field: "value", build: count(nil, whole.Cut(measure.ReadPartial, ""))},

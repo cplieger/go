@@ -3,6 +3,8 @@ package chartdata
 import (
 	"slices"
 	"time"
+
+	"github.com/cplieger/go/measure/v2"
 )
 
 // Option sets an optional part of a frame. An option the frame's type cannot
@@ -23,18 +25,22 @@ const (
 	optDomain
 	optOpen
 	optResets
+	optRead
 )
 
 // optMarks are the options every frame takes.
-const optMarks = optRefs | optNotes
+const optMarks = optRefs | optNotes | optRead
 
 type options struct {
 	domain *Range
-	refs   []FrameRef
-	notes  []FrameNote
-	resets []time.Time
-	used   optionKind
-	open   bool
+	read   *measure.Read
+	// frameRead is the frame's read field, which applyOptions builds from read.
+	frameRead *FrameRead
+	refs      []FrameRef
+	notes     []FrameNote
+	resets    []time.Time
+	used      optionKind
+	open      bool
 }
 
 // WithRefs sets the frame's reference values, replacing any set before.
@@ -76,6 +82,7 @@ var optionNames = []struct {
 	{"WithDomain", optDomain},
 	{"WithOpen", optOpen},
 	{"WithResets", optResets},
+	{"WithRead", optRead},
 }
 
 // applyOptions applies opts and refuses an option outside allowed or with a
@@ -97,7 +104,11 @@ func applyOptions(opts []Option, allowed optionKind, values *count) (options, er
 	if err := checkMarks(o.refs, o.notes, values); err != nil {
 		return o, err
 	}
-	err := o.checkAxis()
+	if err := o.checkAxis(); err != nil {
+		return o, err
+	}
+	var err error
+	o.frameRead, err = frameRead(o.read)
 	return o, err
 }
 

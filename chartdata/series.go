@@ -41,6 +41,7 @@ func NewSeriesFrame(d measure.Declared, x []float64, series []Series, opts ...Op
 		Resets: o.resetMillis(),
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 		Open:   o.open,
 	}, nil
 }
@@ -77,6 +78,7 @@ func NewBinsFrame(d measure.Declared, axis FrameAxis, bins []Bin, series []Serie
 		Resets: o.resetMillis(),
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 		Open:   o.open,
 	}, nil
 }

@@ -1,0 +1,9 @@
+{
+  "count": {
+    "as_of": null,
+    "state": "complete",
+    "value": 5
+  },
+  "rule": "read",
+  "field": "as_of"
+}

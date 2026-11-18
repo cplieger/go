@@ -47,6 +47,7 @@ func NewCategoriesFrame(d measure.Declared, names []string, series []Series, opt
 		Series: out,
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 	}, nil
 }
 
@@ -88,6 +89,7 @@ func NewBoxesFrame(d measure.Declared, names []string, series []Boxes, opts ...O
 		Series: out,
 		Refs:   o.refs,
 		Notes:  o.notes,
+		Read:   o.frameRead,
 	}, nil
 }
 

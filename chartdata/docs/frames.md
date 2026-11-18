@@ -17,7 +17,7 @@ A `key` is always data: a label value, a reference name or the declaration's nam
 
 Frames encode with `encoding/json` as they are.
 
-- An instant is a Unix time in milliseconds, what JavaScript's `Date` takes.
+- An instant on an axis is a Unix time in milliseconds, what JavaScript's `Date` takes. A read's `as_of`, which is no place on an axis, is an RFC 3339 string ([Read state](read-state.md)).
 - A quantity is in the declaration's base unit: seconds, bytes, a ratio from 0 to 1, a count, or a plain number for `none`.
 - A gap is `null`. The constructors take `NaN` for a gap in a `[]float64` and write it as a `nil` element of the frame's `[]*float64`.
 - An optional field is left out when it is unset.
@@ -60,6 +60,7 @@ Options set the optional parts of a frame. An option the frame's type cannot tak
 | `WithDomain(Range{From, To})` | `SeriesFrame`, `BinsFrame` | the span the axis covers when it is wider than the data, such as a window whose first hours hold no samples |
 | `WithOpen(open)` | `SeriesFrame`, `BinsFrame`, `CalendarFrame` | that the last column, bin or day is still filling |
 | `WithResets(at...)` | `SeriesFrame`, `BinsFrame` | the instants a restart broke the series at, strictly increasing; a line breaks there instead of joining across them |
+| `WithRead(r)` | every frame | `read`, the state of a read that was not whole; a complete read adds nothing ([Read state](read-state.md)) |
 
 ## Refusals
 
@@ -79,6 +80,7 @@ A constructor returns a `*RefusalError` for a frame it refuses, and never a part
 | `empty` | an empty name, node or required list, such as a tree group with no parts, or a nil `Grid` |
 | `shape` | parts that do not fit together, such as a box with some of its five numbers, a grid axis with both names and edges, a flow link naming a node `nodes` does not list, a flow loop, a state its state set does not declare, a meter value outside its range, or a calendar start that is not the first instant of a day or not in an IANA zone |
 | `limit` | a frame past one of the limits below |
+| `read` | a read state a frame or a `Count` cannot carry: a state outside the six, a complete read with a reason, a reason that is no code or past 64 bytes, an `as_of` RFC 3339 cannot write, and on a `Count` a value and an `as_of` not set together ([Read state](read-state.md#what-rule-read-refuses)) |
 
 The rules are stable. The refusal fixtures carry them, so the chart elements refuse the same frames by the same rule. `declaration` and `option` have no fixture, since no frame on the wire can break them.
 

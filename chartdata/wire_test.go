@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cplieger/go/chartdata"
 )
@@ -22,7 +23,8 @@ func TestWireTypesListEveryTypeOnTheWire(t *testing.T) {
 		for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
 			typ = typ.Elem()
 		}
-		if typ.Kind() != reflect.Struct || reached[typ] {
+		// time.Time crosses the wire as a string, not as its fields.
+		if typ.Kind() != reflect.Struct || typ == reflect.TypeFor[time.Time]() || reached[typ] {
 			return
 		}
 		reached[typ] = true
