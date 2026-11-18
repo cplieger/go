@@ -134,39 +134,33 @@ func TestRenderPageCorpusAgreesWithPageMatcher(t *testing.T) {
 	}
 }
 
-// dotSegment reports whether a target's path holds a "." or ".." segment in
-// any spelling a browser's URL parser removes (%2e in either case).
-func dotSegment(target string) bool {
-	p, _, _ := strings.Cut(target, "?")
-	for seg := range strings.SplitSeq(p, "/") {
-		if s := strings.ReplaceAll(strings.ToLower(seg), "%2e", "."); s == "." || s == ".." {
-			return true
-		}
-	}
-	return false
-}
-
 func TestRenderPageCorpusMarksServerOnlyExactlyOnDotSegments(t *testing.T) {
 	t.Parallel()
-	var dot, dotdot, encoded int
+	// A browser's URL parser removes a "." or ".." segment, %2e spellings
+	// included, before the router reads the path (WHATWG URL, path state), so
+	// exactly these corpus cases are the server's alone.
+	serverOnly := map[string]bool{
+		"/./library": true, "/x/../library": true, "/library/%2e%2e": true,
+		"/./library/a": true, "/x/../library/a": true,
+		"/./docs/": true, "/x/../docs/": true, "/docs/%2e%2e": true,
+		"/./settings/a/b": true, "/x/../settings/a/b": true, "/settings/%2e%2e": true,
+	}
+	seen := map[string]bool{}
 	for _, c := range renderCorpus(t, corpusPages, "/api") {
-		if c.ServerOnly != dotSegment(c.Path) {
-			t.Errorf("%q: serverOnly is %v, want %v", c.Path, c.ServerOnly, !c.ServerOnly)
-		}
-		p, _, _ := strings.Cut(c.Path, "?")
-		for seg := range strings.SplitSeq(p, "/") {
-			switch {
-			case seg == ".":
-				dot++
-			case seg == "..":
-				dotdot++
-			case strings.EqualFold(seg, "%2e%2e"):
-				encoded++
-			}
+		seen[c.Path] = true
+		if c.ServerOnly != serverOnly[c.Path] {
+			t.Errorf("%q: serverOnly is %v, want %v", c.Path, c.ServerOnly, serverOnly[c.Path])
 		}
 	}
-	if dot == 0 || dotdot == 0 || encoded == 0 {
-		t.Errorf("the corpus holds %d \".\", %d \"..\" and %d \"%%2e%%2e\" segments, want each", dot, dotdot, encoded)
+	for _, p := range []string{"/library/a%2Fb", "/library?q=1", "//library", "/library/%C3%A9"} {
+		if !seen[p] {
+			t.Errorf("the corpus has no case %q", p)
+		}
+	}
+	for p := range serverOnly {
+		if !seen[p] {
+			t.Errorf("the corpus has no case %q", p)
+		}
 	}
 }
 

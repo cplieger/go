@@ -121,11 +121,11 @@ func (b *build) checkIconPNGs() error {
 	return nil
 }
 
+const svgRoot = "svg"
+
 // iconElements are the SVG elements oksvg draws; anything else (text, a
 // filter, a mask, a clip path, an image) would be dropped from the render,
 // so the icon is refused instead.
-const svgRoot = "svg"
-
 var iconElements = []string{
 	svgRoot, "g", "defs", "use", "title", "desc",
 	"path", "rect", "circle", "ellipse", "line", "polyline", "polygon",

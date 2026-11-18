@@ -171,14 +171,24 @@ func messages(msgs []api.Message) string {
 	return strings.Join(lines, "; ")
 }
 
+// defines adds BUNDLE_URLS to the user's defines: the whole object, and one
+// dotted define per classic entry, so a member read inlines only that URL and
+// the unread-classic check sees which entries a module reads.
 func defines(user, urls map[string]string) (map[string]string, error) {
 	raw, err := json.Marshal(urls)
 	if err != nil {
 		return nil, err
 	}
-	d := make(map[string]string, len(user)+1)
+	d := make(map[string]string, len(user)+len(urls)+1)
 	maps.Copy(d, user)
 	d[bundleURLs] = string(raw)
+	for name, u := range urls {
+		q, qerr := json.Marshal(u)
+		if qerr != nil {
+			return nil, qerr
+		}
+		d[bundleURLs+"."+name] = string(q)
+	}
 	return d, nil
 }
 

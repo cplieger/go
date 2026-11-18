@@ -86,6 +86,23 @@ func TestBuildRefusesClassicEntryNothingReads(t *testing.T) {
 	buildRefused(t, c, "worker", "BUNDLE_URLS")
 }
 
+func TestBuildRefusesClassicEntryUnreadBesideAReadOne(t *testing.T) {
+	t.Parallel()
+	c := newFixture(t, files{
+		"src/app.ts":    "declare const BUNDLE_URLS: { worker: string };\nnew SharedWorker(BUNDLE_URLS.worker);\n",
+		"src/worker.js": "self.addEventListener(\"connect\", () => {});\n",
+		"src/unread.js": "self.addEventListener(\"message\", () => {});\n",
+	})
+	c.Entries = append(c.Entries,
+		webbundle.Entry{Name: "worker", Path: "src/worker.js", Kind: webbundle.Classic},
+		webbundle.Entry{Name: "unread", Path: "src/unread.js", Kind: webbundle.Classic},
+	)
+	_, err := webbundle.Build(c)
+	if err == nil || !strings.Contains(err.Error(), `"unread"`) || strings.Contains(err.Error(), `"worker"`) {
+		t.Fatalf("Build = %v, want a refusal naming the unread classic entry only", err)
+	}
+}
+
 func TestBuildRefusesScriptImportingCSS(t *testing.T) {
 	t.Parallel()
 	c := newFixture(t, files{"src/app.ts": "import \"./app.css\";\nconsole.log(1);\n"})

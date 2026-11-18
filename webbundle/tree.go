@@ -88,9 +88,9 @@ func (t *tree) write(name string, body []byte, perm fs.FileMode) error {
 }
 
 // writeHashed writes body as assets/<stem>-<hash><ext>, the hash being the
-// first 8 bytes of its SHA-256 in hex, and returns that path. It refuses a
-// path already written, which only another file of the same name and bytes
-// could hold.
+// first 8 bytes of its SHA-256 in hex, and returns that path. A second file
+// whose stem, extension and 8-byte hash prefix match is refused, never
+// written over.
 func (t *tree) writeHashed(stem, ext string, body []byte) (string, error) {
 	sum := sha256.Sum256(body)
 	name := "assets/" + stem + "-" + hex.EncodeToString(sum[:8]) + ext
