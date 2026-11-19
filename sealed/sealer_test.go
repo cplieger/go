@@ -320,8 +320,8 @@ func b64Len(n int) int { return (8*n + 5) / 6 }
 // TestExpiringBound checks MaxPayload, ExpiringLen and Open's length bound:
 // a user agent ignores a cookie whose name and value pass 4,096 octets
 // (RFC 6265bis, draft-ietf-httpbis-rfc6265bis-22 §5.6 step 5), so MaxPayload
-// is the longest payload whose value fits 4,096 characters; httpwire's
-// cursor bound is 1,416 characters; lengths are base64url (RFC 4648 §5).
+// is the longest payload whose value fits 4,096 characters; the lengths are
+// docs/format.md's, in base64url (RFC 4648 §5).
 func TestExpiringBound(t *testing.T) {
 	s := New(k1)
 	const purpose Purpose = "example/bound"
@@ -365,7 +365,7 @@ func TestExpiringBound(t *testing.T) {
 			}
 		}
 	})
-	t.Run("docs/format.md lengths", func(t *testing.T) {
+	t.Run("the documented lengths", func(t *testing.T) {
 		for n, want := range map[int]int{-1: 0, 0: 50, 1024: 1415, 1025: 1416, 3035: 4096, 3036: 0} {
 			if got := ExpiringLen(n); got != want {
 				t.Errorf("ExpiringLen(%d) = %d, want %d", n, got, want)
@@ -434,7 +434,7 @@ func TestAtRestBound(t *testing.T) {
 			}
 		}
 	})
-	t.Run("docs/format.md lengths", func(t *testing.T) {
+	t.Run("the documented lengths", func(t *testing.T) {
 		for n, want := range map[int]int{-1: 0, 0: 39, 3035: 4086, 65536: 87420, 65537: 0} {
 			if got := AtRestLen(n); got != want {
 				t.Errorf("AtRestLen(%d) = %d, want %d", n, got, want)

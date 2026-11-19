@@ -93,8 +93,18 @@ func TestKeyID(t *testing.T) {
 func TestSubkey(t *testing.T) {
 	r := ringSealer(t, k2, k1)
 	seen := map[[32]byte]Label{}
-	for _, label := range []Label{"", "a", "a\x00", "b", "httpwire/cursor"} {
-		t.Run(fmt.Sprintf("%q", label), func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		label Label
+	}{
+		{"empty", ""},
+		{"a", "a"},
+		{"a and NUL", "a\x00"},
+		{"b", "b"},
+		{"a package path", "example/cursor"},
+	} {
+		label := tc.label
+		t.Run(tc.name, func(t *testing.T) {
 			got, err := r.Subkey(label)
 			if err != nil {
 				t.Fatalf("Subkey: %v", err)
