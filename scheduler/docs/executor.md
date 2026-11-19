@@ -118,7 +118,7 @@ A job's counts stay in memory, so a 500-item batch never writes its record once 
 - `Done` and `Total`: its latest `Run.Progress(done, total)`, 0 and 0 until it reports.
 - `Until`: a yielded job's `until`, moved to the time of a `Wake`, and zero otherwise.
 
-A job that is not live is absent, so a reader merges `Live()` over the stored records by id. `Observer.Moved` reports that a count moved: a `Progress` that changed the counts, a queue position, a yield or its wake. It is called at most once a second while counts move, with one trailing call after the last move so the last value is never lost. It runs on `Run`'s own goroutine, outside the executor's lock, so it may call `Live()`, and it is never called once `Run` has returned. An app sets it to the call that tells its clients to re-read the jobs.
+A job that is not live is absent, so a reader merges `Live()` over the stored records by id. `Observer.Moved` reports that a count moved: a `Progress` that changed the counts, a queue position, a yield or its wake. It is called at most once a second while counts move, with one trailing call after the last move so the last value is never lost. It runs on the goroutine `Run` starts for it, outside the executor's lock, so it may call `Live()`, and it is never called once `Run` has returned. An app sets it to the call that tells its clients to re-read the jobs.
 
 ## Hold and shutdown
 
