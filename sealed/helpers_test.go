@@ -81,20 +81,26 @@ func refOpen(t *testing.T, gcmKey, raw []byte) (plain []byte, err error) {
 	return plain, err
 }
 
-// ringSealer returns a Sealer over a ring of keys, the first current and
-// the second, if any, previous: the ring a KeyFile installs after Rotate.
-func ringSealer(t *testing.T, keys ...[keyLen]byte) *Sealer {
-	t.Helper()
+// testRing returns a ring of keys, the first current and the second, if
+// any, previous: the ring a KeyFile installs after Rotate.
+func testRing(tb testing.TB, keys ...[keyLen]byte) *ring {
+	tb.Helper()
 	r := &ring{n: len(keys)}
 	for i, key := range keys {
 		rk, err := newRingKey(key)
 		if err != nil {
-			t.Fatalf("newRingKey: %v", err)
+			tb.Fatalf("newRingKey: %v", err)
 		}
 		r.keys[i] = rk
 	}
+	return r
+}
+
+// ringSealer returns a Sealer over testRing(keys).
+func ringSealer(t *testing.T, keys ...[keyLen]byte) *Sealer {
+	t.Helper()
 	src := new(keySource)
-	src.ring.Store(r)
+	src.ring.Store(testRing(t, keys...))
 	return &Sealer{src: src}
 }
 
@@ -163,29 +169,29 @@ type testVectors struct {
 
 // loadVectors reads testdata/vectors.json, refusing a field testVectors
 // does not name.
-func loadVectors(t *testing.T) *testVectors {
-	t.Helper()
+func loadVectors(tb testing.TB) *testVectors {
+	tb.Helper()
 	data, err := os.ReadFile("testdata/vectors.json")
 	if err != nil {
-		t.Fatalf("read the vectors: %v", err)
+		tb.Fatalf("read the vectors: %v", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	v := new(testVectors)
 	if err := dec.Decode(v); err != nil {
-		t.Fatalf("decode the vectors: %v", err)
+		tb.Fatalf("decode the vectors: %v", err)
 	}
 	return v
 }
 
 // key returns the key the vectors name name.
-func (v *testVectors) key(t *testing.T, name string) [keyLen]byte {
-	t.Helper()
+func (v *testVectors) key(tb testing.TB, name string) [keyLen]byte {
+	tb.Helper()
 	for _, k := range v.Keys {
 		if k.Name == name && len(k.Key) == keyLen {
 			return [keyLen]byte(k.Key)
 		}
 	}
-	t.Fatalf("the vectors hold no 32-byte key %q", name)
+	tb.Fatalf("the vectors hold no 32-byte key %q", name)
 	return [keyLen]byte{}
 }
