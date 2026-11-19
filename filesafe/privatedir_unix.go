@@ -238,11 +238,11 @@ func occupantRefusal(err error, dir string, lstat func() (os.FileInfo, error)) e
 	}
 }
 
-// foreignDirErr is ErrNotOwned wrapping err when a permission error refused
-// the open of fi, a directory another uid owns: the lstat that found fi
-// already passed every parent, so its owner's mode is what refused.
+// foreignDirErr is ErrNotOwned wrapping err when err is a permission error
+// and fi, a directory found by a lookup that passed every parent, has
+// another owner: that directory's own mode is what refused.
 func foreignDirErr(err error, fi os.FileInfo, name string) error {
-	if !fi.IsDir() || !errors.Is(err, fs.ErrPermission) {
+	if !errors.Is(err, fs.ErrPermission) {
 		return err
 	}
 	if oerr := ownerErr(fi, name); oerr != nil {
@@ -262,7 +262,7 @@ func rootDirRefusal(root *os.Root, clean string, err error) error {
 	}
 	dir := filepath.Clean(root.Name())
 	fi, serr := os.Stat(dir)
-	if serr != nil {
+	if serr != nil || !fi.IsDir() {
 		return err
 	}
 	return foreignDirErr(err, fi, dir)
