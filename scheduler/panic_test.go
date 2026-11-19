@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/scheduler/v2"
+	"github.com/cplieger/go/scheduler/v2/internal/memrecords"
 )
 
 var panicked = scheduler.Reason{Code: scheduler.ReasonRunPanicked}
@@ -290,5 +291,55 @@ func TestObserverPanicInRunEndsJob(t *testing.T) {
 			wantLastResult(t, seen, s.Job, scheduler.ResultFailed)
 			r.wantSlotFreed(t)
 		})
+	})
+}
+
+// proposalPutPanics is a store whose Put panics once, in the first write of
+// a record that names a proposal.
+type proposalPutPanics struct {
+	*memrecords.Store
+	fired atomic.Bool
+}
+
+func (s *proposalPutPanics) Put(ctx context.Context, rec scheduler.Record) error {
+	if rec.Proposal != "" && s.fired.CompareAndSwap(false, true) {
+		panic("proposal write")
+	}
+	return s.Store.Put(ctx, rec)
+}
+
+// TestProposeRecordPanicHoldsNoProposal pins that a Records.Put panic in
+// Propose holds nothing: the job ends failed with run_panicked, its record
+// names no proposal, and a new request of its owner and scope runs instead
+// of joining the failed job.
+func TestProposeRecordPanicHoldsNoProposal(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pipe := spec("pipe", "passes")
+		pipe.Proposes = true
+		pipe.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+			if _, err := run.Propose("plan"); err != nil {
+				t.Errorf("Propose = %v, want nil", err)
+			}
+			return scheduler.End{Result: scheduler.ResultOK}
+		}
+		seen := &transitions{}
+		inner := memrecords.New()
+		r := (&rig{store: inner, log: &runLog{}}).open(t, scheduler.Config[payload]{
+			Kinds:   []scheduler.KindSpec[payload]{pipe},
+			Records: &proposalPutPanics{Store: inner}, Observer: seen.observer(),
+		})
+		s := r.start(t, api("pipe", "p", "alice", payload{}))
+		synctest.Wait()
+		r.wantEnd(t, s.Job, scheduler.ResultFailed, panicked)
+		if rec := r.rec(t, s.Job); rec.Proposal != "" {
+			t.Errorf("record names proposal %q, want none", rec.Proposal)
+		}
+		wantLastResult(t, seen, s.Job, scheduler.ResultFailed)
+		again := r.start(t, api("pipe", "p", "alice", payload{}))
+		if again.Joined || again.Job == s.Job {
+			t.Fatalf("Start of alice's pipe \"p\" again = %+v, want a new job, not the failed one's proposal", again)
+		}
+		synctest.Wait()
+		r.wantEnd(t, again.Job, scheduler.ResultOK)
 	})
 }

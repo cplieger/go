@@ -262,8 +262,8 @@ func faultRun(t *testing.T, n int) []string {
 	f.try(t, func() { _, _ = ex.Cancel(t.Context(), followUp) })
 	f.try(t, func() { _, _ = ex.Cancel(t.Context(), followUp) })
 	f.try(t, func() { ex.CredentialEnded("bob") })
-	scheduled := false
-	f.try(t, func() { scheduled = ex.Schedule("part", "tick", scheduler.Scheduled(time.Hour), time.Time{}) == nil })
+	start(api("full", "", "carol", payload{})) // its end is one tock counts from
+	f.try(t, func() { _ = ex.Schedule("part", "tick", scheduler.Scheduled(time.Hour), time.Time{}) })
 	close(passes)
 	synctest.Wait()
 	time.Sleep(time.Minute)
@@ -276,6 +276,9 @@ func faultRun(t *testing.T, n int) []string {
 		}
 	})
 	resumed := time.Now()
+	// After the resume, which would arm a scope a panicked Schedule left
+	// unarmed.
+	f.try(t, func() { _ = ex.Schedule("part", "tock", scheduler.Scheduled(time.Hour), time.Time{}) })
 	close(maint)
 	synctest.Wait()
 
@@ -293,6 +296,27 @@ func faultRun(t *testing.T, n int) []string {
 		r.wantEnd(t, id, scheduler.ResultFailed, panicked)
 		wantLastResult(t, seen, id, scheduler.ResultFailed)
 	}
+	// Before any new job's end, which would re-arm a scope its kind covers.
+	scopes := []string{"tick", "tock"}
+	for _, scope := range scopes {
+		if err := ex.Schedule("part", scope, scheduler.Scheduled(time.Hour), time.Time{}); err != nil {
+			t.Errorf("Schedule(part %q) after the scenario = %v, want nil", scope, err)
+		}
+	}
+	woke := func(scope string) bool {
+		return slices.ContainsFunc(r.wakes("part", scope), func(rec scheduler.Record) bool {
+			return rec.QueuedAt.After(resumed)
+		})
+	}
+	for (!woke("tick") || !woke("tock")) && time.Since(resumed) < 2*time.Hour {
+		time.Sleep(time.Minute)
+		synctest.Wait()
+	}
+	for _, scope := range scopes {
+		if !woke(scope) {
+			t.Errorf("part %q did not wake within 2 hours of the resume, want its timer armed", scope)
+		}
+	}
 	for _, j := range []scheduler.Job[payload]{
 		api("hold", "h", "zed", payload{}), api("pipe", "p", "zed", payload{}),
 		api("grab", "", "zed", payload{N: 1}), api("nap", "", "zed", payload{}),
@@ -309,20 +333,6 @@ func faultRun(t *testing.T, n int) []string {
 		time.Sleep(time.Minute)
 		synctest.Wait()
 		r.wantEnd(t, s.Job, scheduler.ResultOK)
-	}
-	if scheduled {
-		woke := func() bool {
-			return slices.ContainsFunc(r.wakes("part", "tick"), func(rec scheduler.Record) bool {
-				return rec.QueuedAt.After(resumed)
-			})
-		}
-		for !woke() && time.Since(resumed) < 2*time.Hour {
-			time.Sleep(time.Minute)
-			synctest.Wait()
-		}
-		if !woke() {
-			t.Error("part \"tick\" did not wake within 2 hours of the resume, want its timer armed")
-		}
 	}
 	began := time.Now()
 	resume, err := ex.Hold(t.Context(), true)
@@ -346,7 +356,8 @@ func faultRun(t *testing.T, n int) []string {
 // case, and pins that the executor stays usable after it: no job is left
 // queued or running, a job whose Run took the panic ends failed with
 // run_panicked and the Observer gets that end, a new request of every kind
-// runs, a scheduled scope still wakes, and Hold(all) and shutdown return.
+// runs, each scheduled scope wakes once Schedule is called again with its
+// cadence, and Hold(all) and shutdown return.
 func TestCallbackPanicLeavesExecutorUsable(t *testing.T) {
 	var sites []string
 	synctest.Test(t, func(t *testing.T) { sites = faultRun(t, 0) })
