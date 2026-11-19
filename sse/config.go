@@ -1,9 +1,12 @@
 package sse
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -260,6 +263,29 @@ func validate(c *config) error {
 	}
 	if !c.clientBufferSet {
 		c.clientBuffer = max(c.ringSize, clientBufferFloor)
+	}
+	return checkHelloSize(c)
+}
+
+// checkHelloSize refuses a configuration whose hello could exceed
+// MaxFrameBytes, which the client enforces on every frame: the build and the
+// keepalive name are the hello's only unbounded fields. It encodes the widest
+// hello, a scoped connection with both offsets at their largest.
+func checkHelloSize(c *config) error {
+	widest := Hello{
+		Epoch:          strings.Repeat("f", max(len(c.epoch), epochLen)),
+		Conn:           strings.Repeat("A", base64.RawURLEncoding.EncodedLen(connBytes)),
+		Verdict:        VerdictCursorInvalid, // the longest verdict
+		KeepaliveEvent: c.keepaliveEvent,
+		Build:          c.build,
+		Floor:          math.MaxUint64,
+		Head:           math.MaxUint64,
+		Wire:           Wire,
+		KeepaliveMS:    int(c.keepalive.Milliseconds()),
+	}
+	data, _ := json.Marshal(widest) // a Hello holds only strings and numbers, which always encode
+	if size := frameSize(len(helloEvent), [][]byte{data}, 0); size > MaxFrameBytes {
+		return fmt.Errorf("%w: the hello can reach %d bytes with WithBuild and WithKeepaliveEvent as set, above MaxFrameBytes (%d)", ErrConfig, size, MaxFrameBytes)
 	}
 	return nil
 }

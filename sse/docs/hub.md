@@ -6,8 +6,9 @@ This page covers every option and method of the Go hub, for anyone wiring it int
 
 `New(opts ...Option)` returns a `*Hub`, or an error that wraps `ErrConfig` and names the option the hub could not honour. `MustNew` panics with that error, so a `recover` can match `ErrConfig` with `errors.Is`; it is for construction at package level in `main`. A nil option is skipped.
 
-Each option refuses its own value at once. The rules that compare two options run once after every option is applied, so option order never changes the result. The defaults that depend on another option are derived at the same point. Those rules refuse four combinations:
+Each option refuses its own value at once. The rules that compare two options run once after every option is applied, so option order never changes the result. The defaults that depend on another option are derived at the same point. Those rules refuse five combinations:
 
+- a hello that could exceed `MaxFrameBytes`, the frame cap the client enforces, from a long build or keepalive name
 - a replay buffer without a TTL
 - a TTL below the client's watchdog window plus its backoff cap
 - a reply cap above the replay size
@@ -22,8 +23,8 @@ Each option refuses its own value at once. The rules that compare two options ru
 | `WithClientBuffer(n)` | `max(replay size, 256)` | at or below zero |
 | `WithMaxClients(n)` | `0`, unlimited | never, and zero or negative means unlimited |
 | `WithKeepalive(d)` | `15s` | below 1ms |
-| `WithKeepaliveEvent(name)` | `sse:keepalive` | CR or LF in the name, and `""` selects the `: keepalive` comment form |
-| `WithBuild(id)` | `""`, the hello carries no `build` | not valid UTF-8 |
+| `WithKeepaliveEvent(name)` | `sse:keepalive` | CR or LF in the name, or long enough that the hello could exceed `MaxFrameBytes`; `""` selects the `: keepalive` comment form |
+| `WithBuild(id)` | `""`, the hello carries no `build` | not valid UTF-8, or long enough that the hello could exceed `MaxFrameBytes` |
 | `WithReconnectDelay(d)` | `1500ms` | below 1ms |
 | `WithWriteTimeout(d)` | `2 × keepalive` | at or below the keepalive |
 | `WithLogger(l)` | `slog.Default()` | never, and nil means the default, so the last one wins |

@@ -158,7 +158,7 @@ export interface StreamInternals {
    * while `assured()` does not cover it or the cursor is null.
    */
   coveredSince(scope: readonly string[] | null): Cursor | null;
-  /** The latest accepted hello's build stamp, null before one or when it carried none. */
+  /** The open connection's hello build stamp; null when the stream is not open or the hello carried none. */
   build(): string | null;
 }
 
@@ -896,7 +896,11 @@ export function createStream(opts: StreamOptions): Stream {
       if (coalesces && !full) {
         return;
       }
-      queued = { cause, full: (queued?.full ?? false) || full };
+      // A queued hello is never demoted by a later wake: its cause carries the hello's build.
+      queued = {
+        cause: queued?.cause === "hello" ? "hello" : cause,
+        full: (queued?.full ?? false) || full,
+      };
       return;
     }
     const slot: Slot = { cause, full: (queued?.full ?? false) || full };
@@ -1364,7 +1368,7 @@ export function createStream(opts: StreamOptions): Stream {
       };
     },
     coveredSince,
-    build: () => serverBuild,
+    build: () => (state.kind === "open" ? serverBuild : null),
   });
   return stream;
 }

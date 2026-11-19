@@ -225,6 +225,26 @@ describe("stream runtime", () => {
     expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "2026.11.19-a1b2c3" });
   });
 
+  it("a hello queued behind an in-flight run keeps its cause and build when a later wake queues", async () => {
+    const h = harness();
+    const first = await h.open({ head: "5", build: "b1" });
+    first.end();
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_RETRY_MS);
+    await flush();
+    expect(h.sf.connections).toHaveLength(2);
+    h.last().push(helloFrame({ head: "6", build: "b2" }));
+    await flush();
+    h.visibility.emit("hidden");
+    h.visibility.emit("visible");
+    await flush();
+    expect(h.runs).toHaveLength(1);
+    h.runs[0]!.resolve();
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
+  });
+
   it("a run whose cause is not a hello receives build null", async () => {
     const h = harness();
     const conn = await h.open({ build: "b1" });
@@ -405,7 +425,7 @@ describe("stream runtime", () => {
     expect(h.ofKind("revalidate")).toHaveLength(2);
   });
 
-  it("a full run queued behind a later cause still runs as full", async () => {
+  it("a full hello queued behind a run keeps its cause and full when a later wake joins it", async () => {
     const versions = createVersionMap();
     versions.observe({ kind: "chat", ref: "c1" }, "3", A);
     const h = harness({ visible: false, versions });
@@ -424,7 +444,7 @@ describe("stream runtime", () => {
     h.runs[0]!.resolve();
     await flush();
     expect(h.runs).toHaveLength(2);
-    expect(h.runs[1]!.ctx).toMatchObject({ cause: "pageshow", full: true, epoch: B });
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", full: true, epoch: B });
     expect(versions.snapshot().held).toEqual([]);
   });
 

@@ -889,6 +889,35 @@ describe("port protocol", () => {
     ]);
   });
 
+  it("a tab returning between connections gets build null in its own full run; the next hello's build reaches the host and every tab", async () => {
+    const h = track(hostHarness());
+    const a = rawTab(h, { tabId: "a" });
+    await hello(h, { resumed: true, build: "v1" });
+    h.sf.connections[0]!.end();
+    await settle();
+    expect(h.host.stream().state().kind).toBe("backoff");
+    const back = rawTab(h, { tabId: "b", hadWorker: true });
+    await settle();
+    expect(back.ofType("revalidate_run")).toMatchObject([
+      { ctx: { cause: "hello", full: true, build: null } },
+    ]);
+    back.send({ type: "revalidate_done", runId: back.ofType("revalidate_run")[0]!.runId });
+    await settle();
+
+    vi.advanceTimersByTime(1500);
+    await hello(h, { head: "0", build: "v2" });
+    expect(h.runs).toHaveLength(1);
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", build: "v2" });
+    const fanned = h.runs[0]!.tabs.run(h.runs[0]!.ctx);
+    await settle();
+    for (const tab of [a, back]) {
+      const routed = tab.ofType("revalidate_run").at(-1)!;
+      expect(routed.ctx).toMatchObject({ cause: "hello", build: "v2" });
+      tab.send({ type: "revalidate_done", runId: routed.runId });
+    }
+    await fanned;
+  });
+
   it("reconnect() on a worker-mode attachment reconnects the host's stream once, keeping the cursor unless resetCursor is set; in fallback mode it drives the fallback stream", async () => {
     const h = track(hostHarness());
     const t = tabHarness([h.host]);
