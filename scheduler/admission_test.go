@@ -1028,4 +1028,29 @@ func TestStartAfterShutdownWritesNoRecord(t *testing.T) {
 			}
 		})
 	})
+
+	t.Run("a start its owner's held proposal answers after Run returned", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			p := &proposals{}
+			r, stop := (&rig{store: memrecords.New(), log: &runLog{}}).openUntil(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{p.spec("")}})
+			first := r.start(t, api("align", "file:1/expect:7", "alice", payload{}))
+			synctest.Wait()
+			r.wantEnd(t, first.Job, scheduler.ResultOK)
+			stop()
+			s, err := r.ex.Start(t.Context(), api("align", "file:1/expect:7", "alice", payload{}))
+			if err != nil || !s.Joined || s.Job != first.Job {
+				t.Errorf("Start after Run returned, for a held proposal = (%+v, %v), want joined to %s", s, err, first.Job)
+			}
+			if _, err := r.ex.Start(t.Context(), api("align", "file:1/expect:7", "bob", payload{})); !errors.Is(err, scheduler.ErrQueueFull) {
+				t.Errorf("Start after Run returned, for another owner = %v, want ErrQueueFull", err)
+			}
+			synctest.Wait()
+			if all := r.store.All(); len(all) != 1 {
+				t.Errorf("records after Run returned = %d, want the proposing job's only", len(all))
+			}
+			if n := len(p.runLog.ids()); n != 1 {
+				t.Errorf("%d runs after Run returned, want the proposing job's only", n)
+			}
+		})
+	})
 }
