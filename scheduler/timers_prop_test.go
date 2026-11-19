@@ -649,7 +649,7 @@ func (d *diffRun) check(t *testing.T, advanced bool) {
 			switch {
 			case advanced && idle && !inAny(woke, ws):
 				d.fail(t, "%s %q woke at %v, outside its windows %v", key.Kind, key.Scope, woke, ws)
-			case !advanced && (woke.Before(counted.lo) || d.rearmed[key] != k && !d.countedEnd(key, k)):
+			case !advanced && (woke.Before(counted.lo) || d.rearmed[key] != k && !d.released(key, k, c, woke)):
 				d.fail(t, "%s %q woke at %v when the step did not count it again from a base already due (%v)", key.Kind, key.Scope, woke, counted)
 			}
 		}
@@ -678,14 +678,15 @@ func (d *diffRun) standsIn(key scheduler.ScheduledScope, live map[scheduler.ID]s
 	return false
 }
 
-// countedEnd reports whether a job that may have stood in for key's timer
-// job ended after step k with an end the executor counts, which arms key's
-// timer from its base, as a restart would, even when the base did not move.
-func (d *diffRun) countedEnd(key scheduler.ScheduledScope, k int) bool {
+// released reports whether a job that may have stood in for key's timer job
+// ended in step k with the wait after work not done from its end begun by
+// woke: a stand-in whose end moves no base arms key there, already passed
+// when the store held that End past it.
+func (d *diffRun) released(key scheduler.ScheduledScope, k int, c diffCadence, woke time.Time) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for id, j := range d.jobs {
-		if j.ended && d.endStep[id] == k && d.countedLocked(id, j) && relevant(j.key, key) {
+		if j.ended && d.endStep[id] == k && d.joinableLocked(id, j, key) && !woke.Before(band(j.endAt, c.notDone(), "").lo) {
 			return true
 		}
 	}
@@ -701,13 +702,15 @@ func (d *diffRun) countedLocked(id scheduler.ID, j *diffJob) bool {
 
 // held answers the windows of each end that may have set key's timer since it
 // was last counted again and that moved nothing for key: held in memory only,
-// or a full job's whose payload covers key.
+// a counted one key's base does not lead from, or a full job's whose payload
+// covers key.
 func (d *diffRun) held(key scheduler.ScheduledScope, c diffCadence) []window {
+	base := d.timing[key].Base
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var ws []window
 	for id, j := range d.jobs {
-		moved := relevant(j.key, key) && d.countedLocked(id, j)
+		moved := relevant(j.key, key) && d.countedLocked(id, j) && !base.Before(j.endAt)
 		if j.ended && !moved && d.joinableLocked(id, j, key) && d.endStep[id] >= d.rearmed[key] {
 			ws = append(ws, band(j.endAt, c.notDone(), fmt.Sprintf("%s %s %s", j.key.Kind, id, j.result)))
 		}

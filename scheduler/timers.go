@@ -405,7 +405,6 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	e.mu.Unlock()
 	defer e.wg.Done()
 
-	woke := time.Now()
 	s, err := e.Start(context.Background(), Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
 	var recent *RecentError
 	e.mu.Lock()
@@ -416,13 +415,13 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	now := time.Now()
 	switch {
 	case err == nil && e.findLocked(s.Job) == nil:
-		// It ended before this lock with an end that re-armed nothing (gen);
-		// a base from after the wake is that end, counted.
-		e.afterEndLocked(key, t, !t.base.Before(woke), now)
+		// It ended before this lock with an end that moved no base (gen), so
+		// that end counts for nothing here, as in releaseStandInLocked.
+		e.armAtLocked(key, t, now.Add(JitteredDelay(t.cadence.wait(false), jitter)))
 	case err == nil:
 		// While the job runs this wake stands in for the next, so a request
 		// longer than the interval coalesces; its end replaces it
-		// (noteEndLocked, or releaseStandInLocked for an end not counted).
+		// (noteEndLocked, or releaseStandInLocked for an end that moved no base).
 		e.armAtLocked(key, t, now.Add(JitteredDelay(t.cadence.wait(true), jitter)))
 		t.standIn = s.Job
 	case errors.As(err, &recent):
@@ -435,27 +434,18 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	}
 }
 
-// releaseStandInLocked re-arms each scheduled scope whose timer job id ended
-// at at and whose stand-in wake its end left armed (afterEndLocked).
-func (e *Executor[P]) releaseStandInLocked(id ID, counted bool, at time.Time) {
+// releaseStandInLocked re-arms each scheduled scope whose stand-in wake waits
+// on job id, which ended at at. Called after noteEndLocked, which re-arms a
+// scope whose base the end moved and so clears its standIn: the end moved no
+// base of a scope left, and is held in memory only, like a refusal. The next
+// wake is at plus Retry's d, or the interval, so a cancel or a covering end
+// that counts for nothing never re-runs the job at once.
+func (e *Executor[P]) releaseStandInLocked(id ID, at time.Time) {
 	for key, t := range e.scheduled {
 		if t.standIn == id {
-			e.afterEndLocked(key, t, counted, at)
+			e.armAtLocked(key, t, at.Add(JitteredDelay(t.cadence.wait(false), jitter)))
 		}
 	}
-}
-
-// afterEndLocked arms t after its timer job ended at at. A counted end arms
-// from the base, as a restart would. An end not counted (cancelled,
-// interrupted, never started, not kept) is held in memory only, like a
-// refusal: the next wake is at plus Retry's d, or the interval, so a cancel
-// never re-runs the job at once.
-func (e *Executor[P]) afterEndLocked(key ScheduledScope, t *timed, counted bool, at time.Time) {
-	if counted {
-		e.armLocked(key, t)
-		return
-	}
-	e.armAtLocked(key, t, at.Add(JitteredDelay(t.cadence.wait(false), jitter)))
 }
 
 // stopTimersLocked stops every scheduled scope's timer and deadline check.
