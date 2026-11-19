@@ -161,6 +161,91 @@ func TestContractFailsACaseItCannotCheck(t *testing.T) {
 	})
 }
 
+// keyedCase is a POST of row sent as alice, with Idempotency-Key key and the
+// inbound X-Request-Id id, each "" sending none.
+func keyedCase(t testing.TB, row, target, body, key, id string) httpwiretest.Case {
+	t.Helper()
+	r := request(t, http.MethodPost, target, alice)
+	if body != "" {
+		r.Body = io.NopCloser(strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+	}
+	if key != "" {
+		r.Header.Set("Idempotency-Key", key)
+	}
+	if id != "" {
+		r.Header.Set("X-Request-Id", id)
+	}
+	return httpwiretest.Case{Row: row, Request: r}
+}
+
+func runJob(t testing.TB, key, id string) httpwiretest.Case {
+	return keyedCase(t, "jobs.run", "/api/jobs/run", `{"kind":"a"}`, key, id)
+}
+
+// A replayed refusal is the first run's body, so its request_id names the
+// run whose logs hold the failure while its X-Request-Id is the resend's.
+func TestContractPassesAReplayedRefusal(t *testing.T) {
+	t.Run("the API's own replay", func(t *testing.T) {
+		f := newFixture(t, false)
+		first, again := httptest.NewRecorder(), httptest.NewRecorder()
+		f.api.ServeHTTP(first, runJob(t, `"k0"`, "").Request)
+		f.api.ServeHTTP(again, runJob(t, `"k0"`, "").Request)
+		if again.Body.String() != first.Body.String() || again.Header().Get("X-Request-Id") == first.Header().Get("X-Request-Id") {
+			t.Fatalf("a resend answered %q with id %q after %q with id %q; want the kept body under a fresh id",
+				again.Body, again.Header().Get("X-Request-Id"), first.Body, first.Header().Get("X-Request-Id"))
+		}
+		r := record(t, func(tb testing.TB) {
+			httpwiretest.Contract(tb, f.api, []httpwiretest.Case{runJob(t, `"k1"`, ""), runJob(t, `"k1"`, ""), runJob(t, `"k2"`, ""), runJob(t, `"k1"`, "")})
+		})
+		for _, s := range r.failures {
+			t.Errorf("Contract failed a replayed refusal: %s", s)
+		}
+	})
+	t.Run("a mount's replay", func(t *testing.T) {
+		f := newFixture(t, false)
+		r := record(t, func(tb testing.TB) {
+			httpwiretest.Contract(tb, f.api, []httpwiretest.Case{
+				keyedCase(t, "keyed.run", "/api/keyed/run", "", `"k1"`, "first-id"),
+				keyedCase(t, "keyed.run", "/api/keyed/run?replay", "", `"k1"`, "first-id"),
+			})
+		})
+		for _, s := range r.failures {
+			t.Errorf("Contract failed a replayed refusal: %s", s)
+		}
+	})
+}
+
+// The replay rule admits only an id an earlier case of the same Keyed row
+// and Idempotency-Key value was answered with.
+func TestContractFailsARequestIDNoReplayKept(t *testing.T) {
+	first := func(t testing.TB, key string) httpwiretest.Case {
+		return keyedCase(t, "keyed.run", "/api/keyed/run", "", key, "first-id")
+	}
+	cases := map[string]func(testing.TB) []httpwiretest.Case{
+		"no earlier case": func(testing.TB) []httpwiretest.Case { return nil },
+		"an earlier case under another key": func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{first(tb, `"k2"`)}
+		},
+		"an earlier case with no key": func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{first(tb, "")}
+		},
+		"an earlier case of another row": func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{runJob(tb, `"k1"`, "first-id")}
+		},
+	}
+	for name, earlier := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, false)
+			resend := keyedCase(t, "keyed.run", "/api/keyed/run?replay", "", `"k1"`, "first-id")
+			r := record(t, func(tb testing.TB) { httpwiretest.Contract(tb, f.api, append(earlier(t), resend)) })
+			if len(r.failures) != 1 || !r.failed(`row "keyed.run"`, "?replay", `request_id "first-id"`, `"second-id"`) {
+				t.Errorf("failures %q; want only the resend's, naming its request_id", r.failures)
+			}
+		})
+	}
+}
+
 // sameShapeCases cover every read row with Changes: jobs.mine, jobs.all with
 // a page cursor, and jobs.get both found and refused.
 func sameShapeCases(t testing.TB) []httpwiretest.Case {
@@ -326,6 +411,7 @@ func TestSameShapeWithNoGuard(t *testing.T) {
 	f := newFixture(t, false)
 	tb := f.table(false)
 	tb.Endpoints = nil
+	tb.Mounts = tb.Mounts[:1]
 	tb.Mounts[0].Rows[0].Changes = []string{"jobs"}
 	var doc map[string]any
 	raw, err := os.ReadFile("testdata/contract.json")
