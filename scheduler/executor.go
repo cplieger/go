@@ -43,8 +43,9 @@ type KindSpec[P any] struct {
 	Run  func(ctx context.Context, r *Run[P]) End
 	Kind Kind
 	// Slot "" runs beside any other job; a named slot runs one job at a time,
-	// in class order. Either way a follow-up waits for the running job of its
-	// scope.
+	// in class order. Either way a follow-up starts once the running job of its
+	// scope ends or yields; once that job is stopped, it starts at once with no
+	// slot or for a batch, and on a named slot when the stopped Run returns.
 	Slot   string
 	Phases []Phase // the pipeline, for step N of M; each phase once, at most 32
 	// Kept is how long an ended record is kept: 0 writes no record, else 15
