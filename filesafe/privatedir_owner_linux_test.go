@@ -397,8 +397,8 @@ func TestPrivateDir_AnswersAPermissionErrorForAParentItCannotRead(t *testing.T) 
 	})
 }
 
-// A directory the caller owns whose own mode shuts the caller out is one it
-// can repair, so it stays a permission error and never becomes ErrNotOwned.
+// A directory the caller owns whose own mode shuts the caller out stays a
+// permission error: ErrNotOwned names only a refusal by another uid's mode.
 func TestPrivateDir_AnswersAPermissionErrorForAClosedDirItOwns(t *testing.T) {
 	base, ok := asNobody(t, ownWorkspace, nil)
 	if !ok {
