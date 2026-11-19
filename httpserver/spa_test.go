@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/cplieger/go/httpserver/v2"
 )
@@ -792,7 +793,6 @@ func TestSPARefusesBrokenTree(t *testing.T) {
 		"default shell missing":    without("index.html"),
 		"hash not hex":             badHash,
 		"listed dot-file":          listing("assets/.x.js", "x"),
-		"listed nested index":      listing("assets/sub/index.html", "<p>"),
 		"listed manifest":          listing(httpserver.BundlePath, "{}"),
 		"entry path not listed":    entries(httpserver.BundleEntry{Name: "w", Kind: httpserver.BundleClassic, Path: "assets/none.js"}),
 		"entry outside assets":     entries(httpserver.BundleEntry{Name: "w", Kind: httpserver.BundleClassic, Path: noticeIndex}),
@@ -1112,9 +1112,10 @@ func TestSPAErrorsResponderAnswersRefusals(t *testing.T) {
 	h := newSPA(t, c)
 	spaServe(h, http.MethodGet, "/assets/missing.js")
 	spaServe(h, http.MethodPost, "/library")
+	spaServe(h, http.MethodGet, "/"+moduleAsset, "If-Match", `"other"`)
 	c.Assets = nil
 	spaServe(newSPA(t, c), http.MethodGet, "/library")
-	if want := []httpserver.ErrorCode{"not_found", "method_not_allowed", "ui_unbuilt"}; !slices.Equal(codes, want) {
+	if want := []httpserver.ErrorCode{"not_found", "method_not_allowed", "precondition_failed", "ui_unbuilt"}; !slices.Equal(codes, want) {
 		t.Errorf("responder codes = %v, want %v", codes, want)
 	}
 }
@@ -1172,4 +1173,144 @@ func TestReadBundle(t *testing.T) {
 			t.Errorf("files = %v", b.Files)
 		}
 	})
+}
+
+// spaServedFiles is one target of each kind SPA writes with a 200: an
+// immutable asset, a classic entry, a notice and a page's shell.
+func spaServedFiles() map[string]string {
+	files := spaFiles()
+	return map[string]string{"/" + moduleAsset: files[moduleAsset], "/" + classicAsset: files[classicAsset], "/" + noticeFile: files[noticeFile], "/library": indexHTML}
+}
+
+func TestSPAIgnoresRange(t *testing.T) {
+	c := spaConfig(t, nil)
+	h := newSPA(t, c)
+	for target, body := range spaServedFiles() {
+		etag := spaServe(h, http.MethodGet, target).Header().Get("ETag")
+		for _, header := range [][]string{
+			{"Range", "bytes=0-3"},
+			{"Range", "bytes=999999-"},
+			{"Range", "bytes=0-3", "If-Range", etag},
+			{"Range", "nonsense"},
+		} {
+			t.Run(pathName(target)+" "+strings.Join(header, " "), func(t *testing.T) {
+				rec := spaServe(h, http.MethodGet, target, header...)
+				if rec.Code != http.StatusOK || rec.Body.String() != body {
+					t.Errorf("status %d body %d bytes, want 200 and the whole file (%d bytes)", rec.Code, rec.Body.Len(), len(body))
+				}
+				for _, k := range []string{"Accept-Ranges", "Content-Range"} {
+					if v := rec.Header().Values(k); v != nil {
+						t.Errorf("%s = %q, want none", k, v)
+					}
+				}
+				wantPolicy(t, rec, defaultPolicy)
+			})
+		}
+		t.Run(pathName(target)+" gzip", func(t *testing.T) {
+			rec := spaServe(h, http.MethodGet, target, "Range", "bytes=0-3", "Accept-Encoding", "gzip")
+			if rec.Code != http.StatusOK || rec.Header().Get("Content-Encoding") != "gzip" || !bytes.Equal(gunzip(t, rec.Body.Bytes()), []byte(body)) {
+				t.Errorf("status %d Content-Encoding %q, want 200 and the whole gzip body", rec.Code, rec.Header().Get("Content-Encoding"))
+			}
+		})
+	}
+}
+
+func TestSPAEvaluatesIfMatch(t *testing.T) {
+	h := newSPA(t, spaConfig(t, nil))
+	for target, body := range spaServedFiles() {
+		etag := spaServe(h, http.MethodGet, target).Header().Get("ETag")
+		gzTag := spaServe(h, http.MethodGet, target, "Accept-Encoding", "gzip").Header().Get("ETag")
+		if etag == "" || gzTag == etag {
+			t.Fatalf("%s: ETag %q, gzip ETag %q, want two tags", target, etag, gzTag)
+		}
+		holds := map[string][]string{
+			"its tag":              {"If-Match", etag},
+			"a list holding it":    {"If-Match", `"x", ` + etag},
+			"a star":               {"If-Match", "*"},
+			"its gzip tag gzipped": {"If-Match", gzTag, "Accept-Encoding", "gzip"},
+			"the matching tag beside a failing If-None-Match": {"If-Match", etag, "If-None-Match", `"x"`},
+		}
+		for name, header := range holds {
+			t.Run(pathName(target)+" holds "+name, func(t *testing.T) {
+				rec := spaServe(h, http.MethodGet, target, header...)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200", rec.Code)
+				}
+				got := rec.Body.Bytes()
+				if rec.Header().Get("Content-Encoding") == "gzip" {
+					got = gunzip(t, got)
+				}
+				if string(got) != body {
+					t.Error("body is not the file")
+				}
+			})
+		}
+		fails := map[string][]string{
+			"another tag":                     {"If-Match", `"other"`},
+			"its weak tag":                    {"If-Match", "W/" + etag},
+			"its identity tag gzipped":        {"If-Match", etag, "Accept-Encoding", "gzip"},
+			"its gzip tag for the identity":   {"If-Match", gzTag},
+			"a star beside a tag":             {"If-Match", `*, "other"`},
+			"before a matching If-None-Match": {"If-Match", `"other"`, "If-None-Match", etag},
+		}
+		for name, header := range fails {
+			t.Run(pathName(target)+" fails "+name, func(t *testing.T) {
+				rec := spaServe(h, http.MethodGet, target, header...)
+				wantRefusal(t, rec, http.StatusPreconditionFailed, "precondition_failed")
+				if v := rec.Header().Get("ETag"); v != "" {
+					t.Errorf("ETag = %q on the refusal, want none", v)
+				}
+			})
+		}
+		t.Run(pathName(target)+" HEAD fails too", func(t *testing.T) {
+			rec := spaServe(h, http.MethodHead, target, "If-Match", `"other"`)
+			if rec.Code != http.StatusPreconditionFailed {
+				t.Errorf("status = %d, want 412", rec.Code)
+			}
+		})
+	}
+}
+
+func TestSPAPreconditionsSkipTheNotFoundShell(t *testing.T) {
+	h := newSPA(t, spaConfig(t, nil))
+	rec := spaServe(h, http.MethodGet, "/no/such/page", "If-Match", `"other"`)
+	wantShell(t, rec, http.StatusNotFound, indexHTML)
+}
+
+func TestSPAIgnoresDatePreconditions(t *testing.T) {
+	c := spaConfig(t, nil)
+	tree := c.Assets.(fstest.MapFS)
+	modTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, f := range tree {
+		f.ModTime = modTime
+	}
+	h := newSPA(t, c)
+	for target, body := range spaServedFiles() {
+		for _, header := range [][]string{
+			{"If-Unmodified-Since", modTime.Add(-time.Hour).Format(http.TimeFormat)},
+			{"If-Modified-Since", modTime.Add(time.Hour).Format(http.TimeFormat)},
+		} {
+			t.Run(pathName(target)+" "+header[0], func(t *testing.T) {
+				rec := spaServe(h, http.MethodGet, target, header...)
+				if rec.Code != http.StatusOK || rec.Body.String() != body {
+					t.Errorf("status = %d, want 200 and the file", rec.Code)
+				}
+				if v := rec.Header().Get("Last-Modified"); v != "" {
+					t.Errorf("Last-Modified = %q, want none", v)
+				}
+			})
+		}
+	}
+}
+
+func TestSPAServesListedIndexUnderAssets(t *testing.T) {
+	const name, body = "assets/sub/index.html", "<p>nested</p>"
+	files := spaFiles()
+	files[name] = body
+	c := spaConfig(t, nil)
+	c.Assets = bundleTree(t, files, append(slices.Clone(spaListed), name), spaEntries)
+	rec := spaServe(newSPA(t, c), http.MethodGet, "/"+name)
+	if rec.Code != http.StatusOK || rec.Body.String() != body {
+		t.Errorf("status %d body %q, want 200 and the file", rec.Code, rec.Body.String())
+	}
 }

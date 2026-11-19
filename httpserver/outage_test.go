@@ -168,7 +168,8 @@ func TestOutagePageErrorsResponderAnswersRefusals(t *testing.T) {
 	h := newOutage(t, c)
 	spaServe(h, http.MethodGet, "/api/x")
 	spaServe(h, http.MethodPost, "/")
-	if want := []httpserver.ErrorCode{"not_found", "method_not_allowed"}; !slices.Equal(codes, want) {
+	spaServe(h, http.MethodGet, "/"+styleAsset, "If-Match", `"other"`)
+	if want := []httpserver.ErrorCode{"not_found", "method_not_allowed", "precondition_failed"}; !slices.Equal(codes, want) {
 		t.Errorf("responder codes = %v, want %v", codes, want)
 	}
 }
@@ -477,10 +478,11 @@ func TestOutagePageServesListedAssets(t *testing.T) {
 	t.Run("every listed asset answers as SPA answers it", func(t *testing.T) {
 		spa := newSPA(t, spaConfig(t, nil))
 		for _, name := range []string{moduleAsset, classicAsset, styleAsset, chunkAsset, fontAsset} {
-			for _, header := range [][]string{nil, {"Accept-Encoding", "gzip"}, {"If-None-Match", `"` + sha256Hex(files[name]) + `"`}} {
+			for _, header := range [][]string{nil, {"Accept-Encoding", "gzip"}, {"If-None-Match", `"` + sha256Hex(files[name]) + `"`}, {"If-Match", `"other"`}, {"Range", "bytes=0-0"}} {
 				want := spaServe(spa, http.MethodGet, "/"+name, header...)
 				got := spaServe(h, http.MethodGet, "/"+name, header...)
-				if got.Code != want.Code || !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
+				// A refusal's envelope carries its own request id, so only its status is compared.
+				if got.Code != want.Code || (got.Code != http.StatusPreconditionFailed && !bytes.Equal(got.Body.Bytes(), want.Body.Bytes())) {
 					t.Errorf("GET /%s %q = %d (%d bytes), SPA answers %d (%d bytes)", name, header, got.Code, got.Body.Len(), want.Code, want.Body.Len())
 				}
 				for _, k := range []string{"Content-Type", "Cache-Control", "ETag", "Vary", "Content-Encoding", "Content-Security-Policy"} {

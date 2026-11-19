@@ -148,7 +148,7 @@ func OutagePage(c OutageConfig) (http.Handler, error) { //nolint:gocritic // hug
 		return nil, err
 	}
 	if built {
-		if p.assets, p.served, err = bundleAssets(c.Assets, b, policy); err != nil {
+		if p.assets, err = bundleAssets(c.Assets, b, policy); err != nil {
 			return nil, err
 		}
 		if v.Style, err = outageStyle(b, c.Style); err != nil {
@@ -220,8 +220,7 @@ func outageStyle(b Bundle, style string) (string, error) {
 
 type outagePage struct {
 	errs      ErrorResponder
-	assets    http.Handler
-	served    map[string]bool // tree paths answered through assets
+	assets    map[string]*spaFile // by tree path, as SPA serves them
 	policy    string
 	apiPrefix string
 	page      []byte
@@ -239,8 +238,8 @@ func (p *outagePage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(p.errs, w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	if p.served[strings.TrimPrefix(r.URL.Path, "/")] {
-		p.assets.ServeHTTP(w, r)
+	if f := p.assets[strings.TrimPrefix(r.URL.Path, "/")]; f != nil {
+		f.serve(w, r, http.StatusOK, p.errs)
 		return
 	}
 	h.Set("Content-Type", contentTypes[htmlExt])

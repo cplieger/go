@@ -52,6 +52,23 @@ func List(h http.Header, name string, syntax Syntax) iter.Seq[string] {
 	}
 }
 
+// IfMatchFails reports whether h's If-Match, over every field line, states a
+// condition that etag, a strong entity-tag, fails (RFC 9110 section 13.1.1).
+// The condition holds when the field is "*" alone or lists an entity-tag
+// strongly equal to etag (section 8.8.3.2), so a weak tag never matches. A
+// field with no member states no condition.
+func IfMatchFails(h http.Header, etag string) bool {
+	members, wildcard := 0, false
+	for member := range List(h, "If-Match", entityTags) {
+		members++
+		wildcard = member == "*"
+		if member == etag {
+			return false
+		}
+	}
+	return members > 0 && (!wildcard || members != 1)
+}
+
 // IfNoneMatch reports whether h's If-None-Match, over every field line, is
 // "*" as the whole field or lists an entity-tag weakly equal to etag, a
 // strong entity-tag (RFC 9110 section 13.1.2).

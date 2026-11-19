@@ -221,6 +221,12 @@ func gzipAsset(b []byte, name string) (gzAsset, bool) {
 	return gzAsset{contentType: contentTypeOf(name), body: bytes.Clone(buf.Bytes())}, true
 }
 
+// gzipETag is the entity-tag of etag's gzip body, a distinct representation:
+// etag, a strong entity-tag, with "-gz" before its closing quote.
+func gzipETag(etag string) string {
+	return `"` + strings.Trim(etag, `"`) + `-gz"`
+}
+
 // serveGzip writes the precompressed representation of an asset and reports
 // true when it handled the response. It returns false — leaving the caller to
 // fall back to the identity http.FileServer — for Range requests, non-GET/HEAD
@@ -236,7 +242,7 @@ func serveGzip(w http.ResponseWriter, r *http.Request, etag string, gz gzAsset) 
 	// A gzip body is a distinct representation, so it carries its own ETag;
 	// Vary: Accept-Encoding (set by the caller) keeps caches from crossing it
 	// with the identity body.
-	gzEtag := `"` + strings.Trim(etag, `"`) + `-gz"`
+	gzEtag := gzipETag(etag)
 	h.Set("ETag", gzEtag)
 	if httpfield.IfNoneMatch(r.Header, gzEtag) {
 		w.WriteHeader(http.StatusNotModified)

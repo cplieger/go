@@ -32,7 +32,8 @@ const (
 
 // CheckSPA fails t unless h, httpserver.SPA built from c (alone or at "/" of
 // an app handler), serves c.Assets as SPA must: every page, shell file name,
-// listed file (with and without gzip), unlisted file, sourcemap, dot-file, the
+// listed file (with and without gzip, with a Range it ignores, and with an
+// If-Match it holds and one it fails), unlisted file, sourcemap, dot-file, the
 // manifest, /favicon.ico, a same-origin and a cross-site POST, a path under
 // c.APIPrefix and an unknown path. Each answer outside c.APIPrefix carries
 // exactly SPAPolicy(c.CSPAdd) and its status, body, table content type,
@@ -177,11 +178,15 @@ func (s *spaCheck) checkFiles() {
 	}
 }
 
-// checkFile requests target without and with gzip and checks both answers
+// checkFile requests target without and with gzip, with a Range SPA ignores,
+// with its own tag in If-Match and with another one, and checks each answer
 // against want, returning the identity answer.
 func (s *spaCheck) checkFile(where, target string, want fileWant, name string) *httptest.ResponseRecorder {
 	rec := s.serve(http.MethodGet, target)
 	s.checkAnswer(where, rec, want, name)
+	s.checkAnswer(where+" (Range)", s.serve(http.MethodGet, target, "Range", "bytes=1-1", "If-Range", want.etag), want, name)
+	s.checkAnswer(where+" (If-Match its tag)", s.serve(http.MethodGet, target, "If-Match", want.etag), want, name)
+	s.checkRefusal(where+" (If-Match another tag)", s.serve(http.MethodGet, target, "If-Match", `"`+sampleSegment+`"`), http.StatusPreconditionFailed, "precondition_failed")
 	gz := s.serve(http.MethodGet, target, "Accept-Encoding", "gzip")
 	if gz.Header().Get("Content-Encoding") != "gzip" {
 		s.checkAnswer(where+" (gzip offered)", gz, want, name)

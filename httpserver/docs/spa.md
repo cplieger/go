@@ -82,7 +82,6 @@ An entry marked `"stable": true` keeps one URL across builds, which a service wo
 - unknown keys, or data after the object
 - a listed path that is not a regular file in the tree, or holds a segment starting with `.`
 - a file at the root that is neither an `.html` shell nor a stable entry's `.js` file, or a nested file outside `assets/` and `licenses/`
-- a file named `index.html` under `assets/` or `licenses/`, since `http.FileServer` redirects any path ending in `/index.html`
 - a hash that is not 64 lowercase hex digits
 - an entry with no name, an unknown kind, a path not listed, or the same logical file twice (`app` of kind `module` and `app` of kind `classic` are both `/app.js`)
 - an entry whose path is outside `assets/`, unless it is stable
@@ -98,7 +97,7 @@ The first row that applies answers:
 | --- | --- |
 | A path at or under `APIPrefix`, by its raw or its cleaned path | `not_found` (404) |
 | A method other than `GET` or `HEAD` | `method_not_allowed` (405) with `Allow: GET, HEAD` |
-| A listed file under `assets/` whose extension is in the content-type table, or a stable entry | The file through `StaticHandler`, with gzip when offered |
+| A listed file under `assets/` whose extension is in the content-type table, or a stable entry | The file, with gzip when offered |
 | A listed notice under `licenses/` | The notice as `text/plain; charset=utf-8`, whatever its extension |
 | `/favicon.ico` | 204 with no body |
 | Any other path under `assets/` or `licenses/` once its dot segments are cleaned, the manifest, or a shell's own file name such as `/index.html` | `not_found` (404) |
@@ -162,6 +161,15 @@ A file under `assets/` is named by its content hash, so it can be cached for a y
 
 Every `no-cache` ETag is computed once at start as the first 32 hex digits of SHA-256 over the file's manifest hash, a zero byte and the policy, quoted. A changed policy therefore changes the tag, and the next revalidation answers 200 with the new header. Nothing then depends on a browser merging a 304's headers into its stored response (RFC 9111 section 4.3.4). An unchanged build and policy still costs a 304. The gzip body of each file answers under its tag plus `-gz`.
 
+`SPA` holds every listed file in memory and writes each answer itself, so every refusal goes through `Errors`. On a 200 it evaluates the conditional headers against the representation it chose, the gzip body or the file, in RFC 9110 section 13.2.2's order:
+
+- An `If-Match` that lists neither that representation's tag nor `*` alone answers `precondition_failed` (412), with `Cache-Control: no-store`. The comparison is strong, so a weak tag never matches (RFC 9110 section 13.1.1).
+- An `If-None-Match` that matches answers 304.
+- `Range` is ignored, as RFC 9110 section 14.2 allows, so a range request gets the whole file with 200 and no `Accept-Ranges`. A bundle file loads whole, and no type in the content-type table is a media type that streams by range.
+- No `Last-Modified` is sent, so `If-Modified-Since` and `If-Unmodified-Since` are ignored (RFC 9110 sections 13.1.3 and 13.1.4). The ETag is the only validator.
+
+The default shell answered with 404 evaluates none of them (RFC 9110 section 13.2.1).
+
 ## Unbuilt
 
 With no `bundle.json`, `SPA` logs one Warn at start naming `go generate ./...`, every page path answers `ui_unbuilt` (503), and every other path answers `not_found`, each with `Cache-Control: no-store`, so the browser asks again once the bundle is built. So `go test` and a backend-only build run without the bundler's toolchain.
@@ -178,6 +186,7 @@ The `httpservertest` package holds the checks, so `httpserver` itself imports no
 
 - every page at a sample path, comparing the body with its own shell and running `CheckShell` on it
 - every listed file, with and without gzip, checking its body, content type, cache policy and ETag, and for a `classic` or stable entry or a notice the policy-bound tag
+- every listed file again with a `Range` header, which must answer the whole file, and with `If-Match`, which must answer the file for its own tag and `precondition_failed` for another
 - every unlisted file in the tree, a made-up file under `assets/` and `licenses/`, a sourcemap path, dot-files, the manifest and the shells' own file names
 - an unknown path, `/favicon.ico`, a same-origin and a cross-site `POST`, and a path under `APIPrefix`.
 

@@ -404,3 +404,34 @@ func TestCheckNoUIFailsOnAnotherAnswer(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckSPAFailsRangeAnswer(t *testing.T) {
+	c := fixtureConfig(t)
+	h := tamper(fixtureSPA(t, c), func(r *http.Request) bool { return r.Header.Get("Range") != "" },
+		func(rec *httptest.ResponseRecorder) {
+			rec.Code = http.StatusPartialContent
+			rec.Body.Truncate(1)
+		})
+	wantFailure(t, runCheckSPA(t, h, c), "(Range)", "status")
+}
+
+func TestCheckSPAFailsPlainTextPreconditionFailure(t *testing.T) {
+	c := fixtureConfig(t)
+	h := tamper(fixtureSPA(t, c), func(r *http.Request) bool { return r.Header.Get("If-Match") == `"checkspa"` },
+		func(rec *httptest.ResponseRecorder) {
+			rec.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			rec.Body.Reset()
+			rec.Body.WriteString("412 precondition failed\n")
+		})
+	wantFailure(t, runCheckSPA(t, h, c), "(If-Match another tag)", "envelope")
+}
+
+func TestCheckSPAFailsIgnoredIfMatch(t *testing.T) {
+	c := fixtureConfig(t)
+	spa := fixtureSPA(t, c)
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del("If-Match")
+		spa.ServeHTTP(w, r)
+	})
+	wantFailure(t, runCheckSPA(t, h, c), "(If-Match another tag)", "status")
+}
