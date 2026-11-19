@@ -72,6 +72,8 @@ func Listen(c Config) (net.Listener, error) {
 		return nil, fmt.Errorf("ownersock: socket lock: %w", err)
 	}
 	ul, err := bind(path)
+	// The lock file holds no data, and closing the descriptor drops the flock
+	// whatever Close reports, so its error says nothing about the bind.
 	_ = lease.Close()
 	if err != nil {
 		return nil, err
