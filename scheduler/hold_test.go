@@ -634,10 +634,46 @@ func TestQuietWaitsForRecordWrites(t *testing.T) {
 			s.wantNoWrite(t, "Run")
 		})
 	})
+
+	t.Run("a shutdown waits for a hold's queued-job end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := newGatedStore()
+			r, stop := (&rig{store: s.Store, log: &runLog{}}).openUntil(t, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+				Records: s,
+			})
+			r.start(t, api("scan", "source:a", "alice", payload{Gate: make(chan struct{})}))
+			synctest.Wait()
+			q := r.start(t, api("scan", "source:b", "alice", payload{}))
+			g := s.gateEnd(q.Job)
+			_ = holdAsync(t.Context(), r.ex)
+			<-g.entered
+			s.quietWhile(t, g, stopAsync(stop), "Run")
+			r.wantEnd(t, q.Job, scheduler.ResultInterrupted)
+			s.wantNoWrite(t, "Run")
+		})
+	})
+
+	t.Run("a second hold waits for the first hold's queued-job end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s, r := gatedRig(t, 0)
+			r.start(t, api("scan", "source:a", "alice", payload{Gate: make(chan struct{})}))
+			synctest.Wait()
+			q := r.start(t, api("scan", "source:b", "alice", payload{}))
+			g := s.gateEnd(q.Job)
+			_ = holdAsync(t.Context(), r.ex)
+			<-g.entered
+			if h := s.quietWhile(t, g, holdAsync(t.Context(), r.ex), "second Hold(all)"); h.err != nil {
+				t.Fatalf("second Hold(all) = %v, want nil", h.err)
+			}
+			r.wantEnd(t, q.Job, scheduler.ResultInterrupted)
+			s.wantNoWrite(t, "second Hold(all)")
+		})
+	})
 }
 
-// gatedStore holds the next call of each gated op until its gate's release
-// closes.
+// gatedStore holds the next call of each gated op, or of a gated job's End,
+// until its gate's release closes.
 type gatedStore struct {
 	*memrecords.Store
 	gates  map[memrecords.Op]*storeGate
@@ -645,7 +681,10 @@ type gatedStore struct {
 	mu     sync.Mutex
 }
 
-type storeGate struct{ entered, release chan struct{} }
+type storeGate struct {
+	entered, release chan struct{}
+	id               scheduler.ID // the only job whose call it holds, when set
+}
 
 func newGatedStore() *gatedStore {
 	return &gatedStore{Store: memrecords.New(), gates: map[memrecords.Op]*storeGate{}}
@@ -664,18 +703,26 @@ func gatedRig(t *testing.T, maxQueued int) (*gatedStore, *rig) {
 	return s, r
 }
 
-func (s *gatedStore) gate(op memrecords.Op) *storeGate {
-	g := &storeGate{entered: make(chan struct{}), release: make(chan struct{})}
+func (s *gatedStore) gate(op memrecords.Op) *storeGate { return s.gateFor(op, "") }
+
+func (s *gatedStore) gateEnd(id scheduler.ID) *storeGate { return s.gateFor(memrecords.OpEnd, id) }
+
+func (s *gatedStore) gateFor(op memrecords.Op, id scheduler.ID) *storeGate {
+	g := &storeGate{entered: make(chan struct{}), release: make(chan struct{}), id: id}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gates[op] = g
 	return g
 }
 
-func (s *gatedStore) pass(op memrecords.Op) {
+func (s *gatedStore) pass(op memrecords.Op, id scheduler.ID) {
 	s.mu.Lock()
-	g := s.gates[op]
-	delete(s.gates, op)
+	g, ok := s.gates[op]
+	if ok && (g.id == "" || g.id == id) {
+		delete(s.gates, op)
+	} else {
+		g = nil
+	}
 	s.mu.Unlock()
 	if g != nil {
 		close(g.entered)
@@ -684,12 +731,12 @@ func (s *gatedStore) pass(op memrecords.Op) {
 }
 
 func (s *gatedStore) Insert(ctx context.Context, rec scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) {
-	s.pass(memrecords.OpInsert)
+	s.pass(memrecords.OpInsert, rec.ID)
 	return s.Store.Insert(ctx, rec, key)
 }
 
 func (s *gatedStore) End(ctx context.Context, id scheduler.ID, end scheduler.End) (scheduler.Record, error) {
-	s.pass(memrecords.OpEnd)
+	s.pass(memrecords.OpEnd, id)
 	return s.Store.End(ctx, id, end)
 }
 
