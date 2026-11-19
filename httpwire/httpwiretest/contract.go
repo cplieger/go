@@ -20,6 +20,8 @@ import (
 	"github.com/cplieger/go/httpwire/internal/wirelink"
 )
 
+const codeOutcomeUnknown = "outcome_unknown"
+
 // Case is one request Contract serves.
 type Case struct {
 	// Request is built by the test, carrying its own principal.
@@ -52,13 +54,12 @@ func WithSameShape(s SameShape) Option {
 }
 
 // Contract serves each case through api and fails t, naming the row, on any
-// answer outside the row's shapes in the OpenAPI document api was built
-// with: an undeclared success status, a body that does not decode strictly
-// into the status's Response type or breaks its schema, a Raw answer of
-// another media type, an error that is not an envelope of a code in the
-// row's union at the catalog's status, and no Wire-Version of this API or
-// valid X-Request-Id. A HEAD answer's body is not read. A case naming no
-// row, a Stream row, or a request the API routes to another row fails.
+// answer outside the row's shapes in the document api was built with (a
+// status, body, media type, envelope, Wire-Version or X-Request-Id; a HEAD
+// answer's body is not read). A case naming no row, a Stream row, or a
+// request routed to another row fails, as does every write row, mount rows
+// included, whose union holds outcome_unknown and that is not Keyed.
+// docs/testing.md lists each check.
 func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 	t.Helper()
 	if api == nil {
@@ -72,6 +73,7 @@ func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 		}
 	}
 	c := newChecker(t, api)
+	c.unkeyedOutcomes()
 	covered := map[string]bool{}
 	for _, cs := range cases {
 		ep, body, ok := c.admit(cs)
@@ -129,6 +131,16 @@ func newChecker(t testing.TB, api *httpwire.API) *checker {
 		}
 	}
 	return c
+}
+
+// unkeyedOutcomes fails every write row that can answer outcome_unknown
+// and is not Keyed.
+func (c *checker) unkeyedOutcomes() {
+	for _, ep := range c.order {
+		if ep.Method != http.MethodGet && ep.Method != http.MethodHead && !ep.Keyed && slices.Contains(ep.Errors, codeOutcomeUnknown) {
+			c.t.Errorf("httpwiretest: row %q is a write whose union holds %s, so a resend may run it twice; make the row Keyed", ep.Name, codeOutcomeUnknown)
+		}
+	}
 }
 
 // uncovered fails every row WithSameShape covers that no case served.

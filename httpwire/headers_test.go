@@ -442,33 +442,51 @@ func headers(t reflect.Type) func(*httpwire.Table) {
 func TestDeriveRefusesHeaders(t *testing.T) {
 	text := reflect.TypeFor[sessionToken]()
 	cases := map[string]refusal{
-		"the table's ClientHeader": {headers(oneHeader(text, `header:"fixture-version"`)),
-			[]string{`row "jobs.list": Headers field "Fixture-Version" names the table's ClientHeader`}},
-		"a field with no header tag": {headers(reflect.TypeFor[struct{ V sessionToken }]()),
-			[]string{`row "jobs.list": Headers field V names no header`}},
-		"a header tag with no name": {headers(oneHeader(text, `header:",omitempty"`)),
-			[]string{`row "jobs.list": Headers field V names no header`}},
-		"a name outside the token grammar": {headers(oneHeader(text, `header:"Bad Header"`)),
-			[]string{`row "jobs.list": Headers field V names "Bad Header", which is not a header name`}},
+		"the table's ClientHeader": {
+			headers(oneHeader(text, `header:"fixture-version"`)),
+			[]string{`row "jobs.list": Headers field "Fixture-Version" names the table's ClientHeader`},
+		},
+		"a field with no header tag": {
+			headers(reflect.TypeFor[struct{ V sessionToken }]()),
+			[]string{`row "jobs.list": Headers field V names no header`},
+		},
+		"a header tag with no name": {
+			headers(oneHeader(text, `header:",omitempty"`)),
+			[]string{`row "jobs.list": Headers field V names no header`},
+		},
+		"a name outside the token grammar": {
+			headers(oneHeader(text, `header:"Bad Header"`)),
+			[]string{`row "jobs.list": Headers field V names "Bad Header", which is not a header name`},
+		},
 		"one header named twice": {headers(reflect.TypeFor[struct {
 			A sessionToken `header:"X-Thing"`
 			B sessionToken `header:"x-thing"`
 		}]()), []string{`row "jobs.list": Headers field "X-Thing" is declared twice`}},
-		"a field outside the binder set": {headers(oneHeader(reflect.TypeFor[float64](), `header:"X-Thing"`)),
-			[]string{`row "jobs.list": Headers field "X-Thing" is float64, outside the types a header value parses into`}},
-		"a list": {headers(oneHeader(reflect.TypeFor[heldPaths](), `header:"X-Thing"`)),
-			[]string{`row "jobs.list": Headers field "X-Thing" is a list; a header takes one value`}},
-		"a cursor": {headers(oneHeader(reflect.TypeFor[httpwire.Cursor](), `header:"X-Thing"`)),
-			[]string{`row "jobs.list": Headers field "X-Thing" is an httpwire.Cursor`}},
-		"a Refusal outside the code grammar": {headers(oneHeader(reflect.TypeFor[badRefusal](), `header:"X-Thing"`)),
-			[]string{`row "jobs.list"`, `Refusal "Not-A-Code"`}},
+		"a field outside the binder set": {
+			headers(oneHeader(reflect.TypeFor[float64](), `header:"X-Thing"`)),
+			[]string{`row "jobs.list": Headers field "X-Thing" is float64, outside the types a header value parses into`},
+		},
+		"a list": {
+			headers(oneHeader(reflect.TypeFor[heldPaths](), `header:"X-Thing"`)),
+			[]string{`row "jobs.list": Headers field "X-Thing" is a list; a header takes one value`},
+		},
+		"a cursor": {
+			headers(oneHeader(reflect.TypeFor[httpwire.Cursor](), `header:"X-Thing"`)),
+			[]string{`row "jobs.list": Headers field "X-Thing" is an httpwire.Cursor`},
+		},
+		"a Refusal outside the code grammar": {
+			headers(oneHeader(reflect.TypeFor[badRefusal](), `header:"X-Thing"`)),
+			[]string{`row "jobs.list"`, `Refusal "Not-A-Code"`},
+		},
 		"Headers not a struct": {headers(reflect.TypeFor[string]()), []string{`row "jobs.list": Headers string is not a struct`}},
 		"Headers is None":      {headers(reflect.TypeFor[httpwire.None]()), []string{`row "jobs.list": Headers is httpwire.None`}},
 		"a Keyed row's header that decodes itself one way": {edit("jobs.start", func(ep *httpwire.Endpoint) {
 			ep.Headers = oneHeader(reflect.TypeFor[keyList](), `header:"X-Thing"`)
 		}), []string{`row "jobs.start": a Keyed row's fingerprint marshals the decoded request, but httpwire_test.keyList decodes itself with no MarshalText`}},
-		"a mount row naming an owned header": {edit("auth.keys", func(ep *httpwire.Endpoint) { ep.Headers = oneHeader(text, `header:"Authorization"`) }),
-			[]string{`row "auth.keys": Headers field "Authorization" names a header httpwire or the platform owns`}},
+		"a mount row naming an owned header": {
+			edit("auth.keys", func(ep *httpwire.Endpoint) { ep.Headers = oneHeader(text, `header:"Authorization"`) }),
+			[]string{`row "auth.keys": Headers field "Authorization" names a header httpwire or the platform owns`},
+		},
 	}
 	// RFC 9110 sections 7.6.1 and 8, httputil's hop-by-hop list, and the
 	// headers the binder reads itself.
@@ -479,8 +497,10 @@ func TestDeriveRefusesHeaders(t *testing.T) {
 		"TE": "Te", "Trailer": "Trailer", "Transfer-Encoding": "Transfer-Encoding", "Upgrade": "Upgrade", "Wire-Version": "Wire-Version",
 		"X-Request-ID": "X-Request-Id",
 	} {
-		cases["the owned header "+tag] = refusal{headers(oneHeader(text, `header:"`+tag+`"`)),
-			[]string{`row "jobs.list": Headers field "` + canonical + `" names a header httpwire or the platform owns`}}
+		cases["the owned header "+tag] = refusal{
+			headers(oneHeader(text, `header:"`+tag+`"`)),
+			[]string{`row "jobs.list": Headers field "` + canonical + `" names a header httpwire or the platform owns`},
+		}
 	}
 	runRefusals(t, cases)
 }

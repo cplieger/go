@@ -147,7 +147,7 @@ func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
 			c.out = append(c.out, a.queryList(qv, ep, &f, vals[f.name])...)
 			continue
 		}
-		code, message := a.queryField(qv, ep, &f, vals[f.name])
+		code, message := a.textValue(qv, ep, inQuery, &f, vals[f.name])
 		if code != "" {
 			c.add(f.name, refusalCode(f.typ, code), message)
 		}
@@ -160,7 +160,9 @@ func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
 	return qv.Interface(), c.out
 }
 
-func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []string) (code, message string) {
+// textValue sets f in v from the values given for it in a query or the
+// header, answering the field code of a refusal or "".
+func (a *API) textValue(v reflect.Value, ep *Endpoint, in string, f *textField, given []string) (code, message string) {
 	switch {
 	case len(given) == 0 && f.optional:
 		return "", ""
@@ -169,7 +171,7 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 	case len(given) > 1:
 		return codeMalformed, "given more than once"
 	}
-	fv := qv.FieldByIndex(f.index)
+	fv := v.FieldByIndex(f.index)
 	if f.cursor {
 		fv.SetString(given[0])
 		return "", ""
@@ -181,7 +183,7 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 	if code, message := parseText(fv, given[0]); code != "" {
 		return code, message
 	}
-	if e := a.schema.CheckParam(ep.Name, inQuery, f.name, paramValue(fv, given[0])); e != nil {
+	if e := a.schema.CheckParam(ep.Name, in, f.name, paramValue(fv, given[0])); e != nil {
 		return e.Code, e.Message
 	}
 	return "", ""

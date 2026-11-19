@@ -59,7 +59,7 @@ func keyedTable(t testing.TB) *httpwire.Table {
 	if err := c.Add("queue_full", httpserver.CodeSpec{Status: http.StatusServiceUnavailable, Remediation: "Retry later.", NoEffect: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add("outcome_unknown", httpserver.CodeSpec{Status: http.StatusBadGateway, Remediation: "Read the jobs first."}); err != nil {
+	if err := c.SetRemediation("outcome_unknown", "Read the jobs first."); err != nil {
 		t.Fatal(err)
 	}
 	jobCodes := []string{"queue_full", "outcome_unknown"}

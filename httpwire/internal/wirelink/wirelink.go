@@ -20,4 +20,7 @@ var (
 	// OwnerProblems answers every refusal Derive makes of an *httpwire.Owner
 	// on its own, the catalog check aside.
 	OwnerProblems func(owner any) []error
+	// Stub answers an httpwire.Binding New accepts for any *httpwire.Endpoint
+	// of its table, whose handler answers internal_error.
+	Stub func(ep any) any
 )

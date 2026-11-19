@@ -145,6 +145,7 @@ func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount boo
 	u.addIf(ep.Request != nil, codeMediaType, codeBadBody, "body_too_large")
 	u.addIf(ep.Kind == Raw && write, "body_too_large")
 	u.addIf(ep.Query != nil, "bad_query")
+	u.addIf(ep.Headers != nil, codeBadHeader)
 	u.addIf(ep.IfMatch, ifMatchUnion...)
 	u.addIf(ep.List, codeCursor)
 	u.addIf(ep.Keyed, keyedUnion...)
@@ -342,7 +343,7 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	for _, f := range []struct {
 		t    reflect.Type
 		name string
-	}{{ep.Params, partParams}, {ep.Query, partQuery}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
+	}{{ep.Params, partParams}, {ep.Query, partQuery}, {ep.Headers, partHeaders}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
 		if f.t == noneType {
 			c.fail("%s: %s is httpwire.None; leave it nil to declare none", at, f.name)
 		}
@@ -361,12 +362,17 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	}
 }
 
-// textParts holds Params to the path's wildcards and, on a table row, every
-// Params and Query field to the types the binder parses from text. A mount
-// row's fields are its handler's to parse.
+// textParts holds Params to the path's wildcards, every Headers field to a
+// header no other layer owns and, on a table row, every Params, Query and
+// Headers field to the types the binder parses from text. A mount row's
+// values are its handler's to parse.
 func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 	if ep.Params != nil && ep.Params != noneType {
 		c.pathParams(ep, at, mount)
+	}
+	if ep.Headers != nil && ep.Headers != noneType {
+		_, problems := headerFields(ep.Headers, c.t.ClientHeader, !mount)
+		c.failEach(at+": ", problems)
 	}
 	if mount {
 		return
@@ -376,7 +382,7 @@ func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 		c.failEach(at+": Query ", problems)
 	}
 	seen := map[reflect.Type]bool{}
-	for _, t := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
+	for _, t := range []reflect.Type{ep.Params, ep.Query, ep.Headers, ep.Request} {
 		if t != nil {
 			c.failEach(at+": ", refusalProblems(t, seen))
 		}
@@ -587,7 +593,7 @@ func (c *tableChecker) keyed(ep *Endpoint, at string, names map[string]*Endpoint
 }
 
 func (c *tableChecker) fingerprinted(ep *Endpoint, at string) {
-	for _, part := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
+	for _, part := range []reflect.Type{ep.Params, ep.Query, ep.Headers, ep.Request} {
 		if t, method := oneWay(part, map[reflect.Type]bool{}); t != nil {
 			c.fail("%s: a Keyed row's fingerprint marshals the decoded request, but %s decodes itself with no %s", at, t, method)
 		}

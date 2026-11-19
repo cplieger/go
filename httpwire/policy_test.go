@@ -73,7 +73,7 @@ func TestPolicyOfMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	const wantJSON = `{"window_s":90,"scope":"credential,operation","concurrent":"join","kept":"success_and_effectful_refusals","max_kept":5,"result":"jobs.read"}`
-	if string(got) != wantJSON {
+	if !jsonSame(t, got, []byte(wantJSON)) {
 		t.Errorf("as JSON %s, want %s", got, wantJSON)
 	}
 	if p, ok := httpwire.PolicyOf(&httpwire.Endpoint{Window: time.Minute}); ok || p != (httpwire.IdempotencyPolicy{}) {

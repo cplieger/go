@@ -286,18 +286,23 @@ type pageAnswer interface {
 // listIndex answers the index of the List[T] that t is or embeds, empty
 // when t is one.
 func listIndex(t reflect.Type) ([]int, bool) {
-	isList := func(t reflect.Type) bool {
+	return answerIndex(t, func(t reflect.Type) bool {
 		p, ok := methodOf[pageAnswer](t)
 		return ok && p.listType() == t
-	}
+	})
+}
+
+// answerIndex answers the index of the field of t that is, by is, the
+// answer type t is or embeds, empty when t is one.
+func answerIndex(t reflect.Type, is func(reflect.Type) bool) ([]int, bool) {
 	if t == nil || t.Kind() != reflect.Struct {
 		return nil, false
 	}
-	if isList(t) {
+	if is(t) {
 		return []int{}, true
 	}
 	for f := range t.Fields() {
-		if f.Anonymous && isList(f.Type) {
+		if f.Anonymous && is(f.Type) {
 			return f.Index, true
 		}
 	}

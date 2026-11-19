@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 	"github.com/cplieger/go/httpwire/httpwiretest"
 )
@@ -24,7 +25,11 @@ func outcomeAPI(t *testing.T) *httpwire.API {
 	}
 	keyed := row("act.keyed", http.MethodPost, "/api/act/keyed", "Act keyed", "outcome_unknown")
 	keyed.Keyed = true
-	tb := &httpwire.Table{Catalog: httpwire.NewCatalog(), Prefix: "/api", Endpoints: []httpwire.Endpoint{
+	c := httpwire.NewCatalog()
+	if err := c.Add("auth_required", httpserver.CodeSpec{Status: http.StatusUnauthorized, Remediation: "Sign in."}); err != nil {
+		t.Fatal(err)
+	}
+	tb := &httpwire.Table{Catalog: c, Prefix: "/api", Endpoints: []httpwire.Endpoint{
 		row("act.unkeyed", http.MethodPost, "/api/act", "Act unkeyed", "outcome_unknown"),
 		keyed,
 		row("act.plain", http.MethodPost, "/api/act/plain", "Act plainly"),
@@ -38,7 +43,7 @@ func outcomeAPI(t *testing.T) *httpwire.API {
 	api, err := httpwire.New(tb, []httpwire.Binding{
 		httpwire.Bind("act.unkeyed", none), httpwire.Bind("act.keyed", none),
 		httpwire.Bind("act.plain", none), httpwire.Bind("act.read", none),
-	}, httpwire.WithSchema(doc),
+	}, httpwire.WithSchema(doc), httpwire.WithGuard(fixtureGuard{c}),
 		httpwire.WithCredential(func(*http.Request) string { return "s:a" }),
 		httpwire.WithCursorOwner(func(*http.Request) string { return "u:a" }),
 		httpwire.WithHold(func(next http.Handler) http.Handler { return next }))

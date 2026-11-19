@@ -2,6 +2,7 @@ package httpwire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -98,6 +99,7 @@ type Binding struct {
 	name       string
 	kind       bindKind
 	nilHandler bool
+	stub       bool // serves any row of its kind, its types unchecked
 }
 
 // decoded is a request's decoded parts, each a value of the binding's type
@@ -149,6 +151,18 @@ func Bind[P, Q, B, H, R any](name string, h Handler[P, Q, B, H, R]) Binding {
 	return b
 }
 
+var errStub = errors.New("httpwire: a stub binding ran")
+
+// stubBinding binds ep to a handler that answers internal_error, for a
+// test that never runs the row past its guard.
+func stubBinding(ep *Endpoint) Binding {
+	return Binding{
+		name: ep.Name, kind: kindBinding(ep.Kind), stub: true,
+		run:     func(context.Context, *decoded) (int, any, error) { return 0, nil, errStub },
+		handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(errStub) }),
+	}
+}
+
 // BindRaw binds a Raw or Redirect row to a handler that writes its own
 // answer.
 func BindRaw(name string, h http.Handler) Binding {
@@ -196,7 +210,7 @@ func bindingProblems(ep *Endpoint, b *Binding) []string {
 	if want := kindBinding(ep.Kind); b.kind != want {
 		return []string{fmt.Sprintf("%s is a %s row, bound with %s; bind it with %s", at, kindNames[ep.Kind], bindNames[b.kind], bindNames[want])}
 	}
-	if b.kind != bindJSON {
+	if b.kind != bindJSON || b.stub {
 		return nil
 	}
 	var p []string
@@ -207,6 +221,7 @@ func bindingProblems(ep *Endpoint, b *Binding) []string {
 		{b.params, ep.Params, "P", partParams},
 		{b.query, ep.Query, "Q", partQuery},
 		{b.body, ep.Request, "B", "Request"},
+		{b.headers, ep.Headers, "H", partHeaders},
 	} {
 		if !declares(part.got, part.want) {
 			p = append(p, fmt.Sprintf("%s: the binding's %s is %s, but the row's %s is %s", at, part.letter, part.got, part.field, typeName(part.want)))

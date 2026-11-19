@@ -142,7 +142,18 @@ func matrixOptions(t testing.TB) []httpwire.Option {
 		}
 		return ""
 	}
-	return []httpwire.Option{httpwire.WithSchema(doc), httpwire.WithCredential(principal), httpwire.WithCursorOwner(principal)}
+	l, err := httpserver.NewKeyedRateLimiter(httpserver.KeyedRate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyOf := func(r *http.Request) (string, bool) {
+		p := r.Header.Get("Principal")
+		return p, strings.HasPrefix(p, "key ")
+	}
+	return []httpwire.Option{
+		httpwire.WithSchema(doc), httpwire.WithCredential(principal), httpwire.WithCursorOwner(principal),
+		httpwire.WithKeyRate(l, keyOf),
+	}
 }
 
 // matrixGuard answers each row from matrixWant, so AccessMatrix passes it

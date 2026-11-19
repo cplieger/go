@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"github.com/cplieger/go/textsafe"
 )
 
 // writeAnswer writes a JSON row's success; code zero is the row's primary
@@ -36,6 +37,14 @@ func (a *API) writeAnswer(w http.ResponseWriter, r *http.Request, ep *Endpoint, 
 			a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
 			return
 		}
+	}
+	body, problem := boundChecked(body, func(source, service string) {
+		a.log().ErrorContext(r.Context(), "httpwire: an open check's upstream service is outside the code grammar, left out", "row", ep.Name, "source", source, "service", textsafe.SanitizeSingleLineBounded(service, maxReason))
+	})
+	if problem != "" {
+		a.log().ErrorContext(r.Context(), "httpwire: a row answered an open check that breaks its rules", "row", ep.Name, "problem", problem)
+		a.table.Catalog.WriteError(w, r, &Error{Code: codeInternal})
+		return
 	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {

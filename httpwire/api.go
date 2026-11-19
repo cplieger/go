@@ -343,29 +343,17 @@ func (a *API) outage(mount bool, next http.Handler) http.Handler {
 	})
 }
 
-// decode answers r's Params, Query and Request as ep declares them, and the
+// decode answers r's Params, Query, Headers and Request as ep declares them, and the
 // body bytes it read.
 func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
-	d := &decoded{}
-	if ep.Params != nil {
-		v, ok := a.decodePath(r, ep)
-		if !ok {
-			return nil, nil, &Error{Code: codeNotFound, Message: "no resource matches the path"}
-		}
-		d.params = v
-	}
-	if ep.Query != nil {
-		v, fields := a.decodeQuery(r, ep)
-		if len(fields) > 0 {
-			return nil, nil, &Error{Code: "bad_query", Message: "the query does not match this request", Fields: fields}
-		}
-		d.query = v
+	d, e := a.decodeText(r, ep)
+	if e != nil {
+		return nil, nil, e
 	}
 	var b []byte
 	if ep.Request != nil {
-		e := jsonMediaType(r)
-		if e != nil {
-			return nil, nil, e
+		if me := jsonMediaType(r); me != nil {
+			return nil, nil, me
 		}
 		if b, e = readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody)); e != nil {
 			return nil, nil, e
@@ -378,6 +366,34 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 		return nil, nil, e
 	}
 	return d, b, nil
+}
+
+// decodeText reads the parts that come before the body: the path, the
+// query, then the headers.
+func (a *API) decodeText(r *http.Request, ep *Endpoint) (*decoded, *Error) {
+	d := &decoded{}
+	if ep.Params != nil {
+		v, ok := a.decodePath(r, ep)
+		if !ok {
+			return nil, &Error{Code: codeNotFound, Message: "no resource matches the path"}
+		}
+		d.params = v
+	}
+	if ep.Query != nil {
+		v, fields := a.decodeQuery(r, ep)
+		if len(fields) > 0 {
+			return nil, &Error{Code: "bad_query", Message: "the query does not match this request", Fields: fields}
+		}
+		d.query = v
+	}
+	if ep.Headers != nil {
+		v, fields := a.decodeHeaders(r, ep)
+		if len(fields) > 0 {
+			return nil, &Error{Code: codeBadHeader, Message: "the request headers do not match this request", Fields: fields}
+		}
+		d.headers = v
+	}
+	return d, nil
 }
 
 // decodeLast reads what follows the body: If-Match, the Idempotency-Key,
@@ -472,7 +488,8 @@ func (c *newChecker) bindings(bs []Binding) map[string]*Binding {
 		rows[c.t.Endpoints[i].Name] = &c.t.Endpoints[i]
 	}
 	bound := map[string]*Binding{}
-	for _, b := range bs {
+	for i := range bs {
+		b := &bs[i]
 		switch {
 		case isMountRow(c.t, b.name):
 			c.fail("binding %q names a mount row, which its mount's Handler serves", b.name)
@@ -483,7 +500,8 @@ func (c *newChecker) bindings(bs []Binding) map[string]*Binding {
 		case b.nilHandler:
 			c.fail("binding %q has a nil handler", b.name)
 		default:
-			bound[b.name] = &b
+			own := *b // the caller's slice may change after New returns
+			bound[b.name] = &own
 		}
 	}
 	for i := range c.t.Endpoints {
@@ -645,36 +663,42 @@ func (c *newChecker) idempotencyPolicy(ep *Endpoint, op *operation) {
 	}
 }
 
-// publishedPolicy is a Keyed row's x-idempotency as a decoded JSON value,
-// its window in whole seconds rounded down; nil on any other row.
+// publishedPolicy is PolicyOf's answer as the decoded JSON value New
+// compares a document's x-idempotency with; nil on a row that is not Keyed.
 func publishedPolicy(ep *Endpoint) map[string]any {
-	if !ep.Keyed {
+	p, ok := PolicyOf(ep)
+	if !ok {
 		return nil
 	}
-	p := map[string]any{
-		"window_s":   json.Number(strconv.FormatInt(int64(ep.Window/time.Second), 10)),
-		"scope":      "credential,operation",
-		"concurrent": "join",
-		"kept":       "success_and_effectful_refusals",
+	v := map[string]any{
+		"window_s":   json.Number(strconv.FormatInt(p.WindowS, 10)),
+		"scope":      p.Scope,
+		"concurrent": p.Concurrent,
+		"kept":       p.Kept,
 	}
-	if ep.MaxKept > 0 {
-		p["max_kept"] = json.Number(strconv.Itoa(ep.MaxKept))
+	if p.MaxKept > 0 {
+		v["max_kept"] = json.Number(strconv.Itoa(p.MaxKept))
 	}
-	if ep.Result != "" {
-		p["result"] = ep.Result
+	if p.Result != "" {
+		v["result"] = p.Result
 	}
-	return p
+	return v
 }
 
 // decodedParts matches what the binder decodes on ep with what op declares:
-// each Params and Query field a parameter, required as the field is, no
-// other path or query parameter, and a JSON request body exactly when ep
-// has a Request. A mismatch would refuse every request at run time.
+// each Params, Query and Headers field a parameter, required as the field
+// is, no other path or query parameter, and a JSON request body exactly
+// when ep has a Request. Other header parameters stay, since the document
+// declares the ones the binder reads itself (Idempotency-Key, Wire-Version). A mismatch would refuse every request at run time.
 func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
 	at := fmt.Sprintf("row %q", ep.Name)
 	declared := map[paramKey]bool{}
 	c.fieldParams(at, ep.Params, inPath, op, declared)
 	c.fieldParams(at, ep.Query, inQuery, op, declared)
+	if ep.Headers != nil {
+		fields, _ := headerFields(ep.Headers, c.t.ClientHeader, true)
+		c.paramsOf(at, fields, inHeader, op, declared)
+	}
 	for _, key := range slices.SortedFunc(maps.Keys(op.params), func(x, y paramKey) int {
 		return cmp.Or(cmp.Compare(x.in, y.in), cmp.Compare(x.name, y.name))
 	}) {
@@ -694,7 +718,7 @@ func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
 	}
 }
 
-var partOf = map[string]string{inPath: partParams, inQuery: partQuery}
+var partOf = map[string]string{inPath: partParams, inQuery: partQuery, inHeader: partHeaders}
 
 // ifMatchParam matches an IfMatch row with a required If-Match header
 // parameter in op, and any other row with none; header names are
@@ -748,8 +772,14 @@ func (c *newChecker) fieldParams(at string, t reflect.Type, in string, op *opera
 		return
 	}
 	fields, _ := textFields(t)
+	c.paramsOf(at, fields, in, op, declared)
+}
+
+// paramsOf matches each field, decoded from the in parameters, with op's
+// parameter of its name, marking it in declared.
+func (c *newChecker) paramsOf(at string, fields []textField, in string, op *operation, declared map[paramKey]bool) {
 	for _, f := range fields {
-		key := paramKey{in, f.name}
+		key := paramKeyOf(in, f.name)
 		declared[key] = true
 		switch p := op.params[key]; {
 		case p == nil:

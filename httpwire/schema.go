@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/textproto"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +30,16 @@ type operation struct {
 	path        string
 }
 
+// paramKey names a parameter; a header's name is canonical, since header
+// names are case-insensitive (RFC 9110 section 5.1).
 type paramKey struct{ in, name string }
+
+func paramKeyOf(in, name string) paramKey {
+	if in == inHeader {
+		name = textproto.CanonicalMIMEHeaderKey(name)
+	}
+	return paramKey{in, name}
+}
 
 type param struct {
 	schema   *node
@@ -239,11 +249,11 @@ func (p *parser) parameters(op *operation, v any, at string) {
 			p.fail(pat, "parameter in %q is not path, query, header or cookie", m["in"])
 		case m["schema"] == nil:
 			p.fail(pat, "parameter has no schema")
-		case op.params[paramKey{in, name}] != nil:
+		case op.params[paramKeyOf(in, name)] != nil:
 			p.fail(pat, "parameter %s %q declared twice", in, name)
 		default:
 			required, _ := m["required"].(bool)
-			op.params[paramKey{in, name}] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required, form: p.form(m, pat)}
+			op.params[paramKeyOf(in, name)] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required, form: p.form(m, pat)}
 		}
 	}
 }

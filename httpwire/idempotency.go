@@ -110,20 +110,30 @@ func Idempotency(ctx context.Context) (k IdempotencyKey, fingerprint [32]byte, o
 // IdempotencyPolicy is a Keyed row's published policy, its OpenAPI
 // operation's x-idempotency member.
 type IdempotencyPolicy struct {
-	// WindowS is the row's Window in whole seconds, rounded down.
-	WindowS    int64  `json:"window_s"`
 	Scope      string `json:"scope"`
 	Concurrent string `json:"concurrent"`
 	Kept       string `json:"kept"`
-	MaxKept    int    `json:"max_kept,omitempty"`
 	Result     string `json:"result,omitempty"`
+	// WindowS is the row's Window in whole seconds, rounded down.
+	WindowS int64 `json:"window_s"`
+	MaxKept int   `json:"max_kept,omitempty"`
 }
 
 // PolicyOf answers a Keyed row's published policy, read from the row as
 // Derive leaves it (its Window set); ok is false for a row that is not
 // Keyed.
 func PolicyOf(ep *Endpoint) (p IdempotencyPolicy, ok bool) {
-	return IdempotencyPolicy{}, false
+	if !ep.Keyed {
+		return IdempotencyPolicy{}, false
+	}
+	return IdempotencyPolicy{
+		WindowS:    int64(ep.Window / time.Second),
+		Scope:      "credential,operation",
+		Concurrent: "join",
+		Kept:       "success_and_effectful_refusals",
+		MaxKept:    ep.MaxKept,
+		Result:     ep.Result,
+	}, true
 }
 
 type idemCallKey struct{}
@@ -232,9 +242,10 @@ func parseSFString(v string) (string, bool) {
 func fingerprint(row string, d *decoded) ([32]byte, error) {
 	part, err := json.Marshal(struct {
 		Params, Query, Body any
+		Headers             any `json:",omitempty"`
 		IfMatch             string
 		RawBody             []byte `json:",omitempty"`
-	}{addressed(d.params), addressed(d.query), addressed(d.body), d.ifMatch.String(), d.rawBody})
+	}{addressed(d.params), addressed(d.query), addressed(d.body), addressed(d.headers), d.ifMatch.String(), d.rawBody})
 	if err != nil {
 		return [32]byte{}, err
 	}

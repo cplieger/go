@@ -38,6 +38,8 @@ const (
 	codeInFlight    = "idempotency_in_flight"
 	codeStoreFull   = "idempotency_store_full"
 	codeTooLarge    = "idempotency_answer_too_large"
+	codeBadHeader   = "bad_header"
+	codeOutcome     = "outcome_unknown"
 	internalMessage = "internal error"
 )
 
@@ -46,6 +48,7 @@ const (
 var libraryCodes = map[string]httpserver.CodeSpec{
 	codeBadBody:                   {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
 	"bad_query":                   {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
+	codeBadHeader:                 {Status: http.StatusBadRequest, Remediation: "Fix the request headers as the fields describe, then resend the request."},
 	"body_too_large":              {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
 	codeMediaType:                 {Status: http.StatusUnsupportedMediaType, Remediation: "Send the body as JSON, with Content-Type: application/json.", NoEffect: true},
 	codeCursor:                    {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},
@@ -66,6 +69,7 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	"store_unavailable":           {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
 	codeAccounts:                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
 	codeMaintenance:               {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
+	codeOutcome:                   {Status: http.StatusBadGateway, Remediation: "Check the result before sending it again; the action may have run."},
 }
 
 // Catalog is the one code table of an app's listeners: every code any layer
@@ -258,20 +262,29 @@ func boundFields(fields []FieldError) []FieldError {
 }
 
 func upstreamOf(r *http.Request, e *Error) *Upstream {
-	u := e.Upstream
+	out, ok := boundUpstream(e.Upstream)
+	if !ok {
+		logError(r, "httpwire: upstream service outside the code grammar, left out", "code", e.Code, "service", textsafe.SanitizeSingleLineBounded(e.Upstream.Service, maxReason))
+	}
+	return out
+}
+
+// boundUpstream holds u to the envelope's rules: a status outside 100 to
+// 599 left out, the message one line of at most 512 bytes. ok is false,
+// and out nil, for a service outside the code grammar.
+func boundUpstream(u *Upstream) (out *Upstream, ok bool) {
 	if u == nil {
-		return nil
+		return nil, true
 	}
 	if !isCode(u.Service) || len(u.Service) > maxEnvelopeString {
-		logError(r, "httpwire: upstream service outside the code grammar, left out", "code", e.Code, "service", textsafe.SanitizeSingleLineBounded(u.Service, maxReason))
-		return nil
+		return nil, false
 	}
-	out := &Upstream{Service: u.Service}
+	out = &Upstream{Service: u.Service}
 	if u.Status >= 100 && u.Status <= 599 {
 		out.Status = u.Status
 	}
 	out.Message, _ = textsafe.SanitizeSingleLineCapped(u.Message, maxUpstreamMessage, "…")
-	return out
+	return out, true
 }
 
 // Responder adapts WriteError to httpserver's ErrorResponder, for the
