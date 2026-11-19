@@ -48,7 +48,7 @@ The client keeps its cursor as `epoch:offset`, presents it as `Last-Event-ID` on
 
 Each run's `RevalidateContext` carries its `cause`, the map's `epoch`, the connection's `generation`, `full`, `build` and `signal`. For a `hello` run, `build` is the build that hello carries, so a page that reconnects to a redeployed server learns it before its first read; it is `null` when the hello carries none and for every other cause.
 
-While `revalidate` runs, incoming frames are held and delivered in order once it settles; runs are single-flight, a second cause queues at most one more run (a queued `hello` keeps its cause, and its `build`, when a later wake joins it), and a held queue past 2000 frames or 64 MiB ends the connection so the next connect resumes from the cursor instead.
+While `revalidate` runs, incoming frames are held and delivered in order once it settles; runs are single-flight, a second cause queues at most one more run (a queued `hello` keeps its cause and its `build` when a later wake joins it, even after a revalidate timeout ends that hello's connection), and a held queue past 2000 frames or 64 MiB ends the connection so the next connect resumes from the cursor instead.
 
 With `alive` set, every keepalive (or every `everyBeats`-th) is acknowledged with a `POST` to that URL carrying the stream's headers, so a server-side presence table keyed on `SSE-Client` sees which clients are still reading; a failed acknowledgement is reported as an `alive_ack` record.
 

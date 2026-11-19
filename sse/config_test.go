@@ -3,6 +3,7 @@ package sse
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -92,7 +93,9 @@ func TestNew_crossFieldRulesInBothOrders(t *testing.T) {
 
 // TestNew_largestAcceptedBuildServesHelloWithinFrameCap serves the longest
 // build New accepts on a scoped connection, whose hello also carries conn, and
-// requires the hello frame to fit the frame cap the client enforces.
+// requires both that served hello and the widest hello Serve can write
+// (cursor_invalid, both offsets at MaxOffset) to fit the frame cap the client
+// enforces.
 func TestNew_largestAcceptedBuildServesHelloWithinFrameCap(t *testing.T) {
 	refused := sort.Search(MaxFrameBytes+1, func(n int) bool {
 		_, err := New(WithBuild(strings.Repeat("b", n)))
@@ -116,10 +119,27 @@ func TestNew_largestAcceptedBuildServesHelloWithinFrameCap(t *testing.T) {
 		t.Fatal("hello frame has no terminating blank line")
 	}
 	if !bytes.Contains(body[start:start+end], []byte(`"conn":"`)) {
-		t.Error("hello carries no conn; the scoped connection is the widest hello")
+		t.Error("hello on a scoped connection carries no conn")
 	}
 	if size := end + 2; size > MaxFrameBytes {
-		t.Errorf("hello frame with a %d-byte build is %d bytes, above MaxFrameBytes (%d)", refused-1, size, MaxFrameBytes)
+		t.Errorf("served fresh hello with a %d-byte build is %d bytes, above MaxFrameBytes (%d)", refused-1, size, MaxFrameBytes)
+	}
+	widest, err := json.Marshal(Hello{
+		Epoch:          h.epoch,
+		Conn:           strings.Repeat("A", 22),
+		Verdict:        VerdictCursorInvalid,
+		KeepaliveEvent: h.cfg.keepaliveEvent,
+		Build:          h.cfg.build,
+		Floor:          MaxOffset,
+		Head:           MaxOffset,
+		Wire:           Wire,
+		KeepaliveMS:    int(h.cfg.keepalive.Milliseconds()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := frameSize(len(helloEvent), [][]byte{widest}, 0); size > MaxFrameBytes {
+		t.Errorf("widest hello with a %d-byte build is %d bytes, above MaxFrameBytes (%d)", refused-1, size, MaxFrameBytes)
 	}
 }
 

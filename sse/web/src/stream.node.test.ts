@@ -245,6 +245,61 @@ describe("stream runtime", () => {
     expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
   });
 
+  it("a hello still queued when its blocker times out keeps its cause and build when a wake in backoff runs it", async () => {
+    const h = harness();
+    const first = await h.open({ head: "5", build: "b1" });
+    first.end();
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_RETRY_MS);
+    await flush();
+    h.last().push(helloFrame({ head: "6", build: "b2" }));
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_TIMING.revalidateTimeoutMs - DEFAULT_RETRY_MS);
+    await flush();
+    expect(h.ofKind("revalidate_timeout")).toHaveLength(1);
+    expect(h.stream.state().kind).toBe("backoff");
+    expect(h.runs).toHaveLength(1);
+    h.visibility.emit("hidden");
+    h.visibility.emit("visible");
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
+  });
+
+  it("a later hello joining a queued hello replaces its build", async () => {
+    const h = harness();
+    await h.open({ head: "5", build: "b1" });
+    for (const build of ["b2", "b3"]) {
+      h.last().end();
+      await flush();
+      vi.advanceTimersByTime(DEFAULT_RETRY_MS * 4);
+      await flush();
+      h.last().push(helloFrame({ head: "6", build }));
+      await flush();
+    }
+    expect(h.sf.connections).toHaveLength(3);
+    expect(h.ofKind("revalidate_timeout")).toEqual([]);
+    expect(h.runs).toHaveLength(1);
+    h.runs[0]!.resolve();
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b3" });
+  });
+
+  it("a full run queued on a stopped stream runs with the build of the hello that starts it, resumed or not", async () => {
+    const h = harness();
+    streamInternals(h.stream).queueFull();
+    await h.open({ head: "3", build: "n1" });
+    expect(h.runs).toHaveLength(1);
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", full: true, build: "n1" });
+
+    const resumed = harness();
+    streamInternals(resumed.stream).queueFull();
+    await resumed.open({ resumed: true, head: "3", build: "r1" });
+    expect(resumed.runs).toHaveLength(1);
+    expect(resumed.runs[0]!.ctx).toMatchObject({ cause: "hello", full: true, build: "r1" });
+  });
+
   it("a run whose cause is not a hello receives build null", async () => {
     const h = harness();
     const conn = await h.open({ build: "b1" });

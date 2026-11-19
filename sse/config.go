@@ -283,7 +283,7 @@ func checkHelloSize(c *config) error {
 		Wire:           Wire,
 		KeepaliveMS:    int(c.keepalive.Milliseconds()),
 	}
-	data, _ := json.Marshal(widest) // a Hello holds only strings and numbers, which always encode
+	data, _ := json.Marshal(widest) // a Hello holds only strings, numbers and a bool, which always encode
 	if size := frameSize(len(helloEvent), [][]byte{data}, 0); size > MaxFrameBytes {
 		return fmt.Errorf("%w: the hello can reach %d bytes with WithBuild and WithKeepaliveEvent as set, above MaxFrameBytes (%d)", ErrConfig, size, MaxFrameBytes)
 	}

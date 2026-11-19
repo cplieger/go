@@ -18,6 +18,7 @@ import {
   scriptedFetch,
 } from "./test-helpers/scripted-fetch.js";
 import { fakeOnline, fakeVisibility } from "./test-helpers/stream-harness.js";
+import { DEFAULT_TIMING } from "./timing.js";
 import { type VersionMap, createVersionMap } from "./versions.js";
 import { createVisibilityManager } from "./visibility.js";
 import { type TabSet, type WorkerHost, createWorkerHost } from "./worker.js";
@@ -876,6 +877,40 @@ describe("port protocol", () => {
       cause: "hello",
       build: "2026.11.19-a1b2c3",
     });
+  });
+
+  it("a hello still queued when its blocker times out reaches the host and every tab with its build when a wake in backoff runs it", async () => {
+    const h = track(hostHarness());
+    const t = tabHarness([h.host]);
+    tabs.push(t.attachment);
+    const raw = rawTab(h, { tabId: "raw" });
+    await hello(h, { head: "5", build: "b1" });
+    expect(h.runs).toHaveLength(1);
+    h.sf.connections[0]!.end();
+    await settle();
+    vi.advanceTimersByTime(1500);
+    await hello(h, { head: "6", build: "b2" });
+    const untilTimeout = DEFAULT_TIMING.revalidateTimeoutMs - 1500;
+    await beats(Math.floor(untilTimeout / HB));
+    vi.advanceTimersByTime(untilTimeout % HB);
+    await settle();
+    expect(h.ofKind("revalidate_timeout")).toHaveLength(1);
+    expect(h.host.stream().state().kind).toBe("backoff");
+    expect(h.runs).toHaveLength(1);
+    t.visibility.emit("hidden");
+    raw.send({ type: "visibility", ev: "hidden" });
+    await settle();
+    raw.send({ type: "visibility", ev: "visible" });
+    await settle();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
+    const fanned = h.runs[1]!.tabs.run(h.runs[1]!.ctx);
+    await settle();
+    const routed = raw.ofType("revalidate_run").at(-1)!;
+    expect(routed.ctx).toMatchObject({ cause: "hello", build: "b2" });
+    raw.send({ type: "revalidate_done", runId: routed.runId });
+    await fanned;
+    expect(t.runs.map((r) => [r.cause, r.build])).toEqual([["hello", "b2"]]);
   });
 
   it("a returning tab's own full run carries the open connection's build", async () => {
