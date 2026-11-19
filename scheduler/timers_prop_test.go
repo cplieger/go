@@ -702,15 +702,13 @@ func (d *diffRun) countedLocked(id scheduler.ID, j *diffJob) bool {
 
 // held answers the windows of each end that may have set key's timer since it
 // was last counted again and that moved nothing for key: held in memory only,
-// a counted one key's base does not lead from, or a full job's whose payload
-// covers key.
+// or a full job's whose payload covers key.
 func (d *diffRun) held(key scheduler.ScheduledScope, c diffCadence) []window {
-	base := d.timing[key].Base
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var ws []window
 	for id, j := range d.jobs {
-		moved := relevant(j.key, key) && d.countedLocked(id, j) && !base.Before(j.endAt)
+		moved := relevant(j.key, key) && d.countedLocked(id, j)
 		if j.ended && !moved && d.joinableLocked(id, j, key) && d.endStep[id] >= d.rearmed[key] {
 			ws = append(ws, band(j.endAt, c.notDone(), fmt.Sprintf("%s %s %s", j.key.Kind, id, j.result)))
 		}
