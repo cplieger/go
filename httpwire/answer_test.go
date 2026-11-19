@@ -126,9 +126,10 @@ func errorAPI(t *testing.T, err error) (*httpwire.API, *logSink) {
 
 func TestMapErrorAnswersHandlerErrors(t *testing.T) {
 	for name, tc := range map[string]struct {
-		err           error
-		status        int
-		code, message string
+		err     error
+		status  int
+		code    httpserver.ErrorCode
+		message string
 	}{
 		"an Error in the union":         {&httpwire.Error{Code: "job_missing", Message: "no job abc"}, http.StatusNotFound, "job_missing", "no job abc"},
 		"a wrapped Error":               {fmt.Errorf("load: %w", &httpwire.Error{Code: "job_missing", Message: "gone"}), http.StatusNotFound, "job_missing", "gone"},

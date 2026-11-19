@@ -62,7 +62,7 @@ func keyedTable(t testing.TB) *httpwire.Table {
 	if err := c.SetRemediation("outcome_unknown", "Read the jobs first."); err != nil {
 		t.Fatal(err)
 	}
-	jobCodes := []string{"queue_full", "outcome_unknown"}
+	jobCodes := []httpserver.ErrorCode{"queue_full", "outcome_unknown"}
 	return &httpwire.Table{
 		Prefix: "/api", Catalog: c,
 		Endpoints: []httpwire.Endpoint{
@@ -386,7 +386,7 @@ func (kf *keyedFixture) quickJob(key string, header ...string) *httptest.Respons
 	return kf.do(http.MethodPost, "/api/jobs/quick", `{"kind":"a","size":1}`, key, header...)
 }
 
-func codeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+func codeOf(t *testing.T, rec *httptest.ResponseRecorder) httpserver.ErrorCode {
 	t.Helper()
 	if rec.Code < 400 {
 		return ""
@@ -579,8 +579,9 @@ func TestWhatIsKept(t *testing.T) {
 		return kf.do(http.MethodPost, "/api/jobs/quick", `{"kind":"`+kind+`","size":1}`, key)
 	}
 	for _, tc := range []struct {
-		kind, code string
-		runs       int
+		kind string
+		code httpserver.ErrorCode
+		runs int
 	}{
 		{"full", "queue_full", 2},
 		{"lost", "outcome_unknown", 1},
@@ -607,18 +608,18 @@ func TestKeptRuleReadsTheCodePastMaxAnswer(t *testing.T) {
 		fields[i] = httpwire.FieldError{Path: "items[" + strconv.Itoa(i) + "]", Code: "invalid", Message: strings.Repeat("m", 200)}
 	}
 	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
-		return jobAnswer{}, &httpwire.Error{Code: c.Body.Kind, Message: "the queue refused the items", Fields: fields}
+		return jobAnswer{}, &httpwire.Error{Code: httpserver.ErrorCode(c.Body.Kind), Message: "the queue refused the items", Fields: fields}
 	}
 	for _, tc := range []struct {
-		code, resend string
+		code, resend httpserver.ErrorCode
 		runs         int
 	}{
 		{"queue_full", "queue_full", 2},
 		{"outcome_unknown", "idempotency_answer_too_large", 1},
 	} {
-		t.Run(tc.code, func(t *testing.T) {
+		t.Run(string(tc.code), func(t *testing.T) {
 			before := kf.runsOf("jobs.quick")
-			body, key := `{"kind":"`+tc.code+`","size":1}`, `"`+tc.code+`"`
+			body, key := `{"kind":"`+string(tc.code)+`","size":1}`, `"`+string(tc.code)+`"`
 			first := kf.do(http.MethodPost, "/api/jobs/quick", body, key)
 			if codeOf(t, first) != tc.code || first.Body.Len() <= kib {
 				t.Fatalf("first answer %q of %d bytes, want %s past %d bytes", codeOf(t, first), first.Body.Len(), tc.code, kib)

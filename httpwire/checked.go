@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // CheckAnswer is one source's answer to an open check, a keyed re-read of
@@ -48,8 +50,8 @@ type SourceCheck[T any] struct {
 	Answer    CheckAnswer `json:"answer"`
 	NotStored NotStored   `json:"not_stored,omitempty"`
 	// Code is the failure's code, in the code grammar.
-	Code   string `json:"code,omitempty"`
-	Stored bool   `json:"stored"`
+	Code   httpserver.ErrorCode `json:"code,omitempty"`
+	Stored bool                 `json:"stored"`
 }
 
 // checkAnswer is implemented by every Checked[T], and by a type embedding
@@ -130,7 +132,7 @@ func (s *SourceCheck[T]) storedProblem() string {
 
 func (s *SourceCheck[T]) errorProblem() string {
 	switch {
-	case !isCode(s.Code) || len(s.Code) > maxEnvelopeString:
+	case !isCode(string(s.Code)) || len(s.Code) > maxEnvelopeString:
 		return "an error answer's code is not in the code grammar"
 	case s.Row != nil || s.Stored || s.NotStored != "":
 		return "an error answer carries a row, stored or not_stored"

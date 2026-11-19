@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 	"github.com/cplieger/go/httpwire/internal/wirelink"
 )
@@ -38,13 +39,13 @@ type Credential struct {
 // The refusals AccessMatrix expects, as the access module's guard names
 // them.
 const (
-	codeAuthRequired    = "auth_required"
-	codeKeyInvalid      = "auth_key_invalid"
-	codeSessionRequired = "auth_session_required"
-	codeKeyRequired     = "auth_key_required"
-	codeScopeRequired   = "auth_scope_required"
-	codeRecentRequired  = "auth_recent_auth_required"
-	codePersonRequired  = "person_required"
+	codeAuthRequired    httpserver.ErrorCode = "auth_required"
+	codeKeyInvalid      httpserver.ErrorCode = "auth_key_invalid"
+	codeSessionRequired httpserver.ErrorCode = "auth_session_required"
+	codeKeyRequired     httpserver.ErrorCode = "auth_key_required"
+	codeScopeRequired   httpserver.ErrorCode = "auth_scope_required"
+	codeRecentRequired  httpserver.ErrorCode = "auth_recent_auth_required"
+	codePersonRequired  httpserver.ErrorCode = "person_required"
 )
 
 // AccessMatrix builds an API of table with guard and opts, every row of
@@ -177,7 +178,7 @@ func (m *matrix) ranAs(at string, ep *httpwire.Endpoint, c Credential, rec *http
 // expected is the code a's rules give c, "" when the row runs. Each 401
 // carries WWW-Authenticate, and auth_scope_required its RFC 6750
 // error="insufficient_scope".
-func expected(a httpwire.Access, c Credential) string {
+func expected(a httpwire.Access, c Credential) httpserver.ErrorCode {
 	if a.Class == httpwire.Public {
 		return ""
 	}
@@ -220,7 +221,7 @@ func sameShape(s httpwire.Shape, c Credential) bool {
 
 // answerCode is an error answer's code, "" for one with no envelope (a
 // HEAD answer's included).
-func answerCode(r *http.Request, rec *httptest.ResponseRecorder) string {
+func answerCode(r *http.Request, rec *httptest.ResponseRecorder) httpserver.ErrorCode {
 	if r != nil && r.Method == http.MethodHead {
 		return ""
 	}

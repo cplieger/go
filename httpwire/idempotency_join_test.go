@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -307,7 +308,7 @@ func TestCommitAfterTheDeadline(t *testing.T) {
 func TestUnknownOutcomeKeptAfterTheClientLeaves(t *testing.T) {
 	cases := map[string]struct {
 		answer   func(ctx context.Context) error
-		wantCode string
+		wantCode httpserver.ErrorCode
 		wantRuns int
 	}{
 		"a union code that may have acted": {func(context.Context) error {

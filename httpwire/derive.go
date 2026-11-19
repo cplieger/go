@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 const (
@@ -25,13 +27,13 @@ const (
 
 // The codes the union adds for a row's features.
 var (
-	keyedUnion = []string{
+	keyedUnion = []httpserver.ErrorCode{
 		codeKeyInvalid, codeKeyRequired, codeKeyReused, codeInFlight,
 		codeStoreFull, codeTooLarge, "held_limit",
 	}
-	ifMatchUnion  = []string{codeIfMatchReq, codeIfMatchBad, "stale_version"}
-	writeUnion    = []string{codeWire, "cross_origin_refused"}
-	everyRowUnion = []string{codeAccounts, codeMaintenance, "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
+	ifMatchUnion  = []httpserver.ErrorCode{codeIfMatchReq, codeIfMatchBad, "stale_version"}
+	writeUnion    = []httpserver.ErrorCode{codeWire, "cross_origin_refused"}
+	everyRowUnion = []httpserver.ErrorCode{codeAccounts, codeMaintenance, "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
 )
 
 var (
@@ -43,7 +45,7 @@ var (
 // t with each row's Errors filled and MaxBody defaulted. Its error lists
 // every refusal at once, each naming its row, owner, source or kind.
 // guardCodes answers the guard's codes for an Access; nil is no guard.
-func Derive(t *Table, guardCodes func(Access) []string) (*Table, error) {
+func Derive(t *Table, guardCodes func(Access) []httpserver.ErrorCode) (*Table, error) {
 	if t == nil {
 		return nil, errors.New("httpwire: Derive of a nil table")
 	}
@@ -56,7 +58,7 @@ func Derive(t *Table, guardCodes func(Access) []string) (*Table, error) {
 
 // derive answers the derived copy beside every refusal, so New can go on
 // checking the bindings and the document against it.
-func derive(t *Table, guardCodes func(Access) []string) (*Table, []error) {
+func derive(t *Table, guardCodes func(Access) []httpserver.ErrorCode) (*Table, []error) {
 	d := cloneTable(t)
 	if d.MaxBody == 0 {
 		d.MaxBody = defaultMaxBody
@@ -85,7 +87,7 @@ func derive(t *Table, guardCodes func(Access) []string) (*Table, []error) {
 // name, carries its own codes and the binder's wrap's instead. Derive fills
 // Errors with it, so the binder and the client generator read one
 // derivation.
-func Union(t *Table, ep *Endpoint, guardCodes func(Access) []string) []string {
+func Union(t *Table, ep *Endpoint, guardCodes func(Access) []httpserver.ErrorCode) []httpserver.ErrorCode {
 	return unionOf(t, ep, guardCodes, isMountRow(t, ep.Name))
 }
 
@@ -101,11 +103,11 @@ func isMountRow(t *Table, name string) bool {
 }
 
 type codeSet struct {
-	seen map[string]bool
-	list []string
+	seen map[httpserver.ErrorCode]bool
+	list []httpserver.ErrorCode
 }
 
-func (s *codeSet) add(codes ...string) {
+func (s *codeSet) add(codes ...httpserver.ErrorCode) {
 	for _, c := range codes {
 		if c != "" && !s.seen[c] {
 			s.seen[c] = true
@@ -114,7 +116,7 @@ func (s *codeSet) add(codes ...string) {
 	}
 }
 
-func (s *codeSet) addIf(cond bool, codes ...string) {
+func (s *codeSet) addIf(cond bool, codes ...httpserver.ErrorCode) {
 	if cond {
 		s.add(codes...)
 	}
@@ -124,8 +126,8 @@ func isWrite(method string) bool { return method != http.MethodGet && method != 
 
 func admitsKey(c Class) bool { return c == Key || c == Scoped }
 
-func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount bool) []string {
-	u := &codeSet{seen: map[string]bool{}}
+func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []httpserver.ErrorCode, mount bool) []httpserver.ErrorCode {
+	u := &codeSet{seen: map[httpserver.ErrorCode]bool{}}
 	u.add(ep.Codes...)
 	write := isWrite(ep.Method)
 	if mount {
@@ -194,7 +196,7 @@ func cloneRows(rows []Endpoint) []Endpoint {
 		ep.PersonActions = slices.Clone(ep.PersonActions)
 		ep.Errors = slices.Clone(ep.Errors)
 		if ep.Reasons != nil {
-			r := make(map[string]ReasonSet, len(ep.Reasons))
+			r := make(map[httpserver.ErrorCode]ReasonSet, len(ep.Reasons))
 			for code, set := range ep.Reasons {
 				r[code] = ReasonSet{Listed: slices.Clone(set.Listed), Open: set.Open}
 			}
@@ -211,7 +213,7 @@ type rowRef struct {
 
 type tableChecker struct {
 	t      *Table
-	guard  func(Access) []string
+	guard  func(Access) []httpserver.ErrorCode
 	owners map[*Owner]bool
 	kinds  map[string]bool
 	errs   []error
@@ -820,7 +822,7 @@ func (c *tableChecker) owner(o *Owner) {
 	}
 }
 
-func (c *tableChecker) ownerCode(at, sentinel, code string) {
+func (c *tableChecker) ownerCode(at, sentinel string, code httpserver.ErrorCode) {
 	if code == "" {
 		c.fail("%s: sentinel %s maps to an empty code", at, sentinel)
 		return

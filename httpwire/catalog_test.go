@@ -18,7 +18,7 @@ import (
 
 // libraryCodes is httpwire's own code set with each status and whether a
 // resend is safe, as the package documents it.
-var libraryCodes = map[string]struct {
+var libraryCodes = map[httpserver.ErrorCode]struct {
 	status   int
 	noEffect bool
 }{
@@ -68,7 +68,7 @@ func TestOutcomeUnknownIsTheLibrarysCode(t *testing.T) {
 func TestNewCatalogHoldsLibraryAndServerCodes(t *testing.T) {
 	c := httpwire.NewCatalog()
 	for code, want := range libraryCodes {
-		t.Run(code, func(t *testing.T) {
+		t.Run(string(code), func(t *testing.T) {
 			got, ok := c.Lookup(code)
 			if !ok {
 				t.Fatalf("Lookup(%q) found nothing", code)
@@ -83,17 +83,17 @@ func TestNewCatalogHoldsLibraryAndServerCodes(t *testing.T) {
 	}
 	for code, want := range httpserver.CodeSpecs() {
 		t.Run("server_"+string(code), func(t *testing.T) {
-			if _, mine := libraryCodes[string(code)]; mine {
+			if _, mine := libraryCodes[code]; mine {
 				t.Fatalf("%q is owned by both httpserver and httpwire", code)
 			}
-			got, ok := c.Lookup(string(code))
+			got, ok := c.Lookup(code)
 			if !ok || got != want {
 				t.Errorf("Lookup(%q) = %+v, %v; want httpserver's %+v", code, got, ok, want)
 			}
 		})
 	}
 	t.Run("no_substitute_code", func(t *testing.T) {
-		if _, ok := c.Lookup(string(httpserver.InvalidErrorCode)); ok {
+		if _, ok := c.Lookup(httpserver.InvalidErrorCode); ok {
 			t.Errorf("the catalog holds %q", httpserver.InvalidErrorCode)
 		}
 	})
@@ -103,7 +103,7 @@ func TestCatalogAddRefusals(t *testing.T) {
 	good := httpserver.CodeSpec{Status: 502, Remediation: "Check the Sonarr connection in Settings."}
 	cases := []struct {
 		name string
-		code string
+		code httpserver.ErrorCode
 		spec httpserver.CodeSpec
 	}{
 		{"library_code", "stale_version", good},
@@ -111,8 +111,8 @@ func TestCatalogAddRefusals(t *testing.T) {
 		{"empty_code", "", good},
 		{"capital", "Arr_refused", good},
 		{"hyphen", "arr-refused", good},
-		{"substitute_code", string(httpserver.InvalidErrorCode), good},
-		{"code_over_cap", strings.Repeat("a", 4097), good},
+		{"substitute_code", httpserver.InvalidErrorCode, good},
+		{"code_over_cap", httpserver.ErrorCode(strings.Repeat("a", 4097)), good},
 		{"status_success", "arr_refused", httpserver.CodeSpec{Status: 200, Remediation: good.Remediation}},
 		{"status_below_400", "arr_refused", httpserver.CodeSpec{Status: 399, Remediation: good.Remediation}},
 		{"status_above_599", "arr_refused", httpserver.CodeSpec{Status: 600, Remediation: good.Remediation}},
@@ -160,7 +160,7 @@ func TestCatalogAddOwned(t *testing.T) {
 			t.Fatalf("AddOwned = %v", err)
 		}
 		for code, want := range owned {
-			if got, ok := c.Lookup(string(code)); !ok || got != want {
+			if got, ok := c.Lookup(code); !ok || got != want {
 				t.Errorf("Lookup(%q) = %+v, %v; want %+v", code, got, ok, want)
 			}
 		}
@@ -235,7 +235,7 @@ func TestCatalogAddOwned(t *testing.T) {
 
 func TestCatalogSetRemediation(t *testing.T) {
 	c := httpwire.NewCatalog()
-	for _, code := range []string{"stale_version", "host_not_allowed"} {
+	for _, code := range []httpserver.ErrorCode{"stale_version", "host_not_allowed"} {
 		before, _ := c.Lookup(code)
 		if err := c.SetRemediation(code, "Ask the admin of this server."); err != nil {
 			t.Fatalf("SetRemediation(%q) = %v", code, err)
@@ -247,7 +247,10 @@ func TestCatalogSetRemediation(t *testing.T) {
 			t.Errorf("after SetRemediation, Lookup(%q) = %+v; want %+v", code, got, want)
 		}
 	}
-	for name, tc := range map[string]struct{ code, words string }{
+	for name, tc := range map[string]struct {
+		code  httpserver.ErrorCode
+		words string
+	}{
 		"unknown_code":  {"no_such_code", "Retry."},
 		"empty":         {"stale_version", ""},
 		"two_lines":     {"stale_version", "Reload.\nRetry."},
@@ -425,7 +428,7 @@ func TestWriteErrorWiringBugsLogToDefault(t *testing.T) {
 	cases := []struct {
 		name  string
 		e     *httpwire.Error
-		code  string
+		code  httpserver.ErrorCode
 		log   string
 		check func(t *testing.T, env httpwire.Envelope)
 	}{

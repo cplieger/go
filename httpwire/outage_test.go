@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -21,7 +22,8 @@ func outageCase(t *testing.T, file *string) (*orderCase, *bool, *logSink) {
 
 func TestOutageRefusesRowsBeforeTheGuard(t *testing.T) {
 	for name, tc := range map[string]struct {
-		file, code string
+		file string
+		code httpserver.ErrorCode
 	}{
 		"the store cannot open":    {"store", "store_unavailable"},
 		"the accounts cannot open": {"accounts", "accounts_unavailable"},
@@ -72,7 +74,7 @@ func TestOutageRefusesRowsBeforeTheGuard(t *testing.T) {
 func TestDuringOutageRowsAndTheMount(t *testing.T) {
 	for name, tc := range map[string]struct {
 		file       string
-		mountCode  string
+		mountCode  httpserver.ErrorCode
 		mountReach bool
 	}{
 		"no outage":                {"", "", true},

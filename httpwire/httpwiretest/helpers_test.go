@@ -128,11 +128,11 @@ type (
 type script struct {
 	header  map[string]string // set last, over the binder's headers
 	body    string
-	drop    []string // headers removed
-	refuse  string   // a code the catalog writes as the answer
-	want    string   // the request body the script answers; another is a 418
-	status  int      // the status written; zero keeps the refusal's
-	noJSONC bool     // write no application/json Content-Type
+	drop    []string             // headers removed
+	refuse  httpserver.ErrorCode // a code the catalog writes as the answer
+	want    string               // the request body the script answers; another is a 418
+	status  int                  // the status written; zero keeps the refusal's
+	noJSONC bool                 // write no application/json Content-Type
 }
 
 // fixture is an API over a store of jobs owned by four accounts, and a mount
@@ -174,7 +174,7 @@ func newFixture(t testing.TB, personal bool) *fixture {
 		jobs: []job{{"a1", "alice"}, {"a2", "alice"}, {"b1", "bob"}, {"b2", "bob"}, {"c1", "carol"}, {"d1", "dave"}},
 	}
 	f.catalog = httpwire.NewCatalog()
-	for code, status := range map[string]int{
+	for code, status := range map[httpserver.ErrorCode]int{
 		"probe_missing": http.StatusNotFound, "job_missing": http.StatusNotFound,
 		"auth_required": http.StatusUnauthorized, "auth_forbidden": http.StatusForbidden,
 	} {
@@ -213,7 +213,7 @@ func (f *fixture) table(personal bool) *httpwire.Table {
 	all := row("jobs.all", http.MethodGet, "/jobs", "List jobs", session)
 	all.Query, all.Response, all.List, all.Changes = reflect.TypeFor[jobQuery](), reflect.TypeFor[httpwire.List[job]](), true, []string{"jobs"}
 	get := row("jobs.get", http.MethodGet, "/jobs/{id}", "Read a job", session)
-	get.Params, get.Response, get.Codes, get.Changes = reflect.TypeFor[jobParams](), reflect.TypeFor[job](), []string{"job_missing"}, []string{"jobs"}
+	get.Params, get.Response, get.Codes, get.Changes = reflect.TypeFor[jobParams](), reflect.TypeFor[job](), []httpserver.ErrorCode{"job_missing"}, []string{"jobs"}
 	csv := row("jobs.csv", http.MethodGet, "/jobs.csv", "Export jobs", session)
 	csv.Kind, csv.ContentType, csv.Changes, csv.Personal = httpwire.Raw, "text/csv", []string{"jobs"}, personal
 	csv.Successes = []httpwire.Success{{Status: http.StatusNoContent}}
@@ -221,7 +221,7 @@ func (f *fixture) table(personal bool) *httpwire.Table {
 	stream.Kind, stream.Events = httpwire.Stream, []httpwire.Event{{Name: "changed", Data: reflect.TypeFor[job]()}}
 
 	pget := row("probe.get", http.MethodGet, "/probe", "Read the probe", public)
-	pget.Response, pget.Codes = reflect.TypeFor[probe](), []string{"probe_missing"}
+	pget.Response, pget.Codes = reflect.TypeFor[probe](), []httpserver.ErrorCode{"probe_missing"}
 	pmake := row("probe.make", http.MethodPost, "/probe", "Make a probe", public)
 	pmake.Status, pmake.Response = http.StatusCreated, reflect.TypeFor[probe]()
 	pmake.Successes = []httpwire.Success{{Status: http.StatusOK, Response: reflect.TypeFor[probe]()}}
@@ -376,14 +376,14 @@ func (g fixtureGuard) Wrap(ep *httpwire.Endpoint, next http.Handler) http.Handle
 	})
 }
 
-func (fixtureGuard) Codes(a httpwire.Access) []string {
+func (fixtureGuard) Codes(a httpwire.Access) []httpserver.ErrorCode {
 	switch a.Class {
 	case httpwire.Public:
 		return nil
 	case httpwire.Key, httpwire.Scoped:
-		return []string{"auth_required", "auth_forbidden"}
+		return []httpserver.ErrorCode{"auth_required", "auth_forbidden"}
 	}
-	return []string{"auth_required"}
+	return []httpserver.ErrorCode{"auth_required"}
 }
 
 func (fixtureGuard) Shape(r *http.Request) httpwire.Shape {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -26,7 +27,7 @@ var scopeRank = map[string]int{"read": 1, "operate": 2, "admin": 3}
 // refusal code with its headers, or "" to admit.
 type verdict struct {
 	header map[string]string
-	code   string
+	code   httpserver.ErrorCode
 	retry  time.Duration
 }
 

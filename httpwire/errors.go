@@ -1,6 +1,10 @@
 package httpwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
+)
 
 // Owner is the error-code table of a package whose sentinels a handler may
 // return: each sentinel answers its code, or is named in Outside with the
@@ -19,7 +23,7 @@ type Owner struct {
 // OwnerCode maps one sentinel to the code it answers.
 type OwnerCode struct {
 	Err  error
-	Code string
+	Code httpserver.ErrorCode
 }
 
 // Error is a handler's own refusal. Its Code must be in the row's error
@@ -27,7 +31,7 @@ type OwnerCode struct {
 type Error struct {
 	// Upstream is what another service said; the writer cleans and caps it.
 	Upstream *Upstream
-	Code     string
+	Code     httpserver.ErrorCode
 	Message  string
 	// Reason is optional machine detail: the code grammar, at most 64 bytes.
 	Reason string
@@ -41,9 +45,9 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e.Message == "" {
-		return e.Code
+		return string(e.Code)
 	}
-	return e.Code + ": " + e.Message
+	return string(e.Code) + ": " + e.Message
 }
 
 // Upstream is another service's answer when the app's call to it failed. It

@@ -59,7 +59,7 @@ func writerCases(t *testing.T) []writerCase {
 	t.Helper()
 	server := httpserver.CodeSpecs()
 	library := httpwire.NewCatalog()
-	words := func(code string) string {
+	words := func(code httpserver.ErrorCode) string {
 		s, _ := library.Lookup(code)
 		return s.Remediation
 	}

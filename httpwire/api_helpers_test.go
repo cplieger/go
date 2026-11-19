@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -52,7 +53,7 @@ const fixtureIfMatch = `"0000000000000000.0"`
 type fixtureGuard struct{}
 
 func (fixtureGuard) Wrap(_ *httpwire.Endpoint, next http.Handler) http.Handler { return next }
-func (fixtureGuard) Codes(a httpwire.Access) []string                          { return guardCodes(a) }
+func (fixtureGuard) Codes(a httpwire.Access) []httpserver.ErrorCode            { return guardCodes(a) }
 
 func (fixtureGuard) Shape(*http.Request) httpwire.Shape {
 	return httpwire.Shape{Principal: httpwire.ShapeAnonymous}

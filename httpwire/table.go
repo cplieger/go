@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"reflect"
 	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // Endpoint is one route of an app's JSON API. The binder, the guard, the
@@ -16,7 +18,7 @@ type Endpoint struct {
 	Headers reflect.Type
 
 	// Reasons maps a code of the row's union to the reasons it may carry.
-	Reasons map[string]ReasonSet
+	Reasons map[httpserver.ErrorCode]ReasonSet
 
 	// Name is "<area>.<verb>", unique in the table: the operation id and the
 	// generated client function's name.
@@ -40,7 +42,7 @@ type Endpoint struct {
 	// redirect statuses with none.
 	Successes []Success
 	// Codes are the codes the handler answers itself.
-	Codes []string
+	Codes []httpserver.ErrorCode
 	// Owners are the owner code sets mapError tries, in order.
 	Owners []*Owner
 	// Changes names the feed kinds this read serves; empty on a write.
@@ -51,7 +53,7 @@ type Endpoint struct {
 	PersonActions []string
 	// Errors is the row's error union, filled by Derive; a value set by hand
 	// is replaced.
-	Errors []string
+	Errors []httpserver.ErrorCode
 
 	Access Access
 	// Status is the primary success status. Zero is 200, 204 for a JSON row

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -21,7 +22,7 @@ func FuzzWriteErrorDecodes(f *testing.F) {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c.WriteError(rec, r, &httpwire.Error{
-			Code: code, Message: msg, Reason: reason,
+			Code: httpserver.ErrorCode(code), Message: msg, Reason: reason,
 			Fields:     []httpwire.FieldError{{Path: path, Code: fcode, Message: msg}},
 			RetryAfter: time.Duration(retryMS) * time.Millisecond,
 			Upstream:   &httpwire.Upstream{Service: service, Status: status, Message: upstream},

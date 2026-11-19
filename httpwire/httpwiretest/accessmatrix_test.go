@@ -17,13 +17,13 @@ import (
 
 // The refusal codes of the matrix's guard, named as access names them.
 const (
-	codeAuthRequired    = "auth_required"
-	codeKeyInvalid      = "auth_key_invalid"
-	codeSessionRequired = "auth_session_required"
-	codeKeyRequired     = "auth_key_required"
-	codeScopeRequired   = "auth_scope_required"
-	codeRecentRequired  = "auth_recent_auth_required"
-	codePersonRequired  = "person_required"
+	codeAuthRequired    httpserver.ErrorCode = "auth_required"
+	codeKeyInvalid      httpserver.ErrorCode = "auth_key_invalid"
+	codeSessionRequired httpserver.ErrorCode = "auth_session_required"
+	codeKeyRequired     httpserver.ErrorCode = "auth_key_required"
+	codeScopeRequired   httpserver.ErrorCode = "auth_scope_required"
+	codeRecentRequired  httpserver.ErrorCode = "auth_recent_auth_required"
+	codePersonRequired  httpserver.ErrorCode = "person_required"
 )
 
 // matrixCredentials are the eight credentials, presented through the
@@ -55,11 +55,11 @@ func matrixCredentials() []httpwiretest.Credential {
 
 // matrixWant is each row's answer to each credential of matrixCredentials,
 // in their order, written from the Access rules: "" runs the row.
-var matrixWant = func() map[string][]string {
+var matrixWant = func() map[string][]httpserver.ErrorCode {
 	const ar, ki, sr, kr, sc, ra, pr = codeAuthRequired, codeKeyInvalid, codeSessionRequired, codeKeyRequired, codeScopeRequired, codeRecentRequired, codePersonRequired
-	session := []string{ar, "", "", sr, sr, sr, sr, ki}
-	scopedRead := []string{ar, "", "", "", "", "", sc, ki}
-	return map[string][]string{
+	session := []httpserver.ErrorCode{ar, "", "", sr, sr, sr, sr, ki}
+	scopedRead := []httpserver.ErrorCode{ar, "", "", "", "", "", sc, ki}
+	return map[string][]httpserver.ErrorCode{
 		"open.read":     {"", "", "", "", "", "", "", ""},
 		"me.read":       session,
 		"me.save":       {ar, ra, "", sr, sr, sr, sr, ki},
@@ -93,7 +93,7 @@ type tick struct {
 func matrixTable(t testing.TB) *httpwire.Table {
 	t.Helper()
 	c := httpwire.NewCatalog()
-	for code, status := range map[string]int{
+	for code, status := range map[httpserver.ErrorCode]int{
 		codeAuthRequired: http.StatusUnauthorized, codeKeyInvalid: http.StatusUnauthorized,
 		codeSessionRequired: http.StatusForbidden, codeKeyRequired: http.StatusForbidden,
 		codeScopeRequired: http.StatusForbidden, codeRecentRequired: http.StatusForbidden,
@@ -160,7 +160,7 @@ func matrixOptions(t testing.TB) []httpwire.Option {
 // only when the answers it derives from Access are the ones written there.
 // Each other field breaks it one way.
 type matrixGuard struct {
-	want         map[string][]string
+	want         map[string][]httpserver.ErrorCode
 	served       *atomic.Int64
 	swallow      string // a row it answers itself, never running the row
 	catalog      *httpwire.Catalog
@@ -201,11 +201,11 @@ func (g matrixGuard) Wrap(ep *httpwire.Endpoint, next http.Handler) http.Handler
 	})
 }
 
-func (matrixGuard) Codes(a httpwire.Access) []string {
+func (matrixGuard) Codes(a httpwire.Access) []httpserver.ErrorCode {
 	if a.Class == httpwire.Public {
 		return nil
 	}
-	return []string{codeAuthRequired, codeKeyInvalid, codeSessionRequired, codeKeyRequired, codeScopeRequired, codeRecentRequired, codePersonRequired}
+	return []httpserver.ErrorCode{codeAuthRequired, codeKeyInvalid, codeSessionRequired, codeKeyRequired, codeScopeRequired, codeRecentRequired, codePersonRequired}
 }
 
 func (g matrixGuard) Shape(r *http.Request) httpwire.Shape {
@@ -229,7 +229,7 @@ func (matrixGuard) Admits(httpwire.Shape, httpwire.Access) bool { return true }
 func (matrixGuard) Person(context.Context) error                { return nil }
 
 func newMatrixGuard(tb *httpwire.Table) matrixGuard {
-	want := map[string][]string{}
+	want := map[string][]httpserver.ErrorCode{}
 	for name, cells := range matrixWant {
 		want[name] = slices.Clone(cells)
 	}
@@ -264,7 +264,7 @@ func TestAccessMatrixFailsKeyOnPersonOnly(t *testing.T) {
 	g := newMatrixGuard(tb)
 	g.want["security.read"][cellOf(t, "an admin key")] = ""
 	r := record(t, func(rt testing.TB) { httpwiretest.AccessMatrix(rt, tb, g, matrixCredentials(), matrixOptions(t)...) })
-	if !r.failed(`"security.read"`, "an admin key", codePersonRequired) {
+	if !r.failed(`"security.read"`, "an admin key", string(codePersonRequired)) {
 		t.Errorf("AccessMatrix passed a guard that admits a key on a PersonOnly row: %q", r.failures)
 	}
 	if len(r.failures) != 1 {
@@ -292,27 +292,27 @@ func TestAccessMatrixFailsUnservedRow(t *testing.T) {
 // answer Access gives.
 func TestAccessMatrixFailsAGuardOffItsAccess(t *testing.T) {
 	for name, tc := range map[string]struct {
-		cell string // "row/credential"
-		code string // the guard's answer there
+		cell string               // "row/credential"
+		code httpserver.ErrorCode // the guard's answer there
 		edit func(*matrixGuard)
 		want []string
 	}{
-		"no credential admitted":            {cell: "me.read/no credential", want: []string{`"me.read"`, "no credential", codeAuthRequired}},
-		"a revoked key answered as missing": {cell: "me.read/a revoked key", code: codeAuthRequired, want: []string{`"me.read"`, "a revoked key", codeKeyInvalid}},
-		"a key admitted on a Session row":   {cell: "me.read/a read key", want: []string{`"me.read"`, "a read key", codeSessionRequired}},
+		"no credential admitted":            {cell: "me.read/no credential", want: []string{`"me.read"`, "no credential", string(codeAuthRequired)}},
+		"a revoked key answered as missing": {cell: "me.read/a revoked key", code: codeAuthRequired, want: []string{`"me.read"`, "a revoked key", string(codeKeyInvalid)}},
+		"a key admitted on a Session row":   {cell: "me.read/a read key", want: []string{`"me.read"`, "a read key", string(codeSessionRequired)}},
 		"a session past its window stepping up": {
-			cell: "me.save/the session", want: []string{`"me.save"`, "the session", codeRecentRequired},
+			cell: "me.save/the session", want: []string{`"me.save"`, "the session", string(codeRecentRequired)},
 		},
-		"a session admitted on a Key row": {cell: "feed.read/the session", want: []string{`"feed.read"`, "the session", codeKeyRequired}},
-		"a key below the row's scope":     {cell: "exports.read/a read key", want: []string{`"exports.read"`, "a read key", codeScopeRequired}},
+		"a session admitted on a Key row": {cell: "feed.read/the session", want: []string{`"feed.read"`, "the session", string(codeKeyRequired)}},
+		"a key below the row's scope":     {cell: "exports.read/a read key", want: []string{`"exports.read"`, "a read key", string(codeScopeRequired)}},
 		"an unknown scope on a Scoped row": {
-			cell: "items.list/a key of an unknown scope", want: []string{`"items.list"`, "a key of an unknown scope", codeScopeRequired},
+			cell: "items.list/a key of an unknown scope", want: []string{`"items.list"`, "a key of an unknown scope", string(codeScopeRequired)},
 		},
 		"the session refused on a Scoped row": {
 			cell: "items.drop/the session", code: codeScopeRequired, want: []string{`"items.drop"`, "the session", "the row to run"},
 		},
 		"a key on a PersonOnly row answered as a session row": {
-			cell: "roles.read/an admin key", code: codeSessionRequired, want: []string{`"roles.read"`, "an admin key", codePersonRequired},
+			cell: "roles.read/an admin key", code: codeSessionRequired, want: []string{`"roles.read"`, "an admin key", string(codePersonRequired)},
 		},
 		"a public row refusing": {cell: "open.read/a revoked key", code: codeKeyInvalid, want: []string{`"open.read"`, "a revoked key", "the row to run"}},
 		"no WWW-Authenticate on a 401": {

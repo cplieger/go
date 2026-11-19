@@ -65,7 +65,7 @@ func jobOwner() *httpwire.Owner {
 func fixtureCatalog(t testing.TB) *httpwire.Catalog {
 	t.Helper()
 	c := httpwire.NewCatalog()
-	for code, status := range map[string]int{
+	for code, status := range map[httpserver.ErrorCode]int{
 		"job_missing":               http.StatusNotFound,
 		"job_busy":                  http.StatusConflict,
 		"auth_required":             http.StatusUnauthorized,
@@ -82,15 +82,15 @@ func fixtureCatalog(t testing.TB) *httpwire.Catalog {
 
 // guardCodes is a fixture guard's codes: every authenticated class may be
 // unauthenticated, a key may lack its scope, and a step-up may be due.
-func guardCodes(a httpwire.Access) []string {
-	var codes []string
+func guardCodes(a httpwire.Access) []httpserver.ErrorCode {
+	var codes []httpserver.ErrorCode
 	switch a.Class {
 	case httpwire.Public:
 		return nil
 	case httpwire.Session:
-		codes = []string{"auth_required"}
+		codes = []httpserver.ErrorCode{"auth_required"}
 	case httpwire.Key, httpwire.Scoped:
-		codes = []string{"auth_required", "auth_forbidden"}
+		codes = []httpserver.ErrorCode{"auth_required", "auth_forbidden"}
 	}
 	if a.RecentAuth {
 		codes = append(codes, "auth_recent_auth_required")
@@ -125,9 +125,9 @@ func fixtureTable(t *testing.T) *httpwire.Table {
 			{
 				Name: "jobs.start", Method: http.MethodPost, Path: "/jobs", Summary: "Start a job", Description: "Starts a job.",
 				Request: reflect.TypeFor[startRequest](), Response: reflect.TypeFor[job](), Status: http.StatusAccepted,
-				Access: httpwire.Access{Class: httpwire.Scoped, Scope: "operate"}, Codes: []string{"job_busy"},
+				Access: httpwire.Access{Class: httpwire.Scoped, Scope: "operate"}, Codes: []httpserver.ErrorCode{"job_busy"},
 				Keyed: true, Window: 24 * time.Hour, MaxKept: 1000, Result: "jobs.list",
-				Reasons: map[string]httpwire.ReasonSet{"job_busy": {Listed: []string{"running"}}},
+				Reasons: map[httpserver.ErrorCode]httpwire.ReasonSet{"job_busy": {Listed: []string{"running"}}},
 			},
 			{
 				Name: "settings.save", Method: http.MethodPatch, Path: "/settings", Summary: "Save sign-in", Description: "Saves the sign-in methods.",
@@ -157,13 +157,13 @@ func fixtureTable(t *testing.T) *httpwire.Table {
 				{
 					Name: "auth.keys", Method: http.MethodGet, Path: "/auth/keys", Summary: "List keys", Description: "Lists the API keys.",
 					Response: reflect.TypeFor[[]job](), Access: httpwire.Access{Class: httpwire.Key, Scope: "admin"},
-					Codes: []string{"auth_required", "auth_forbidden"}, Changes: []string{"keys"},
+					Codes: []httpserver.ErrorCode{"auth_required", "auth_forbidden"}, Changes: []string{"keys"},
 				},
 				{
 					Name: "auth.keyCreate", Method: http.MethodPost, Path: "/auth/keys", Summary: "Create a key", Description: "Creates an API key.",
 					Request: reflect.TypeFor[otherBody](), Response: reflect.TypeFor[job](), Status: http.StatusCreated, Access: session,
-					Codes:   []string{"auth_required", "auth_bad_request"},
-					Reasons: map[string]httpwire.ReasonSet{"auth_bad_request": {Listed: []string{"name"}, Open: true}},
+					Codes:   []httpserver.ErrorCode{"auth_required", "auth_bad_request"},
+					Reasons: map[httpserver.ErrorCode]httpwire.ReasonSet{"auth_bad_request": {Listed: []string{"name"}, Open: true}},
 				},
 			},
 		}},
@@ -239,34 +239,34 @@ func TestDeriveLeavesItsInputAlone(t *testing.T) {
 	}
 }
 
-var everyRow = []string{"accounts_unavailable", "maintenance", "host_not_allowed", "internal_error", "not_found", "method_not_allowed"}
+var everyRow = []httpserver.ErrorCode{"accounts_unavailable", "maintenance", "host_not_allowed", "internal_error", "not_found", "method_not_allowed"}
 
-var keyedCodes = []string{
+var keyedCodes = []httpserver.ErrorCode{
 	"idempotency_key_invalid", "idempotency_key_required", "idempotency_key_reused", "idempotency_in_flight",
 	"idempotency_store_full", "idempotency_answer_too_large", "held_limit",
 }
 
-func join(parts ...[]string) []string { return slices.Concat(parts...) }
+func join(parts ...[]httpserver.ErrorCode) []httpserver.ErrorCode { return slices.Concat(parts...) }
 
 func TestUnionOfEachRow(t *testing.T) {
-	want := map[string][]string{
-		"jobs.list": join([]string{"bad_query", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
-		"jobs.get":  join([]string{"job_missing", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
-		"jobs.start": join([]string{"job_busy", "unsupported_media_type", "bad_body", "body_too_large"}, keyedCodes,
-			[]string{"wire_mismatch", "cross_origin_refused", "rate_limited", "upgrade_required", "store_unavailable", "auth_required", "auth_forbidden"}, everyRow),
-		"settings.save": join([]string{
+	want := map[string][]httpserver.ErrorCode{
+		"jobs.list": join([]httpserver.ErrorCode{"bad_query", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
+		"jobs.get":  join([]httpserver.ErrorCode{"job_missing", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
+		"jobs.start": join([]httpserver.ErrorCode{"job_busy", "unsupported_media_type", "bad_body", "body_too_large"}, keyedCodes,
+			[]httpserver.ErrorCode{"wire_mismatch", "cross_origin_refused", "rate_limited", "upgrade_required", "store_unavailable", "auth_required", "auth_forbidden"}, everyRow),
+		"settings.save": join([]httpserver.ErrorCode{
 			"unsupported_media_type", "bad_body", "body_too_large", "if_match_required", "if_match_invalid", "stale_version", "idempotency_key_unsupported",
 			"wire_mismatch", "cross_origin_refused", "person_required", "upgrade_required", "store_unavailable", "auth_required", "auth_recent_auth_required",
 		}, everyRow),
-		"archive.export": join([]string{
+		"archive.export": join([]httpserver.ErrorCode{
 			"body_too_large", "idempotency_key_unsupported", "wire_mismatch", "cross_origin_refused", "person_required",
 			"auth_required", "auth_recent_auth_required", "upgrade_required", "store_unavailable",
 		}, everyRow),
-		"events.wait":    join([]string{"idempotency_key_unsupported", "held_limit", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
-		"live.stream":    join([]string{"idempotency_key_unsupported", "held_limit", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
-		"auth.sso":       join([]string{"idempotency_key_unsupported", "upgrade_required"}, everyRow),
-		"auth.keys":      join([]string{"auth_required", "auth_forbidden", "upgrade_required", "rate_limited"}, everyRow),
-		"auth.keyCreate": join([]string{"auth_required", "auth_bad_request", "upgrade_required", "wire_mismatch", "cross_origin_refused"}, everyRow),
+		"events.wait":    join([]httpserver.ErrorCode{"idempotency_key_unsupported", "held_limit", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
+		"live.stream":    join([]httpserver.ErrorCode{"idempotency_key_unsupported", "held_limit", "upgrade_required", "store_unavailable", "auth_required"}, everyRow),
+		"auth.sso":       join([]httpserver.ErrorCode{"idempotency_key_unsupported", "upgrade_required"}, everyRow),
+		"auth.keys":      join([]httpserver.ErrorCode{"auth_required", "auth_forbidden", "upgrade_required", "rate_limited"}, everyRow),
+		"auth.keyCreate": join([]httpserver.ErrorCode{"auth_required", "auth_bad_request", "upgrade_required", "wire_mismatch", "cross_origin_refused"}, everyRow),
 	}
 	got, err := httpwire.Derive(fixtureTable(t), guardCodes)
 	if err != nil {
@@ -292,11 +292,11 @@ func TestUnionWithoutClientHeaderOrGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := join([]string{"bad_query", "idempotency_key_unsupported", "store_unavailable"}, everyRow)
+	want := join([]httpserver.ErrorCode{"bad_query", "idempotency_key_unsupported", "store_unavailable"}, everyRow)
 	if e := row(got, "jobs.list").Errors; !slices.Equal(e, want) {
 		t.Errorf("Errors = %v, want %v", e, want)
 	}
-	want = join([]string{"auth_required", "auth_forbidden", "rate_limited"}, everyRow)
+	want = join([]httpserver.ErrorCode{"auth_required", "auth_forbidden", "rate_limited"}, everyRow)
 	if e := row(got, "auth.keys").Errors; !slices.Equal(e, want) {
 		t.Errorf("mount Errors = %v, want %v", e, want)
 	}
@@ -306,7 +306,7 @@ func TestUnionListRowCarriesCursorInvalid(t *testing.T) {
 	tb := fixtureTable(t)
 	row(tb, "jobs.list").List = true
 	u := httpwire.Union(tb, row(tb, "jobs.list"), guardCodes)
-	want := join([]string{"bad_query", "cursor_invalid", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow)
+	want := join([]httpserver.ErrorCode{"bad_query", "cursor_invalid", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow)
 	if !slices.Equal(u, want) {
 		t.Errorf("Union = %v, want %v", u, want)
 	}
@@ -715,22 +715,22 @@ func TestPersonActionSpellings(t *testing.T) {
 }
 
 func TestDeriveRefusesReasons(t *testing.T) {
-	reasons := func(name string, r map[string]httpwire.ReasonSet) func(*httpwire.Table) {
+	reasons := func(name string, r map[httpserver.ErrorCode]httpwire.ReasonSet) func(*httpwire.Table) {
 		return edit(name, func(e *httpwire.Endpoint) { e.Reasons = r })
 	}
 	runRefusals(t, map[string]refusal{
-		"code outside union":   {reasons("jobs.list", map[string]httpwire.ReasonSet{"job_busy": {Listed: []string{"running"}}}), []string{`row "jobs.list"`, `"job_busy"`, "union"}},
-		"reason grammar":       {reasons("jobs.start", map[string]httpwire.ReasonSet{"job_busy": {Listed: []string{"Running"}}}), []string{`row "jobs.start"`, `"Running"`}},
-		"reason too long":      {reasons("jobs.start", map[string]httpwire.ReasonSet{"job_busy": {Listed: []string{strings.Repeat("r", 65)}}}), []string{`row "jobs.start"`, "reason"}},
-		"reason twice":         {reasons("jobs.start", map[string]httpwire.ReasonSet{"job_busy": {Listed: []string{"running", "running"}}}), []string{`row "jobs.start"`, `"running"`, "twice"}},
-		"empty closed set":     {reasons("jobs.start", map[string]httpwire.ReasonSet{"job_busy": {}}), []string{`row "jobs.start"`, `"job_busy"`}},
-		"mount code off union": {reasons("auth.keys", map[string]httpwire.ReasonSet{"auth_bad_request": {Open: true}}), []string{`row "auth.keys"`, `"auth_bad_request"`}},
+		"code outside union":   {reasons("jobs.list", map[httpserver.ErrorCode]httpwire.ReasonSet{"job_busy": {Listed: []string{"running"}}}), []string{`row "jobs.list"`, `"job_busy"`, "union"}},
+		"reason grammar":       {reasons("jobs.start", map[httpserver.ErrorCode]httpwire.ReasonSet{"job_busy": {Listed: []string{"Running"}}}), []string{`row "jobs.start"`, `"Running"`}},
+		"reason too long":      {reasons("jobs.start", map[httpserver.ErrorCode]httpwire.ReasonSet{"job_busy": {Listed: []string{strings.Repeat("r", 65)}}}), []string{`row "jobs.start"`, "reason"}},
+		"reason twice":         {reasons("jobs.start", map[httpserver.ErrorCode]httpwire.ReasonSet{"job_busy": {Listed: []string{"running", "running"}}}), []string{`row "jobs.start"`, `"running"`, "twice"}},
+		"empty closed set":     {reasons("jobs.start", map[httpserver.ErrorCode]httpwire.ReasonSet{"job_busy": {}}), []string{`row "jobs.start"`, `"job_busy"`}},
+		"mount code off union": {reasons("auth.keys", map[httpserver.ErrorCode]httpwire.ReasonSet{"auth_bad_request": {Open: true}}), []string{`row "auth.keys"`, `"auth_bad_request"`}},
 	})
 }
 
 func TestDeriveAcceptsAnOpenReasonSetWithNoList(t *testing.T) {
 	tb := fixtureTable(t)
-	row(tb, "auth.keyCreate").Reasons = map[string]httpwire.ReasonSet{"auth_bad_request": {Open: true}}
+	row(tb, "auth.keyCreate").Reasons = map[httpserver.ErrorCode]httpwire.ReasonSet{"auth_bad_request": {Open: true}}
 	got, err := httpwire.Derive(tb, guardCodes)
 	if err != nil {
 		t.Fatalf("Derive = %v, want nil", err)
@@ -742,8 +742,8 @@ func TestDeriveAcceptsAnOpenReasonSetWithNoList(t *testing.T) {
 
 func TestDeriveRefusesCodesOutsideTheCatalog(t *testing.T) {
 	runRefusals(t, map[string]refusal{
-		"own code":   {edit("jobs.start", func(e *httpwire.Endpoint) { e.Codes = []string{"job_gone"} }), []string{`row "jobs.start"`, `"job_gone"`, "catalog"}},
-		"mount code": {edit("auth.keys", func(e *httpwire.Endpoint) { e.Codes = []string{"auth_gone"} }), []string{`row "auth.keys"`, `"auth_gone"`, "catalog"}},
+		"own code":   {edit("jobs.start", func(e *httpwire.Endpoint) { e.Codes = []httpserver.ErrorCode{"job_gone"} }), []string{`row "jobs.start"`, `"job_gone"`, "catalog"}},
+		"mount code": {edit("auth.keys", func(e *httpwire.Endpoint) { e.Codes = []httpserver.ErrorCode{"auth_gone"} }), []string{`row "auth.keys"`, `"auth_gone"`, "catalog"}},
 		"guard code": {
 			func(tb *httpwire.Table) { tb.Catalog = httpwire.NewCatalog() },
 			[]string{`row "jobs.list"`, `"auth_required"`, "catalog"},
@@ -820,7 +820,7 @@ func TestUnionOfARawRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := join([]string{"idempotency_key_unsupported", "upgrade_required", "auth_required"}, everyRow)
+	want := join([]httpserver.ErrorCode{"idempotency_key_unsupported", "upgrade_required", "auth_required"}, everyRow)
 	if e := row(got, "files.get").Errors; !slices.Equal(e, want) {
 		t.Errorf("Errors = %v, want %v", e, want)
 	}

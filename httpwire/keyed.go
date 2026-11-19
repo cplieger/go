@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // defaultRowDeadline ends a Keyed handler's context when neither the route
@@ -326,7 +328,7 @@ func rowDeadline(r *http.Request) (context.Context, context.CancelFunc) {
 // it may not have kept.
 type keepWriter struct {
 	http.ResponseWriter
-	code        string
+	code        httpserver.ErrorCode
 	contentType string
 	body        bytes.Buffer
 	retryAfter  time.Duration
@@ -365,7 +367,7 @@ func (w *keepWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // noteCode tells the keepWriter under w, found through Unwrap, the code of
 // the refusal about to be written, unless the answer has already started.
-func noteCode(w http.ResponseWriter, code string) {
+func noteCode(w http.ResponseWriter, code httpserver.ErrorCode) {
 	for w != nil {
 		if k, ok := w.(*keepWriter); ok {
 			if k.status == 0 {

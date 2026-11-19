@@ -51,7 +51,7 @@ api, err := httpwire.New(table, []httpwire.Binding{httpwire.Bind("items.get", ge
 
 - `Table`, `Endpoint`, `Access`, `Kind`, `Mount`, `Owner` and `Derive` declare the API. `Bind`, `BindRaw`, `BindStream`, `Call`, `None`, `Status` and `Answer` bind handlers; a `Call` carries the row's path, query, body and request headers.
 - `New` and its `With*` options build an `API`, which serves the table and quiesces through `Quiesce`.
-- `Catalog`, `Error`, `FieldError`, `Upstream`, `Envelope`, `DecodeEnvelope` and `Union` describe refusals.
+- `Catalog`, `Error`, `FieldError`, `Upstream`, `Envelope`, `DecodeEnvelope` and `Union` describe refusals. Each wire code is an `httpserver.ErrorCode`, so `httpservertest.CheckCodeSpecs` finds every code an app answers.
 - `Page`, `Cursor`, `Limit`, `List`, `Seal`, `Open`, `Tag`, `OpenToken`, `Idempotency`, `IdempotencyStore`, `IdempotencyPolicy` and `PolicyOf` serve pages, handles, tags and replays.
 - `Checked`, `SourceCheck`, `CheckAnswer` and `NotStored` answer an open check, a keyed re-read of one item at each of its sources.
 - `ParseSchema`, `WireVersion` and the `Pattern*` constants read the document.

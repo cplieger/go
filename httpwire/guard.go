@@ -3,6 +3,8 @@ package httpwire
 import (
 	"context"
 	"net/http"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // Guard decides who reaches each row, from the row's Access.
@@ -10,7 +12,7 @@ type Guard interface {
 	// Wrap guards one row's handler; it runs before any decoding.
 	Wrap(ep *Endpoint, next http.Handler) http.Handler
 	// Codes are the codes Wrap may answer for a row with this Access.
-	Codes(a Access) []string
+	Codes(a Access) []httpserver.ErrorCode
 	// Shape is the request's principal shape, answered without refusing:
 	// the admitted principal, else a passive authentication, else anonymous.
 	Shape(r *http.Request) Shape

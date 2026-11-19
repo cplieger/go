@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -345,7 +346,7 @@ func TestHeadersDecodeOrder(t *testing.T) {
 		target, body string
 		header       []string
 		status       int
-		code         string
+		code         httpserver.ErrorCode
 	}{
 		"a path naming nothing first":       {"/api/agents/tape?limit=1", `{"name":"a"}`, nil, http.StatusNotFound, "not_found"},
 		"the query before the headers":      {"/api/agents/book?limit=0", `{"name":"a"}`, nil, http.StatusBadRequest, "bad_query"},
@@ -408,7 +409,7 @@ func TestUnionOfARowWithHeaders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := join([]string{"bad_query", "bad_header", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow)
+		want := join([]httpserver.ErrorCode{"bad_query", "bad_header", "idempotency_key_unsupported", "upgrade_required", "store_unavailable", "auth_required"}, everyRow)
 		if e := row(got, "jobs.list").Errors; !slices.Equal(e, want) {
 			t.Errorf("Errors = %v, want %v", e, want)
 		}

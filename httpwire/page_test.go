@@ -21,6 +21,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -866,7 +867,7 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 		"a mount List row with no Page": {func(tb *httpwire.Table) {
 			tb.Mounts = []httpwire.Mount{{Handler: http.NotFoundHandler(), Rows: []httpwire.Endpoint{{
 				Name: "auth.keys", Method: http.MethodGet, Path: "/auth/keys", Summary: "List keys", Description: "Lists keys.",
-				Response: reflect.TypeFor[httpwire.List[entry]](), Access: session, List: true, Codes: []string{"auth_required"},
+				Response: reflect.TypeFor[httpwire.List[entry]](), Access: session, List: true, Codes: []httpserver.ErrorCode{"auth_required"},
 			}}}}
 		}, []string{`row "auth.keys"`, "Page"}},
 		"a pointer to Page": {func(tb *httpwire.Table) { listRow(tb).Query = reflect.TypeFor[pageByPointer]() }, []string{`row "items.list"`, "Page"}},

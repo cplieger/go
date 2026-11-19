@@ -45,7 +45,7 @@ const (
 
 // libraryCodes are the codes httpwire's own layers answer, each with its
 // default remediation.
-var libraryCodes = map[string]httpserver.CodeSpec{
+var libraryCodes = map[httpserver.ErrorCode]httpserver.CodeSpec{
 	codeBadBody:                   {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
 	"bad_query":                   {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
 	codeBadHeader:                 {Status: http.StatusBadRequest, Remediation: "Fix the request headers as the fields describe, then resend the request."},
@@ -75,25 +75,23 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 // Catalog is the one code table of an app's listeners: every code any layer
 // answers, with its status and remediation. It is safe for concurrent use.
 type Catalog struct {
-	specs map[string]httpserver.CodeSpec // each code as it was added
-	words map[string]string              // the app's remediation, replacing the added one
+	specs map[httpserver.ErrorCode]httpserver.CodeSpec // each code as it was added
+	words map[httpserver.ErrorCode]string              // the app's remediation, replacing the added one
 	mu    sync.RWMutex
 }
 
 // NewCatalog returns a catalog holding httpwire's own codes and every code of
 // httpserver.CodeSpecs.
 func NewCatalog() *Catalog {
-	c := &Catalog{specs: maps.Clone(libraryCodes), words: map[string]string{}}
-	for code, s := range httpserver.CodeSpecs() {
-		c.specs[string(code)] = s
-	}
+	c := &Catalog{specs: maps.Clone(libraryCodes), words: map[httpserver.ErrorCode]string{}}
+	maps.Copy(c.specs, httpserver.CodeSpecs())
 	return c
 }
 
 // Add adds an app's own code. It refuses a code already in the catalog, a
 // code outside the grammar, a status outside 400 to 599, and a remediation
 // that is empty, over 4 KiB or more than one line of valid UTF-8.
-func (c *Catalog) Add(code string, s httpserver.CodeSpec) error {
+func (c *Catalog) Add(code httpserver.ErrorCode, s httpserver.CodeSpec) error {
 	if err := checkSpec(code, s); err != nil {
 		return err
 	}
@@ -114,20 +112,20 @@ func (c *Catalog) AddOwned(specs map[httpserver.ErrorCode]httpserver.CodeSpec) e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var errs []error
-	add := map[string]httpserver.CodeSpec{}
+	add := map[httpserver.ErrorCode]httpserver.CodeSpec{}
 	for _, code := range slices.Sorted(maps.Keys(specs)) {
 		s := specs[code]
-		if err := checkSpec(string(code), s); err != nil {
+		if err := checkSpec(code, s); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if have, ok := c.specs[string(code)]; ok {
+		if have, ok := c.specs[code]; ok {
 			if have != s {
 				errs = append(errs, fmt.Errorf("httpwire: code %q is in the catalog as %+v, not %+v", code, have, s))
 			}
 			continue
 		}
-		add[string(code)] = s
+		add[code] = s
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -139,7 +137,7 @@ func (c *Catalog) AddOwned(specs map[httpserver.ErrorCode]httpserver.CodeSpec) e
 // SetRemediation replaces the remediation of a code already in the catalog,
 // keeping its status: the app's words for a library's code. It refuses an
 // unknown code and a remediation Add would refuse.
-func (c *Catalog) SetRemediation(code, remediation string) error {
+func (c *Catalog) SetRemediation(code httpserver.ErrorCode, remediation string) error {
 	if err := checkLine(remediation); err != nil {
 		return fmt.Errorf("httpwire: code %q: %w", code, err)
 	}
@@ -153,7 +151,7 @@ func (c *Catalog) SetRemediation(code, remediation string) error {
 }
 
 // Lookup returns code's status and remediation.
-func (c *Catalog) Lookup(code string) (httpserver.CodeSpec, bool) {
+func (c *Catalog) Lookup(code httpserver.ErrorCode) (httpserver.CodeSpec, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	s, ok := c.specs[code]
@@ -163,11 +161,11 @@ func (c *Catalog) Lookup(code string) (httpserver.CodeSpec, bool) {
 	return s, ok
 }
 
-func checkSpec(code string, s httpserver.CodeSpec) error {
-	if !isCode(code) || len(code) > maxEnvelopeString {
-		return fmt.Errorf("httpwire: %q is not a code: one or more of a-z, 0-9 and _", textsafe.SanitizeSingleLineBounded(code, maxReason))
+func checkSpec(code httpserver.ErrorCode, s httpserver.CodeSpec) error {
+	if !isCode(string(code)) || len(code) > maxEnvelopeString {
+		return fmt.Errorf("httpwire: %q is not a code: one or more of a-z, 0-9 and _", textsafe.SanitizeSingleLineBounded(string(code), maxReason))
 	}
-	if code == string(httpserver.InvalidErrorCode) {
+	if code == httpserver.InvalidErrorCode {
 		return fmt.Errorf("httpwire: %q is httpserver's substitute for a malformed code", code)
 	}
 	if s.Status < 400 || s.Status > 599 {
@@ -222,7 +220,7 @@ func (c *Catalog) envelope(r *http.Request, e *Error) (env Envelope, status int)
 	}
 	spec, ok := c.Lookup(e.Code)
 	if !ok {
-		logError(r, "httpwire: error code with no catalog row", "code", textsafe.SanitizeSingleLineBounded(e.Code, maxReason))
+		logError(r, "httpwire: error code with no catalog row", "code", textsafe.SanitizeSingleLineBounded(string(e.Code), maxReason))
 		spec, _ = c.Lookup(codeInternal)
 		e = &Error{Code: codeInternal}
 	}
@@ -293,7 +291,7 @@ func boundUpstream(u *Upstream) (out *Upstream, ok bool) {
 // answers internal_error.
 func (c *Catalog) Responder() httpserver.ErrorResponder {
 	return func(w http.ResponseWriter, r *http.Request, _ int, code httpserver.ErrorCode, msg string) {
-		c.WriteError(w, r, &Error{Code: string(code), Message: msg})
+		c.WriteError(w, r, &Error{Code: code, Message: msg})
 	}
 }
 

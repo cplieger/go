@@ -49,7 +49,7 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 			opt(&o)
 		}
 	}
-	var guardCodes func(Access) []string
+	var guardCodes func(Access) []httpserver.ErrorCode
 	if o.guard != nil {
 		guardCodes = o.guard.Codes
 	}

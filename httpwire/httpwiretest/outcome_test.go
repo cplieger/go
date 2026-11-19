@@ -20,7 +20,7 @@ func outcomeAPI(t *testing.T) *httpwire.API {
 		t.Fatal(err)
 	}
 	session := httpwire.Access{Class: httpwire.Session}
-	row := func(name, method, path, summary string, codes ...string) httpwire.Endpoint {
+	row := func(name, method, path, summary string, codes ...httpserver.ErrorCode) httpwire.Endpoint {
 		return httpwire.Endpoint{Name: name, Method: method, Path: path, Summary: summary, Description: summary + ".", Access: session, Codes: codes}
 	}
 	keyed := row("act.keyed", http.MethodPost, "/act/keyed", "Act keyed", "outcome_unknown")

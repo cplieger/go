@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -121,7 +122,7 @@ func TestTransportFixtureCodesAreTheCatalogs(t *testing.T) {
 	readCorpus(t, transportFile, &f)
 	cat := httpwire.NewCatalog()
 	for code, spec := range f.ErrorCodes {
-		got, ok := cat.Lookup(code)
+		got, ok := cat.Lookup(httpserver.ErrorCode(code))
 		if !ok || got.Status != spec.Status || got.Remediation != spec.Remediation {
 			t.Errorf("errorCodes[%q] = %d %q, the catalog's is %d %q (%v)", code, spec.Status, spec.Remediation, got.Status, got.Remediation, ok)
 		}

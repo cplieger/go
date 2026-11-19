@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -40,7 +41,7 @@ func TestWireCodesFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var got []string
+	var got []httpserver.ErrorCode
 	readCorpus(t, wireCodesFile, &got)
 	if !slices.Equal(got, want) {
 		t.Fatalf("%s lists %q, want NewCatalog's codes %q; regenerate with UPDATE_GOLDEN=1 go test . -run TestWireCodesFile in httpwire", wireCodesFile, got, want)

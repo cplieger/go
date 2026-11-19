@@ -52,6 +52,8 @@ An answer that is or embeds a `Checked[T]` is held to the open check's rules ([T
 
 A handler's error answers through the row's union: an `*Error` whose code the union holds, else the first `OwnerCode` of the row's `Owners` that the error wraps, matched in order with `errors.Is`, else `internal_error`, logged. `Catalog` supplies each code's status and remediation, so a handler sets only the code, a message and, when it applies, a `Reason`, `Fields` or `RetryAfter`.
 
+Every slot that holds a wire code is an `httpserver.ErrorCode`: `Error.Code`, `OwnerCode.Code`, `Endpoint.Codes`, `Endpoint.Errors`, the keys of `Endpoint.Reasons`, `Guard.Codes`, `Envelope.Code`, `SourceCheck.Code`, and the code `Catalog.Add`, `SetRemediation` and `Lookup` take. `httpservertest.CheckCodeSpecs` counts a code set in any of those struct fields, so an app's code test sees every code it answers through httpwire. A field code (`FieldError.Code`) is not a wire code and stays a string.
+
 Every row's union ends with the codes any row may answer: `accounts_unavailable`, `maintenance`, `host_not_allowed`, `internal_error`, `not_found` and `method_not_allowed`. A `Reasons` entry lists the reasons a code may carry; an `Open` set says a client must accept reasons it does not list, such as a field name.
 
 A `Raw` row's handler writes its own answer, which must use the row's `ContentType`. Its refusals go through `Catalog.WriteError`.

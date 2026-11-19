@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -109,7 +110,8 @@ func TestRequirePersonRefusals(t *testing.T) {
 	for name, tc := range map[string]struct {
 		principal, path, action string
 		status                  int
-		code, reason            string
+		code                    httpserver.ErrorCode
+		reason                  string
 		logged                  bool
 	}{
 		"a key":                         {"key", "/api/settings", httpwire.PersonSecretRetarget, 403, "person_required", "secret_retarget", false},
