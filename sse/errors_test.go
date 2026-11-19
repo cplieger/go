@@ -2,10 +2,16 @@ package sse
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/httpserver/v2"
@@ -167,5 +173,45 @@ func TestWithErrors_handlerRefusalsGoThroughTheResponder(t *testing.T) {
 	}
 	if !slices.Equal(rr.calls, want) {
 		t.Errorf("responder calls = %+v, want %+v", rr.calls, want)
+	}
+}
+
+// Only the option and its default may name httpserver's envelope writers, so
+// every refusal a writer adds goes through the hub's responder.
+func TestWithErrors_noWriterBypassesTheResponder(t *testing.T) {
+	writers := map[string]bool{"WriteError": true, "NewErrorResponse": true, "ErrorResponse": true}
+	allowed := map[string]bool{"errors.go": true, "config.go": true}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") || allowed[name] {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		qualifier := ""
+		for _, imp := range f.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == "github.com/cplieger/go/httpserver/v2" {
+				qualifier = "httpserver"
+				if imp.Name != nil {
+					qualifier = imp.Name.Name
+				}
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if x, ok := sel.X.(*ast.Ident); ok && qualifier != "" && x.Name == qualifier && writers[sel.Sel.Name] {
+				t.Errorf("%s: httpserver.%s bypasses the hub's responder; write through h.cfg.errs", fset.Position(sel.Pos()), sel.Sel.Name)
+			}
+			return true
+		})
 	}
 }
