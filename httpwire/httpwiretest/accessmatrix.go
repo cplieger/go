@@ -70,7 +70,7 @@ func AccessMatrix(t testing.TB, table *httpwire.Table, guard httpwire.Guard, cre
 			return
 		}
 	}
-	m := &matrix{t: t, guard: guard}
+	m := &matrix{t: t}
 	bs := make([]httpwire.Binding, 0, len(table.Endpoints))
 	for i := range table.Endpoints {
 		b, _ := wirelink.Stub(&table.Endpoints[i]).(httpwire.Binding)
@@ -92,7 +92,6 @@ func AccessMatrix(t testing.TB, table *httpwire.Table, guard httpwire.Guard, cre
 
 type matrix struct {
 	t       testing.TB
-	guard   httpwire.Guard
 	api     *httpwire.API
 	catalog *httpwire.Catalog
 	ran     *ranRow // set by the stub under the guard, reset before each request
