@@ -24,28 +24,46 @@ func TestValidateFieldCodes(t *testing.T) {
 			rule("title", `^chore\(deps\)`, "draft", "true"),
 			rule("repository", "owner/name", "draft", "false"),
 		}},
-		{name: "a field not declared is unknown", path: "rules", rules: []exclusion.Rule{rule("milestone", "v1")},
-			want: []pathCode{{"rules[0].conditions[0].field", "unknown"}}},
-		{name: "a choice not listed is enum", path: "rules", rules: []exclusion.Rule{rule("kind", "commit")},
-			want: []pathCode{{"rules[0].conditions[0].value", "enum"}}},
-		{name: "a choice is exact", path: "rules", rules: []exclusion.Rule{rule("kind", "Issue")},
-			want: []pathCode{{"rules[0].conditions[0].value", "enum"}}},
-		{name: "a bool other than true or false is enum", path: "rules", rules: []exclusion.Rule{rule("draft", "yes"), rule("draft", "True")},
-			want: []pathCode{{"rules[0].conditions[0].value", "enum"}, {"rules[1].conditions[0].value", "enum"}}},
-		{name: "a pattern regexp refuses is pattern", path: "rules", rules: []exclusion.Rule{rule("title", "(")},
-			want: []pathCode{{"rules[0].conditions[0].value", "pattern"}}},
-		{name: "a rule with no condition is range", path: "rules", rules: []exclusion.Rule{{}, {Conditions: []exclusion.Condition{}}},
-			want: []pathCode{{"rules[0].conditions", "range"}, {"rules[1].conditions", "range"}}},
-		{name: "an empty text value is range", path: "rules", rules: []exclusion.Rule{rule("author", "")},
-			want: []pathCode{{"rules[0].conditions[0].value", "range"}}},
-		{name: "an empty pattern is range", path: "rules", rules: []exclusion.Rule{rule("title", "")},
-			want: []pathCode{{"rules[0].conditions[0].value", "range"}}},
+		{
+			name: "a field not declared is unknown", path: "rules", rules: []exclusion.Rule{rule("milestone", "v1")},
+			want: []pathCode{{"rules[0].conditions[0].field", "unknown"}},
+		},
+		{
+			name: "a choice not listed is enum", path: "rules", rules: []exclusion.Rule{rule("kind", "commit")},
+			want: []pathCode{{"rules[0].conditions[0].value", "enum"}},
+		},
+		{
+			name: "a choice is exact", path: "rules", rules: []exclusion.Rule{rule("kind", "Issue")},
+			want: []pathCode{{"rules[0].conditions[0].value", "enum"}},
+		},
+		{
+			name: "a bool other than true or false is enum", path: "rules", rules: []exclusion.Rule{rule("draft", "yes"), rule("draft", "True")},
+			want: []pathCode{{"rules[0].conditions[0].value", "enum"}, {"rules[1].conditions[0].value", "enum"}},
+		},
+		{
+			name: "a pattern regexp refuses is pattern", path: "rules", rules: []exclusion.Rule{rule("title", "(")},
+			want: []pathCode{{"rules[0].conditions[0].value", "pattern"}},
+		},
+		{
+			name: "a rule with no condition is range", path: "rules", rules: []exclusion.Rule{{}, {Conditions: []exclusion.Condition{}}},
+			want: []pathCode{{"rules[0].conditions", "range"}, {"rules[1].conditions", "range"}},
+		},
+		{
+			name: "an empty text value is range", path: "rules", rules: []exclusion.Rule{rule("author", "")},
+			want: []pathCode{{"rules[0].conditions[0].value", "range"}},
+		},
+		{
+			name: "an empty pattern is range", path: "rules", rules: []exclusion.Rule{rule("title", "")},
+			want: []pathCode{{"rules[0].conditions[0].value", "range"}},
+		},
 		{name: "each entry names its rule and condition", path: "rules", rules: []exclusion.Rule{
 			rule("author", "renovate"),
 			rule("author", "x", "kind", "commit", "label", "y", "milestone", "z"),
 		}, want: []pathCode{{"rules[1].conditions[1].value", "enum"}, {"rules[1].conditions[3].field", "unknown"}}},
-		{name: "the path is the caller's", path: "filters.exclusions", rules: []exclusion.Rule{rule("milestone", "v1")},
-			want: []pathCode{{"filters.exclusions[0].conditions[0].field", "unknown"}}},
+		{
+			name: "the path is the caller's", path: "filters.exclusions", rules: []exclusion.Rule{rule("milestone", "v1")},
+			want: []pathCode{{"filters.exclusions[0].conditions[0].field", "unknown"}},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -76,8 +94,10 @@ func TestBoundsAnswerRange(t *testing.T) {
 		{name: "a value of 201 bytes", rules: []exclusion.Rule{rule("author", strings.Repeat("a", 201))}, want: valueAt},
 		{name: "a value counts bytes, not characters", rules: []exclusion.Rule{rule("author", strings.Repeat("é", 101))}, want: valueAt},
 		{name: "8 conditions", rules: []exclusion.Rule{eight()}},
-		{name: "9 conditions", rules: []exclusion.Rule{{Conditions: append(eight().Conditions, exclusion.Condition{Field: "author", Value: "a"})}},
-			want: []pathCode{{"rules[0].conditions", "range"}}},
+		{
+			name: "9 conditions", rules: []exclusion.Rule{{Conditions: append(eight().Conditions, exclusion.Condition{Field: "author", Value: "a"})}},
+			want: []pathCode{{"rules[0].conditions", "range"}},
+		},
 		{name: "100 rules", rules: rules(100)},
 		{name: "101 rules", rules: rules(101), want: []pathCode{{"rules", "range"}}},
 	}
