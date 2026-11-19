@@ -13,8 +13,8 @@ import (
 // maxScheduled bounds the scheduled scopes of one executor.
 const maxScheduled = 64
 
-// maxEnds bounds the last ends an executor holds: a record store keeps at
-// most 10,000 records in all, so a LastEnds read answers no more scopes.
+// maxEnds bounds the last ends an executor holds: a store keeps at most
+// 10,000 LastEnds rows, so a restart reads no more ends than that.
 const maxEnds = 10_000
 
 // jitter is the ±fraction each scheduled wait is drawn from.
@@ -191,8 +191,9 @@ func (e *Executor[P]) mergeEndsLocked(ends map[ScheduledScope]LastEnd) {
 	e.boundEndsLocked()
 }
 
-// boundEndsLocked drops the oldest ends past maxEnds, the least Kind then
-// Scope first at one instant, keeping each one a scheduled scope counts from.
+// boundEndsLocked drops ends past maxEnds, keeping each one a scheduled scope
+// counts from: first those of a kind with Kept 0, which no restart reads,
+// then the oldest, the least Kind then Scope first at one instant.
 func (e *Executor[P]) boundEndsLocked() {
 	over := len(e.ends) - maxEnds
 	if over <= 0 {
@@ -209,11 +210,22 @@ func (e *Executor[P]) boundEndsLocked() {
 		}
 	}
 	slices.SortFunc(drop, func(a, b ScheduledScope) int {
-		return cmp.Or(e.ends[a].At.Compare(e.ends[b].At), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Scope, b.Scope))
+		return cmp.Or(cmp.Compare(e.storedRank(a.Kind), e.storedRank(b.Kind)),
+			e.ends[a].At.Compare(e.ends[b].At), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Scope, b.Scope))
 	})
 	for _, k := range drop[:min(over, len(drop))] {
 		delete(e.ends, k)
 	}
+}
+
+// storedRank answers 0 for a kind with Kept 0, whose ends a store holds no
+// row for, else 1. An end of a kind the executor does not know came from a
+// LastEnds read, so a restart reads it too.
+func (e *Executor[P]) storedRank(k Kind) int {
+	if spec := e.kinds[k]; spec != nil && spec.Kept == 0 {
+		return 0
+	}
+	return 1
 }
 
 // countFromStart counts each scheduled scope as if it had no end

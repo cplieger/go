@@ -45,7 +45,10 @@ type Records interface {
 	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
 	// LastEnds answers each kind and scope's last moving end, scheduled or
 	// not: the end of a job that started and did not end cancelled or
-	// interrupted, the one LastEnd.Supersedes puts last among its ends.
+	// interrupted, the one LastEnd.Supersedes puts last among its ends. A
+	// store keeps it apart from the record it came from, so pruning and the
+	// record bound never delete it, for up to 10,000 scopes, the oldest
+	// going first.
 	LastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error)
 }
 
