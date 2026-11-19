@@ -112,6 +112,32 @@ func TestListenOpsHostPolicyIPLiteralHosts(t *testing.T) {
 	}
 }
 
+// A live source parsed from no non-blank entry (a public URL not yet saved)
+// still checks: it admits only what its options admit, beside loopback.
+func TestListenOpsHostPolicyInactiveStillChecks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		opts      []httpserver.HostAllowlistOption
+		ipLiteral int
+	}{
+		"with WithIPLiteralHosts(true)": {opts: []httpserver.HostAllowlistOption{httpserver.WithIPLiteralHosts(true)}, ipLiteral: http.StatusOK},
+		"without it":                    {ipLiteral: http.StatusForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, invalid := httpserver.ParseHostList([]string{" ", ""}, tc.opts...)
+			if len(invalid) > 0 || p.Active() {
+				t.Fatalf("ParseHostList(blank) = invalid %q, active %v; want an inactive policy", invalid, p.Active())
+			}
+			var live atomic.Pointer[httpserver.HostPolicy]
+			live.Store(p)
+			addr := liveOps(t, opsConfig("127.0.0.1:0"), &live)
+			_, port, _ := net.SplitHostPort(addr)
+			wantOpsAnswer(t, addr, "192.0.2.10", tc.ipLiteral)
+			wantOpsAnswer(t, addr, "rebind.example", http.StatusForbidden)
+			wantOpsAnswer(t, addr, "localhost:"+port, http.StatusOK)
+		})
+	}
+}
+
 // The image's probe reaches the ops port on loopback, which passes whatever
 // the policy answers, nil included.
 func TestListenOpsHostPolicyLoopbackExempt(t *testing.T) {
