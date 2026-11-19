@@ -41,6 +41,7 @@ Nothing here imports a cplieger repository outside this one.
 | --- | --- |
 | [`slogx`](slogx) | Gives every Go service the same `log/slog` setup in one call, with text or JSON output, UTC timestamps, a level you can change at run time and `LOG_LEVEL` parsing. |
 | [`masked`](masked) | Holds passwords, tokens and API keys in memory so that no log line, error message, JSON body or debug dump shows them, with test checks that find a field or printer that would. |
+| [`sealed`](sealed) | Keeps your Go app's key file and seals its cookies, cursors and stored secrets under it with AES-256-GCM, with key rotation that tells you which values to seal again. |
 | [`envx`](envx) | Configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it, and secrets that come back masked. |
 | [`yamlenv`](yamlenv) | Loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. |
 | [`health`](health) | Gives a Go service one health verdict, kept in memory, served at `GET /healthz` and checked by the same binary when Docker asks, with no shell, curl or wget. |
