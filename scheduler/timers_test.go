@@ -437,6 +437,44 @@ func TestTimerJobUncountedEndWaitsFromTheEnd(t *testing.T) {
 			})
 		}
 	}
+	t.Run("joined a covering job whose end moves no base", func(t *testing.T) {
+		synctest.Test(t, wantJoinedCoverWait)
+	})
+}
+
+// wantJoinedCoverWait has scan's timer join a queued full job that covers it
+// only by its payload, so the full job's ok end moves no base of scan, and
+// fails the test unless scan's next wake is that end plus Retry's d.
+func wantJoinedCoverWait(t *testing.T) {
+	full := spec("full", "s")
+	full.Covers = func(started, other scheduler.Job[payload]) bool {
+		return other.Kind == "scan" && started.Payload.N == 1
+	}
+	r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("scan", "s"), full, spec("busy", "s")}})
+	synctest.Wait()
+	scheduledAt := time.Now()
+	r.schedule(t, "scan", "a", scheduler.Scheduled(time.Hour).Retry(15*time.Minute))
+	busy, covering := make(chan struct{}), make(chan struct{})
+	r.start(t, api("busy", "", "alice", payload{Gate: busy}))
+	synctest.Wait()
+	joined := r.start(t, api("full", "", "alice", payload{Gate: covering, N: 1})).Job
+	synctest.Wait()
+	_, hi := jitterBand(time.Hour)
+	sleepUntil(scheduledAt.Add(hi + time.Second))
+	if n := len(r.wakes("scan", "a")); n != 0 {
+		t.Fatalf("%d scan timer records while the full job is queued, want 0: the wake joins it", n)
+	}
+	close(busy)
+	synctest.Wait()
+	time.Sleep(10 * time.Minute)
+	close(covering)
+	synctest.Wait()
+	r.wantEnd(t, joined, scheduler.ResultOK)
+	endedAt := r.rec(t, joined).EndedAt
+	if n := len(r.wakes("scan", "a")); n != 0 {
+		t.Errorf("%d scan timer records at the full job's end, want 0: its end moved no base of scan", n)
+	}
+	r.nextWake(t, "scan", "a", endedAt, 15*time.Minute)
 }
 
 // wantUncountedEndWait schedules full hourly at c after an ok end, ends its
