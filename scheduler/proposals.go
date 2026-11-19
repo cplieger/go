@@ -99,6 +99,15 @@ func (e *Executor[P]) heldLocked(spec *KindSpec[P], j *Job[P]) (Started, bool) {
 	return Started{}, false
 }
 
+// endedProposalLocked answers the job of j's held proposal when that job has
+// ended, else "".
+func (e *Executor[P]) endedProposalLocked(j *Job[P]) ID {
+	if s, ok := e.heldLocked(e.kinds[j.Kind], j); ok && e.findLocked(s.Job) == nil {
+		return s.Job
+	}
+	return ""
+}
+
 // proposalsFullLocked reports whether j, of a proposing kind, is past the
 // proposal bounds: its owner's held and pending proposals, or everyone's. A
 // pending proposal is a live proposing job that has not proposed yet.

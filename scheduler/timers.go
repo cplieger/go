@@ -396,16 +396,18 @@ func (e *Executor[P]) keepEndLocked(key ScheduledScope, end LastEnd) {
 // Retry's d, or the interval, from the refusal: a refusal code's Retry-After
 // is for an API caller and never sets this timer.
 func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
+	j := Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule}
 	e.mu.Lock()
 	if e.scheduled[key] != t || t.gen != gen || e.closed {
 		e.mu.Unlock()
 		return
 	}
+	served := e.endedProposalLocked(&j)
 	e.wg.Add(1)
 	e.mu.Unlock()
 	defer e.wg.Done()
 
-	s, err := e.Start(context.Background(), Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
+	s, err := e.Start(context.Background(), j)
 	var recent *RecentError
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -414,9 +416,13 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	}
 	now := time.Now()
 	switch {
+	case err == nil && s.Job == served:
+		// A held proposal whose job had ended answered it: a served request,
+		// not a refusal, so the wait is the one the last counted end set.
+		e.armAtLocked(key, t, now.Add(JitteredDelay(t.cadence.wait(t.done), jitter)))
 	case err == nil && e.findLocked(s.Job) == nil:
-		// It ended before this lock with an end that moved no base (gen), so
-		// that end counts for nothing here, as in releaseStandInLocked.
+		// It ended after served was read, with an end that moved no base
+		// (gen), so that end counts for nothing here, as in releaseStandInLocked.
 		e.armAtLocked(key, t, now.Add(JitteredDelay(t.cadence.wait(false), jitter)))
 	case err == nil:
 		// While the job runs this wake stands in for the next, so a request
