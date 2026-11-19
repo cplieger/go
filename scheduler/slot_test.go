@@ -15,9 +15,16 @@ func TestSlotOrder(t *testing.T) {
 	t.Run("executor", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var got order
+			// The person's job holds the slot until the batch's next item
+			// waits for it, so the order checked below is the slot's and not
+			// a race with the batch's goroutine between two items.
+			personHolds := make(chan struct{})
 			align := spec("align", "heavy")
 			align.Run = func(_ context.Context, r *scheduler.Run[payload]) scheduler.End {
 				got.add(r.Job().Scope)
+				if r.Job().Scope == "person" {
+					<-personHolds
+				}
 				return scheduler.End{Result: scheduler.ResultOK}
 			}
 			first := make(chan struct{})
@@ -46,6 +53,8 @@ func TestSlotOrder(t *testing.T) {
 			r.start(t, timer("align", "auto_2", payload{}))
 			r.start(t, api("align", "person", "bob", payload{}))
 			close(first)
+			synctest.Wait()
+			close(personHolds)
 			synctest.Wait()
 			want := []string{"item_0", "person", "auto_1", "item_1", "auto_2", "item_2"}
 			if l := got.list(); !slices.Equal(l, want) {
