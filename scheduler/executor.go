@@ -375,9 +375,10 @@ func (e *Executor[P]) stopLocked(en *job[P], end End) {
 }
 
 // serves reports whether the job is the running job rule 3 reads for j: of
-// j's scope (sameScope), running, and neither stopped nor yielded.
+// j's scope (sameScope), running, not stopped, and not yielded unless its
+// kind proposes, since a yielded proposing job still holds its key.
 func (en *job[P]) serves(j *Job[P]) bool {
-	return en.state == stateRunning && !en.stopped && en.yield == nil && en.sameScope(j)
+	return en.state == stateRunning && !en.stopped && (en.yield == nil || en.spec.Proposes) && en.sameScope(j)
 }
 
 // freeLocked wakes each follow-up waiting in begin; it is called whenever a

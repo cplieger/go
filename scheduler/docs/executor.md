@@ -70,13 +70,13 @@ At the batch's end, a line still `queued` or `running` goes to review: as `cance
 
 A kind with `Proposes` computes a result a person applies later by id. Its job's `Scope` is the proposal key, the expectation included, so two requests with the same key are the same proposal. `Run.Propose(v)` holds `v` for 15 minutes after the job ends, once per job (a second call answers `ErrProposed`), and the record names its `ProposalID`. `Proposal(owner, id)` answers it, and false for another owner's id, an expired one or one never held.
 
-A `Start` with the same owner, kind and scope as a held proposal answers that proposal's job and runs nothing. For a proposing kind, rules 1 and 3 read only the requester's own jobs, and a running one answers the request with no follow-up. At most 16 held or pending proposals per owner and 256 in all; past either, `Start` answers `ErrQueueFull`. Proposals live in memory, so one lost to a restart is proposed again.
+A `Start` with the same owner, kind and scope as a held proposal answers that proposal's job and runs nothing. For a proposing kind, rules 1 and 3 read only the requester's own jobs, and a running or yielded one answers the request with no follow-up, so one key is held by at most one pending or held job. At most 16 held or pending proposals per owner and 256 in all; past either, `Start` answers `ErrQueueFull`. Proposals live in memory, so one lost to a restart is proposed again.
 
 ## Yield and Wake
 
 `Run.Yield(ctx, until)` lets a running job wait without holding its slot, for a write retried later from results it keeps in memory. It frees the slot at once and keeps the record `running` at its phase. At `until`, or at `Wake(id)`, the job takes the slot back after any waiting `Interactive` job and ahead of every `Automatic` and `Batch` one, and `Yield` answers nil. While the job waits:
 
-- A request for its kind and scope is served as if no job of that scope ran, so a waiting job never stops the next scheduled one.
+- A request for its kind and scope is served as if no job of that scope ran, so a waiting job never stops the next scheduled one. A proposing kind is the exception: its yielded job still answers its owner's request, as a running one does.
 - A job that starts and covers it ends the wait with `*CoveredError` naming the covering job (`errors.Is(err, ErrCovered)` holds), and the yielded `Run` returns its own end.
 - A cancel, `CredentialEnded`, `Hold` or shutdown cancels its context, and `Yield` answers the context's error, even when its `until` or a `Wake` came at the same moment; only a cover that started before the cancel still answers `*CoveredError`.
 
