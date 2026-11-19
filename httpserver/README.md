@@ -158,7 +158,7 @@ When `Serve` returns before `ctx` is cancelled, for example because the listener
 - [Requests and responses](docs/requests-and-responses.md) covers the JSON helpers, the error envelope and its codes, body decoding and path checks.
 - [Static assets and CSP hashes](docs/static-assets.md) covers embedded files, content types, caching and entity-tags.
 - [Single-page apps and the outage page](docs/spa.md) covers `SPA`, its manifest, pages, policy and caching, the test helpers and `OutagePage`.
-- [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the ops listener, which answers every `Host` until you list `Hosts`.
+- [Server and shutdown](docs/server.md) covers timeouts, shutdown order and the ops listener with its three forms of host check: none, a fixed `Hosts` list or a live `HostPolicy`.
 - [Upstream images](docs/imagecache.md) covers `imagecache`: its options, what it keeps, serving and 304, its codes, eviction, restart and shutdown.
 
 ## Credits
