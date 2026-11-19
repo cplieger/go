@@ -294,6 +294,7 @@ func (e *Executor[P]) ended(ctx context.Context, en *job[P], end End) {
 	stored, at, _ := e.end(ctx, en, end)
 	e.mu.Lock()
 	e.removeLocked(en)
+	e.releaseStandInLocked(en.j.ID, false, at)
 	e.mu.Unlock()
 	e.emit(en, &Transition{Phase: en.rec.Phase, Result: stored.Result, At: at})
 }

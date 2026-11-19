@@ -482,12 +482,14 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	en.state = stateEnded
 	e.removeLocked(en)
 	// An end the store does not hold moves nothing a restart would not read.
-	if kept && moving(stored.Result) {
+	counted := kept && moving(stored.Result)
+	if counted {
 		e.noteEndLocked(en, stored.Result, at)
 		if en.spec.Fresh != nil {
 			e.noteRecentLocked(en, at)
 		}
 	}
+	e.releaseStandInLocked(en.j.ID, counted, at)
 	e.keepLocked(en, at)
 	e.mu.Unlock()
 	if en.w != nil {

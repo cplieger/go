@@ -34,6 +34,7 @@ type timed struct {
 	timer   *time.Timer
 	check   *time.Timer    // fires just after the watch's deadline
 	lead    ScheduledScope // the scope whose end base is; zero when base is no end
+	standIn ID             // the job whose wake armed the timer, until a re-arm
 	lease   health.Lease   // the kind's Watch(every), or {every, Cycles: 3}
 	cadence Cadence
 	gen     uint64 // bumped at each arm, so a superseded timer's func does nothing
@@ -137,6 +138,7 @@ func (e *Executor[P]) unscheduleLocked(key ScheduledScope) {
 
 func (e *Executor[P]) stopTimerLocked(t *timed) {
 	t.gen++
+	t.standIn = ""
 	if t.timer != nil {
 		t.timer.Stop()
 		t.timer = nil
@@ -391,7 +393,8 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	e.mu.Unlock()
 	defer e.wg.Done()
 
-	_, err := e.Start(context.Background(), Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
+	woke := time.Now()
+	s, err := e.Start(context.Background(), Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
 	var recent *RecentError
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -400,10 +403,16 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 	}
 	now := time.Now()
 	switch {
+	case err == nil && e.findLocked(s.Job) == nil:
+		// It ended before this lock with an end that re-armed nothing (gen);
+		// a base from after the wake is that end, counted.
+		e.afterEndLocked(key, t, !t.base.Before(woke), now)
 	case err == nil:
-		// Admitted or joined: the job's moving end re-arms from itself, and
-		// this wake stands in when it ends without one.
+		// While the job runs this wake stands in for the next, so a request
+		// longer than the interval coalesces; its end replaces it
+		// (noteEndLocked, or releaseStandInLocked for an end not counted).
 		e.armAtLocked(key, t, now.Add(JitteredDelay(t.cadence.wait(true), jitter)))
+		t.standIn = s.Job
 	case errors.As(err, &recent):
 		e.armAtLocked(key, t, recent.Until)
 	case errors.Is(err, ErrQueueFull), errors.Is(err, ErrStoreUnavailable), errors.Is(err, ErrCapacity):
@@ -412,6 +421,29 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 		e.log.Error("scheduled job not started", "kind", key.Kind, "scope", key.Scope, "err", err)
 		e.armAtLocked(key, t, now.Add(JitteredDelay(t.cadence.wait(false), jitter)))
 	}
+}
+
+// releaseStandInLocked re-arms each scheduled scope whose timer job id ended
+// at at and whose stand-in wake its end left armed (afterEndLocked).
+func (e *Executor[P]) releaseStandInLocked(id ID, counted bool, at time.Time) {
+	for key, t := range e.scheduled {
+		if t.standIn == id {
+			e.afterEndLocked(key, t, counted, at)
+		}
+	}
+}
+
+// afterEndLocked arms t after its timer job ended at at. A counted end arms
+// from the base, as a restart would. An end not counted (cancelled,
+// interrupted, never started, not kept) is held in memory only, like a
+// refusal: the next wake is at plus Retry's d, or the interval, so a cancel
+// never re-runs the job at once.
+func (e *Executor[P]) afterEndLocked(key ScheduledScope, t *timed, counted bool, at time.Time) {
+	if counted {
+		e.armLocked(key, t)
+		return
+	}
+	e.armAtLocked(key, t, at.Add(JitteredDelay(t.cadence.wait(false), jitter)))
 }
 
 // stopTimersLocked stops every scheduled scope's timer and deadline check.
