@@ -175,6 +175,77 @@ func assertNotOwnedAtOpen(t *testing.T, call string, err error) {
 	}
 }
 
+func assertPlainPermission(t *testing.T, call string, err error) {
+	t.Helper()
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("%s = %v, want fs.ErrPermission", call, err)
+	}
+	if errors.Is(err, ErrNotOwned) || errors.Is(err, ErrParentNotSynced) || errors.Is(err, ErrRaced) {
+		t.Errorf("%s = %v, want none of ErrNotOwned, ErrParentNotSynced and ErrRaced", call, err)
+	}
+}
+
+// ownWorkspace builds, for a root suite, the directory nobody owns where the
+// child makes the fixtures it must own.
+func ownWorkspace(t *testing.T, base string) {
+	dir := filepath.Join(base, "own")
+	mkdirExact(t, dir, 0o700)
+	if err := os.Chown(dir, nobodyUID, nobodyUID); err != nil {
+		t.Fatalf("chown %s: %v", dir, err)
+	}
+}
+
+// ownDir answers a directory the running uid owns: ownWorkspace's in the
+// child, a fresh temporary directory in an unprivileged suite.
+func ownDir(t *testing.T, base string) string {
+	t.Helper()
+	if base == "" {
+		return t.TempDir()
+	}
+	return filepath.Join(base, "own")
+}
+
+// closeDir sets dir to mode 0 and gives it back its mode at cleanup, so the
+// suite can remove what it holds.
+func closeDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatalf("chmod %s to 0: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+}
+
+// rootOwnedDir answers a directory root owns and the running uid can search:
+// the tree's base in the child, / in an unprivileged suite.
+func rootOwnedDir(base string) string {
+	if base == "" {
+		return "/"
+	}
+	return base
+}
+
+// linkedRoot makes dir at 0700 and opens a root on it through a symlink, so
+// the test can repoint the root's path while the root keeps dir.
+func linkedRoot(t *testing.T, dir string) (root *os.Root, link string) {
+	t.Helper()
+	mkdirExact(t, dir, 0o700)
+	link = dir + ".link"
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatalf("symlink %s: %v", link, err)
+	}
+	return openRootAt(t, link), link
+}
+
+func repoint(t *testing.T, link, target string) {
+	t.Helper()
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("remove %s: %v", link, err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink %s to %s: %v", link, target, err)
+	}
+}
+
 func openRootAt(t *testing.T, dir string) *os.Root {
 	t.Helper()
 	root, err := os.OpenRoot(dir)
@@ -306,31 +377,111 @@ func TestPrivateDir_AnswersAPermissionErrorForAParentItCannotRead(t *testing.T) 
 	rootDir, names := closedForeign(t, base)
 	foreign := filepath.Join(rootDir, names[0])
 
-	assertPermission := func(t *testing.T, call string, err error) {
-		t.Helper()
-		if !errors.Is(err, fs.ErrPermission) {
-			t.Errorf("%s = %v, want fs.ErrPermission", call, err)
-		}
-		if errors.Is(err, ErrNotOwned) || errors.Is(err, ErrParentNotSynced) {
-			t.Errorf("%s = %v, want neither ErrNotOwned nor ErrParentNotSynced", call, err)
-		}
-	}
 	t.Run("EnsurePrivateDir under a traverse-only parent", func(t *testing.T) {
 		dir := filepath.Join(traverseOnly, "credentials")
 		_, err := EnsurePrivateDir(dir)
-		assertPermission(t, "EnsurePrivateDir("+dir+")", err)
+		assertPlainPermission(t, "EnsurePrivateDir("+dir+")", err)
 	})
 	t.Run("EnsurePrivateDir under a closed foreign parent", func(t *testing.T) {
 		dir := filepath.Join(foreign, "credentials")
 		_, err := EnsurePrivateDir(dir)
-		assertPermission(t, "EnsurePrivateDir("+dir+")", err)
+		assertPlainPermission(t, "EnsurePrivateDir("+dir+")", err)
 	})
 	t.Run("CheckPrivateDir under a closed foreign parent", func(t *testing.T) {
 		dir := filepath.Join(foreign, "credentials")
-		assertPermission(t, "CheckPrivateDir("+dir+")", CheckPrivateDir(dir))
+		assertPlainPermission(t, "CheckPrivateDir("+dir+")", CheckPrivateDir(dir))
 	})
 	t.Run("CheckPrivateDirInRoot under a closed foreign parent", func(t *testing.T) {
 		name := filepath.Join(names[0], "credentials")
-		assertPermission(t, "CheckPrivateDirInRoot("+name+")", CheckPrivateDirInRoot(openRootAt(t, rootDir), name))
+		assertPlainPermission(t, "CheckPrivateDirInRoot("+name+")", CheckPrivateDirInRoot(openRootAt(t, rootDir), name))
+	})
+}
+
+// A directory the caller owns whose own mode shuts the caller out is one it
+// can repair, so it stays a permission error and never becomes ErrNotOwned.
+func TestPrivateDir_AnswersAPermissionErrorForAClosedDirItOwns(t *testing.T) {
+	base, ok := asNobody(t, ownWorkspace, nil)
+	if !ok {
+		return
+	}
+	own := ownDir(t, base)
+	closed := filepath.Join(own, "closed")
+	mkdirExact(t, closed, 0o700)
+	rootDir := filepath.Join(own, "root")
+	mkdirExact(t, rootDir, 0o700)
+	ownRoot := openRootAt(t, own)
+	closedRoot := openRootAt(t, rootDir)
+	closeDir(t, closed)
+	closeDir(t, rootDir)
+
+	t.Run("EnsurePrivateDir", func(t *testing.T) {
+		_, err := EnsurePrivateDir(closed)
+		assertPlainPermission(t, "EnsurePrivateDir("+closed+")", err)
+	})
+	t.Run("CheckPrivateDir", func(t *testing.T) {
+		assertPlainPermission(t, "CheckPrivateDir("+closed+")", CheckPrivateDir(closed))
+	})
+	t.Run("CheckPrivateDirInRoot on a child", func(t *testing.T) {
+		assertPlainPermission(t, "CheckPrivateDirInRoot("+own+", closed)", CheckPrivateDirInRoot(ownRoot, "closed"))
+	})
+	t.Run("CheckPrivateDirInRoot on its own directory", func(t *testing.T) {
+		assertPlainPermission(t, "CheckPrivateDirInRoot("+rootDir+", .)", CheckPrivateDirInRoot(closedRoot, "."))
+	})
+}
+
+// For "." on a root closed to the caller, the owner is that of the directory
+// the root's path names now, so a path repointed at another uid's directory
+// is labelled from that directory.
+func TestCheckPrivateDirInRoot_ReadsAClosedRootsOwnerFromItsPath(t *testing.T) {
+	base, ok := asNobody(t, ownWorkspace, nil)
+	if !ok {
+		return
+	}
+	dir := filepath.Join(ownDir(t, base), "mine")
+	root, link := linkedRoot(t, dir)
+	closeDir(t, dir)
+	repoint(t, link, rootOwnedDir(base))
+	assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."))
+}
+
+// A refused open is classified from a lookup taken after it, not from the
+// Lstat before it, so what changed in between names the refusal.
+func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing.T) {
+	setup := func(t *testing.T, base string) {
+		ownWorkspace(t, base)
+		dir := filepath.Join(base, "own", "turned")
+		mkdirExact(t, dir, 0o700)
+		if err := os.Chown(dir, nobodyUID, nobodyUID); err != nil {
+			t.Fatalf("chown %s: %v", dir, err)
+		}
+	}
+	between := func(base string) {
+		if err := os.Chown(filepath.Join(base, "own", "turned"), 0, 0); err != nil {
+			t.Errorf("chown turned to root: %v", err)
+		}
+	}
+	base, ok := asNobody(t, setup, between)
+	if !ok {
+		return
+	}
+	own := ownDir(t, base)
+
+	t.Run("its own directory closed and its path repointed", func(t *testing.T) {
+		dir := filepath.Join(own, "mine")
+		root, link := linkedRoot(t, dir)
+		withPinOpenHook(t, func(string) {
+			closeDir(t, dir)
+			repoint(t, link, rootOwnedDir(base))
+		})
+		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."))
+	})
+	if base == "" {
+		// Unprivileged, no directory can be handed to another uid.
+		return
+	}
+	t.Run("a child another uid took over", func(t *testing.T) {
+		root := openRootAt(t, own)
+		withPinOpenHook(t, func(string) { awaitParent(t) })
+		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+own+", turned)", CheckPrivateDirInRoot(root, "turned"))
 	})
 }
