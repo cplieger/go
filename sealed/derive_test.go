@@ -2,9 +2,12 @@ package sealed
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"regexp"
 	"testing"
 )
 
@@ -31,7 +34,8 @@ func TestHKDFEmptySalt(t *testing.T) {
 // TestKeyID checks that a key's id is the first 16 bytes of HKDF-SHA256 of
 // the key under the empty salt and info "sealed/key-id" (RFC 5869 §2.3),
 // in lowercase hex: against the ids an independent implementation computed
-// for the docs/format.md vectors, and against the RFC transcription.
+// for the docs/format.md vectors, and against the RFC transcription; and
+// that KeyIDs answers those ids for each kind of Sealer.
 func TestKeyID(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -71,6 +75,158 @@ func TestKeyID(t *testing.T) {
 			}
 		}
 	})
+	t.Run("KeyIDs", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			s    *Sealer
+			want KeyIDs
+		}{
+			{"New", New(k1), KeyIDs{Current: "70603bd36c8291d779397aa614e66b28"}},
+			{"two-key ring", ringSealer(t, k2, k1), KeyIDs{Current: "0681d8a548d4df142f5e9a3ab863e9ba", Previous: "70603bd36c8291d779397aa614e66b28"}},
+			{"zero", &Sealer{}, KeyIDs{}},
+			{"nil", nil, KeyIDs{}},
+			{"New of zero", New([32]byte{}), KeyIDs{}},
+		} {
+			if got := tc.s.KeyIDs(); got != tc.want {
+				t.Errorf("%s: KeyIDs = %+v, want %+v", tc.name, got, tc.want)
+			}
+		}
+		a, b := NewEphemeral().KeyIDs(), NewEphemeral().KeyIDs()
+		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(a.Current) || a.Previous != "" {
+			t.Errorf("NewEphemeral: KeyIDs = %+v, want one id of 32 lowercase hex", a)
+		}
+		if a.Current == b.Current {
+			t.Errorf("two NewEphemeral share the id %s", a.Current)
+		}
+	})
+}
+
+// TestSubkey checks Subkey against the RFC 5869 §2 transcription under
+// docs/format.md's info "sealed/subkey" NUL label, with the docs/format.md
+// vector OpenSSL computed: one key per label, derived from the current key,
+// the same at every call.
+func TestSubkey(t *testing.T) {
+	t.Run("vector", func(t *testing.T) {
+		got, err := New(k1).Subkey("example/cursor")
+		if err != nil {
+			t.Fatalf("Subkey: %v", err)
+		}
+		if want := fromHex("06a613c5bc49e3e6efd70c3b5f8bf403c9fb981197d71bfaca44446225db35f8"); !bytes.Equal(got[:], want) {
+			t.Errorf("Subkey = %x, want %x", got, want)
+		}
+	})
+	r := ringSealer(t, k2, k1)
+	seen := map[[32]byte]Label{}
+	for _, label := range []Label{"", "a", "a\x00", "b", "httpwire/cursor"} {
+		t.Run(fmt.Sprintf("%q", label), func(t *testing.T) {
+			got, err := r.Subkey(label)
+			if err != nil {
+				t.Fatalf("Subkey: %v", err)
+			}
+			if want := refHKDF(k2[:], nil, "sealed/subkey\x00"+string(label), keyLen); !bytes.Equal(got[:], want) {
+				t.Errorf("Subkey = %x, want the current key's %x", got, want)
+			}
+			if again, err := r.Subkey(label); err != nil || again != got {
+				t.Errorf("second Subkey = %x, %v; want %x", again, err, got)
+			}
+			if other, ok := seen[got]; ok {
+				t.Errorf("same Subkey as label %q", other)
+			}
+			seen[got] = label
+		})
+	}
+}
+
+// TestMAC checks MAC as HMAC-SHA256 (RFC 2104 §2) under the key of
+// docs/format.md's info "sealed/mac" NUL label (the RFC 5869
+// transcription), with the docs/format.md vector OpenSSL computed, and
+// VerifyMAC's answers: nil with current for its own tag, the previous
+// key's tag with current false, and ErrInvalid with current false for
+// every changed input (tags compared as crypto/hmac.Equal's docs say).
+func TestMAC(t *testing.T) {
+	s := New(k1)
+	t.Run("vector", func(t *testing.T) {
+		id, tag, err := s.MAC("example/manifest", []byte("example manifest"))
+		if err != nil {
+			t.Fatalf("MAC: %v", err)
+		}
+		if id != "70603bd36c8291d779397aa614e66b28" {
+			t.Errorf("key id = %s, want K1's", id)
+		}
+		if want := fromHex("90c989e51170bc63130b9888d84f37a7e962ede9ba867393c5b177351f10fa09"); !bytes.Equal(tag, want) {
+			t.Errorf("tag = %x, want %x", tag, want)
+		}
+	})
+	t.Run("transcription", func(t *testing.T) {
+		for _, label := range []Label{"", "x", "a\x00b", "snapshot/manifest"} {
+			_, tag, err := s.MAC(label, []byte("a manifest"))
+			if err != nil {
+				t.Fatalf("MAC: %v", err)
+			}
+			h := hmac.New(sha256.New, refHKDF(k1[:], nil, "sealed/mac\x00"+string(label), keyLen))
+			h.Write([]byte("a manifest"))
+			if want := h.Sum(nil); !bytes.Equal(tag, want) {
+				t.Errorf("label %q: tag = %x, want %x", label, tag, want)
+			}
+		}
+	})
+	const label Label = "example/manifest"
+	msg := []byte("a manifest")
+	id, tag, err := s.MAC(label, msg)
+	if err != nil {
+		t.Fatalf("MAC: %v", err)
+	}
+	t.Run("verifies", func(t *testing.T) {
+		if current, err := s.VerifyMAC(label, msg, id, tag); err != nil || !current {
+			t.Errorf("VerifyMAC = %v, %v; want true, nil", current, err)
+		}
+	})
+	t.Run("previous key", func(t *testing.T) {
+		r := ringSealer(t, k2, k1)
+		if current, err := r.VerifyMAC(label, msg, id, tag); err != nil || current {
+			t.Errorf("previous key's tag: %v, %v; want false, nil", current, err)
+		}
+		gotID, gotTag, err := r.MAC(label, msg)
+		if err != nil {
+			t.Fatalf("MAC: %v", err)
+		}
+		wantID, wantTag, err := New(k2).MAC(label, msg)
+		if err != nil {
+			t.Fatalf("MAC: %v", err)
+		}
+		if gotID != wantID || !bytes.Equal(gotTag, wantTag) {
+			t.Errorf("ring MAC = %s %x, want the current key's %s %x", gotID, gotTag, wantID, wantTag)
+		}
+	})
+	flipped := bytes.Clone(tag)
+	flipped[31] ^= 0x80
+	otherID, otherTag, err := New(k2).MAC(label, msg)
+	if err != nil {
+		t.Fatalf("MAC: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		label Label
+		msg   []byte
+		id    string
+		tag   []byte
+	}{
+		{"changed message", label, []byte("a manifesT"), id, tag},
+		{"other label", "example/other", msg, id, tag},
+		{"changed tag", label, msg, id, flipped},
+		{"31-byte tag", label, msg, id, tag[:31]},
+		{"33-byte tag", label, msg, id, append(bytes.Clone(tag), 0)},
+		{"empty tag", label, msg, id, nil},
+		{"unknown id", label, msg, otherID, tag},
+		{"unknown key's own tag", label, msg, otherID, otherTag},
+		{"empty id", label, msg, "", tag},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if current, err := s.VerifyMAC(tc.label, tc.msg, tc.id, tc.tag); !errors.Is(err, ErrInvalid) || current {
+				t.Errorf("VerifyMAC = %v, %v; want false, ErrInvalid", current, err)
+			}
+		})
+	}
 }
 
 // TestDerivationSeparation checks the info strings of docs/format.md's
