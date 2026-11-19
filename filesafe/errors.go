@@ -60,6 +60,10 @@ var (
 	// error: by EnforceMode, by a write or probe under WithMode or
 	// WithMkdirMode, and by EnsurePrivateDir. Match with errors.Is.
 	ErrModeNotStored = errors.New("filesafe: filesystem did not store the requested mode")
+	// ErrParentNotSynced is returned by EnsurePrivateDir when dir's parent
+	// could not be fsynced; unlike its other errors, a retry is safe
+	// (PrivateDirResult). Match with errors.Is.
+	ErrParentNotSynced = errors.New("filesafe: parent directory not synced")
 	// ErrAborted is returned by PendingFile.Commit when the pending file was
 	// already aborted by a prior Cleanup or Close.
 	ErrAborted = errors.New("filesafe: pending file aborted")

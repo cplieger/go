@@ -47,6 +47,8 @@ A caller that needs strict durability treats `Durable == false` as a failure to 
 
 `WithMkdirMode` and `WithMkdirAll` are covered by the same guarantee. Each directory the write creates has its own parent synced as it is made, except on Windows, which has no directory sync: there the write's flush of the published file stands for it on local NTFS, and `Result.Durable` is false on the volumes listed above. A directory entry that was never synced into its parent can vanish in a crash and take the whole subtree with it, including a file that was itself synced and renamed. On Linux and macOS a write that creates three directory levels therefore syncs four directories, and `Result.Durable` is false if any of those syncs failed. A level another writer created between the write's check and its own `mkdir` is synced too on the absolute-path writes; the `*InRoot` writes sync only the levels they create.
 
+`EnsurePrivateDir` syncs the parent of its directory on every call, whether it created the directory or found it, so a file a write reports as durable inside that directory does not vanish with it. A failed sync returns `ErrParentNotSynced`, which is safe to retry.
+
 ## Concurrent writers
 
 Each write stages its own temp file under a random name, created exclusively. Two writers on one path each publish a whole file, and the last rename wins. The package takes no lock, so a caller that must not lose an update coordinates its writers itself.
@@ -67,6 +69,7 @@ Every error matches with `errors.Is` or `errors.As`.
 | `ErrNotDirectory` | `EnsurePrivateDir` found a file, FIFO, device node or socket at the name, or `OpenParentInRoot` found one in an ancestor's place |
 | `ErrNotOwned` | `EnsurePrivateDir` found a directory not owned by the effective user, or could not tell |
 | `ErrModeTooOpen` | `EnsurePrivateDir` found a pre-existing directory with group or other access, and no repair was asked for |
+| `ErrParentNotSynced` | `EnsurePrivateDir` could not open or fsync the parent of the directory after every check passed. A directory the call created is removed again while it is still empty; one it found, or one another writer has already filled, stays, and the error also carries any removal failure. Safe to retry, unlike the other `EnsurePrivateDir` errors |
 | `ErrModeNotStored` | `EnforceMode`, or a write or probe under `WithMode` or `WithMkdirMode`, found the filesystem stored a different mode than asked. A directory level refused this way is removed again while it is still an empty directory, so a retry fails the same way; one another writer has already filled stays, and the error also carries the removal failure |
 | `ErrAborted` | `PendingFile.Commit` was called after `Cleanup` or `Close` aborted the write |
 | `ErrFileBusy` | Windows only. Another handle refused the replace on every retry, or the context ended while waiting to retry. It arrives inside a `*WriteError` with `PhaseRename`, wrapping the last `syscall.Errno`: a sharing or lock violation means a handle held the file, and access denied is either such a handle or an ACL refusal |

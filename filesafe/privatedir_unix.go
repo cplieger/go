@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -18,6 +19,17 @@ const privateDirMode os.FileMode = 0o700
 // created the directory and before it opens it, the point where a
 // filesystem that ignores the requested mode has already stored its own.
 var privateDirCreatedHook func(dir string)
+
+// fsyncDir opens dir as a directory and fsyncs it. It is a package var so
+// tests can record the sync and inject a failure.
+var fsyncDir = func(dir string) error {
+	d, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
 
 // ensurePrivateDir is EnsurePrivateDir after path validation; the sequence
 // and every refusal are documented there.
@@ -42,6 +54,9 @@ func ensurePrivateDir(clean string, c *cfg) (PrivateDirResult, error) {
 	found := chmodBits(fi.Mode())
 	if !created {
 		if found&0o077 == 0 {
+			if err := syncParent(clean, false); err != nil {
+				return PrivateDirResult{}, err
+			}
 			return PrivateDirResult{Mode: found}, nil
 		}
 		// The euid-ownership check above already proved this directory is
@@ -59,6 +74,9 @@ func ensurePrivateDir(clean string, c *cfg) (PrivateDirResult, error) {
 		}
 		c.logger.Warn("filesafe: pre-existing directory was not private; repaired",
 			"dir", clean, "requested", privateDirMode.String(), "found", found.String())
+		if err := syncParent(clean, false); err != nil {
+			return PrivateDirResult{}, err
+		}
 		return PrivateDirResult{Mode: stored, Repaired: true}, nil
 	}
 
@@ -71,7 +89,29 @@ func ensurePrivateDir(clean string, c *cfg) (PrivateDirResult, error) {
 		c.logger.Warn("filesafe: created directory did not keep the requested mode; repaired",
 			"dir", clean, "requested", privateDirMode.String(), "stored", found.String())
 	}
+	if err := syncParent(clean, true); err != nil {
+		return PrivateDirResult{}, err
+	}
 	return PrivateDirResult{Mode: stored, Created: true, Repaired: repaired}, nil
+}
+
+// syncParent fsyncs dir's parent. On failure it removes a dir this call
+// created with rmdir(2), which removes only an empty directory and never a
+// file or link swapped in at the name.
+func syncParent(dir string, created bool) error {
+	parent := filepath.Dir(dir)
+	err := fsyncDir(parent)
+	if err == nil {
+		return nil
+	}
+	if !created {
+		return fmt.Errorf("%w: %s (%s found; left in place): %w", ErrParentNotSynced, parent, dir, err)
+	}
+	if rmErr := syscall.Rmdir(dir); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %s (%s created; not removed): %w", ErrParentNotSynced, parent, dir,
+			errors.Join(err, fmt.Errorf("filesafe: removing %s: %w", dir, rmErr)))
+	}
+	return fmt.Errorf("%w: %s (%s created; removed again): %w", ErrParentNotSynced, parent, dir, err)
 }
 
 // mkdirPrivate creates dir at 0700 and reports whether THIS call created

@@ -27,6 +27,7 @@ A mode passed to `mkdir(2)` or `open(2)` is a request, not a result. The umask n
 - It reads the owner from the open handle and requires the effective uid, or returns `ErrNotOwned`. A 0700 directory owned by another user passes every mode check, and its owner can still replace it after the verdict returns.
 - When this call created the directory, it runs `EnforceMode` to 0700. That repairs an ACL that widened the mode, and it is safe because no other writer has ever held that name.
 - When the directory already existed, its mode is left unchanged by default, and the call returns `ErrModeTooOpen` if any group or other bit is set. Repairing a directory another user made would take over their name and hand them whatever is written under it.
+- Once every check has passed, it fsyncs the parent of `dir`, whether this call created `dir` or found it, because another process may have created `dir` a moment earlier and not synced it yet. Without that sync, `dir` and every file in it can vanish in a power loss. Opening the parent for the sync needs read access to it, so a parent the effective user can only traverse fails here.
 
 `WithRepairOwnedDir(true)` repairs a pre-existing directory instead of refusing it, because the ownership check has already proved it belongs to the caller. It is not the default, because a wide mode on a directory you own can be deliberate.
 
@@ -38,12 +39,12 @@ type PrivateDirResult struct {
 }
 ```
 
-The result is meaningful only beside a nil error. A non-nil error can follow a successful `mkdir`, so the directory may exist while its ownership is unproven. Treat that as fatal rather than retrying into it.
+The result is meaningful only beside a nil error. A non-nil error can follow a successful `mkdir`, so the directory may exist while its ownership is unproven. Treat that as fatal rather than retrying into it, except `ErrParentNotSynced`: the parent sync failed after every check passed. A directory the call created is then removed again while it is still empty, and a directory it found is left, so a retry creates or finds it and syncs again.
 
 `WithLogger` sets the logger for the one `Warn` a repair emits, since a filesystem that ignores mode requests affects every other `mkdir` in the program too. `EnsurePrivateDir` takes only these two options, so a write option passed to it does not compile, and the mode is not a parameter.
 
 ## One level per call
 
-`EnsurePrivateDir` does not create, inspect or vouch for the parent of `dir`. For a path of several levels, loop over the levels yourself, outermost first, because only the caller knows which levels are its own.
+`EnsurePrivateDir` does not create, inspect or vouch for the parent of `dir`. It opens the parent only to sync it. For a path of several levels, loop over the levels yourself, outermost first, because only the caller knows which levels are its own.
 
 The verdict holds at one point in time. It proves what was true of one directory while a handle was open on it, and the handle is closed before the call returns. A later `ReadDir`, `Remove`, `Open` or `Mkdir` through the pathname resolves every component again and reopens the window the check closed. To keep that window closed, hold the directory open as an `*os.Root` for its whole lifetime and act on the names inside it.

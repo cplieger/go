@@ -9,10 +9,10 @@ import (
 // PrivateDirResult reports the outcome of one EnsurePrivateDir call.
 //
 // Only meaningful alongside a nil error: a non-nil error means no verdict
-// was reached, which is NOT "nothing happened" — the mkdir may have
-// succeeded and a later step refused the result, so the directory can exist
-// while its custody is unestablished. Treat a failure as fatal; do not
-// retry into it.
+// was reached, not "nothing happened", since the mkdir may have succeeded
+// before a later step refused the result. Treat a failure as fatal, except
+// ErrParentNotSynced, which a caller may retry: a directory the call created
+// was removed again while still empty, and a found one was left.
 type PrivateDirResult struct {
 	// Mode is the mode the filesystem actually stored, read back from the
 	// open handle (permission bits plus setuid/setgid/sticky). Always 0700
@@ -74,13 +74,13 @@ func chmodBits(m os.FileMode) os.FileMode {
 }
 
 // EnsurePrivateDir creates the one absolute directory level dir at 0700 if
-// absent, then proves from an open handle that it is a directory owned by
-// the effective uid with no group or other access; dir's parent is not
-// checked, and the verdict holds at one point in time (docs/file-modes.md).
-// A pre-existing too-open directory is ErrModeTooOpen unless
-// WithRepairOwnedDir; other refusals are ErrEmptyPath, ErrUnsafePath,
-// ErrSymlinkTarget, ErrNotDirectory, ErrNotOwned and ErrModeNotStored (match
-// with errors.Is). On Windows a valid dir returns ErrModeUnsupported.
+// absent, proves from an open handle that it is a directory owned by the
+// effective uid with no group or other access, then fsyncs dir's parent,
+// which it must be able to read but does not check; the verdict holds at one
+// point in time (docs/file-modes.md). Refusals (errors.Is): ErrModeTooOpen
+// unless WithRepairOwnedDir, ErrEmptyPath, ErrUnsafePath, ErrSymlinkTarget,
+// ErrNotDirectory, ErrNotOwned, ErrModeNotStored, and ErrParentNotSynced,
+// the one worth a retry. On Windows a valid dir returns ErrModeUnsupported.
 func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, error) {
 	c := buildPrivateDirCfg(opts)
 	clean, err := validateAbsClean(dir)

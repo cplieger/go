@@ -110,7 +110,7 @@ Without `WithMode`, filesafe sets no mode. The file is created the way `os.Creat
 
 Pass `WithMode` for any file whose readers must be restricted, such as credentials, configuration and backups. The payload is staged in a file proven owner-only, the final file is proven to hold the mode, and a filesystem that stores anything else fails the write with `ErrModeNotStored`.
 
-`WithMkdirMode` creates missing parent directories at a mode it also proves, and `WithMkdirAll(true)` creates them as `os.MkdirAll` does, proving nothing. `EnsurePrivateDir` sets up one directory level that only the effective user may enter. [File modes and private directories](docs/file-modes.md) explains both.
+`WithMkdirMode` creates missing parent directories at a mode it also proves, and `WithMkdirAll(true)` creates them as `os.MkdirAll` does, proving nothing. `EnsurePrivateDir` sets up one directory level that only the effective user may enter, synced into its parent so it survives a power loss. [File modes and private directories](docs/file-modes.md) explains both.
 
 ## Windows
 
