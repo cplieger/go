@@ -1,6 +1,7 @@
 const codes = [
   "accounts_unavailable",
   "bad_body",
+  "bad_header",
   "bad_query",
   "bad_request",
   "body_too_large",
@@ -22,6 +23,7 @@ const codes = [
   "maintenance",
   "method_not_allowed",
   "not_found",
+  "outcome_unknown",
   "person_required",
   "precondition_failed",
   "rate_limited",

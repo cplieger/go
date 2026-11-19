@@ -33,7 +33,7 @@ export interface ErrorEnvelope {
 }
 
 // The bounds the Go writer and DecodeEnvelope hold too; string lengths are UTF-8 bytes.
-const MAX_STRING = 4096;
+export const MAX_STRING = 4096;
 const MAX_REASON = 64;
 const MAX_FIELDS = 100;
 const MAX_UPSTREAM_MESSAGE = 512;
@@ -43,7 +43,7 @@ const utf8 = new TextEncoder();
 
 type Members = Readonly<Record<string, unknown>>;
 
-function isObject(v: unknown): v is Members {
+export function isObject(v: unknown): v is Members {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -56,7 +56,7 @@ function str(o: Members, name: string, limit: number): string | undefined {
   return typeof v === "string" && utf8.encode(v).length <= limit ? v : undefined;
 }
 
-function code(o: Members, name: string, limit: number): string | undefined {
+export function code(o: Members, name: string, limit: number): string | undefined {
   const v = str(o, name, limit);
   return v !== undefined && CODE.test(v) ? v : undefined;
 }
@@ -89,7 +89,7 @@ function decodeFields(v: unknown): FieldError[] | undefined {
   return out;
 }
 
-function decodeUpstream(v: unknown): ErrorEnvelope["upstream"] {
+export function decodeUpstream(v: unknown): ErrorEnvelope["upstream"] {
   if (!isObject(v)) {
     return undefined;
   }
