@@ -254,34 +254,60 @@ func TestCoalescingRules(t *testing.T) {
 			})
 		})
 
+		// openSlow opens a rig whose refresh kind takes the slot and whose Run
+		// takes ten seconds to return once stopped, and cancels the running job
+		// of a queued follow-up.
+		openSlow := func(t *testing.T, slot string) (r *rig, running, follow scheduler.Started) {
+			t.Helper()
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			slow := kinds()[0]
+			slow.Slot = slot
+			slow.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+				base.log.add(run.Job())
+				if gate := run.Job().Payload.Gate; gate != nil {
+					select {
+					case <-gate:
+					case <-ctx.Done():
+						time.Sleep(10 * time.Second) // a Run that takes a while to return
+					}
+				}
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r = base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{slow}})
+			gate := make(chan struct{})
+			t.Cleanup(func() { close(gate) })
+			running, follow = queue(t, r, gate)
+			if stopping, err := r.ex.Cancel(t.Context(), running.Job); !stopping || err != nil {
+				t.Fatalf("Cancel(running) = (%t, %v), want (true, nil)", stopping, err)
+			}
+			synctest.Wait()
+			return r, running, follow
+		}
+
 		t.Run("cancel the running job", func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				base := &rig{store: memrecords.New(), log: &runLog{}}
-				slow := kinds()[0]
-				slow.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
-					base.log.add(run.Job())
-					if gate := run.Job().Payload.Gate; gate != nil {
-						select {
-						case <-gate:
-						case <-ctx.Done():
-							time.Sleep(10 * time.Second) // a Run that takes a while to return
-						}
-					}
-					return scheduler.End{Result: scheduler.ResultOK}
-				}
-				r := base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{slow}})
-				gate := make(chan struct{})
-				defer close(gate)
-				running, follow := queue(t, r, gate)
-				if stopping, err := r.ex.Cancel(t.Context(), running.Job); !stopping || err != nil {
-					t.Fatalf("Cancel(running) = (%t, %v), want (true, nil)", stopping, err)
-				}
-				synctest.Wait()
+				r, running, follow := openSlow(t, "")
 				if !r.log.ran(follow.Job) {
 					t.Errorf("the follow-up did not start once the cancel stopped %s, want it running", running.Job)
 				}
 				time.Sleep(10 * time.Second)
 				synctest.Wait()
+				r.wantEnd(t, running.Job, scheduler.ResultCancelled)
+				r.wantEnd(t, follow.Job, scheduler.ResultOK)
+			})
+		})
+
+		t.Run("cancel the running job on a named slot", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r, running, follow := openSlow(t, "net")
+				if r.log.ran(follow.Job) {
+					t.Errorf("the follow-up started while the stopped %s still holds the slot, want it queued until that Run returns", running.Job)
+				}
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				if !r.log.ran(follow.Job) {
+					t.Errorf("the follow-up did not start once the stopped %s returned, want it running", running.Job)
+				}
 				r.wantEnd(t, running.Job, scheduler.ResultCancelled)
 				r.wantEnd(t, follow.Job, scheduler.ResultOK)
 			})
