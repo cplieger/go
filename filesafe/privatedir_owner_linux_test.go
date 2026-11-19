@@ -486,6 +486,32 @@ func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing
 	})
 }
 
+// A refused open of a name swapped since its Lstat is ErrRaced, the refusal a
+// retry can cure, even when the open's errno is a permission error.
+func TestCheckPrivateDirInRoot_AnswersErrRacedForANameSwappedBeforeARefusedOpen(t *testing.T) {
+	base, ok := asNobody(t, ownWorkspace, nil)
+	if !ok {
+		return
+	}
+	own := ownDir(t, base)
+	dir := filepath.Join(own, "swapped")
+	moved := filepath.Join(own, "swapped-away")
+	for _, d := range []string{dir, moved} {
+		t.Cleanup(func() { _ = os.RemoveAll(d) })
+		t.Cleanup(func() { _ = os.Chmod(d, 0o700) })
+	}
+	mkdirExact(t, dir, 0)
+	root := openRootAt(t, own)
+	withPinOpenHook(t, func(string) {
+		mustRename(t, dir, moved)
+		mkdirExact(t, dir, 0)
+	})
+	err := CheckPrivateDirInRoot(root, "swapped")
+	if !errors.Is(err, ErrRaced) || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("CheckPrivateDirInRoot(%s, swapped) = %v, want ErrRaced wrapping fs.ErrPermission", own, err)
+	}
+}
+
 // A closed root whose directory moved off its path can only be refused: the
 // path then names nothing, or a directory the root does not hold, and neither
 // can turn the refusal into a pass.
