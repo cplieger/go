@@ -756,11 +756,11 @@ type leaseCtxKey struct{}
 // TestLeaseAnswers checks, through the acquireLease seam, how OpenKeyFile
 // and a keyless Create answer each error filesafe's AcquireLease and
 // ErrLeaseHeld godoc name: ErrLeaseHeld is ErrKeyFileInUse; each refusal
-// ErrUnsafeKeyFile; a bare context error, ErrModeNotStored, ENOLCK and
-// fs.ErrNotExist are themselves, the last a missing key file to OpenKeyFile
-// once the key file is gone too; a wait Close ended is fs.ErrClosed
-// (context.Cause). Each call gets a context of the caller's and
-// path+".lock", and each error names the file.
+// ErrUnsafeKeyFile; a bare context error, ErrModeNotStored, ENOLCK, ErrRaced
+// and fs.ErrNotExist are themselves, the last a missing key file to
+// OpenKeyFile once the key file is gone too; a wait Close ended is
+// fs.ErrClosed (context.Cause). Each call gets a context of the caller's
+// and path+".lock", and each error names the file.
 func TestLeaseAnswers(t *testing.T) {
 	text := keyFileText(t, "one key")
 	cases := []struct {
@@ -796,6 +796,9 @@ func TestLeaseAnswers(t *testing.T) {
 		{"lock path missing", func(p string) error {
 			return &fs.PathError{Op: "open", Path: p, Err: syscall.ENOENT}
 		}, []error{fs.ErrNotExist}, []error{ErrUnsafeKeyFile, ErrKeyFileInUse}},
+		{"lock file replaced until ctx ended", func(p string) error {
+			return fmt.Errorf("%w: %w", fmt.Errorf("%w: %s", filesafe.ErrRaced, p), context.DeadlineExceeded)
+		}, []error{filesafe.ErrRaced, context.DeadlineExceeded}, []error{ErrKeyFileInUse, ErrUnsafeKeyFile}},
 	}
 	stub := func(t *testing.T, lockPath string, answer func(string) error) {
 		stubAcquireLease(t, func(ctx context.Context, got string) (*filesafe.Lease, error) {
@@ -845,6 +848,9 @@ func TestLeaseAnswers(t *testing.T) {
 		}},
 		{"not regular", func(_ context.Context, p string) error {
 			return &filesafe.NotRegularError{Name: p, Mode: fs.ModeDir | 0o700}
+		}},
+		{"lock file replaced", func(ctx context.Context, p string) error {
+			return fmt.Errorf("%w: %w", fmt.Errorf("%w: %s", filesafe.ErrRaced, p), ctx.Err())
 		}},
 	}
 	for _, tc := range closeEnded {

@@ -831,27 +831,58 @@ func TestCloseDuringWrite(t *testing.T) {
 }
 
 // parentNotSynced is EnsurePrivateDir's answer when dir's parent could not
-// be fsynced.
+// be fsynced, dir left in place.
 func parentNotSynced(dir string) error {
 	return fmt.Errorf("%w: %s: %w", filesafe.ErrParentNotSynced, dir, syscall.EIO)
+}
+
+// parentUnreadable is EnsurePrivateDir's answer when dir's parent can be
+// traversed but not read, so no sync can open it.
+func parentUnreadable(dir string) error {
+	parent := filepath.Dir(dir)
+	return fmt.Errorf("filesafe: parent %s is not readable by the effective uid (%s left in place): %w",
+		parent, dir, &fs.PathError{Op: "open", Path: parent, Err: syscall.EACCES})
 }
 
 // TestCreateDirNotDurable checks Create through the ensurePrivateDir seam
 // against filesafe's PrivateDirResult and ErrParentNotSynced docs (a
 // directory entry never synced into its parent "can vanish in a crash",
-// docs/durability.md, and a caller may retry): a failed parent sync is
-// ErrNotDurable and writes no key; a KeyFile holding its uninstalled write
-// keeps the lease and the record while its lock file is the one at the
-// path, or the check cannot tell, and drops both once it is not.
+// docs/durability.md; a caller may retry, and the directory is left): a
+// failed parent sync is ErrNotDurable, an unreadable parent fs.ErrPermission,
+// and neither writes a key; a KeyFile holding its uninstalled write keeps
+// the lease and the record while its lock file is the one at the path, or
+// the check cannot tell, and drops both once it is not.
 func TestCreateDirNotDurable(t *testing.T) {
 	keyDir := func(t *testing.T) (dir, path string) {
 		dir = filepath.Join(privateDir(t), "keys")
 		return dir, filepath.Join(dir, "sealing.key")
 	}
-	for _, found := range []bool{false, true} {
-		t.Run(fmt.Sprint("from keyless, directory found ", found), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		found  bool
+		answer func(dir string) error
+		is     []error
+		isNot  []error
+	}{
+		{
+			"parent sync failed, directory made", false, parentNotSynced,
+			[]error{ErrNotDurable, filesafe.ErrParentNotSynced},
+			[]error{ErrKeyExists},
+		},
+		{
+			"parent sync failed, directory found", true, parentNotSynced,
+			[]error{ErrNotDurable, filesafe.ErrParentNotSynced},
+			[]error{ErrKeyExists},
+		},
+		{
+			"parent unreadable", false, parentUnreadable,
+			[]error{fs.ErrPermission},
+			[]error{ErrNotDurable, ErrUnsafeKeyFile, ErrKeyExists},
+		},
+	} {
+		t.Run("from keyless, "+tc.name, func(t *testing.T) {
 			dir, path := keyDir(t)
-			if found {
+			if tc.found {
 				if err := os.Mkdir(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -859,19 +890,23 @@ func TestCreateDirNotDurable(t *testing.T) {
 			f := openKeyless(t, path)
 			failing := true
 			stubEnsurePrivateDir(t, func(d string, opts ...filesafe.PrivateDirOption) (filesafe.PrivateDirResult, error) {
-				if failing {
-					return filesafe.PrivateDirResult{}, parentNotSynced(d)
+				if !failing {
+					return filesafe.EnsurePrivateDir(d, opts...)
 				}
-				return filesafe.EnsurePrivateDir(d, opts...)
+				// filesafe leaves the directory, made or found, on both answers.
+				if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+					t.Errorf("mkdir: %v", err)
+				}
+				return filesafe.PrivateDirResult{}, tc.answer(d)
 			})
-			checkErr(t, f.Create(t.Context()), dir, []error{ErrNotDurable, filesafe.ErrParentNotSynced}, []error{ErrKeyExists})
+			checkErr(t, f.Create(t.Context()), dir, tc.is, tc.isNot)
 			checkNoWrite(t, f, path)
 			if _, err := os.Lstat(path + lockSuffix); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("Lstat(the lock file) = %v; want no lease taken", err)
 			}
 			failing = false
 			if err := f.Create(t.Context()); err != nil {
-				t.Fatalf("Create with the sync healthy: %v", err)
+				t.Fatalf("Create once the directory is healthy: %v", err)
 			}
 		})
 	}
@@ -896,6 +931,7 @@ func TestCreateDirNotDurable(t *testing.T) {
 			return fmt.Errorf("%w: %s (mode 0750)", filesafe.ErrModeTooOpen, dir)
 		}, []error{ErrUnsafeKeyFile, filesafe.ErrModeTooOpen}},
 		{"parent sync failed", parentNotSynced, []error{ErrNotDurable, filesafe.ErrParentNotSynced}},
+		{"parent unreadable", parentUnreadable, []error{fs.ErrPermission}},
 	} {
 		t.Run("from keyless, written, "+tc.name, func(t *testing.T) {
 			dir, path := keyDir(t)
