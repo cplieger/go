@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// Start admits j, writing its record (a batch's with one queued line per item) before
-// it is queued. A stored record holding j's Key, its owner's held proposal of its
-// scope, a queued job of its scope or one covering it, or a running one of its scope
-// inside Fresh, of a proposing kind or serving a timer request, answers it instead
-// (Joined). A Hold(all) or shutdown opened during the write ends the job interrupted.
-// Errors: *RecentError; ErrQueueFull past a bound (the record ended skipped,
-// queue_full) or in a Hold(all) or after shutdown (no record); ErrStoreUnavailable or
-// ctx's error; ErrBatchSize, ErrUnknownKind, ErrScope.
+// Start admits j, writing its record (a batch's: one queued line per item)
+// before queueing it. j joins a stored record with its Key, its owner's held
+// proposal of its scope, a queued job of its scope or covering it, or a
+// running one of its scope inside Fresh, for a timer request or of a proposing
+// kind, yielded too (Joined). A Hold(all) or shutdown during the write ends it
+// interrupted. Errors: *RecentError; ErrQueueFull past a bound (record ended
+// skipped, queue_full) or in a Hold(all) or after shutdown (no record);
+// ErrStoreUnavailable, ctx's error, ErrBatchSize, ErrUnknownKind, ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
