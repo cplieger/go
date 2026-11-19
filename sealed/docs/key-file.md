@@ -78,7 +78,7 @@ An error from a done context wraps the context's error. A key-file error names t
 
 ## Systems
 
-A key file works on Linux. It also runs, untested, on macOS, DragonFly BSD, FreeBSD, NetBSD, OpenBSD and illumos, which have file owners, modes and `flock(2)`. Windows, AIX and Solaris refuse a key file with an error matching both `ErrUnsafeKeyFile` and `filesafe.ErrModeUnsupported`. The module cannot check owners and modes or take the lease there. `New`, `NewEphemeral` and every `Sealer` call work on all of them. js, wasip1 and Plan 9 are unsupported, since filesafe does not build there.
+A key file works on Linux and macOS, which CI tests. It also runs, untested, on DragonFly BSD, FreeBSD, NetBSD, OpenBSD and illumos, which have file owners, modes and `flock(2)`. Windows, AIX and Solaris refuse a key file with an error matching both `ErrUnsafeKeyFile` and `filesafe.ErrModeUnsupported`, and CI tests that refusal on Windows. The module cannot check owners and modes or take the lease there. `New`, `NewEphemeral` and every `Sealer` call work on all of them. js, wasip1 and Plan 9 are unsupported, since filesafe does not build there.
 
 ## Backup and restore
 
