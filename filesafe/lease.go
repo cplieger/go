@@ -35,12 +35,12 @@ type Lease struct {
 
 // AcquireLease takes an exclusive lease on the lock file at the absolute
 // path, creating it at 0600 when absent (never a directory, never removed),
-// retrying every 50 ms until it is free or ctx is done. A done ctx opens
-// nothing and returns ctx.Err(). ctx ending wraps ctx.Err() in ErrLeaseHeld
-// when another holder had the lease, or in ErrRaced when the lock file was
-// last found replaced. Before locking it refuses a bad path, a symlink
-// (ErrSymlinkTarget), ErrNotRegular, ErrNotOwned, ErrModeTooOpen and a
-// created file whose 0600 was not stored (ErrModeNotStored).
+// retrying every 50 ms until it is free or ctx is done. No attempt starts
+// once ctx is done, and a ctx done at the call returns ctx.Err(). A wait ctx
+// ends wraps ctx.Err() in ErrLeaseHeld, or in ErrRaced when the lock file
+// was last found replaced. It refuses a bad path, a symlink
+// (ErrSymlinkTarget), ErrNotRegular, ErrNotOwned, ErrModeTooOpen and, for a
+// created file lacking 0600, ErrModeNotStored.
 func AcquireLease(ctx context.Context, path string) (*Lease, error) {
 	return acquireLease(ctx, path, false)
 }
@@ -86,13 +86,21 @@ func acquireLease(ctx context.Context, path string, shared bool) (*Lease, error)
 		}
 		select {
 		case <-ctx.Done():
-			if errors.Is(err, ErrRaced) {
-				return nil, fmt.Errorf("%w: %w", err, ctx.Err())
-			}
-			return nil, fmt.Errorf("%w: %s: %w", ErrLeaseHeld, clean, ctx.Err())
 		case <-ticker.C:
 		}
+		if ctx.Err() != nil {
+			return nil, waitEnded(ctx, clean, err)
+		}
 	}
+}
+
+// waitEnded is the answer when ctx ends a wait whose last attempt failed
+// with last: ErrRaced when the lock file was replaced, else ErrLeaseHeld.
+func waitEnded(ctx context.Context, clean string, last error) error {
+	if errors.Is(last, ErrRaced) {
+		return fmt.Errorf("%w: %w", last, ctx.Err())
+	}
+	return fmt.Errorf("%w: %s: %w", ErrLeaseHeld, clean, ctx.Err())
 }
 
 func tryLease(path string, shared bool) (*Lease, error) {

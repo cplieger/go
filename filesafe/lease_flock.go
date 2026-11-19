@@ -115,10 +115,11 @@ func createLockTemp(dir string) (*os.File, string, error) {
 	}
 }
 
-// lockOpenRefusal names a refused lock-file open by what lstat finds at
-// name, since kernels pick different errnos (ELOOP, EMLINK or EFTYPE for a
-// link, EISDIR for a directory, EACCES for another user's file). A name
-// swapped after the failed open can only mislabel the error.
+// lockOpenRefusal names a refused lock-file open as noFollowRefusal does:
+// ELOOP, an ancestor loop included, is ErrSymlinkTarget, and any other errno
+// is named by what lstat finds at name (EMLINK or EFTYPE for a link, EISDIR
+// for a directory, EACCES for another user's file). A name swapped after the
+// failed open can only mislabel the error.
 func lockOpenRefusal(err error, name string) error {
 	if errors.Is(err, syscall.ELOOP) {
 		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, name, err)

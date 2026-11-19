@@ -15,7 +15,7 @@ filesafe is built for Go services that keep state, configuration or credentials 
 - `WithMode` proves the mode the filesystem stored, so a filesystem that widens a 0600 request fails the write instead of publishing a readable file. It is not available on Windows.
 - The `*InRoot` functions run through an `*os.Root`, so a symlink or `..` in a name cannot leave the directory tree.
 - Writes refuse a symlink, FIFO, socket or device node at the target path.
-- A lease lets one process at a time update a file, on a local filesystem, NFS or SMB, and frees itself when its holder exits. It is not available on Windows.
+- A lease lets one process at a time update a file, on a local filesystem, NFS or SMB (see [Leases](docs/leases.md) for the mount options), and frees itself when its holder exits. It is not available on Windows.
 
 Consider [google/renameio](https://github.com/google/renameio) if you also need to replace a symbolic link atomically.
 

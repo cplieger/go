@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -659,6 +660,17 @@ func TestAcquireLease_RejectsBadPaths(t *testing.T) {
 					}
 				})
 			}
+			t.Run("symlink loop in an ancestor", func(t *testing.T) {
+				loop := filepath.Join(t.TempDir(), "loop")
+				if err := os.Symlink(loop, loop); err != nil {
+					t.Fatalf("make a self-referential symlink: %v", err)
+				}
+				l, err := form.take(t.Context(), filepath.Join(loop, "app.lock"))
+				if !errors.Is(err, ErrSymlinkTarget) || !errors.Is(err, syscall.ELOOP) {
+					_ = closeIfLease(l)
+					t.Errorf("err = %v, want ErrSymlinkTarget wrapping ELOOP", err)
+				}
+			})
 			t.Run("missing parent", func(t *testing.T) {
 				parent := filepath.Join(t.TempDir(), "missing")
 				if l, err := form.take(t.Context(), filepath.Join(parent, "app.lock")); !errors.Is(err, fs.ErrNotExist) {
@@ -778,6 +790,38 @@ func TestAcquireLease_ContextEndWhileTheLockFileKeepsBeingReplacedIsRaced(t *tes
 				t.Errorf("err = %v, want it not to match ErrLeaseHeld: nobody held the lease", err)
 			}
 			_ = closeIfLease(l)
+		})
+	}
+}
+
+// A tick that fired before ctx ended must not start one more attempt, which
+// could return a lease after ctx is done. The hook ends ctx during the first
+// attempt and holds it past one poll, so a tick is pending when the wait
+// selects.
+func TestAcquireLease_NoAttemptStartsOnceContextIsDone(t *testing.T) {
+	for _, form := range blockingLeaseForms {
+		t.Run(form.name, func(t *testing.T) {
+			for range 20 {
+				path := newLockFile(t)
+				ctx, cancel := context.WithCancel(t.Context())
+				var attempts int
+				replace := replaceOnce(t)
+				stubLeaseLockedHook(t, func(path string) {
+					attempts++
+					replace(path)
+					cancel()
+					pause(t, leasePollInterval+10*time.Millisecond)
+				})
+				l, err := form.take(ctx, path)
+				if attempts != 1 {
+					t.Errorf("attempts = %d, want 1: none starts once ctx is done", attempts)
+				}
+				if !errors.Is(err, ErrRaced) || !errors.Is(err, context.Canceled) {
+					t.Errorf("err = %v, want ErrRaced and context.Canceled", err)
+				}
+				_ = closeIfLease(l)
+				cancel()
+			}
 		})
 	}
 }
