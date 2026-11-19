@@ -126,10 +126,10 @@ func (e *Executor[P]) stoppedErr(ctx context.Context, en *job[P]) error {
 
 // setLine writes line i of en's record.
 func (e *Executor[P]) setLine(en *job[P], i int, l Line) {
-	en.recMu.Lock()
-	defer en.recMu.Unlock()
-	en.rec.Lines[i] = l
-	e.put(en)
+	e.write(en, nil, func(rec *Record) bool {
+		rec.Lines[i] = l
+		return true
+	})
 }
 
 // closeBatch is CloseEnd's close of a batch's lines.

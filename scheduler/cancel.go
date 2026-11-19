@@ -106,7 +106,5 @@ func (e *Executor[P]) CredentialEnded(credential string) {
 	e.writeLocked()
 	e.mu.Unlock()
 	defer e.wrote()
-	for _, en := range dequeued {
-		e.ended(context.Background(), en, end)
-	}
+	e.endedAll(context.Background(), dequeued)
 }

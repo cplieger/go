@@ -312,10 +312,7 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 	e.writeLocked()
 	idle := e.idle
 	e.mu.Unlock()
-	for _, en := range dequeued {
-		e.ended(ctx, en, *en.stopEnd)
-	}
-	e.wrote()
+	e.endDequeued(ctx, dequeued)
 	<-idle
 	e.wg.Wait()
 	close(stopMoves)
@@ -443,7 +440,35 @@ func (e *Executor[P]) await(en *job[P]) {
 // begin runs a job that holds its slot once no running job serves its scope,
 // unless it left the queue first.
 func (e *Executor[P]) begin(en *job[P]) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	covered, ok := e.starting(en, cancel)
+	if !ok {
+		return
+	}
+
+	if en.w != nil && e.observer.SlotWait != nil {
+		e.observer.SlotWait(en.spec.Slot, en.class, en.slot.waited(en.w))
+	}
+	now := en.startedAt
+	e.write(en, &Transition{Phase: PhaseStarted, At: now}, func(rec *Record) bool {
+		rec.State, rec.StartedAt, rec.Phase = StateRunning, now, PhaseStarted
+		return true
+	})
+	e.flush(en)
+	for _, q := range covered {
+		e.ended(context.Background(), q, *q.stopEnd)
+	}
+	e.finish(en, e.guarded(ctx, en))
+}
+
+// starting waits until no running job serves en's scope, then marks it
+// running with cancel as its stop and takes out the queued jobs it covers;
+// false when en left the queue first. mu is released by defer, since Covers
+// is called under it.
+func (e *Executor[P]) starting(en *job[P], cancel context.CancelFunc) (covered []*job[P], ok bool) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	for en.state == stateQueued {
 		freed := e.behindLocked(en)
 		if freed == nil {
@@ -457,32 +482,13 @@ func (e *Executor[P]) begin(en *job[P]) {
 		e.mu.Lock()
 	}
 	if en.state != stateQueued {
-		e.mu.Unlock()
-		return
+		return nil, false
 	}
 	e.unwaitLocked(en)
 	en.state = stateRunning
-	now := time.Now()
-	en.startedAt = now
-	ctx, cancel := context.WithCancel(context.Background())
+	en.startedAt = time.Now()
 	en.cancel = cancel
-	covered := e.coverLocked(en)
-	e.mu.Unlock()
-	defer cancel()
-
-	if en.w != nil && e.observer.SlotWait != nil {
-		e.observer.SlotWait(en.spec.Slot, en.class, en.slot.waited(en.w))
-	}
-	en.recMu.Lock()
-	en.rec.State, en.rec.StartedAt, en.rec.Phase = StateRunning, now, PhaseStarted
-	e.put(en)
-	e.post(en, &Transition{Phase: PhaseStarted, At: now})
-	en.recMu.Unlock()
-	e.flush(en)
-	for _, q := range covered {
-		e.ended(context.Background(), q, *q.stopEnd)
-	}
-	e.finish(en, e.guarded(ctx, en))
+	return e.coverLocked(en), true
 }
 
 // coverLocked takes out of the queue each queued job the starting job's kind
@@ -514,27 +520,8 @@ func (e *Executor[P]) coverLocked(en *job[P]) []*job[P] {
 // finish writes a run job's end, frees its slot and reports the stored end.
 // A job a cancel stopped ends as the cancel said, whatever its Run returned.
 func (e *Executor[P]) finish(en *job[P], end End) {
-	e.mu.Lock()
-	en.returned = true
-	if en.stopEnd != nil {
-		end = *en.stopEnd
-	}
-	e.mu.Unlock()
-	stored, at, kept := e.end(context.Background(), en, end)
-	e.mu.Lock()
-	en.state = stateEnded
-	e.removeLocked(en)
-	e.freeLocked()
-	// An end the store does not hold moves nothing a restart would not read.
-	if kept && moving(stored.Result) {
-		e.noteEndLocked(en, stored.Result, at)
-		if en.spec.Fresh != nil {
-			e.noteRecentLocked(en, at)
-		}
-	}
-	e.releaseStandInLocked(en.j.ID, at)
-	e.keepLocked(en, at)
-	e.mu.Unlock()
+	stored, at, kept := e.end(context.Background(), en, e.returnedEnd(en, end))
+	e.retire(en, stored.Result, at, kept)
 	if en.w != nil {
 		en.slot.drop(en.w)
 	}
@@ -543,6 +530,39 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	en.recMu.Unlock()
 	e.emit(en, &Transition{Phase: phase, Result: stored.Result, At: at})
 	close(en.finished)
+}
+
+// returnedEnd marks en's Run returned and answers the end to write: a
+// cancel's, a covering start's or a shutdown's when one stopped it, else
+// end.
+func (e *Executor[P]) returnedEnd(en *job[P], end End) End {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	en.returned = true
+	if en.stopEnd != nil {
+		return *en.stopEnd
+	}
+	return end
+}
+
+// retire takes the run job en, whose end r was written at at, out of the
+// live jobs and frees its scope. mu is released by defer, since Covers and
+// Fresh are called under it.
+func (e *Executor[P]) retire(en *job[P], r Result, at time.Time, kept bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	en.state = stateEnded
+	e.removeLocked(en)
+	e.freeLocked()
+	// An end the store does not hold moves nothing a restart would not read.
+	if kept && moving(r) {
+		e.noteEndLocked(en, r, at)
+		if en.spec.Fresh != nil {
+			e.noteRecentLocked(en, at)
+		}
+	}
+	e.releaseStandInLocked(en.j.ID, at)
+	e.keepLocked(en, at)
 }
 
 // end writes en's end and answers the stored one, which an end the job's own
@@ -565,12 +585,31 @@ func (e *Executor[P]) end(ctx context.Context, en *job[P], end End) (stored End,
 	return *rec.End, rec.EndedAt, true
 }
 
+// write applies change to en's record and, when change answers true, writes
+// the record and posts tr unless it is nil; the caller flushes after. recMu
+// is released by defer: a panic out of Records.Put on Run's stack must leave
+// it free for finish's closeEnd.
+func (e *Executor[P]) write(en *job[P], tr *Transition, change func(rec *Record) bool) bool {
+	en.recMu.Lock()
+	defer en.recMu.Unlock()
+	if !change(&en.rec) {
+		return false
+	}
+	e.put(en)
+	if tr != nil {
+		e.post(en, tr)
+	}
+	return true
+}
+
 // put writes the job's record after a change and logs a failed write, which
-// leaves the record unwritten until a later put lands.
+// leaves the record unwritten until a later put lands. It is called holding
+// en's recMu.
 func (e *Executor[P]) put(en *job[P]) {
 	if en.spec.Kept == 0 {
 		return
 	}
+	en.unwritten = true // until Put answers, so closeEnd writes again after a panic out of it
 	err := e.records.Put(context.Background(), en.rec)
 	en.unwritten = err != nil
 	if err != nil {

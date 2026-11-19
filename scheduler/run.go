@@ -70,24 +70,24 @@ func (r *Run[P]) Commit() bool {
 // reach moves en's record to phase p, which is step n of the kind's Phases,
 // or an executor phase with n 0, and writes it once per change.
 func (e *Executor[P]) reach(en *job[P], p Phase, n int) {
-	en.recMu.Lock()
-	// A pipeline may name an executor phase (started) as its own first step.
-	if en.rec.Phase == p && (n == 0 || en.rec.Step.N == n) {
-		en.recMu.Unlock()
-		return
-	}
 	now := time.Now()
-	en.rec.Phase = p
-	if n > 0 {
-		en.rec.Step.N = n
-		if !slices.ContainsFunc(en.rec.Phases, func(a PhaseAt) bool { return a.Phase == p }) {
-			en.rec.Phases = append(en.rec.Phases, PhaseAt{Phase: p, At: now})
+	moved := e.write(en, &Transition{Phase: p, At: now}, func(rec *Record) bool {
+		// A pipeline may name an executor phase (started) as its own first step.
+		if rec.Phase == p && (n == 0 || rec.Step.N == n) {
+			return false
 		}
+		rec.Phase = p
+		if n > 0 {
+			rec.Step.N = n
+			if !slices.ContainsFunc(rec.Phases, func(a PhaseAt) bool { return a.Phase == p }) {
+				rec.Phases = append(rec.Phases, PhaseAt{Phase: p, At: now})
+			}
+		}
+		return true
+	})
+	if moved {
+		e.flush(en)
 	}
-	e.put(en)
-	e.post(en, &Transition{Phase: p, At: now})
-	en.recMu.Unlock()
-	e.flush(en)
 }
 
 // guarded runs en's Run, ending the job failed with run_panicked when it

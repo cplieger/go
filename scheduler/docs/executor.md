@@ -108,6 +108,8 @@ A loop that is not a job holds its own `Watch`: `NewWatch(lease)`, `Beat(at)` af
 
 A panic in a kind's `Run`, in an item's `fn`, or from `Reached` with a phase outside `Phases` ends the job, never the process. The job ends `failed` with the one reason `run_panicked`, a moving end. The panic value and stack are logged once at ERROR, the only place they appear. The slot is freed and the `Observer` gets the end. A panic in one item ends the whole batch, and that item's line goes to review as `run_panicked`.
 
+A panic out of a `Records` method, an `Observer` func or a `KindSpec` func reaches the call it came in on. On a call a kind's `Run` made, it ends the job as above. On the app's own call to `Start`, `Cancel`, `CredentialEnded`, `Schedule`, `Hold` or its `resume`, it propagates to that caller and the executor stays usable: no lock or slot stays held, a request whose `Insert` did not answer was never admitted, a job whose end's write panicked leaves its record open as a failed write does, a `Hold` that hands back no `resume` ends its own hold, a `Schedule` whose `Covers` panicked leaves the scope unscheduled for the next `Schedule` to add, and a `resume` whose read panicked retries the read as a failed one. A panic on the executor's own goroutines, which start and end each job and fire each timer, ends the process.
+
 ## The Observer
 
 `Observer.Transition` is called for each job queued, started, reaching a phase, and ended, with `Result` set only on the end. Each func is optional and is called outside the executor's lock, so it must return promptly: a series update or a log line. `Transition` and `SlotWait` are called synchronously and in order for one job; `Moved` is described under Live counts.

@@ -28,31 +28,50 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	if err != nil {
 		return Started{}, err
 	}
+	s, placed, err := e.place(ctx, spec, en)
+	switch placed {
+	case placeRefused:
+		defer e.wrote()
+		return e.refuse(ctx, en)
+	case placeAdmitted:
+		defer e.wrote()
+		return e.admit(ctx, en)
+	case placeAnswered:
+	}
+	return s, err
+}
 
+// placement is what place did with a request.
+type placement uint8
+
+const (
+	placeAnswered placement = iota // place's Started and error are Start's answer
+	placeRefused                   // past a bound, its write counted: refuse ends it queue_full
+	placeAdmitted                  // live, in the bounds and its write counted: admit writes it
+)
+
+// place answers en's request from a held proposal, a waiting or running job,
+// a hold or a Fresh window, or counts its record write and places it. mu is
+// released by defer, since Fresh and Covers are called under it.
+func (e *Executor[P]) place(ctx context.Context, spec *KindSpec[P], en *job[P]) (Started, placement, error) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if s, ok, err := e.matchLocked(ctx, spec, &en.j); ok || err != nil {
-		e.mu.Unlock()
-		return s, err
+		return s, placeAnswered, err
 	}
 	if e.holds > 0 || e.closed {
-		e.mu.Unlock()
-		return Started{}, ErrQueueFull
+		return Started{}, placeAnswered, ErrQueueFull
 	}
 	if s, ok, err := e.answerLocked(spec, &en.j); ok || err != nil {
-		e.mu.Unlock()
-		return s, err
+		return s, placeAnswered, err
 	}
 	e.writeLocked()
 	if e.fullLocked(&en.j) || e.proposalsFullLocked(spec, &en.j) {
-		e.mu.Unlock()
-		defer e.wrote()
-		return e.refuse(ctx, en)
+		return Started{}, placeRefused, nil
 	}
 	e.live = append(e.live, en)
 	e.waitLocked(en)
-	e.mu.Unlock()
-	defer e.wrote()
-	return e.admit(ctx, en)
+	return Started{}, placeAdmitted, nil
 }
 
 // matchLocked answers j from its owner's held proposal or a waiting job,
@@ -87,34 +106,34 @@ func (e *Executor[P]) matchLocked(ctx context.Context, spec *KindSpec[P], j *Job
 // queues it. A CredentialEnded, a covering start, a Hold(all) or a shutdown
 // during the write ends it instead.
 func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
+	answered := false
+	defer func() {
+		// A panic out of Records.Insert, which wrote nothing then.
+		if !answered {
+			e.drop(en)
+		}
+	}()
 	replay, err := e.insert(ctx, en)
-	e.mu.Lock()
-	if replay != "" {
-		e.unwaitLocked(en)
-		en.state = stateEnded
-		e.removeLocked(en)
-		close(en.admitted)
-		e.mu.Unlock()
+	answered = true
+	switch {
+	case replay != "":
+		e.drop(en)
 		return Started{Job: replay, Joined: true}, nil
+	case err != nil:
+		e.drop(en)
+		return Started{}, err
 	}
-	if err == nil && en.stopEnd == nil && (e.closed || e.holds > 0) {
+	e.mu.Lock()
+	if en.stopEnd == nil && (e.closed || e.holds > 0) {
 		stop := End{Result: ResultInterrupted} // as the hold or shutdown ends a queued job
 		en.stopEnd = &stop
 	}
-	stopped := err == nil && en.stopEnd != nil
-	if err != nil || stopped {
+	if en.stopEnd != nil {
+		// It stays live, so a Cancel finds it, until ended has written its end.
 		e.unwaitLocked(en)
 		en.state = stateEnded
-		if !stopped {
-			// A stopped job stays live, so a Cancel finds it, until ended
-			// has written its end.
-			e.removeLocked(en)
-		}
 		close(en.admitted)
 		e.mu.Unlock()
-		if !stopped {
-			return Started{}, err
-		}
 		e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
 		e.ended(ctx, en, *en.stopEnd)
 		return Started{Job: en.j.ID}, nil
@@ -132,6 +151,17 @@ func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 	e.mu.Unlock()
 	e.flush(en)
 	return s, nil
+}
+
+// drop takes an admitting job whose record was not written out of the live
+// jobs and the bounds.
+func (e *Executor[P]) drop(en *job[P]) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.unwaitLocked(en)
+	en.state = stateEnded
+	e.removeLocked(en)
+	close(en.admitted)
 }
 
 // queueFull is the end of a request the queue refused after its record was
@@ -286,12 +316,44 @@ func (e *Executor[P]) refuse(ctx context.Context, en *job[P]) (Started, error) {
 }
 
 // ended writes the end of a job that never ran, takes it out of the live
-// jobs and tells the Observer.
+// jobs and tells the Observer. A panic out of the end's write leaves the
+// record open, as a failed write does, and still takes the job out.
 func (e *Executor[P]) ended(ctx context.Context, en *job[P], end End) {
+	gone := false
+	defer func() {
+		if !gone {
+			e.unlive(en, time.Now())
+		}
+	}()
 	stored, at, _ := e.end(ctx, en, end)
+	e.unlive(en, at)
+	gone = true
+	e.emit(en, &Transition{Phase: en.rec.Phase, Result: stored.Result, At: at})
+}
+
+// unlive takes a job that never ran, ended at at, out of the live jobs and
+// re-arms a scheduled scope whose stand-in wake waited on it.
+func (e *Executor[P]) unlive(en *job[P], at time.Time) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.removeLocked(en)
 	e.releaseStandInLocked(en.j.ID, at)
-	e.mu.Unlock()
-	e.emit(en, &Transition{Phase: en.rec.Phase, Result: stored.Result, At: at})
+}
+
+// endedAll writes the end each job left the queue with, as ended does. Each
+// later end is written by defer, so a panic out of app code in one still
+// ends the rest before it propagates.
+func (e *Executor[P]) endedAll(ctx context.Context, ens []*job[P]) {
+	if len(ens) == 0 {
+		return
+	}
+	defer e.endedAll(ctx, ens[1:])
+	e.ended(ctx, ens[0], *ens[0].stopEnd)
+}
+
+// endDequeued is endedAll for the jobs a hold or shutdown dequeued under the
+// write writeLocked counted, which it ends by defer.
+func (e *Executor[P]) endDequeued(ctx context.Context, ens []*job[P]) {
+	defer e.wrote()
+	e.endedAll(ctx, ens)
 }

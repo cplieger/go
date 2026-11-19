@@ -63,11 +63,31 @@ func (r *Run[P]) Propose(v any) (ProposalID, error) {
 	e.proposals[p.id] = p
 	e.mu.Unlock()
 
-	en.recMu.Lock()
-	en.rec.Proposal = p.id
-	e.put(en)
-	en.recMu.Unlock()
+	named := false
+	defer func() {
+		if !named {
+			e.unpropose(en, p)
+		}
+	}()
+	e.write(en, nil, func(rec *Record) bool {
+		rec.Proposal = p.id
+		return true
+	})
+	named = true
 	return p.id, nil
+}
+
+// unpropose takes back en's proposal p after a panic out of Records.Put in
+// Propose: no caller got its id, and holding it would answer its owner's
+// later requests of its scope with this failed job.
+func (e *Executor[P]) unpropose(en *job[P], p *proposal) {
+	e.mu.Lock()
+	delete(e.proposals, p.id)
+	en.proposal = nil
+	e.mu.Unlock()
+	en.recMu.Lock()
+	en.rec.Proposal = ""
+	en.recMu.Unlock()
 }
 
 // Proposal answers owner's held proposal id; false for another owner's id, an

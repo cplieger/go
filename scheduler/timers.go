@@ -88,6 +88,14 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence, changed time.
 		t = &timed{since: now}
 		e.scheduled[key] = t
 	}
+	set := false
+	defer func() {
+		// A panic out of Covers: unscheduled, the scope's next Schedule arms
+		// it, where a half-set one would answer that nothing changed.
+		if !set {
+			e.unscheduleLocked(key)
+		}
+	}()
 	t.cadence, t.lease, t.changed = c, lease, changed
 	t.watch = NewWatch(lease)
 	if e.endsRead {
@@ -98,6 +106,7 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence, changed time.
 	}
 	e.armLocked(key, t)
 	e.watchLocked(key, t)
+	set = true
 	return nil
 }
 
