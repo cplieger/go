@@ -30,7 +30,8 @@ const (
 // Class orders the jobs waiting for one slot.
 type Class uint8
 
-// The classes, in the order a slot serves them.
+// The classes. A slot serves Interactive first, then a yielded job, then
+// Automatic and Batch alternating while both wait.
 const (
 	Interactive Class = iota + 1 // a person's or a key's single job: first in line for its slot
 	Automatic                    // a scheduled job
