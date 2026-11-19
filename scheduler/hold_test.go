@@ -534,3 +534,220 @@ func TestResumeKeepsEndStoredDuringRead(t *testing.T) {
 		})
 	})
 }
+
+// A hold and a shutdown answer only once every record write in flight when
+// they came has landed, and write nothing after.
+func TestQuietWaitsForRecordWrites(t *testing.T) {
+	t.Run("a hold ends a record being written interrupted", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s, r := gatedRig(t, 0)
+			g := s.gate(memrecords.OpInsert)
+			started := startAsync(t.Context(), r.ex, api("scan", "source:a", "alice", payload{}))
+			<-g.entered
+			h := s.quietWhile(t, g, holdAsync(t.Context(), r.ex), "Hold(all)")
+			if h.err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", h.err)
+			}
+			a := <-started
+			if a.err != nil || a.s.Job == "" || a.s.Joined {
+				t.Fatalf("Start whose record a hold overtook = (%+v, %v), want its own job", a.s, a.err)
+			}
+			r.wantEnd(t, a.s.Job, scheduler.ResultInterrupted)
+			s.wantNoWrite(t, "Hold(all)")
+			if r.log.ran(a.s.Job) {
+				t.Error("the job whose record a hold overtook ran, want never")
+			}
+		})
+	})
+
+	t.Run("a hold waits for a refused request's record", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s, r := gatedRig(t, 1)
+			r.start(t, api("scan", "source:a", "alice", payload{Gate: make(chan struct{})}))
+			synctest.Wait()
+			r.start(t, api("scan", "source:b", "alice", payload{}))
+			g := s.gate(memrecords.OpInsert)
+			refused := startAsync(t.Context(), r.ex, api("scan", "source:c", "bob", payload{}))
+			<-g.entered
+			if h := s.quietWhile(t, g, holdAsync(t.Context(), r.ex), "Hold(all)"); h.err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", h.err)
+			}
+			if a := <-refused; !errors.Is(a.err, scheduler.ErrQueueFull) {
+				t.Errorf("Start past MaxQueued = (%+v, %v), want ErrQueueFull", a.s, a.err)
+			}
+			s.wantNoWrite(t, "Hold(all)")
+		})
+	})
+
+	t.Run("a hold waits for a cancelled job's end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s, r := gatedRig(t, 0)
+			r.start(t, api("scan", "source:a", "alice", payload{Gate: make(chan struct{})}))
+			synctest.Wait()
+			q := r.start(t, api("scan", "source:b", "alice", payload{}))
+			g := s.gate(memrecords.OpEnd)
+			go func() { _, _ = r.ex.Cancel(t.Context(), q.Job) }()
+			<-g.entered
+			if h := s.quietWhile(t, g, holdAsync(t.Context(), r.ex), "Hold(all)"); h.err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", h.err)
+			}
+			r.wantEnd(t, q.Job, scheduler.ResultCancelled)
+			s.wantNoWrite(t, "Hold(all)")
+		})
+	})
+
+	t.Run("a shutdown ends a record being written interrupted", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := newGatedStore()
+			r, stop := (&rig{store: s.Store, log: &runLog{}}).openUntil(t, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+				Records: s,
+			})
+			g := s.gate(memrecords.OpInsert)
+			started := startAsync(t.Context(), r.ex, api("scan", "source:a", "alice", payload{}))
+			<-g.entered
+			s.quietWhile(t, g, stopAsync(stop), "Run")
+			a := <-started
+			if a.err != nil || a.s.Job == "" || a.s.Joined {
+				t.Fatalf("Start whose record a shutdown overtook = (%+v, %v), want its own job", a.s, a.err)
+			}
+			r.wantEnd(t, a.s.Job, scheduler.ResultInterrupted)
+			s.wantNoWrite(t, "Run")
+		})
+	})
+
+	t.Run("a shutdown waits for a cancelled job's end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := newGatedStore()
+			r, stop := (&rig{store: s.Store, log: &runLog{}}).openUntil(t, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+				Records: s,
+			})
+			r.start(t, api("scan", "source:a", "alice", payload{Gate: make(chan struct{})}))
+			synctest.Wait()
+			q := r.start(t, api("scan", "source:b", "alice", payload{}))
+			g := s.gate(memrecords.OpEnd)
+			go func() { _, _ = r.ex.Cancel(t.Context(), q.Job) }()
+			<-g.entered
+			s.quietWhile(t, g, stopAsync(stop), "Run")
+			r.wantEnd(t, q.Job, scheduler.ResultCancelled)
+			s.wantNoWrite(t, "Run")
+		})
+	})
+}
+
+// gatedStore holds the next call of each gated op until its gate's release
+// closes.
+type gatedStore struct {
+	*memrecords.Store
+	gates  map[memrecords.Op]*storeGate
+	writes int // the record writes counted when quietWhile's call answered
+	mu     sync.Mutex
+}
+
+type storeGate struct{ entered, release chan struct{} }
+
+func newGatedStore() *gatedStore {
+	return &gatedStore{Store: memrecords.New(), gates: map[memrecords.Op]*storeGate{}}
+}
+
+// gatedRig runs an executor of kind "scan" on slot "heavy" over a gated store
+// until the test ends; maxQueued 0 keeps the default bound.
+func gatedRig(t *testing.T, maxQueued int) (*gatedStore, *rig) {
+	t.Helper()
+	s := newGatedStore()
+	r := (&rig{store: s.Store, log: &runLog{}}).open(t, scheduler.Config[payload]{
+		Kinds:     []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+		Records:   s,
+		MaxQueued: maxQueued,
+	})
+	return s, r
+}
+
+func (s *gatedStore) gate(op memrecords.Op) *storeGate {
+	g := &storeGate{entered: make(chan struct{}), release: make(chan struct{})}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gates[op] = g
+	return g
+}
+
+func (s *gatedStore) pass(op memrecords.Op) {
+	s.mu.Lock()
+	g := s.gates[op]
+	delete(s.gates, op)
+	s.mu.Unlock()
+	if g != nil {
+		close(g.entered)
+		<-g.release
+	}
+}
+
+func (s *gatedStore) Insert(ctx context.Context, rec scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) {
+	s.pass(memrecords.OpInsert)
+	return s.Store.Insert(ctx, rec, key)
+}
+
+func (s *gatedStore) End(ctx context.Context, id scheduler.ID, end scheduler.End) (scheduler.Record, error) {
+	s.pass(memrecords.OpEnd)
+	return s.Store.End(ctx, id, end)
+}
+
+func (s *gatedStore) count() int {
+	return s.Count(memrecords.OpInsert) + s.Count(memrecords.OpPut) + s.Count(memrecords.OpEnd)
+}
+
+// quietWhile wants call to wait while g holds its write, releases g and
+// answers what call answered, counting the writes made by then.
+func (s *gatedStore) quietWhile(t *testing.T, g *storeGate, call <-chan held, name string) held {
+	t.Helper()
+	synctest.Wait()
+	var h held
+	select {
+	case h = <-call:
+		t.Errorf("%s answered while a record write was held, want it to wait for the write", name)
+		s.writes = s.count()
+		close(g.release)
+		return h
+	default:
+	}
+	close(g.release)
+	h = <-call
+	s.writes = s.count()
+	return h
+}
+
+// wantNoWrite wants no record write since quietWhile's call answered.
+func (s *gatedStore) wantNoWrite(t *testing.T, name string) {
+	t.Helper()
+	synctest.Wait()
+	if n := s.count() - s.writes; n != 0 {
+		t.Errorf("%d record writes after %s answered, want none", n, name)
+	}
+}
+
+type held struct {
+	resume func()
+	err    error
+}
+
+// holdAsync calls Hold(ctx, true) on its own goroutine and answers what it
+// answered.
+func holdAsync(ctx context.Context, ex *scheduler.Executor[payload]) <-chan held {
+	out := make(chan held, 1)
+	go func() {
+		resume, err := ex.Hold(ctx, true)
+		out <- held{resume: resume, err: err}
+	}()
+	return out
+}
+
+// stopAsync calls stop on its own goroutine and answers once it returned.
+func stopAsync(stop func()) <-chan held {
+	out := make(chan held, 1)
+	go func() {
+		stop()
+		out <- held{}
+	}()
+	return out
+}
