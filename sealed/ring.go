@@ -1,6 +1,7 @@
 package sealed
 
 import (
+	"crypto/rand"
 	"sync/atomic"
 
 	"github.com/cplieger/go/filesafe"
@@ -38,6 +39,13 @@ func newRingKey(key [keyLen]byte) (ringKey, error) {
 	return ringKey{key: masked.NewSecret(string(key[:])), id: id}, nil
 }
 
+// randomKey returns a new key from crypto/rand.
+func randomKey() [keyLen]byte {
+	var key [keyLen]byte
+	rand.Read(key[:]) // never returns an error (Go 1.24+); it crashes instead
+	return key
+}
+
 // bytes returns the key in a new slice, which the caller keeps no longer
 // than its call.
 func (k ringKey) bytes() []byte { return []byte(k.key.Reveal()) }
@@ -48,6 +56,18 @@ func (s *keySource) load() *ring {
 		return nil
 	}
 	return s.ring.Load()
+}
+
+// ids returns the ids of r's keys, both empty for a nil r.
+func (r *ring) ids() KeyIDs {
+	if r == nil {
+		return KeyIDs{}
+	}
+	ids := KeyIDs{Current: r.keys[0].id}
+	if r.n == 2 {
+		ids.Previous = r.keys[1].id
+	}
+	return ids
 }
 
 // byID returns the key whose id is id, and whether it is the current key.

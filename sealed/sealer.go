@@ -3,7 +3,6 @@ package sealed
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -104,11 +103,7 @@ func New(key [32]byte) *Sealer {
 // NewEphemeral returns a Sealer over one random key no one else holds: what
 // it seals stops opening when the process ends. It suits tests, and an app
 // that keeps nothing sealed across a restart.
-func NewEphemeral() *Sealer {
-	var key [keyLen]byte
-	rand.Read(key[:]) // never returns an error (Go 1.24+); it crashes instead
-	return newSealer(key)
-}
+func NewEphemeral() *Sealer { return newSealer(randomKey()) }
 
 // newSealer returns a Sealer whose own source holds key alone.
 func newSealer(key [keyLen]byte) *Sealer {
@@ -217,17 +212,7 @@ func (s *Sealer) OpenAtRest(purpose Purpose, value string) (payload []byte, curr
 
 // KeyIDs returns the ids of the keys s holds, read together. Both are empty
 // when s holds no key.
-func (s *Sealer) KeyIDs() KeyIDs {
-	r := s.load()
-	if r == nil {
-		return KeyIDs{}
-	}
-	ids := KeyIDs{Current: r.keys[0].id}
-	if r.n == 2 {
-		ids.Previous = r.keys[1].id
-	}
-	return ids
-}
+func (s *Sealer) KeyIDs() KeyIDs { return s.load().ids() }
 
 // seal returns the value of plain under k's key for u and purpose, in the
 // layout of docs/format.md: version, nonce, ciphertext and tag.

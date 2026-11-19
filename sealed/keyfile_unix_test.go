@@ -4,12 +4,14 @@ package sealed
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -106,6 +108,89 @@ func checkKeyless(t *testing.T, f *KeyFile, err error) {
 	checkNoKey(t, f.Sealer())
 }
 
+// openKeyless opens path, where nothing is, as a keyless KeyFile, and
+// closes it when the test ends.
+func openKeyless(t *testing.T, path string) *KeyFile {
+	t.Helper()
+	f, err := OpenKeyFile(t.Context(), path)
+	checkKeyless(t, f, err)
+	return f
+}
+
+// createKeyFile opens path, where nothing is, and creates its key file.
+func createKeyFile(t *testing.T, path string) *KeyFile {
+	t.Helper()
+	f := openKeyless(t, path)
+	if err := f.Create(t.Context()); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return f
+}
+
+// checkInUse checks that another KeyFile holds the lease of the key file
+// at path: an OpenKeyFile with a 100 ms context answers ErrKeyFileInUse.
+func checkInUse(t *testing.T, path string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	f, err := OpenKeyFile(ctx, path)
+	if f != nil {
+		_ = f.Close()
+	}
+	if !errors.Is(err, ErrKeyFileInUse) {
+		t.Errorf("a second OpenKeyFile = %v; want ErrKeyFileInUse while the lease is held", err)
+	}
+}
+
+// keyLine is one key line of a key file.
+type keyLine struct {
+	word, id string
+	key      [keyLen]byte
+}
+
+var keyLineRE = regexp.MustCompile(`^(current|previous) ([0-9a-f]{32}) ([0-9a-f]{64})$`)
+
+// readKeyLines reads the key file at path with this test's own reading of
+// docs/format.md's grammar: the version line, then key lines, each ending
+// in LF, each id the RFC 5869 §2.3 transcription's id of its key.
+func readKeyLines(t *testing.T, path string) []keyLine {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the key file: %v", err)
+	}
+	text, ok := strings.CutSuffix(string(data), "\n")
+	lines := strings.Split(text, "\n")
+	if !ok || lines[0] != "sealed-key/v1" {
+		t.Fatalf("the key file %q is not version 1 text ending in LF", data)
+	}
+	var keys []keyLine
+	for _, line := range lines[1:] {
+		m := keyLineRE.FindStringSubmatch(line)
+		if m == nil {
+			t.Fatalf("the key file holds the line %q, not a key line", line)
+		}
+		k := keyLine{word: m[1], id: m[2], key: [keyLen]byte(fromHex(m[3]))}
+		if want := hex.EncodeToString(refHKDF(k.key[:], nil, "sealed/key-id", idLen)); k.id != want {
+			t.Errorf("the %s key's id = %s, want %s", k.word, k.id, want)
+		}
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// lineIDs returns the KeyIDs of a key file's lines.
+func lineIDs(lines []keyLine) KeyIDs {
+	var ids KeyIDs
+	if len(lines) > 0 {
+		ids.Current = lines[0].id
+	}
+	if len(lines) > 1 {
+		ids.Previous = lines[1].id
+	}
+	return ids
+}
+
 func stubCheckPrivateDir(t *testing.T, fn func(dir string) error) {
 	t.Helper()
 	old := checkPrivateDir
@@ -118,6 +203,42 @@ func stubAcquireLease(t *testing.T, fn func(ctx context.Context, lockPath string
 	old := acquireLease
 	acquireLease = fn
 	t.Cleanup(func() { acquireLease = old })
+}
+
+func stubEnsurePrivateDir(t *testing.T, fn func(dir string, opts ...filesafe.PrivateDirOption) (filesafe.PrivateDirResult, error)) {
+	t.Helper()
+	old := ensurePrivateDir
+	ensurePrivateDir = fn
+	t.Cleanup(func() { ensurePrivateDir = old })
+}
+
+func stubLeaseCovers(t *testing.T, fn func(l *filesafe.Lease) (bool, error)) {
+	t.Helper()
+	old := leaseCovers
+	leaseCovers = fn
+	t.Cleanup(func() { leaseCovers = old })
+}
+
+func stubWriteFile(t *testing.T, fn func(ctx context.Context, path string, data []byte, opts ...filesafe.WriteOption) (filesafe.Result, error)) {
+	t.Helper()
+	old := writeFile
+	writeFile = fn
+	t.Cleanup(func() { writeFile = old })
+}
+
+// notDurable makes the writeFile seam answer Durable false, after its write
+// reached the path, while the flag it returns is true.
+func notDurable(t *testing.T) *bool {
+	t.Helper()
+	on := true
+	stubWriteFile(t, func(ctx context.Context, path string, data []byte, opts ...filesafe.WriteOption) (filesafe.Result, error) {
+		res, err := filesafe.WriteFile(ctx, path, data, opts...)
+		if on && err == nil {
+			res.Durable = false
+		}
+		return res, err
+	})
+	return &on
 }
 
 func stubGeteuid(t *testing.T, euid int) {
@@ -136,8 +257,15 @@ func checkRefusal(t *testing.T, f *KeyFile, err error, name string, is, isNot []
 		_ = f.Close()
 		t.Fatalf("OpenKeyFile = a KeyFile, %v; want none", err)
 	}
+	checkErr(t, err, name, is, isNot)
+}
+
+// checkErr checks that err matches each of is and none of isNot, names
+// name and holds no hex run a key line's id or key would leave.
+func checkErr(t *testing.T, err error, name string, is, isNot []error) {
+	t.Helper()
 	if err == nil {
-		t.Fatal("OpenKeyFile = nil error")
+		t.Fatal("nil error")
 	}
 	for _, want := range is {
 		if !errors.Is(err, want) {
@@ -207,15 +335,30 @@ func TestOpenKeyFile(t *testing.T) {
 
 // TestOpenKeyFileMissing checks that an open never creates a key file (the
 // OpenKeyFile godoc: "Where no file is, it creates nothing and returns a
-// KeyFile holding no key"): no directory, no lock file and no lease, also
-// for a key file or directory removed after OpenKeyFile found the file,
-// before its directory check, after it, or before its read; and a done ctx
-// does not fail it, since only a key file needs the lease.
+// KeyFile holding no key"): no directory, no EnsurePrivateDir call, no lock
+// file and no lease, also for a key file or directory removed after
+// OpenKeyFile found the file, before its directory check, after it, or
+// before its read; and a done ctx does not fail it, since only a key file
+// needs the lease.
 func TestOpenKeyFileMissing(t *testing.T) {
 	text := keyFileText(t, "one key")
+	var made int
+	stubEnsurePrivateDir(t, func(dir string, opts ...filesafe.PrivateDirOption) (filesafe.PrivateDirResult, error) {
+		made++
+		return filesafe.EnsurePrivateDir(dir, opts...)
+	})
+	open := func(t *testing.T, ctx context.Context, path string) (*KeyFile, error) {
+		t.Helper()
+		before := made
+		f, err := OpenKeyFile(ctx, path)
+		if made != before {
+			t.Errorf("OpenKeyFile called EnsurePrivateDir %d times", made-before)
+		}
+		return f, err
+	}
 	t.Run("no directory", func(t *testing.T) {
 		dir := filepath.Join(privateDir(t), "keys")
-		f, err := OpenKeyFile(t.Context(), filepath.Join(dir, "sealing.key"))
+		f, err := open(t, t.Context(), filepath.Join(dir, "sealing.key"))
 		checkKeyless(t, f, err)
 		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("Lstat(the directory) = %v; want none made", err)
@@ -226,7 +369,7 @@ func TestOpenKeyFileMissing(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		for _, c := range []context.Context{t.Context(), ctx} {
-			f, err := OpenKeyFile(c, filepath.Join(dir, "sealing.key"))
+			f, err := open(t, c, filepath.Join(dir, "sealing.key"))
 			checkKeyless(t, f, err)
 		}
 		entries, err := os.ReadDir(dir)
@@ -245,9 +388,13 @@ func TestOpenKeyFileMissing(t *testing.T) {
 			}
 			return filesafe.CheckPrivateDir(dir)
 		})
-		f, err := OpenKeyFile(t.Context(), path)
+		f, err := open(t, t.Context(), path)
 		checkKeyless(t, f, err)
-		checkNoLease(t, path)
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		if err := openKeyless(t, path).Create(ctx); err != nil {
+			t.Errorf("a second KeyFile's Create = %v; want the lease free", err)
+		}
 	})
 	for _, tc := range []struct {
 		name        string
@@ -275,7 +422,7 @@ func TestOpenKeyFileMissing(t *testing.T) {
 				}
 				return err
 			})
-			f, err := OpenKeyFile(t.Context(), path)
+			f, err := open(t, t.Context(), path)
 			checkKeyless(t, f, err)
 			if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("Lstat(the directory) = %v; want it not made again", err)
@@ -403,13 +550,12 @@ func TestKeyFileReadBound(t *testing.T) {
 }
 
 // TestLease checks that a KeyFile holding a key holds its lease from
-// OpenKeyFile to Close (the KeyFile and Close godoc): flock(2) locks belong
-// to an open file description, so a second OpenKeyFile in this process
-// waits, answering ErrKeyFileInUse with filesafe.ErrLeaseHeld and the
-// context's error at its deadline; one with no deadline takes the lease
-// within one of AcquireLease's 50 ms polls of Close; the closed Sealer holds
-// no key, a second Close answers nil, and the lock file stays. A done ctx
-// opens nothing: its error, not ErrKeyFileInUse.
+// OpenKeyFile to Close (the KeyFile and Close godoc; flock(2): a lock
+// belongs to an open file description): a second OpenKeyFile here answers
+// ErrKeyFileInUse, filesafe.ErrLeaseHeld and ctx's error at its deadline,
+// or takes the lease within one 50 ms poll of Close; once closed, the
+// Sealer holds no key, the writes answer fs.ErrClosed, a second Close nil,
+// and the lock file stays. A done ctx is its error, not ErrKeyFileInUse.
 func TestLease(t *testing.T) {
 	path := writeKeyFile(t, privateDir(t), keyFileText(t, "one key"), 0o600)
 	lockPath := path + lockSuffix
@@ -467,6 +613,7 @@ func TestLease(t *testing.T) {
 				<-done
 			}
 			checkNoKey(t, a.Sealer())
+			checkClosedWrites(t, a)
 			if err := a.Close(); err != nil {
 				t.Errorf("second Close = %v, want nil", err)
 			}
@@ -483,14 +630,28 @@ func TestLease(t *testing.T) {
 	})
 }
 
+// checkClosedWrites checks that each of f's writes answers fs.ErrClosed, as
+// the Close godoc says of a closed KeyFile, and Create makes no directory.
+func checkClosedWrites(t *testing.T, f *KeyFile) {
+	t.Helper()
+	stubEnsurePrivateDir(t, func(dir string, _ ...filesafe.PrivateDirOption) (filesafe.PrivateDirResult, error) {
+		t.Errorf("a closed KeyFile's Create called EnsurePrivateDir(%s)", dir)
+		return filesafe.PrivateDirResult{}, nil
+	})
+	for name, write := range map[string]func(context.Context) error{"Create": f.Create, "Rotate": f.Rotate, "Retire": f.Retire} {
+		if err := write(t.Context()); !errors.Is(err, fs.ErrClosed) {
+			t.Errorf("%s after Close = %v, want fs.ErrClosed", name, err)
+		}
+	}
+}
+
 // TestLockFileRefused checks that each unsafe thing at <path>.lock an
-// unprivileged test can make is ErrUnsafeKeyFile wrapping filesafe's
-// AcquireLease refusal (its godoc: "a symlink (ErrSymlinkTarget), a
-// non-regular file (ErrNotRegular) ... group or other access
-// (ErrModeTooOpen)"), naming the lock file, before the key file is read:
-// the key file is no key file, which a read would answer ErrKeyFileFormat.
-// A FIFO does not block the open (open(2) O_NONBLOCK), and a lock file's
-// wide mode is left as found.
+// unprivileged test can make is, from OpenKeyFile and a keyless Create,
+// ErrUnsafeKeyFile wrapping filesafe's AcquireLease refusal (its godoc: "a
+// symlink (ErrSymlinkTarget), a non-regular file (ErrNotRegular) ... group
+// or other access (ErrModeTooOpen)"), naming the lock file, before the key
+// file is read (it is no key file) or written. A FIFO does not block the
+// open (open(2) O_NONBLOCK), and a wide mode is left as found.
 func TestLockFileRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -513,7 +674,10 @@ func TestLockFileRefused(t *testing.T) {
 			}
 		}, filesafe.ErrNotRegular, 0},
 		{"unix socket", func(t *testing.T, lockPath string) {
-			l, err := net.Listen("unix", lockPath)
+			// A socket path holds at most 107 bytes (unix(7) sun_path), which
+			// a temporary directory's can pass: bind it from its directory.
+			t.Chdir(filepath.Dir(lockPath))
+			l, err := net.Listen("unix", filepath.Base(lockPath))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -527,12 +691,8 @@ func TestLockFileRefused(t *testing.T) {
 		{"mode 0644", wideLockFile(0o644), filesafe.ErrModeTooOpen, 0o644},
 		{"mode 0640", wideLockFile(0o640), filesafe.ErrModeTooOpen, 0o640},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := writeKeyFile(t, privateDir(t), "not a key file\n", 0o600)
-			lockPath := path + lockSuffix
-			tc.make(t, lockPath)
-			f, err := OpenKeyFile(t.Context(), path)
-			checkRefusal(t, f, err, lockPath, []error{ErrUnsafeKeyFile, tc.is}, []error{ErrKeyFileFormat, ErrKeyFileInUse})
+		checkMode := func(t *testing.T, lockPath string) {
+			t.Helper()
 			if tc.mode == 0 {
 				return
 			}
@@ -543,8 +703,38 @@ func TestLockFileRefused(t *testing.T) {
 			if got := fi.Mode().Perm(); got != tc.mode {
 				t.Errorf("the lock file's mode after the refusal = %#o, want %#o kept", got, tc.mode)
 			}
+		}
+		t.Run("OpenKeyFile "+tc.name, func(t *testing.T) {
+			path := writeKeyFile(t, privateDir(t), "not a key file\n", 0o600)
+			lockPath := path + lockSuffix
+			tc.make(t, lockPath)
+			f, err := OpenKeyFile(t.Context(), path)
+			checkRefusal(t, f, err, lockPath, []error{ErrUnsafeKeyFile, tc.is}, []error{ErrKeyFileFormat, ErrKeyFileInUse})
+			checkMode(t, lockPath)
+		})
+		t.Run("Create "+tc.name, func(t *testing.T) {
+			path := filepath.Join(privateDir(t), "sealing.key")
+			lockPath := path + lockSuffix
+			f := openKeyless(t, path)
+			tc.make(t, lockPath)
+			checkErr(t, f.Create(t.Context()), lockPath, []error{ErrUnsafeKeyFile, tc.is}, []error{ErrKeyExists, ErrKeyFileInUse})
+			checkNoWrite(t, f, path)
+			checkMode(t, lockPath)
 		})
 	}
+}
+
+// checkNoWrite checks that a keyless KeyFile's refused Create wrote no key
+// file and holds no key and no lease.
+func checkNoWrite(t *testing.T, f *KeyFile, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Lstat(the key file) = %v; want none written", err)
+	}
+	if f.src.lease != nil {
+		t.Error("the KeyFile holds the lease")
+	}
+	checkNoKey(t, f.Sealer())
 }
 
 // wideLockFile makes an empty lock file at mode.
@@ -564,16 +754,16 @@ func wideLockFile(mode os.FileMode) func(t *testing.T, lockPath string) {
 type leaseCtxKey struct{}
 
 // TestLeaseAnswers checks, through the acquireLease seam, how OpenKeyFile
-// answers each error filesafe's AcquireLease and ErrLeaseHeld godoc name,
-// those an unprivileged test cannot make included: ErrLeaseHeld is
-// ErrKeyFileInUse; a bare context error is itself; each refusal is
-// ErrUnsafeKeyFile; ErrModeNotStored and a failed flock(2) (ENOLCK) are
-// themselves; fs.ErrNotExist is a missing key file only when the key file
-// is gone too. Each call is handed the caller's ctx and path+".lock", and
-// each error names the lock file.
+// and a keyless Create answer each error filesafe's AcquireLease and
+// ErrLeaseHeld godoc name: ErrLeaseHeld is ErrKeyFileInUse; each refusal
+// ErrUnsafeKeyFile; a bare context error, ErrModeNotStored, ENOLCK and
+// fs.ErrNotExist are themselves, the last a missing key file to OpenKeyFile
+// once the key file is gone too; a wait Close ended is fs.ErrClosed
+// (context.Cause). Each call gets a context of the caller's and
+// path+".lock", and each error names the file.
 func TestLeaseAnswers(t *testing.T) {
 	text := keyFileText(t, "one key")
-	for _, tc := range []struct {
+	cases := []struct {
 		name   string
 		answer func(lockPath string) error
 		is     []error
@@ -603,27 +793,38 @@ func TestLeaseAnswers(t *testing.T) {
 		{"flock ENOLCK", func(p string) error {
 			return &fs.PathError{Op: "flock", Path: p, Err: syscall.ENOLCK}
 		}, []error{syscall.ENOLCK}, []error{ErrUnsafeKeyFile, ErrKeyFileInUse}},
-		{"lock path missing, key file there", func(p string) error {
+		{"lock path missing", func(p string) error {
 			return &fs.PathError{Op: "open", Path: p, Err: syscall.ENOENT}
 		}, []error{fs.ErrNotExist}, []error{ErrUnsafeKeyFile, ErrKeyFileInUse}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := writeKeyFile(t, privateDir(t), text, 0o600)
-			lockPath := path + lockSuffix
-			stubAcquireLease(t, func(ctx context.Context, got string) (*filesafe.Lease, error) {
-				if got != lockPath {
-					t.Errorf("acquireLease(%q), want %q", got, lockPath)
-				}
-				if ctx.Value(leaseCtxKey{}) == nil {
-					t.Error("acquireLease was not handed the caller's ctx")
-				}
-				return nil, tc.answer(got)
-			})
-			f, err := OpenKeyFile(context.WithValue(t.Context(), leaseCtxKey{}, true), path)
-			checkRefusal(t, f, err, lockPath, tc.is, tc.isNot)
+	}
+	stub := func(t *testing.T, lockPath string, answer func(string) error) {
+		stubAcquireLease(t, func(ctx context.Context, got string) (*filesafe.Lease, error) {
+			if got != lockPath {
+				t.Errorf("acquireLease(%q), want %q", got, lockPath)
+			}
+			if ctx.Value(leaseCtxKey{}) == nil {
+				t.Error("acquireLease was not handed a context of the caller's")
+			}
+			return nil, answer(got)
 		})
 	}
-	t.Run("lock path missing, key file gone", func(t *testing.T) {
+	callerCtx := func(t *testing.T) context.Context { return context.WithValue(t.Context(), leaseCtxKey{}, true) }
+	for _, tc := range cases {
+		t.Run("OpenKeyFile "+tc.name, func(t *testing.T) {
+			path := writeKeyFile(t, privateDir(t), text, 0o600)
+			stub(t, path+lockSuffix, tc.answer)
+			f, err := OpenKeyFile(callerCtx(t), path)
+			checkRefusal(t, f, err, path+lockSuffix, tc.is, tc.isNot)
+		})
+		t.Run("Create "+tc.name, func(t *testing.T) {
+			path := filepath.Join(privateDir(t), "sealing.key")
+			f := openKeyless(t, path)
+			stub(t, path+lockSuffix, tc.answer)
+			checkErr(t, f.Create(callerCtx(t)), path+lockSuffix, tc.is, append([]error{fs.ErrClosed}, tc.isNot...))
+			checkNoWrite(t, f, path)
+		})
+	}
+	t.Run("OpenKeyFile lock path missing, key file gone", func(t *testing.T) {
 		path := writeKeyFile(t, privateDir(t), text, 0o600)
 		stubAcquireLease(t, func(_ context.Context, lockPath string) (*filesafe.Lease, error) {
 			if err := os.Remove(path); err != nil {
@@ -633,5 +834,50 @@ func TestLeaseAnswers(t *testing.T) {
 		})
 		f, err := OpenKeyFile(t.Context(), path)
 		checkKeyless(t, f, err)
+	})
+	closeEnded := []struct {
+		name   string
+		answer func(ctx context.Context, lockPath string) error
+	}{
+		{"bare context error", func(ctx context.Context, _ string) error { return ctx.Err() }},
+		{"lease held", func(ctx context.Context, p string) error {
+			return fmt.Errorf("%w: %s: %w", filesafe.ErrLeaseHeld, p, ctx.Err())
+		}},
+		{"not regular", func(_ context.Context, p string) error {
+			return &filesafe.NotRegularError{Name: p, Mode: fs.ModeDir | 0o700}
+		}},
+	}
+	for _, tc := range closeEnded {
+		t.Run("Create, Close ends the wait, "+tc.name, func(t *testing.T) {
+			path := filepath.Join(privateDir(t), "sealing.key")
+			f := openKeyless(t, path)
+			closed := make(chan error, 1)
+			stubAcquireLease(t, func(ctx context.Context, lockPath string) (*filesafe.Lease, error) {
+				go func() { closed <- f.Close() }()
+				select {
+				case <-ctx.Done():
+				case <-time.After(5 * time.Second):
+					t.Error("Close did not end the lease wait")
+				}
+				return nil, tc.answer(ctx, lockPath)
+			})
+			checkErr(t, f.Create(t.Context()), path, []error{fs.ErrClosed}, []error{ErrKeyFileInUse, ErrUnsafeKeyFile})
+			if err := <-closed; err != nil {
+				t.Errorf("Close = %v, want nil", err)
+			}
+			checkNoWrite(t, f, path)
+		})
+	}
+	t.Run("Create, its own deadline ends the wait", func(t *testing.T) {
+		path := filepath.Join(privateDir(t), "sealing.key")
+		f := openKeyless(t, path)
+		stubAcquireLease(t, func(ctx context.Context, lockPath string) (*filesafe.Lease, error) {
+			<-ctx.Done()
+			return nil, fmt.Errorf("%w: %s: %w", filesafe.ErrLeaseHeld, lockPath, ctx.Err())
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		checkErr(t, f.Create(ctx), path+lockSuffix, []error{ErrKeyFileInUse, context.DeadlineExceeded}, []error{fs.ErrClosed})
+		checkNoWrite(t, f, path)
 	})
 }
