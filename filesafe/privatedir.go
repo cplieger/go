@@ -19,9 +19,8 @@ type PrivateDirResult struct {
 	// when the error is nil, except on the pre-existing-and-already-private
 	// path, where it is what was found.
 	Mode os.FileMode
-	// Created reports whether THIS call created the directory — the field
-	// the repair decision turns on: a directory this process just made is
-	// one no other writer has ever held a name to.
+	// Created reports whether THIS call created the directory, one no other
+	// writer has ever held a name to, so a widened mode is always repaired.
 	Created bool
 	// Repaired reports whether this call chmod'ed the directory to 0700: a
 	// Created directory whose stored mode was not what was asked (an
