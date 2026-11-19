@@ -1074,3 +1074,100 @@ func TestOlderCoveringEndNotedLate(t *testing.T) {
 		r.nextWake(t, "quick", "", own, 24*time.Hour)
 	})
 }
+
+// proposingKinds is quick and prop, a proposing kind whose Covers covers
+// quick; neither has a slot, and prop's jobs wait on their Gate and end
+// failed at the scope p:fail, ok at any other.
+func proposingKinds() []scheduler.KindSpec[payload] {
+	prop := spec("prop", "")
+	prop.Proposes = true
+	prop.Covers = func(_, other scheduler.Job[payload]) bool { return other.Kind == "quick" }
+	prop.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+		select {
+		case <-r.Job().Payload.Gate:
+		case <-ctx.Done():
+		}
+		if r.Job().Scope == "p:fail" {
+			return scheduler.End{Result: scheduler.ResultFailed}
+		}
+		return scheduler.End{Result: scheduler.ResultOK}
+	}
+	return []scheduler.KindSpec[payload]{spec("quick", ""), prop}
+}
+
+// gated builds a job that waits on gate.
+type gated func(gate <-chan struct{}) scheduler.Job[payload]
+
+// endsOutOfOrder schedules quick, starts older then later, ends older with
+// its End held after the store wrote it, ends later a minute after, then
+// releases older's End, so the executor notes the later end first. It
+// answers the later end.
+func endsOutOfOrder(t *testing.T, r *rig, s *heldEnds, older, later gated) scheduler.Record {
+	t.Helper()
+	r.schedule(t, "quick", "", dailyRetry)
+	time.Sleep(10 * time.Minute)
+	og, lg := make(chan struct{}), make(chan struct{})
+	o := r.start(t, older(og))
+	synctest.Wait()
+	l := r.start(t, later(lg))
+	synctest.Wait()
+	s.hold(o.Job)
+	close(og)
+	<-s.entered
+	time.Sleep(time.Minute)
+	close(lg)
+	synctest.Wait()
+	close(s.release)
+	synctest.Wait()
+	end := r.rec(t, l.Job)
+	if got := r.rec(t, o.Job).EndedAt; !got.Before(end.EndedAt) {
+		t.Fatalf("held job ended at %v, want before the later end at %v", got, end.EndedAt)
+	}
+	return end
+}
+
+func TestProposingKindCoveringEndNotedLate(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		older, later gated
+		wait         time.Duration // from the later end
+	}{
+		{
+			name: "an older failed covering end after a later ok one",
+			older: func(g <-chan struct{}) scheduler.Job[payload] {
+				return api("prop", "p:fail", "alice", payload{Gate: g})
+			},
+			later: func(g <-chan struct{}) scheduler.Job[payload] { return api("prop", "p:ok", "alice", payload{Gate: g}) },
+			wait:  24 * time.Hour,
+		},
+		{
+			name:  "an older own ok end after a later failed covering one",
+			older: func(g <-chan struct{}) scheduler.Job[payload] { return api("quick", "", "bob", payload{Gate: g}) },
+			later: func(g <-chan struct{}) scheduler.Job[payload] {
+				return api("prop", "p:fail", "alice", payload{Gate: g})
+			},
+			wait: 15 * time.Minute,
+		},
+	} {
+		run := func(t *testing.T, restart bool) {
+			synctest.Test(t, func(t *testing.T) {
+				s := &heldEnds{Store: memrecords.New(), entered: make(chan struct{}), release: make(chan struct{})}
+				base := &rig{store: s.Store, log: &runLog{}}
+				r, stop := base.openUntil(t, scheduler.Config[payload]{Kinds: proposingKinds(), Records: s})
+				later := endsOutOfOrder(t, r, s, c.older, c.later)
+				if restart {
+					stop()
+					r = base.open(t, scheduler.Config[payload]{Kinds: proposingKinds()})
+					synctest.Wait()
+					r.schedule(t, "quick", "", dailyRetry)
+				}
+				if got, want := r.ex.Deadline("quick", ""), later.EndedAt.Add(72*time.Hour); !got.Equal(want) {
+					t.Errorf("Deadline = %v, want %v: the later end plus the lease", got, want)
+				}
+				r.nextWake(t, "quick", "", later.EndedAt, c.wait)
+			})
+		}
+		t.Run(c.name+", in process", func(t *testing.T) { run(t, false) })
+		t.Run(c.name+", after a restart", func(t *testing.T) { run(t, true) })
+	}
+}
