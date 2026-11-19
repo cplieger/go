@@ -19,11 +19,18 @@ func (r *Run[P]) Item(ctx context.Context, i int, fn func(ctx context.Context) L
 	if claimed, err := en.claim(i); !claimed {
 		return err
 	}
+	taken := false
+	defer func() {
+		// Also on a panic out of Observer.SlotWait, so a later Item runs the line.
+		if !taken {
+			en.unclaim(i)
+		}
+	}()
 	release, err := e.takeItem(ctx, en)
 	if err != nil {
-		en.unclaim(i)
 		return err
 	}
+	taken = true
 	defer release()
 	ended := false
 	defer func() {
@@ -86,13 +93,21 @@ func (e *Executor[P]) takeItem(ctx context.Context, en *job[P]) (func(), error) 
 	if err != nil {
 		return nil, err
 	}
+	handed := false
+	defer func() {
+		// Also on a panic out of Observer.SlotWait, which Run's recover would
+		// otherwise leave holding the slot for good.
+		if !handed {
+			release()
+		}
+	}()
 	if e.observer.SlotWait != nil {
 		e.observer.SlotWait(en.spec.Slot, Batch, en.slot.waited(w))
 	}
 	if err := e.stoppedErr(ctx, en); err != nil {
-		release()
 		return nil, err
 	}
+	handed = true
 	return release, nil
 }
 

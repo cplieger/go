@@ -692,6 +692,16 @@ func (e *Executor[P]) flush(en *job[P]) {
 		return
 	}
 	r.busy = true
+	delivered := false
+	defer func() {
+		// A Transition panic Run's recover takes must not leave busy set, or
+		// no later flush delivers the job's end.
+		if !delivered {
+			r.mu.Lock()
+			r.busy = false
+			r.mu.Unlock()
+		}
+	}()
 	for len(r.pending) > 0 {
 		tr := r.pending[0]
 		r.pending = r.pending[1:]
@@ -700,5 +710,6 @@ func (e *Executor[P]) flush(en *job[P]) {
 		r.mu.Lock()
 	}
 	r.busy = false
+	delivered = true
 	r.mu.Unlock()
 }

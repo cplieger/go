@@ -235,6 +235,34 @@ func TestObserverPanicInRunEndsJob(t *testing.T) {
 			r.wantSlotFreed(t)
 		})
 	})
+	t.Run("the slot wait of a yield taking its slot back", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			lines, seen := &logLines{}, &transitions{}
+			obs := seen.observer()
+			var calls atomic.Int32
+			obs.SlotWait = func(string, scheduler.Class, time.Duration) {
+				if calls.Add(1) == 2 {
+					panic("slot wait gauge")
+				}
+			}
+			full := spec("full", "passes")
+			full.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+				_ = run.Yield(ctx, time.Now().Add(time.Minute))
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{
+				Kinds:  []scheduler.KindSpec[payload]{full, spec("next", "passes")},
+				Logger: slog.New(lines), Observer: obs,
+			})
+			s := r.start(t, timer("full", "", payload{}))
+			time.Sleep(time.Minute)
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultFailed, panicked)
+			wantPanicLogged(t, lines, "slot wait gauge", "TestObserverPanicInRunEndsJob")
+			wantLastResult(t, seen, s.Job, scheduler.ResultFailed)
+			r.wantSlotFreed(t)
+		})
+	})
 	t.Run("a transition of a phase Run reached", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			lines, seen := &logLines{}, &transitions{}
