@@ -174,8 +174,8 @@ func checkedAPI(t *testing.T, cases []checkCase, log *bytes.Buffer) *httpwire.AP
 		}
 	}
 	tb := &httpwire.Table{Catalog: httpwire.NewCatalog(), Prefix: "/api", Endpoints: []httpwire.Endpoint{
-		row("items.check", "/api/items/check", "Check an item", reflect.TypeFor[httpwire.Checked[checkedItem]]()),
-		row("items.checkplus", "/api/items/checkplus", "Check an item with its read time", reflect.TypeFor[checkedPlus]()),
+		row("items.check", "/items/check", "Check an item", reflect.TypeFor[httpwire.Checked[checkedItem]]()),
+		row("items.checkplus", "/items/checkplus", "Check an item with its read time", reflect.TypeFor[checkedPlus]()),
 	}}
 	api, err := httpwire.New(tb, []httpwire.Binding{
 		httpwire.Bind("items.check", func(_ context.Context, c httpwire.Call[noP, checkQuery, noB, noH]) (httpwire.Checked[checkedItem], error) {

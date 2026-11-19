@@ -77,11 +77,11 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	}
 	for i := range d.Endpoints {
 		ep := &d.Endpoints[i]
-		a.mux.Handle(ep.Method+" "+ep.Path, &route{a.rowHandler(ep, bound[ep.Name])})
+		a.mux.Handle(pattern(d.Prefix, ep), &route{a.rowHandler(ep, bound[ep.Name])})
 	}
 	for _, m := range d.Mounts {
 		for i := range m.Rows {
-			a.mux.Handle(m.Rows[i].Method+" "+m.Rows[i].Path, &route{a.mountHandler(&m.Rows[i], m.Handler)})
+			a.mux.Handle(pattern(d.Prefix, &m.Rows[i]), &route{a.mountHandler(&m.Rows[i], m.Handler)})
 		}
 	}
 	return a, nil
@@ -631,8 +631,8 @@ func (c *newChecker) document() *Schema {
 		switch {
 		case op == nil:
 			c.fail("row %q has no operation of that operationId in the document", ep.Name)
-		case op.method != ep.Method || op.path != ep.Path:
-			c.fail("row %q is %s %s, but the document's operation is %s %s", ep.Name, ep.Method, ep.Path, op.method, op.path)
+		case op.method != ep.Method || op.path != c.t.Prefix+ep.Path:
+			c.fail("row %q is %s, but the document's operation is %s %s", ep.Name, pattern(c.t.Prefix, ep), op.method, op.path)
 		default:
 			c.idempotencyPolicy(ep, op)
 			if !r.mount {

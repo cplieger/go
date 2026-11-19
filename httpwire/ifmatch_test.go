@@ -50,17 +50,17 @@ func ifMatchTable() *httpwire.Table {
 		Prefix: "/api", Catalog: httpwire.NewCatalog(),
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "notes.read", Method: http.MethodGet, Path: "/api/notes/{id}", Summary: "Read a note",
+				Name: "notes.read", Method: http.MethodGet, Path: "/notes/{id}", Summary: "Read a note",
 				Description: "Reads one note and its tag.", Params: reflect.TypeFor[noteParams](), Response: reflect.TypeFor[note](),
 				Access: public,
 			},
 			{
-				Name: "notes.save", Method: http.MethodPut, Path: "/api/notes/{id}", Summary: "Save a note",
+				Name: "notes.save", Method: http.MethodPut, Path: "/notes/{id}", Summary: "Save a note",
 				Description: "Saves a note read at its tag.", Params: reflect.TypeFor[noteParams](), Request: reflect.TypeFor[noteBody](),
 				Access: public, IfMatch: true,
 			},
 			{
-				Name: "notes.merge", Method: http.MethodPost, Path: "/api/notes/{id}/merge", Summary: "Merge a note",
+				Name: "notes.merge", Method: http.MethodPost, Path: "/notes/{id}/merge", Summary: "Merge a note",
 				Description: "Merges a note from a base tag.", Params: reflect.TypeFor[noteParams](), Request: reflect.TypeFor[mergeBody](),
 				Access: public,
 			},

@@ -6,7 +6,9 @@ This page describes how httpwire admits, decodes and answers each row of a table
 
 `New(table, bindings, options...)` checks the table, its bindings and its options together, and its error lists every refusal at once, so an app fails at start and never at a request. `Derive` runs the table checks that need no binding, and fills each row's `Errors` with its union.
 
-`WithSchema` is required. Every operation of the document must match one row by `operationId`, method and path, and every row one operation. Each `Params`, `Query` and `Headers` field must be a declared parameter, required as the field is, and a row has a JSON request body exactly when it has a `Request`. A `Keyed` row's operation carries the `x-idempotency` policy the binder enforces (`docs/wire.md`), which `PolicyOf` answers for the row, and no other operation carries one.
+A row's `Path` is relative to the table's `Prefix`: the API serves the row at `Prefix` then `Path` (`Prefix: "/api"` and `Path: "/items/{id}"` serve `/api/items/{id}`), and a `Path` that repeats the prefix is not stripped, so `/api/x` under `/api` serves `/api/api/x`. A `Path` starts with `/` and holds literal segments and whole-segment `{name}` wildcards, and two rows whose full paths one request could match are refused.
+
+`WithSchema` is required. Every operation of the document must match one row by `operationId`, method and full path, and every row one operation. Each `Params`, `Query` and `Headers` field must be a declared parameter, required as the field is, and a row has a JSON request body exactly when it has a `Request`. A `Keyed` row's operation carries the `x-idempotency` policy the binder enforces (`docs/wire.md`), which `PolicyOf` answers for the row, and no other operation carries one.
 
 A row whose class is not `Public` also needs `WithGuard`, `WithCredential` and `WithCursorOwner`. A row whose class admits a key needs `WithKeyRate`. A `Held` or `Keyed` row needs `WithHold`, a row with `Changes` needs `WithFeed`, and a `Keyed` `Raw` row needs `WithSpoolDir`. A table naming a `ClientHeader` needs `WithClientFloor`.
 

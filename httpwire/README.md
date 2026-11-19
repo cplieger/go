@@ -32,7 +32,7 @@ table := &httpwire.Table{
 	Prefix:  "/api",
 	Catalog: httpwire.NewCatalog(),
 	Endpoints: []httpwire.Endpoint{{
-		Name: "items.get", Method: http.MethodGet, Path: "/api/items/{id}",
+		Name: "items.get", Method: http.MethodGet, Path: "/items/{id}",
 		Summary: "Read an item", Description: "Reads one item.",
 		Params: reflect.TypeFor[itemRef](), Response: reflect.TypeFor[item](),
 		Access: httpwire.Access{Class: httpwire.Public},

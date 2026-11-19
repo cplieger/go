@@ -110,29 +110,29 @@ func decodeTable() *httpwire.Table {
 		Prefix: "/api", Catalog: httpwire.NewCatalog(), MaxBody: 512,
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "items.get", Method: http.MethodGet, Path: "/api/items/{kind}/{n}", Summary: "Read an item", Description: "Reads one item.",
+				Name: "items.get", Method: http.MethodGet, Path: "/items/{kind}/{n}", Summary: "Read an item", Description: "Reads one item.",
 				Params: reflect.TypeFor[itemParams](), Response: reflect.TypeFor[itemOut](), Access: public,
 			},
 			{
-				Name: "items.file", Method: http.MethodGet, Path: "/api/items/{kind}/{n}/file", Summary: "Download an item",
+				Name: "items.file", Method: http.MethodGet, Path: "/items/{kind}/{n}/file", Summary: "Download an item",
 				Description: "Downloads one item's file.", Params: reflect.TypeFor[itemParams](), Kind: httpwire.Raw, ContentType: "text/plain",
 				Access: public,
 			},
 			{
-				Name: "items.list", Method: http.MethodGet, Path: "/api/items", Summary: "List items", Description: "Lists the items.",
+				Name: "items.list", Method: http.MethodGet, Path: "/items", Summary: "List items", Description: "Lists the items.",
 				Query: reflect.TypeFor[itemQuery](), Response: reflect.TypeFor[[]itemOut](), Access: public,
 			},
 			{
-				Name: "items.holders", Method: http.MethodGet, Path: "/api/holders", Summary: "Read the holders",
+				Name: "items.holders", Method: http.MethodGet, Path: "/holders", Summary: "Read the holders",
 				Description: "Reads who holds each path.", Query: reflect.TypeFor[holdersQuery](), Response: reflect.TypeFor[[]string](),
 				Access: public,
 			},
 			{
-				Name: "items.put", Method: http.MethodPost, Path: "/api/items", Summary: "Store an item", Description: "Stores one item.",
+				Name: "items.put", Method: http.MethodPost, Path: "/items", Summary: "Store an item", Description: "Stores one item.",
 				Request: reflect.TypeFor[itemBody](), Access: public,
 			},
 			{
-				Name: "items.import", Method: http.MethodPost, Path: "/api/items/import", Summary: "Import an item",
+				Name: "items.import", Method: http.MethodPost, Path: "/items/import", Summary: "Import an item",
 				Description: "Imports one item, answering its receipt.", Request: reflect.TypeFor[itemBody](), Kind: httpwire.Raw,
 				ContentType: "text/plain", Access: public,
 			},

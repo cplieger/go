@@ -108,19 +108,20 @@ type checker struct {
 	rows    map[string]*httpwire.Endpoint
 	mux     *http.ServeMux
 	version string
+	prefix  string
 	order   []*httpwire.Endpoint
 }
 
 func newChecker(t testing.TB, api *httpwire.API) *checker {
 	b := wirelink.Inspect(api)
 	tb := api.Table()
-	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}, mux: http.NewServeMux()}
+	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}, mux: http.NewServeMux(), prefix: tb.Prefix}
 	c.schema, _ = b.Schema.(*httpwire.Schema)
 	c.guard, _ = b.Guard.(httpwire.Guard)
 	add := func(ep *httpwire.Endpoint) {
 		c.rows[ep.Name] = ep
 		c.order = append(c.order, ep)
-		c.mux.Handle(pattern(ep), http.NotFoundHandler())
+		c.mux.Handle(pattern(tb.Prefix, ep), http.NotFoundHandler())
 	}
 	for i := range tb.Endpoints {
 		add(&tb.Endpoints[i])
@@ -185,10 +186,10 @@ func (c *checker) admit(cs Case) (ep *httpwire.Endpoint, body []byte, ok bool) {
 // row's path never reaches a parameter row beside it.
 func (c *checker) reaches(ep *httpwire.Endpoint, r *http.Request) bool {
 	_, got := c.mux.Handler(r)
-	return got == pattern(ep)
+	return got == pattern(c.prefix, ep)
 }
 
-func pattern(ep *httpwire.Endpoint) string { return ep.Method + " " + ep.Path }
+func pattern(prefix string, ep *httpwire.Endpoint) string { return ep.Method + " " + prefix + ep.Path }
 
 // withBody is a copy of r reading body.
 func withBody(r *http.Request, body []byte) *http.Request {

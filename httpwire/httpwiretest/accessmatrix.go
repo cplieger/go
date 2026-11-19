@@ -81,7 +81,7 @@ func AccessMatrix(t testing.TB, table *httpwire.Table, guard httpwire.Guard, cre
 		t.Fatalf("httpwiretest: AccessMatrix: New: %v", err)
 		return
 	}
-	m.api, m.catalog = api, table.Catalog
+	m.api, m.catalog, m.prefix = api, table.Catalog, table.Prefix
 	tb := api.Table()
 	for i := range tb.Endpoints {
 		for _, c := range creds {
@@ -94,7 +94,8 @@ type matrix struct {
 	t       testing.TB
 	api     *httpwire.API
 	catalog *httpwire.Catalog
-	ran     *ranRow // set by the stub under the guard, reset before each request
+	ran     *ranRow
+	prefix  string // set by the stub under the guard, reset before each request
 }
 
 type ranRow struct {
@@ -121,7 +122,7 @@ var wildcard = regexp.MustCompile(`\{[^}]*\}`)
 // cell serves ep once as c and checks the answer.
 func (m *matrix) cell(ep *httpwire.Endpoint, c Credential) {
 	m.t.Helper()
-	path := wildcard.ReplaceAllStringFunc(ep.Path, func(w string) string {
+	path := wildcard.ReplaceAllStringFunc(m.prefix+ep.Path, func(w string) string {
 		if w == "{$}" {
 			return ""
 		}

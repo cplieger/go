@@ -78,25 +78,25 @@ func headerTable(t *testing.T) *httpwire.Table {
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "agents.get", Method: http.MethodGet, Path: "/api/agents", Summary: "Read the agent", Description: "Reads the calling agent.",
+				Name: "agents.get", Method: http.MethodGet, Path: "/agents", Summary: "Read the agent", Description: "Reads the calling agent.",
 				Headers: h, Access: public,
 			},
 			{
-				Name: "agents.post", Method: http.MethodPost, Path: "/api/agents/{kind}", Summary: "Post to an agent",
+				Name: "agents.post", Method: http.MethodPost, Path: "/agents/{kind}", Summary: "Post to an agent",
 				Description: "Posts one message to an agent.", Params: reflect.TypeFor[agentParams](), Query: reflect.TypeFor[agentQuery](),
 				Request: reflect.TypeFor[agentBody](), Headers: h, Access: public,
 			},
 			{
-				Name: "agents.file", Method: http.MethodGet, Path: "/api/agents/file", Summary: "Download the agent's file",
+				Name: "agents.file", Method: http.MethodGet, Path: "/agents/file", Summary: "Download the agent's file",
 				Description: "Downloads the calling agent's file.", Kind: httpwire.Raw, ContentType: "text/plain", Headers: h, Access: public,
 			},
 			{
-				Name: "agents.watch", Method: http.MethodGet, Path: "/api/agents/watch", Summary: "Watch the agent",
+				Name: "agents.watch", Method: http.MethodGet, Path: "/agents/watch", Summary: "Watch the agent",
 				Description: "Streams the calling agent's events.", Kind: httpwire.Stream, Headers: h, Access: public,
 				Events: []httpwire.Event{{Name: "seen", Data: reflect.TypeFor[seenEvent]()}},
 			},
 			{
-				Name: "agents.act", Method: http.MethodPost, Path: "/api/agents/act", Summary: "Act as the agent",
+				Name: "agents.act", Method: http.MethodPost, Path: "/agents/act", Summary: "Act as the agent",
 				Description: "Runs one action as the calling agent.", Request: reflect.TypeFor[agentBody](), Response: reflect.TypeFor[agentAct](),
 				Headers: h, Access: session, Keyed: true,
 			},

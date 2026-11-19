@@ -114,40 +114,40 @@ func fixtureTable(t *testing.T) *httpwire.Table {
 		Kinds:        []httpwire.FeedKind{{Name: "jobs", Source: "store"}, {Name: "keys", Source: "accounts"}, {Name: "status", Source: "live"}},
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "jobs.list", Method: http.MethodGet, Path: "/api/jobs", Summary: "List jobs", Description: "Lists the jobs.",
+				Name: "jobs.list", Method: http.MethodGet, Path: "/jobs", Summary: "List jobs", Description: "Lists the jobs.",
 				Query: reflect.TypeFor[jobQuery](), Response: reflect.TypeFor[[]job](), Access: session, Changes: []string{"jobs", "status"},
 			},
 			{
-				Name: "jobs.get", Method: http.MethodGet, Path: "/api/jobs/{id}", Summary: "Read a job", Description: "Reads one job.",
+				Name: "jobs.get", Method: http.MethodGet, Path: "/jobs/{id}", Summary: "Read a job", Description: "Reads one job.",
 				Params: reflect.TypeFor[jobParams](), Response: reflect.TypeFor[job](), Access: session, Owners: []*httpwire.Owner{jobOwner()},
 				Changes: []string{"jobs"},
 			},
 			{
-				Name: "jobs.start", Method: http.MethodPost, Path: "/api/jobs", Summary: "Start a job", Description: "Starts a job.",
+				Name: "jobs.start", Method: http.MethodPost, Path: "/jobs", Summary: "Start a job", Description: "Starts a job.",
 				Request: reflect.TypeFor[startRequest](), Response: reflect.TypeFor[job](), Status: http.StatusAccepted,
 				Access: httpwire.Access{Class: httpwire.Scoped, Scope: "operate"}, Codes: []string{"job_busy"},
 				Keyed: true, Window: 24 * time.Hour, MaxKept: 1000, Result: "jobs.list",
 				Reasons: map[string]httpwire.ReasonSet{"job_busy": {Listed: []string{"running"}}},
 			},
 			{
-				Name: "settings.save", Method: http.MethodPatch, Path: "/api/settings", Summary: "Save sign-in", Description: "Saves the sign-in methods.",
+				Name: "settings.save", Method: http.MethodPatch, Path: "/settings", Summary: "Save sign-in", Description: "Saves the sign-in methods.",
 				Request: reflect.TypeFor[otherBody](), Access: httpwire.Access{Class: httpwire.Session, PersonOnly: true, RecentAuth: true},
 				PersonActions: []string{httpwire.PersonSignInMethods}, IfMatch: true,
 			},
 			{
-				Name: "archive.export", Method: http.MethodPost, Path: "/api/archive", Summary: "Export", Description: "Exports an archive.",
+				Name: "archive.export", Method: http.MethodPost, Path: "/archive", Summary: "Export", Description: "Exports an archive.",
 				Kind: httpwire.Raw, ContentType: "application/zip", Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
 			},
 			{
-				Name: "events.wait", Method: http.MethodGet, Path: "/api/events/wait", Summary: "Wait", Description: "Waits for a nudge.",
+				Name: "events.wait", Method: http.MethodGet, Path: "/events/wait", Summary: "Wait", Description: "Waits for a nudge.",
 				Response: reflect.TypeFor[nudge](), Successes: []httpwire.Success{{Status: http.StatusNoContent}}, Access: session, Held: true,
 			},
 			{
-				Name: "live.stream", Method: http.MethodGet, Path: "/api/stream", Summary: "Stream", Description: "Streams changes.",
+				Name: "live.stream", Method: http.MethodGet, Path: "/stream", Summary: "Stream", Description: "Streams changes.",
 				Kind: httpwire.Stream, Access: session, Events: []httpwire.Event{{Name: "changed", Data: reflect.TypeFor[changed]()}},
 			},
 			{
-				Name: "auth.sso", Method: http.MethodGet, Path: "/api/sso", Summary: "Sign in", Description: "Redirects to the provider.",
+				Name: "auth.sso", Method: http.MethodGet, Path: "/sso", Summary: "Sign in", Description: "Redirects to the provider.",
 				Kind: httpwire.Redirect, Access: public, DuringOutage: true,
 			},
 		},
@@ -155,12 +155,12 @@ func fixtureTable(t *testing.T) *httpwire.Table {
 			Handler: http.NotFoundHandler(),
 			Rows: []httpwire.Endpoint{
 				{
-					Name: "auth.keys", Method: http.MethodGet, Path: "/api/auth/keys", Summary: "List keys", Description: "Lists the API keys.",
+					Name: "auth.keys", Method: http.MethodGet, Path: "/auth/keys", Summary: "List keys", Description: "Lists the API keys.",
 					Response: reflect.TypeFor[[]job](), Access: httpwire.Access{Class: httpwire.Key, Scope: "admin"},
 					Codes: []string{"auth_required", "auth_forbidden"}, Changes: []string{"keys"},
 				},
 				{
-					Name: "auth.keyCreate", Method: http.MethodPost, Path: "/api/auth/keys", Summary: "Create a key", Description: "Creates an API key.",
+					Name: "auth.keyCreate", Method: http.MethodPost, Path: "/auth/keys", Summary: "Create a key", Description: "Creates an API key.",
 					Request: reflect.TypeFor[otherBody](), Response: reflect.TypeFor[job](), Status: http.StatusCreated, Access: session,
 					Codes:   []string{"auth_required", "auth_bad_request"},
 					Reasons: map[string]httpwire.ReasonSet{"auth_bad_request": {Listed: []string{"name"}, Open: true}},
@@ -435,40 +435,40 @@ func TestDeriveRefusesTableShape(t *testing.T) {
 
 func TestDeriveRefusesNamesMethodsAndPaths(t *testing.T) {
 	runRefusals(t, map[string]refusal{
-		"empty name":            {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "" }), []string{`row ""`, "name"}},
-		"name with no area":     {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "list" }), []string{`row "list"`, "name"}},
-		"name uppercase start":  {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "Jobs.list" }), []string{`row "Jobs.list"`, "name"}},
-		"name empty segment":    {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "jobs..list" }), []string{`row "jobs..list"`, "name"}},
-		"name punctuation":      {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "jobs.list-all" }), []string{`row "jobs.list-all"`, "name"}},
-		"name twice":            {edit("jobs.get", func(e *httpwire.Endpoint) { e.Name = "jobs.list" }), []string{`row "jobs.list"`, "twice"}},
-		"name of a mount row":   {edit("jobs.get", func(e *httpwire.Endpoint) { e.Name = "auth.keys" }), []string{`row "auth.keys"`, "twice"}},
-		"method HEAD":           {edit("jobs.list", func(e *httpwire.Endpoint) { e.Method = http.MethodHead }), []string{`row "jobs.list"`, "method"}},
-		"method lowercase":      {edit("jobs.list", func(e *httpwire.Endpoint) { e.Method = "get" }), []string{`row "jobs.list"`, "method"}},
-		"mount method":          {edit("auth.keys", func(e *httpwire.Endpoint) { e.Method = "OPTIONS" }), []string{`row "auth.keys"`, "method"}},
-		"path outside prefix":   {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/other/jobs" }), []string{`row "jobs.list"`, "Prefix"}},
-		"path sharing a prefix": {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/apijobs" }), []string{`row "jobs.list"`, "Prefix"}},
-		"path is the prefix":    {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api" }), []string{`row "jobs.list"`, "Prefix"}},
-		"mount path outside":    {edit("auth.keys", func(e *httpwire.Endpoint) { e.Path = "/auth/keys" }), []string{`row "auth.keys"`, "Prefix"}},
-		"trailing slash":        {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api/jobs/" }), []string{`row "jobs.list"`, "path"}},
-		"empty segment":         {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api//jobs" }), []string{`row "jobs.list"`, "path"}},
-		"partial wildcard":      {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/api/jobs/x{id}" }), []string{`row "jobs.get"`, "path"}},
-		"end anchor":            {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api/jobs/{$}" }), []string{`row "jobs.list"`, "path"}},
-		"rest wildcard":         {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/api/jobs/{id...}" }), []string{`row "jobs.get"`, "path"}},
-		"wildcard twice":        {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/api/{id}/jobs/{id}" }), []string{`row "jobs.get"`, "path"}},
-		"wildcard name":         {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/api/jobs/{1d}" }), []string{`row "jobs.get"`, "path"}},
-		"query in path":         {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api/jobs?all" }), []string{`row "jobs.list"`, "path"}},
-		"space in path":         {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api/my jobs" }), []string{`row "jobs.list"`, "path"}},
-		"bad escape":            {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/api/jobs%2" }), []string{`row "jobs.list"`, "path"}},
+		"empty name":           {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "" }), []string{`row ""`, "name"}},
+		"name with no area":    {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "list" }), []string{`row "list"`, "name"}},
+		"name uppercase start": {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "Jobs.list" }), []string{`row "Jobs.list"`, "name"}},
+		"name empty segment":   {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "jobs..list" }), []string{`row "jobs..list"`, "name"}},
+		"name punctuation":     {edit("jobs.list", func(e *httpwire.Endpoint) { e.Name = "jobs.list-all" }), []string{`row "jobs.list-all"`, "name"}},
+		"name twice":           {edit("jobs.get", func(e *httpwire.Endpoint) { e.Name = "jobs.list" }), []string{`row "jobs.list"`, "twice"}},
+		"name of a mount row":  {edit("jobs.get", func(e *httpwire.Endpoint) { e.Name = "auth.keys" }), []string{`row "auth.keys"`, "twice"}},
+		"method HEAD":          {edit("jobs.list", func(e *httpwire.Endpoint) { e.Method = http.MethodHead }), []string{`row "jobs.list"`, "method"}},
+		"method lowercase":     {edit("jobs.list", func(e *httpwire.Endpoint) { e.Method = "get" }), []string{`row "jobs.list"`, "method"}},
+		"mount method":         {edit("auth.keys", func(e *httpwire.Endpoint) { e.Method = "OPTIONS" }), []string{`row "auth.keys"`, "method"}},
+		"path with no slash":   {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "jobs" }), []string{`row "jobs.list"`, "path"}},
+		"empty path":           {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "" }), []string{`row "jobs.list"`, "path"}},
+		"path only a slash":    {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/" }), []string{`row "jobs.list"`, "path"}},
+		"mount path no slash":  {edit("auth.keys", func(e *httpwire.Endpoint) { e.Path = "auth/keys" }), []string{`row "auth.keys"`, "path"}},
+		"trailing slash":       {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/jobs/" }), []string{`row "jobs.list"`, "path"}},
+		"empty segment":        {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "//jobs" }), []string{`row "jobs.list"`, "path"}},
+		"partial wildcard":     {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/jobs/x{id}" }), []string{`row "jobs.get"`, "path"}},
+		"end anchor":           {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/jobs/{$}" }), []string{`row "jobs.list"`, "path"}},
+		"rest wildcard":        {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/jobs/{id...}" }), []string{`row "jobs.get"`, "path"}},
+		"wildcard twice":       {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/{id}/jobs/{id}" }), []string{`row "jobs.get"`, "path"}},
+		"wildcard name":        {edit("jobs.get", func(e *httpwire.Endpoint) { e.Path = "/jobs/{1d}" }), []string{`row "jobs.get"`, "path"}},
+		"query in path":        {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/jobs?all" }), []string{`row "jobs.list"`, "path"}},
+		"space in path":        {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/my jobs" }), []string{`row "jobs.list"`, "path"}},
+		"bad escape":           {edit("jobs.list", func(e *httpwire.Endpoint) { e.Path = "/jobs%2" }), []string{`row "jobs.list"`, "path"}},
 		"one method and pattern": {
-			edit("jobs.get", func(e *httpwire.Endpoint) { e.Path, e.Params = "/api/jobs", nil }), []string{`"jobs.get"`, `"jobs.list"`},
+			edit("jobs.get", func(e *httpwire.Endpoint) { e.Path, e.Params = "/jobs", nil }), []string{`"jobs.get"`, `"jobs.list"`},
 		},
 		"table row on a mount pattern": {
-			edit("jobs.get", func(e *httpwire.Endpoint) { e.Path, e.Params = "/api/auth/keys", nil }), []string{`"jobs.get"`, `"auth.keys"`},
+			edit("jobs.get", func(e *httpwire.Endpoint) { e.Path, e.Params = "/auth/keys", nil }), []string{`"jobs.get"`, `"auth.keys"`},
 		},
 		"ambiguous patterns": {
 			func(tb *httpwire.Table) {
-				addRow(httpwire.Endpoint{Name: "a.one", Method: http.MethodGet, Path: "/api/x/{b}", Params: reflect.TypeFor[jobParams]()})(tb)
-				addRow(httpwire.Endpoint{Name: "a.two", Method: http.MethodGet, Path: "/api/{a}/y", Params: reflect.TypeFor[jobParams]()})(tb)
+				addRow(httpwire.Endpoint{Name: "a.one", Method: http.MethodGet, Path: "/x/{b}", Params: reflect.TypeFor[jobParams]()})(tb)
+				addRow(httpwire.Endpoint{Name: "a.two", Method: http.MethodGet, Path: "/{a}/y", Params: reflect.TypeFor[jobParams]()})(tb)
 			},
 			[]string{`"a.one"`, `"a.two"`},
 		},
@@ -566,11 +566,11 @@ func TestDeriveRefusesAccess(t *testing.T) {
 
 func TestDeriveAcceptsAccessForms(t *testing.T) {
 	tb := fixtureTable(t)
-	addRow(httpwire.Endpoint{Name: "key.any", Method: http.MethodGet, Path: "/api/k1", Access: httpwire.Access{Class: httpwire.Key}})(tb)
-	addRow(httpwire.Endpoint{Name: "key.scope", Method: http.MethodGet, Path: "/api/k2", Access: httpwire.Access{Class: httpwire.Key, Scope: "read"}})(tb)
-	addRow(httpwire.Endpoint{Name: "person.scope", Method: http.MethodGet, Path: "/api/p", Access: httpwire.Access{Class: httpwire.Session, PersonOnly: true, Scope: "admin"}})(tb)
-	addRow(httpwire.Endpoint{Name: "scoped.step", Method: http.MethodPost, Path: "/api/s", Access: httpwire.Access{Class: httpwire.Scoped, Scope: "admin", RecentAuth: true, HTTPS: true}})(tb)
-	addRow(httpwire.Endpoint{Name: "session.passive", Method: http.MethodGet, Path: "/api/r", Access: httpwire.Access{Class: httpwire.Session, Passive: true}})(tb)
+	addRow(httpwire.Endpoint{Name: "key.any", Method: http.MethodGet, Path: "/k1", Access: httpwire.Access{Class: httpwire.Key}})(tb)
+	addRow(httpwire.Endpoint{Name: "key.scope", Method: http.MethodGet, Path: "/k2", Access: httpwire.Access{Class: httpwire.Key, Scope: "read"}})(tb)
+	addRow(httpwire.Endpoint{Name: "person.scope", Method: http.MethodGet, Path: "/p", Access: httpwire.Access{Class: httpwire.Session, PersonOnly: true, Scope: "admin"}})(tb)
+	addRow(httpwire.Endpoint{Name: "scoped.step", Method: http.MethodPost, Path: "/s", Access: httpwire.Access{Class: httpwire.Scoped, Scope: "admin", RecentAuth: true, HTTPS: true}})(tb)
+	addRow(httpwire.Endpoint{Name: "session.passive", Method: http.MethodGet, Path: "/r", Access: httpwire.Access{Class: httpwire.Session, Passive: true}})(tb)
 	row(tb, "live.stream").Events[0].Readers = httpwire.Access{Class: httpwire.Scoped, Scope: "read"}
 	if _, err := httpwire.Derive(tb, guardCodes); err != nil {
 		t.Errorf("Derive = %v, want nil", err)
@@ -815,7 +815,7 @@ func TestDeriveRefusesAnIncomparableSentinel(t *testing.T) {
 
 func TestUnionOfARawRead(t *testing.T) {
 	tb := fixtureTable(t)
-	addRow(httpwire.Endpoint{Name: "files.get", Method: http.MethodGet, Path: "/api/file", Kind: httpwire.Raw, ContentType: "text/csv", DuringOutage: true})(tb)
+	addRow(httpwire.Endpoint{Name: "files.get", Method: http.MethodGet, Path: "/file", Kind: httpwire.Raw, ContentType: "text/csv", DuringOutage: true})(tb)
 	got, err := httpwire.Derive(tb, guardCodes)
 	if err != nil {
 		t.Fatal(err)

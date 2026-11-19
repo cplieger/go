@@ -23,19 +23,19 @@ func outcomeAPI(t *testing.T) *httpwire.API {
 	row := func(name, method, path, summary string, codes ...string) httpwire.Endpoint {
 		return httpwire.Endpoint{Name: name, Method: method, Path: path, Summary: summary, Description: summary + ".", Access: session, Codes: codes}
 	}
-	keyed := row("act.keyed", http.MethodPost, "/api/act/keyed", "Act keyed", "outcome_unknown")
+	keyed := row("act.keyed", http.MethodPost, "/act/keyed", "Act keyed", "outcome_unknown")
 	keyed.Keyed = true
 	c := httpwire.NewCatalog()
 	if err := c.Add("auth_required", httpserver.CodeSpec{Status: http.StatusUnauthorized, Remediation: "Sign in."}); err != nil {
 		t.Fatal(err)
 	}
 	tb := &httpwire.Table{Catalog: c, Prefix: "/api", Endpoints: []httpwire.Endpoint{
-		row("act.unkeyed", http.MethodPost, "/api/act", "Act unkeyed", "outcome_unknown"),
+		row("act.unkeyed", http.MethodPost, "/act", "Act unkeyed", "outcome_unknown"),
 		keyed,
-		row("act.plain", http.MethodPost, "/api/act/plain", "Act plainly"),
-		row("act.read", http.MethodGet, "/api/act", "Read the act", "outcome_unknown"),
+		row("act.plain", http.MethodPost, "/act/plain", "Act plainly"),
+		row("act.read", http.MethodGet, "/act", "Read the act", "outcome_unknown"),
 	}, Mounts: []httpwire.Mount{{Handler: http.NotFoundHandler(), Rows: []httpwire.Endpoint{
-		row("mount.act", http.MethodPut, "/api/mount/act", "Act through the mount", "outcome_unknown"),
+		row("mount.act", http.MethodPut, "/mount/act", "Act through the mount", "outcome_unknown"),
 	}}}}
 	none := func(context.Context, httpwire.Call[httpwire.None, httpwire.None, httpwire.None, httpwire.None]) (httpwire.None, error) {
 		return httpwire.None{}, nil

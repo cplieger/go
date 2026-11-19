@@ -334,7 +334,7 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	if !isRowMethod(ep.Method) {
 		c.fail("%s: method %q is not GET, POST, PUT, PATCH or DELETE", at, ep.Method)
 	}
-	wildcards, err := pathWildcards(c.t.Prefix, ep.Path)
+	wildcards, err := pathWildcards(ep.Path)
 	if err != nil {
 		c.fail("%s: %v", at, err)
 	} else if (len(wildcards) > 0) != (ep.Params != nil) {
@@ -391,7 +391,7 @@ func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 
 // pathParams holds ep's Params fields to its path's wildcards, one each.
 func (c *tableChecker) pathParams(ep *Endpoint, at string, mount bool) {
-	wildcards, _ := pathWildcards(c.t.Prefix, ep.Path)
+	wildcards, _ := pathWildcards(ep.Path)
 	fields, problems := textFields(ep.Params)
 	for _, name := range wildcards {
 		if !slices.ContainsFunc(fields, func(f textField) bool { return f.name == name }) {
@@ -873,14 +873,17 @@ func (c *tableChecker) reasons(ep *Endpoint, at string) {
 // together (one method and pattern, or two patterns neither more specific)
 // are refused here, naming both.
 func (c *tableChecker) patterns(refs []rowRef) {
+	if !validPrefix(c.t.Prefix) {
+		return
+	}
 	mux := http.NewServeMux()
 	var done []*Endpoint
 	for _, r := range refs {
 		ep := r.ep
-		if _, err := pathWildcards(c.t.Prefix, ep.Path); err != nil || !isRowMethod(ep.Method) {
+		if _, err := pathWildcards(ep.Path); err != nil || !isRowMethod(ep.Method) {
 			continue
 		}
-		if err := register(mux, ep); err != nil {
+		if err := register(mux, c.t.Prefix, ep); err != nil {
 			c.overlap(done, ep, err)
 			continue
 		}
@@ -893,10 +896,10 @@ func (c *tableChecker) overlap(done []*Endpoint, ep *Endpoint, err error) {
 	found := false
 	for _, other := range done {
 		m := http.NewServeMux()
-		_ = register(m, other)
-		if register(m, ep) != nil {
+		_ = register(m, c.t.Prefix, other)
+		if register(m, c.t.Prefix, ep) != nil {
 			found = true
-			c.fail("rows %q and %q: %s %s and %s %s overlap, so one request would match both", other.Name, ep.Name, other.Method, other.Path, ep.Method, ep.Path)
+			c.fail("rows %q and %q: %s and %s overlap, so one request would match both", other.Name, ep.Name, pattern(c.t.Prefix, other), pattern(c.t.Prefix, ep))
 		}
 	}
 	if !found {
@@ -904,15 +907,19 @@ func (c *tableChecker) overlap(done []*Endpoint, ep *Endpoint, err error) {
 	}
 }
 
-func register(mux *http.ServeMux, ep *Endpoint) (err error) {
+func register(mux *http.ServeMux, prefix string, ep *Endpoint) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("%v", p)
 		}
 	}()
-	mux.Handle(ep.Method+" "+ep.Path, http.NotFoundHandler())
+	mux.Handle(pattern(prefix, ep), http.NotFoundHandler())
 	return nil
 }
+
+// pattern is ep's ServeMux pattern: its method and its full path, the
+// table's Prefix then the row's Path.
+func pattern(prefix string, ep *Endpoint) string { return ep.Method + " " + prefix + ep.Path }
 
 func isRowMethod(m string) bool {
 	switch m {
@@ -999,13 +1006,13 @@ func isLiteralSegment(seg string) bool {
 
 func isHex(b byte) bool { return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F' }
 
-// pathWildcards checks that path is the prefix then one or more segments,
-// each a literal or a whole {name}, names unique, and answers the wildcard
-// names in path order.
-func pathWildcards(prefix, path string) ([]string, error) {
-	rest, ok := strings.CutPrefix(path, prefix+"/")
-	if !ok || prefix == "" {
-		return nil, fmt.Errorf("path %q is not under Prefix %q", path, prefix)
+// pathWildcards checks that path is "/" then one or more segments, each a
+// literal or a whole {name}, names unique, and answers the wildcard names in
+// path order.
+func pathWildcards(path string) ([]string, error) {
+	rest, ok := strings.CutPrefix(path, "/")
+	if !ok {
+		return nil, fmt.Errorf("path %q does not start with \"/\"", path)
 	}
 	var names []string
 	for seg := range strings.SplitSeq(rest, "/") {

@@ -74,11 +74,11 @@ func pageTable(t testing.TB) *httpwire.Table {
 	return &httpwire.Table{
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{
-			listRow("items.list", "/api/items", "List items", session, reflect.TypeFor[httpwire.List[entry]]()),
-			listRow("items.archived", "/api/items/archived", "List archived items", session, reflect.TypeFor[archivedPage]()),
-			listRow("items.public", "/api/public/items", "List public items", public, reflect.TypeFor[httpwire.List[entry]]()),
-			handleRow("handles.seal", "/api/handles", "Seal a handle", session),
-			handleRow("handles.public", "/api/public/handles", "Seal a public handle", public),
+			listRow("items.list", "/items", "List items", session, reflect.TypeFor[httpwire.List[entry]]()),
+			listRow("items.archived", "/items/archived", "List archived items", session, reflect.TypeFor[archivedPage]()),
+			listRow("items.public", "/public/items", "List public items", public, reflect.TypeFor[httpwire.List[entry]]()),
+			handleRow("handles.seal", "/handles", "Seal a handle", session),
+			handleRow("handles.public", "/public/handles", "Seal a public handle", public),
 		},
 	}
 }
@@ -865,7 +865,7 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 		}, []string{`row "items.list"`, "JSON"}},
 		"a mount List row with no Page": {func(tb *httpwire.Table) {
 			tb.Mounts = []httpwire.Mount{{Handler: http.NotFoundHandler(), Rows: []httpwire.Endpoint{{
-				Name: "auth.keys", Method: http.MethodGet, Path: "/api/auth/keys", Summary: "List keys", Description: "Lists keys.",
+				Name: "auth.keys", Method: http.MethodGet, Path: "/auth/keys", Summary: "List keys", Description: "Lists keys.",
 				Response: reflect.TypeFor[httpwire.List[entry]](), Access: session, List: true, Codes: []string{"auth_required"},
 			}}}}
 		}, []string{`row "auth.keys"`, "Page"}},

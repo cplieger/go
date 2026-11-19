@@ -47,15 +47,15 @@ func personTable(t *testing.T) *httpwire.Table {
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "archive.export", Method: http.MethodPost, Path: "/api/archive", Summary: "Export an archive", Description: "Export an archive.",
+				Name: "archive.export", Method: http.MethodPost, Path: "/archive", Summary: "Export an archive", Description: "Export an archive.",
 				Kind: httpwire.Raw, ContentType: "application/zip", Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
 			},
 			{
-				Name: "settings.save", Method: http.MethodPost, Path: "/api/settings", Summary: "Save settings", Description: "Save settings.",
+				Name: "settings.save", Method: http.MethodPost, Path: "/settings", Summary: "Save settings", Description: "Save settings.",
 				Access: session, PersonActions: []string{httpwire.PersonSecretRetarget},
 			},
 			{
-				Name: "keys.rotate", Method: http.MethodPost, Path: "/api/keys/rotate", Summary: "Rotate a key", Description: "Rotate a key.",
+				Name: "keys.rotate", Method: http.MethodPost, Path: "/keys/rotate", Summary: "Rotate a key", Description: "Rotate a key.",
 				Access: httpwire.Access{Class: httpwire.Session, PersonOnly: true, RecentAuth: true}, PersonActions: []string{httpwire.PersonKeyRotate},
 			},
 		},

@@ -67,43 +67,43 @@ func keyedTable(t testing.TB) *httpwire.Table {
 		Prefix: "/api", Catalog: c,
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "users.read", Method: http.MethodGet, Path: "/api/users", Summary: "Read the users", Description: "Read the users.",
+				Name: "users.read", Method: http.MethodGet, Path: "/users", Summary: "Read the users", Description: "Read the users.",
 				Response: reflect.TypeFor[[]account](), Access: session,
 			},
 			{
-				Name: "users.register", Method: http.MethodPost, Path: "/api/users", Summary: "Register a user", Description: "Register a user.",
+				Name: "users.register", Method: http.MethodPost, Path: "/users", Summary: "Register a user", Description: "Register a user.",
 				Request: reflect.TypeFor[regBody](), Response: reflect.TypeFor[account](), Status: http.StatusCreated,
 				Successes: []httpwire.Success{{Status: http.StatusOK, Response: reflect.TypeFor[account]()}},
 				Access:    session, Keyed: true, Result: "users.read",
 			},
 			{
-				Name: "jobs.read", Method: http.MethodGet, Path: "/api/jobs", Summary: "Read the jobs", Description: "Read the jobs.",
+				Name: "jobs.read", Method: http.MethodGet, Path: "/jobs", Summary: "Read the jobs", Description: "Read the jobs.",
 				Response: reflect.TypeFor[[]jobAnswer](), Access: session,
 			},
 			{
-				Name: "jobs.start", Method: http.MethodPost, Path: "/api/jobs", Summary: "Start a job", Description: "Start a job.",
+				Name: "jobs.start", Method: http.MethodPost, Path: "/jobs", Summary: "Start a job", Description: "Start a job.",
 				Request: reflect.TypeFor[jobBody](), Response: reflect.TypeFor[jobAnswer](), Status: http.StatusAccepted,
 				Access: session, Keyed: true, Result: "jobs.read", Codes: jobCodes,
 			},
 			{
-				Name: "jobs.quick", Method: http.MethodPost, Path: "/api/jobs/quick", Summary: "Run a quick job", Description: "Run a quick job.",
+				Name: "jobs.quick", Method: http.MethodPost, Path: "/jobs/quick", Summary: "Run a quick job", Description: "Run a quick job.",
 				Request: reflect.TypeFor[jobBody](), Response: reflect.TypeFor[jobAnswer](), Access: session, Keyed: true, Codes: jobCodes,
 			},
 			{
-				Name: "jobs.retry", Method: http.MethodPost, Path: "/api/jobs/{id}/retry", Summary: "Retry a job", Description: "Retry a job.",
+				Name: "jobs.retry", Method: http.MethodPost, Path: "/jobs/{id}/retry", Summary: "Retry a job", Description: "Retry a job.",
 				Params: reflect.TypeFor[retryParams](), Query: reflect.TypeFor[retryQuery](), Request: reflect.TypeFor[jobBody](),
 				Response: reflect.TypeFor[jobAnswer](), Access: session, Keyed: true,
 			},
 			{
-				Name: "notes.save", Method: http.MethodPut, Path: "/api/notes", Summary: "Save the note", Description: "Save the note.",
+				Name: "notes.save", Method: http.MethodPut, Path: "/notes", Summary: "Save the note", Description: "Save the note.",
 				Request: reflect.TypeFor[noteText](), Access: session, Keyed: true, IfMatch: true,
 			},
 			{
-				Name: "notes.touch", Method: http.MethodPost, Path: "/api/notes/touch", Summary: "Touch the note", Description: "Touch the note.",
+				Name: "notes.touch", Method: http.MethodPost, Path: "/notes/touch", Summary: "Touch the note", Description: "Touch the note.",
 				Access: session,
 			},
 			{
-				Name: "files.get", Method: http.MethodGet, Path: "/api/files", Summary: "Read a file", Description: "Read a file.",
+				Name: "files.get", Method: http.MethodGet, Path: "/files", Summary: "Read a file", Description: "Read a file.",
 				Kind: httpwire.Raw, ContentType: "text/plain", Access: session,
 			},
 		},
@@ -303,7 +303,7 @@ func publishPolicies(t testing.TB, doc []byte, tb *httpwire.Table) []byte {
 		if ep.Result != "" {
 			extra["result"] = ep.Result
 		}
-		op := d["paths"].(map[string]any)[ep.Path].(map[string]any)[strings.ToLower(ep.Method)].(map[string]any)
+		op := d["paths"].(map[string]any)[tb.Prefix+ep.Path].(map[string]any)[strings.ToLower(ep.Method)].(map[string]any)
 		op["x-idempotency"] = policy(int(window/time.Second), extra)
 	}
 	b, err := json.Marshal(d)

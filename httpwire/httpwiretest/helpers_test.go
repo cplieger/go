@@ -206,31 +206,31 @@ func (f *fixture) table(personal bool) *httpwire.Table {
 	row := func(name, method, path, summary string, a httpwire.Access) httpwire.Endpoint {
 		return httpwire.Endpoint{Name: name, Method: method, Path: path, Summary: summary, Description: summary + ".", Access: a}
 	}
-	mine := row("jobs.mine", http.MethodGet, "/api/my/jobs", "List my jobs", session)
+	mine := row("jobs.mine", http.MethodGet, "/my/jobs", "List my jobs", session)
 	mine.Response, mine.Changes, mine.Personal = reflect.TypeFor[jobsAnswer](), []string{"jobs"}, personal
-	own := row("jobs.own", http.MethodGet, "/api/own/jobs", "List own jobs", session)
+	own := row("jobs.own", http.MethodGet, "/own/jobs", "List own jobs", session)
 	own.Response, own.Personal = reflect.TypeFor[jobsAnswer](), true
-	all := row("jobs.all", http.MethodGet, "/api/jobs", "List jobs", session)
+	all := row("jobs.all", http.MethodGet, "/jobs", "List jobs", session)
 	all.Query, all.Response, all.List, all.Changes = reflect.TypeFor[jobQuery](), reflect.TypeFor[httpwire.List[job]](), true, []string{"jobs"}
-	get := row("jobs.get", http.MethodGet, "/api/jobs/{id}", "Read a job", session)
+	get := row("jobs.get", http.MethodGet, "/jobs/{id}", "Read a job", session)
 	get.Params, get.Response, get.Codes, get.Changes = reflect.TypeFor[jobParams](), reflect.TypeFor[job](), []string{"job_missing"}, []string{"jobs"}
-	csv := row("jobs.csv", http.MethodGet, "/api/jobs.csv", "Export jobs", session)
+	csv := row("jobs.csv", http.MethodGet, "/jobs.csv", "Export jobs", session)
 	csv.Kind, csv.ContentType, csv.Changes, csv.Personal = httpwire.Raw, "text/csv", []string{"jobs"}, personal
 	csv.Successes = []httpwire.Success{{Status: http.StatusNoContent}}
-	stream := row("live.stream", http.MethodGet, "/api/stream", "Stream", session)
+	stream := row("live.stream", http.MethodGet, "/stream", "Stream", session)
 	stream.Kind, stream.Events = httpwire.Stream, []httpwire.Event{{Name: "changed", Data: reflect.TypeFor[job]()}}
 
-	pget := row("probe.get", http.MethodGet, "/api/probe", "Read the probe", public)
+	pget := row("probe.get", http.MethodGet, "/probe", "Read the probe", public)
 	pget.Response, pget.Codes = reflect.TypeFor[probe](), []string{"probe_missing"}
-	pmake := row("probe.make", http.MethodPost, "/api/probe", "Make a probe", public)
+	pmake := row("probe.make", http.MethodPost, "/probe", "Make a probe", public)
 	pmake.Status, pmake.Response = http.StatusCreated, reflect.TypeFor[probe]()
 	pmake.Successes = []httpwire.Success{{Status: http.StatusOK, Response: reflect.TypeFor[probe]()}}
-	pdrop := row("probe.drop", http.MethodDelete, "/api/probe", "Drop the probe", public)
-	pfile := row("probe.file", http.MethodGet, "/api/probe/file", "Read the probe file", public)
+	pdrop := row("probe.drop", http.MethodDelete, "/probe", "Drop the probe", public)
+	pfile := row("probe.file", http.MethodGet, "/probe/file", "Read the probe file", public)
 	pfile.Kind, pfile.ContentType = httpwire.Raw, "text/csv"
-	paway := row("probe.away", http.MethodGet, "/api/probe/away", "Leave the probe", public)
+	paway := row("probe.away", http.MethodGet, "/probe/away", "Leave the probe", public)
 	paway.Kind = httpwire.Redirect
-	pitem := row("probe.item", http.MethodGet, "/api/probe/{name}", "Read a named probe", public)
+	pitem := row("probe.item", http.MethodGet, "/probe/{name}", "Read a named probe", public)
 	pitem.Params, pitem.Response = reflect.TypeFor[probeParams](), reflect.TypeFor[probe]()
 	return &httpwire.Table{
 		Catalog: f.catalog, Prefix: "/api", OnePerson: personal,

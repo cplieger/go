@@ -139,7 +139,7 @@ func TestDeriveAcceptsEveryBinderFieldType(t *testing.T) {
 func TestDeriveLeavesMountRowFieldsToTheMount(t *testing.T) {
 	tb := fixtureTable(t)
 	tb.Mounts[0].Rows = append(tb.Mounts[0].Rows, httpwire.Endpoint{
-		Name: "auth.keyGet", Method: http.MethodGet, Path: "/api/auth/keys/{id}", Summary: "Read a key", Description: "Reads one key.",
+		Name: "auth.keyGet", Method: http.MethodGet, Path: "/auth/keys/{id}", Summary: "Read a key", Description: "Reads one key.",
 		Params: reflect.TypeFor[struct {
 			ID string `json:"id"`
 		}](), Response: reflect.TypeFor[job](), Access: session,

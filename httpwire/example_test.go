@@ -61,7 +61,7 @@ func ExampleNew() {
 		Prefix:  "/api",
 		Catalog: httpwire.NewCatalog(),
 		Endpoints: []httpwire.Endpoint{{
-			Name: "items.get", Method: http.MethodGet, Path: "/api/items/{id}",
+			Name: "items.get", Method: http.MethodGet, Path: "/items/{id}",
 			Summary: "Read an item", Description: "Reads one item.",
 			Params: reflect.TypeFor[exampleRef](), Response: reflect.TypeFor[exampleItem](),
 			Access: httpwire.Access{Class: httpwire.Public},

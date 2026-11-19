@@ -171,7 +171,7 @@ func TestDeriveRefusesQueryLists(t *testing.T) {
 		"a list of no items":      {list("holders.zero", nil, reflect.TypeFor[zeroCapQuery]()), []string{`row "holders.zero"`, "MaxItems"}},
 	})
 	tb := fixtureTable(t)
-	addRow(httpwire.Endpoint{Name: "holders.optional", Method: http.MethodGet, Path: "/api/holders", Query: reflect.TypeFor[optionalHolders]()})(tb)
+	addRow(httpwire.Endpoint{Name: "holders.optional", Method: http.MethodGet, Path: "/holders", Query: reflect.TypeFor[optionalHolders]()})(tb)
 	if _, err := httpwire.Derive(tb, guardCodes); err != nil {
 		t.Errorf("Derive of an optional query list = %v, want nil", err)
 	}

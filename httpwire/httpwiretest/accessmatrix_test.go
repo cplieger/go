@@ -106,26 +106,26 @@ func matrixTable(t testing.TB) *httpwire.Table {
 		return httpwire.Endpoint{Name: name, Method: method, Path: path, Summary: summary, Description: summary + ".", Access: a}
 	}
 	session := httpwire.Access{Class: httpwire.Session}
-	feed := row("feed.read", http.MethodGet, "/api/feed", "Read the feed", httpwire.Access{Class: httpwire.Key})
+	feed := row("feed.read", http.MethodGet, "/feed", "Read the feed", httpwire.Access{Class: httpwire.Key})
 	feed.Kind, feed.ContentType = httpwire.Raw, "text/plain"
-	get := row("items.get", http.MethodGet, "/api/items/{id}", "Read an item", httpwire.Access{Class: httpwire.Scoped, Scope: "read"})
+	get := row("items.get", http.MethodGet, "/items/{id}", "Read an item", httpwire.Access{Class: httpwire.Scoped, Scope: "read"})
 	get.Params = reflect.TypeFor[itemParams]()
-	live := row("live.stream", http.MethodGet, "/api/live", "Stream the live events", httpwire.Access{Class: httpwire.Session, Passive: true})
+	live := row("live.stream", http.MethodGet, "/live", "Stream the live events", httpwire.Access{Class: httpwire.Session, Passive: true})
 	live.Kind, live.Events = httpwire.Stream, []httpwire.Event{{Name: "tick", Data: reflect.TypeFor[tick]()}}
 	return &httpwire.Table{Catalog: c, Prefix: "/api", Endpoints: []httpwire.Endpoint{
-		row("open.read", http.MethodGet, "/api/open", "Read the open page", httpwire.Access{Class: httpwire.Public}),
-		row("me.read", http.MethodGet, "/api/me", "Read me", session),
-		row("me.save", http.MethodPost, "/api/me", "Save me", httpwire.Access{Class: httpwire.Session, RecentAuth: true}),
-		row("security.read", http.MethodGet, "/api/security", "Read the security settings", httpwire.Access{Class: httpwire.Session, PersonOnly: true}),
-		row("security.save", http.MethodPost, "/api/security", "Save the security settings", httpwire.Access{Class: httpwire.Session, PersonOnly: true, RecentAuth: true}),
-		row("roles.read", http.MethodGet, "/api/roles", "Read the roles", httpwire.Access{Class: httpwire.Session, PersonOnly: true, Scope: "admin"}),
+		row("open.read", http.MethodGet, "/open", "Read the open page", httpwire.Access{Class: httpwire.Public}),
+		row("me.read", http.MethodGet, "/me", "Read me", session),
+		row("me.save", http.MethodPost, "/me", "Save me", httpwire.Access{Class: httpwire.Session, RecentAuth: true}),
+		row("security.read", http.MethodGet, "/security", "Read the security settings", httpwire.Access{Class: httpwire.Session, PersonOnly: true}),
+		row("security.save", http.MethodPost, "/security", "Save the security settings", httpwire.Access{Class: httpwire.Session, PersonOnly: true, RecentAuth: true}),
+		row("roles.read", http.MethodGet, "/roles", "Read the roles", httpwire.Access{Class: httpwire.Session, PersonOnly: true, Scope: "admin"}),
 		feed,
-		row("exports.read", http.MethodGet, "/api/exports", "Read the exports", httpwire.Access{Class: httpwire.Key, Scope: "operate"}),
-		row("items.list", http.MethodGet, "/api/items", "List the items", httpwire.Access{Class: httpwire.Scoped, Scope: "read"}),
+		row("exports.read", http.MethodGet, "/exports", "Read the exports", httpwire.Access{Class: httpwire.Key, Scope: "operate"}),
+		row("items.list", http.MethodGet, "/items", "List the items", httpwire.Access{Class: httpwire.Scoped, Scope: "read"}),
 		get,
-		row("items.drop", http.MethodDelete, "/api/items", "Drop the items", httpwire.Access{Class: httpwire.Scoped, Scope: "admin"}),
-		row("keys.permit", http.MethodPost, "/api/keys/permit", "Permit a key", httpwire.Access{Class: httpwire.Scoped, Scope: "admin", RecentAuth: true}),
-		row("secure.read", http.MethodGet, "/api/secure", "Read over HTTPS", httpwire.Access{Class: httpwire.Session, HTTPS: true}),
+		row("items.drop", http.MethodDelete, "/items", "Drop the items", httpwire.Access{Class: httpwire.Scoped, Scope: "admin"}),
+		row("keys.permit", http.MethodPost, "/keys/permit", "Permit a key", httpwire.Access{Class: httpwire.Scoped, Scope: "admin", RecentAuth: true}),
+		row("secure.read", http.MethodGet, "/secure", "Read over HTTPS", httpwire.Access{Class: httpwire.Session, HTTPS: true}),
 		live,
 	}}
 }

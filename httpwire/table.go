@@ -23,8 +23,8 @@ type Endpoint struct {
 	Name string
 	// Method is GET, POST, PUT, PATCH or DELETE; a GET row also answers HEAD.
 	Method string
-	// Path is a ServeMux pattern under the table's Prefix: literal segments
-	// and whole-segment {name} wildcards.
+	// Path is relative to the table's Prefix, which New prepends: "/" then
+	// literal segments and whole-segment {name} wildcards.
 	Path        string
 	Summary     string
 	Description string
@@ -153,7 +153,7 @@ const (
 // Table is an app's API: its rows, owners, feed kinds and mounts.
 type Table struct {
 	Catalog *Catalog
-	// Prefix starts every row's path: "/api", "/v1".
+	// Prefix starts every row's full path, Prefix then Path: "/api", "/v1".
 	Prefix string
 	// ClientHeader is the header a client version floor reads; "" is no
 	// floor.
