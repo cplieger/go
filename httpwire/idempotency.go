@@ -39,13 +39,14 @@ type KeptAnswer struct {
 	Oversize bool
 }
 
-// IdempotencyStore keeps settled answers; the join of a request still in
-// flight is always in memory. A store that writes the key in the work's
-// own transaction reads it with Idempotency inside the handler, answers it
-// from Load, and makes Save a no-op. A Load error answers internal_error.
-// A Save error is logged and the answer is kept in memory, under the
-// default store's bounds, until Expires: a resend to this process replays
-// it, and one after a restart runs again.
+// IdempotencyStore keeps settled answers; a request in flight is joined in
+// memory. A store that writes the key in the work's transaction reads it
+// with Idempotency in the handler, answers it from Load, and makes Save a
+// no-op. A Load error answers internal_error. A Save error is logged and
+// the answer kept in this process's memory until Expires. That memory
+// admits a new key by the default bounds over the answers it holds, not
+// the runs in flight, so runs whose saves all fail can pass those bounds by
+// their number; no kept answer is dropped to hold them.
 type IdempotencyStore interface {
 	Load(ctx context.Context, k IdempotencyKey) (KeptAnswer, bool, error)
 	Save(ctx context.Context, k IdempotencyKey, a KeptAnswer) error

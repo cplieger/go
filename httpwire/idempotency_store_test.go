@@ -390,6 +390,46 @@ func TestFailedSaveKeepsTheAnswerInMemory(t *testing.T) {
 			t.Errorf("another credential answered %d %s, want its run", rec.Code, rec.Body)
 		}
 	})
+	t.Run("a burst whose saves fail keeps every answer past the count", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{save: errors.New("disk full")}}, nil)
+			release := make(chan struct{})
+			var n atomic.Int64
+			kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+				<-release
+				return jobAnswer{ID: strconv.FormatInt(n.Add(1), 10)}, nil
+			}
+			a := asCredential("s:a")
+			first := make([]string, 1_005)
+			var wg sync.WaitGroup
+			for i := range first {
+				wg.Go(func() {
+					rec := kf.quickJob(`"`+strconv.Itoa(i)+`"`, a...)
+					if rec.Code != http.StatusOK {
+						t.Errorf("key %d answered %d %s, want its run", i, rec.Code, rec.Body)
+					}
+					first[i] = rec.Body.String()
+				})
+			}
+			synctest.Wait()
+			if runs := kf.runsOf("jobs.quick"); runs != len(first) {
+				t.Errorf("%d runs in flight, want all %d past the default count of 1,000", runs, len(first))
+			}
+			close(release)
+			wg.Wait()
+			for i, body := range first {
+				if rec := kf.quickJob(`"`+strconv.Itoa(i)+`"`, a...); rec.Code != http.StatusOK || rec.Body.String() != body {
+					t.Errorf("key %d's resend answered %d %s, want its own answer %s replayed", i, rec.Code, rec.Body, body)
+				}
+			}
+			if runs := kf.runsOf("jobs.quick"); runs != len(first) {
+				t.Errorf("after the resends, %d runs, want %d: none ran twice", runs, len(first))
+			}
+			if rec := kf.quickJob(`"more"`, a...); codeOf(t, rec) != "idempotency_store_full" || kf.runsOf("jobs.quick") != len(first) {
+				t.Errorf("the next new key answered %d %s, want idempotency_store_full and no run", rec.Code, rec.Body)
+			}
+		})
+	})
 	t.Run("a store that saved keeps nothing in memory", func(t *testing.T) {
 		kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{}}, nil)
 		kf.quickJob(`"s"`)
