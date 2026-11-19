@@ -167,23 +167,20 @@ func privateModeErr(fi os.FileInfo, dir string) error {
 	return nil
 }
 
-// syncParent fsyncs dir's parent. On failure it removes a dir this call
-// created with rmdir(2), which removes only an empty directory and never a
-// file or link swapped in at the name.
+// syncParent fsyncs dir's parent. A failure leaves dir in place, created or
+// found: another caller may already hold a nil verdict on it, and a retry
+// finds it and syncs again.
 func syncParent(dir string, created bool) error {
 	parent := filepath.Dir(dir)
 	err := fsyncDir(parent)
 	if err == nil {
 		return nil
 	}
-	if !created {
-		return fmt.Errorf("%w: %s (%s found; left in place): %w", ErrParentNotSynced, parent, dir, err)
+	how := "found"
+	if created {
+		how = "created"
 	}
-	if rmErr := syscall.Rmdir(dir); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-		return fmt.Errorf("%w: %s (%s created; not removed): %w", ErrParentNotSynced, parent, dir,
-			errors.Join(err, fmt.Errorf("filesafe: removing %s: %w", dir, rmErr)))
-	}
-	return fmt.Errorf("%w: %s (%s created; removed again): %w", ErrParentNotSynced, parent, dir, err)
+	return fmt.Errorf("%w: %s (%s %s; left in place): %w", ErrParentNotSynced, parent, dir, how, err)
 }
 
 // mkdirPrivate creates dir at 0700 and reports whether THIS call created

@@ -39,7 +39,7 @@ type PrivateDirResult struct {
 }
 ```
 
-The result is meaningful only beside a nil error. A non-nil error can follow a successful `mkdir`, so the directory may exist while its ownership is unproven. Treat that as fatal rather than retrying into it, except `ErrParentNotSynced`: the parent sync failed after every check passed. A directory the call created is then removed again while it is still empty, and a directory it found is left, so a retry creates or finds it and syncs again.
+The result is meaningful only beside a nil error. A non-nil error can follow a successful `mkdir`, so the directory may exist while its ownership is unproven. Treat that as fatal rather than retrying into it, except `ErrParentNotSynced`: the parent sync failed after every check passed. The directory stays where it is, whether the call created it or found it, so a retry finds it, reports `Created` false, and syncs again.
 
 `WithLogger` sets the logger for the one `Warn` a repair emits, since a filesystem that ignores mode requests affects every other `mkdir` in the program too. `EnsurePrivateDir` takes only these two options, so a write option passed to it does not compile, and the mode is not a parameter.
 

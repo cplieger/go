@@ -4,7 +4,6 @@ package filesafe
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -83,7 +82,7 @@ func TestEnsurePrivateDir_SyncsTheParentOfADirectoryItFinds(t *testing.T) {
 	})
 }
 
-func TestEnsurePrivateDir_FailedSyncAfterCreateRemovesTheEmptyDirectory(t *testing.T) {
+func TestEnsurePrivateDir_FailedSyncAfterCreateLeavesTheDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "priv")
 	stubFsyncDir(t, func(string) error { return errInjectedSync })
 
@@ -97,27 +96,41 @@ func TestEnsurePrivateDir_FailedSyncAfterCreateRemovesTheEmptyDirectory(t *testi
 	if res != (PrivateDirResult{}) {
 		t.Errorf("result = %+v, want the zero result", res)
 	}
-	if _, lerr := os.Lstat(dir); !errors.Is(lerr, fs.ErrNotExist) {
-		t.Errorf("Lstat(dir) = %v, want fs.ErrNotExist: the created directory must be removed", lerr)
+	fi, lerr := os.Lstat(dir)
+	if lerr != nil {
+		t.Fatalf("Lstat(dir) = %v, want the created directory left in place", lerr)
+	}
+	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+		t.Errorf("dir mode = %v, want a directory at 0700", fi.Mode())
 	}
 }
 
-func TestEnsurePrivateDir_FailedSyncAfterCreateKeepsADirectoryARacerFilled(t *testing.T) {
+// A second caller can find the directory, sync the parent and return nil
+// while the creator's own sync is failing; the creator must not take the
+// directory away from it.
+func TestEnsurePrivateDir_FailedSyncAfterCreateKeepsAConcurrentFindersDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "priv")
-	file := filepath.Join(dir, "racer")
-	stubFsyncDir(t, func(string) error {
-		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-			t.Errorf("racer write: %v", err)
+	orig := fsyncDir
+	var finderErr error
+	calls := 0
+	stubFsyncDir(t, func(parent string) error {
+		calls++
+		if calls > 1 {
+			return orig(parent)
 		}
+		_, finderErr = EnsurePrivateDir(dir)
 		return errInjectedSync
 	})
 
-	_, err := EnsurePrivateDir(dir)
-	if !errors.Is(err, ErrParentNotSynced) {
-		t.Errorf("err = %v, want ErrParentNotSynced", err)
+	_, creatorErr := EnsurePrivateDir(dir)
+	if !errors.Is(creatorErr, ErrParentNotSynced) {
+		t.Errorf("creator err = %v, want ErrParentNotSynced", creatorErr)
 	}
-	if _, serr := os.Stat(file); serr != nil {
-		t.Errorf("Stat(racer's file) = %v, want it left in place", serr)
+	if finderErr != nil {
+		t.Errorf("finder err = %v, want nil", finderErr)
+	}
+	if _, err := os.Lstat(dir); err != nil {
+		t.Errorf("Lstat(dir) = %v, want the directory the finder was promised", err)
 	}
 }
 
@@ -160,8 +173,8 @@ func TestEnsurePrivateDir_RetryAfterAFailedSyncSucceeds(t *testing.T) {
 		if err != nil {
 			t.Fatalf("retry EnsurePrivateDir = %v, want nil", err)
 		}
-		if !res.Created {
-			t.Errorf("retry Created = false, want true: the failed call removed the directory")
+		if res.Created {
+			t.Errorf("retry Created = true, want false: the failed call left the directory")
 		}
 		if got := calls(); got != 2 {
 			t.Errorf("parent syncs = %d, want 2", got)

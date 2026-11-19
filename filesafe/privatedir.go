@@ -11,8 +11,8 @@ import (
 // Only meaningful alongside a nil error: a non-nil error means no verdict
 // was reached, not "nothing happened", since the mkdir may have succeeded
 // before a later step refused the result. Treat a failure as fatal, except
-// ErrParentNotSynced, which a caller may retry: a directory the call created
-// was removed again while still empty, and a found one was left.
+// ErrParentNotSynced, which a caller may retry: the directory, created or
+// found, was left in place, and a retry finds it and syncs again.
 type PrivateDirResult struct {
 	// Mode is the mode the filesystem actually stored, read back from the
 	// open handle (permission bits plus setuid/setgid/sticky). Always 0700
