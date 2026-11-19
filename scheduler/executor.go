@@ -25,10 +25,10 @@ type KindSpec[P any] struct {
 	Fresh func(scope string) time.Duration
 	// Covers is optional: when a job of this kind starts, each queued or
 	// yielded job it covers, its record being written included, ends without
-	// running its own work, and its moving end moves the deadline of each
-	// scheduled scope whose timer job it covers. For that deadline it is
-	// asked with started's Kind and Scope only. The executor calls it holding
-	// its lock, so it must not call the executor.
+	// running its own work. Its moving end also counts for each scheduled
+	// scope whose timer job it covers when later than the scope's own end;
+	// for that it is asked with started's Kind and Scope only. The executor
+	// calls it holding its lock, so it must not call the executor.
 	Covers func(started, other Job[P]) bool
 	// Items is a batch kind's item count, read from the payload at Start;
 	// required with MaxItems > 0 and refused without it.
