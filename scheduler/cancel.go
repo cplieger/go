@@ -3,14 +3,13 @@ package scheduler
 import "context"
 
 // Cancel ends a queued job cancelled without running, its record being
-// written included, and cancels a running or yielded job's context so it
-// ends cancelled at the phase it reached, committing nothing. stopping is
-// true for a job that still has to return. It answers ErrCommitting once the
-// job's Commit answered true, ErrNotCancellable for an ended job and
-// ErrUnknownJob for an unknown id; a repeat answers as the first cancel did.
-// A job of a kind that keeps no record is unknown once it has ended.
-// ErrStoreUnavailable wraps a failed read of an ended job's record; ctx's
-// error ending that read is answered as it is.
+// written included, and cancels a running or yielded job's context so it ends
+// cancelled at the phase it reached, committing nothing; stopping is true for
+// a job that still has to return. It answers ErrCommitting once the job's
+// Commit answered true, ErrNotCancellable for an ended job, and ErrUnknownJob
+// for an unknown id or an ended job of a kind that keeps no record; a repeat
+// answers as the first did. ErrStoreUnavailable wraps a failed read of an
+// ended job's record; ctx's error ending that read is answered as it is.
 func (e *Executor[P]) Cancel(ctx context.Context, id ID) (stopping bool, err error) {
 	e.mu.Lock()
 	en := e.findLocked(id)
