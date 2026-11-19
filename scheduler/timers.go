@@ -441,11 +441,12 @@ func (e *Executor[P]) wake(key ScheduledScope, t *timed, gen uint64) {
 }
 
 // releaseStandInLocked re-arms each scheduled scope whose stand-in wake waits
-// on job id, which ended at at. Called after noteEndLocked, which re-arms a
-// scope whose base the end moved and so clears its standIn: the end moved no
-// base of a scope left, and is held in memory only, like a refusal. The next
-// wake is at plus Retry's d, or the interval, so a cancel or a covering end
-// that counts for nothing never re-runs the job at once.
+// on job id, which ended at at. A caller notes a moving end first
+// (noteEndLocked), which re-arms a scope whose base it moved and so clears its
+// standIn, so the end moved no base of a scope left; it is held in memory
+// only, like a refusal. The next wake is at plus Retry's d, or the interval,
+// so a cancel or a covering end that counts for nothing never re-runs the job
+// at once.
 func (e *Executor[P]) releaseStandInLocked(id ID, at time.Time) {
 	for key, t := range e.scheduled {
 		if t.standIn == id {
