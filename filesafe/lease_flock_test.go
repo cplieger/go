@@ -511,11 +511,16 @@ func TestAcquireLease_ReportsAModeTheFilesystemDidNotStore(t *testing.T) {
 	for _, form := range exclusiveLeaseForms {
 		t.Run(form.name, func(t *testing.T) {
 			stubEnforceMode(t)
-			path := filepath.Join(t.TempDir(), "app.lock")
+			dir := t.TempDir()
+			path := filepath.Join(dir, "app.lock")
 			if l, err := form.take(t.Context(), path); !errors.Is(err, ErrModeNotStored) {
 				_ = closeIfLease(l)
 				t.Errorf("err = %v, want ErrModeNotStored", err)
 			}
+			if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Lstat(lock file) = %v, want fs.ErrNotExist: a file whose mode failed never appears", err)
+			}
+			assertNoTempLeak(t, dir)
 		})
 	}
 }
@@ -560,6 +565,76 @@ func TestAcquireLease_CreatesTheLockFileAt0600AndLeavesIt(t *testing.T) {
 			if _, err := os.Lstat(path); err != nil {
 				t.Errorf("Lstat(lock file) after Close = %v, want it left in place", err)
 			}
+		})
+	}
+}
+
+// wrapEnforceMode runs before ahead of the real enforceMode, restoring it on
+// test end. Callers must not use t.Parallel: package state.
+func wrapEnforceMode(t *testing.T, before func()) {
+	t.Helper()
+	orig := enforceMode
+	t.Cleanup(func() { enforceMode = orig })
+	enforceMode = func(f *os.File, want os.FileMode) (os.FileMode, error) {
+		before()
+		return orig(f, want)
+	}
+}
+
+func TestAcquireLease_SetsTheModeBeforeTheLockFileAppears(t *testing.T) {
+	for _, form := range exclusiveLeaseForms {
+		t.Run(form.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "app.lock")
+			wrapEnforceMode(t, func() {
+				if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("Lstat(lock file) while its mode is set = %v, want fs.ErrNotExist", err)
+				}
+			})
+			l, err := form.take(t.Context(), path)
+			if err != nil {
+				t.Fatalf("err = %v, want a lease", err)
+			}
+			defer func() { _ = l.Close() }()
+			if ok, err := l.Covers(); !ok || err != nil {
+				t.Errorf("Covers = (%v, %v), want (true, nil)", ok, err)
+			}
+			assertNoTempLeak(t, dir)
+		})
+	}
+}
+
+func TestAcquireLease_LockFileMadeByARacingCreatorIsTheOneLocked(t *testing.T) {
+	for _, form := range exclusiveLeaseForms {
+		t.Run(form.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "app.lock")
+			var racer os.FileInfo
+			wrapEnforceMode(t, func() {
+				f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+				if err != nil {
+					t.Errorf("racing creator: %v", err)
+					return
+				}
+				racer, err = f.Stat()
+				if err != nil {
+					t.Errorf("racing creator stat: %v", err)
+				}
+				_ = f.Close()
+			})
+			l, err := form.take(t.Context(), path)
+			if err != nil {
+				t.Fatalf("err = %v, want a lease on the racer's lock file", err)
+			}
+			defer func() { _ = l.Close() }()
+			held, err := l.f.Stat()
+			if err != nil {
+				t.Fatalf("stat held file: %v", err)
+			}
+			if racer == nil || !os.SameFile(held, racer) {
+				t.Errorf("held lock file is not the one the racer created")
+			}
+			assertNoTempLeak(t, dir)
 		})
 	}
 }

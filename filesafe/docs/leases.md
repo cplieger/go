@@ -12,7 +12,7 @@ The kernel ties the lock to the open file, so it drops it when the holder closes
 
 ## The lock file
 
-Name the lock file after what it guards, `<path>.lock`, in the same directory. The exclusive forms create it at 0600, owned by the process's user, when it is missing. They create no directory, so a missing parent is an error matching `fs.ErrNotExist`. The shared forms never create it: a missing file is an error matching `fs.ErrNotExist`, which a reader can take to mean no exclusive holder has run yet.
+Name the lock file after what it guards, `<path>.lock`, in the same directory. The exclusive forms create it at 0600, owned by the process's user, when it is missing. They create no directory, so a missing parent is an error matching `fs.ErrNotExist`. They make the file under a temporary name in the same directory, set its mode, and only then link it to its path, so no other process can open it there before its mode is 0600. A filesystem without hard links cannot create one that way, but a lock file made there beforehand at 0600 works. A crash between the create and the link leaves a temp file that `CleanupStaleTemps` reclaims. The shared forms never create it: a missing file is an error matching `fs.ErrNotExist`, which a reader can take to mean no exclusive holder has run yet.
 
 Never remove a lock file, even after `Close`. A holder that waited on the removed file would lock it while a newcomer locks the new one, and both would believe they hold the lease. `Covers` tells a holder whether the file it locked is still at its path.
 
@@ -22,7 +22,7 @@ Before it locks, every form refuses, from the open descriptor:
 - a directory, FIFO, socket or device, with `ErrNotRegular` (a `*NotRegularError`);
 - a file another user owns, with `ErrNotOwned`, since its owner could swap it;
 - a file with group or other access, with `ErrModeTooOpen`, since another user who can open it could hold the lease against you;
-- a created file whose 0600 the filesystem did not store, with `ErrModeNotStored`.
+- a created file whose 0600 the filesystem did not store, with `ErrModeNotStored`, which never reaches its path.
 
 Only the final component is checked. The lock file's directory should be one only its users can write, such as the directory the guarded file lives in.
 

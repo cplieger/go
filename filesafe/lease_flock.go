@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -17,11 +18,11 @@ const lockFileMode os.FileMode = 0o600
 // takeLease is one attempt at the lease. The Lstat after the flock proves
 // the locked file is still the one at clean.
 func takeLease(clean string, shared bool) (*Lease, error) {
-	f, created, err := openLockFile(clean, shared)
+	f, err := openLockFile(clean, shared)
 	if err != nil {
 		return nil, err
 	}
-	fi, err := checkLockFile(f, clean, created)
+	fi, err := checkLockFile(f, clean)
 	if err == nil {
 		err = flockNonBlocking(f, clean, shared)
 	}
@@ -48,31 +49,70 @@ func takeLease(clean string, shared bool) (*Lease, error) {
 // a FIFO cannot stall it. The exclusive form opens for writing, which NFS
 // and SMB need to emulate flock with a write lock (flock(2) "NFS details",
 // "CIFS details"), and creates the file when absent; the shared form opens
-// read-only and never creates. A name removed between the exclusive form's
-// two opens is ErrRaced.
-func openLockFile(clean string, shared bool) (f *os.File, created bool, err error) {
+// read-only and never creates. A name removed between a lost create race
+// and the reopen is ErrRaced.
+func openLockFile(clean string, shared bool) (*os.File, error) {
 	if shared {
-		f, err = os.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-		if err != nil {
-			return nil, false, lockOpenRefusal(err, clean)
+		return openExistingLockFile(clean, os.O_RDONLY)
+	}
+	f, err := openExistingLockFile(clean, os.O_RDWR)
+	if !errors.Is(err, fs.ErrNotExist) {
+		return f, err
+	}
+	f, lost, err := createLockFile(clean)
+	if !lost {
+		return f, err
+	}
+	f, err = openExistingLockFile(clean, os.O_RDWR)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s: %w", ErrRaced, clean, err)
+	}
+	return f, err
+}
+
+func openExistingLockFile(clean string, flag int) (*os.File, error) {
+	f, err := os.OpenFile(clean, flag|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, lockOpenRefusal(err, clean)
+	}
+	return f, nil
+}
+
+// createLockFile makes the lock file at a package temp name, sets
+// lockFileMode on it, since the umask may have narrowed it or an inherited
+// ACL widened it, and only then links it to clean, so nobody opens it there
+// at another mode. The bool reports that another creator linked first. A
+// temp name a crash leaves behind is one the temp sweeps reclaim.
+func createLockFile(clean string) (*os.File, bool, error) {
+	f, tmp, err := createLockTemp(filepath.Dir(clean))
+	if err != nil {
+		return nil, false, fmt.Errorf("filesafe: creating lock file %s: %w", clean, err)
+	}
+	defer func() { _ = os.Remove(tmp) }()
+	if _, err = enforceMode(f, lockFileMode); err != nil {
+		_ = f.Close()
+		return nil, false, err
+	}
+	if err = os.Link(tmp, clean); err != nil {
+		_ = f.Close()
+		if errors.Is(err, fs.ErrExist) {
+			return nil, true, nil
 		}
-		return f, false, nil
-	}
-	f, err = os.OpenFile(clean, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, lockFileMode)
-	if err == nil {
-		return f, true, nil
-	}
-	if !errors.Is(err, fs.ErrExist) {
-		return nil, false, lockOpenRefusal(err, clean)
-	}
-	f, err = os.OpenFile(clean, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil, false, fmt.Errorf("%w: %s: %w", ErrRaced, clean, err)
-	case err != nil:
-		return nil, false, lockOpenRefusal(err, clean)
+		return nil, false, err
 	}
 	return f, false, nil
+}
+
+// createLockTemp creates an exclusive temp in dir, retrying a name collision.
+func createLockTemp(dir string) (*os.File, string, error) {
+	for try := 0; ; try++ {
+		tmp := filepath.Join(dir, randomTempName())
+		f, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, lockFileMode)
+		if errors.Is(err, fs.ErrExist) && try < 10000 {
+			continue
+		}
+		return f, tmp, err
+	}
 }
 
 // lockOpenRefusal names a refused lock-file open by what lstat finds at
@@ -99,22 +139,15 @@ func lockOpenRefusal(err error, name string) error {
 }
 
 // checkLockFile refuses, from the open descriptor, a lock file that is not
-// a regular file owned by the effective uid, or one found with group or
-// other access. A created file is set to lockFileMode, since the umask may
-// have narrowed it; a failure leaves the file, as every lock file stays.
-func checkLockFile(f *os.File, clean string, created bool) (os.FileInfo, error) {
+// a regular file owned by the effective uid, or one with group or other
+// access.
+func checkLockFile(f *os.File, clean string) (os.FileInfo, error) {
 	fi, err := statRegular(f, clean)
 	if err != nil {
 		return nil, err
 	}
 	if err := ownerErr(fi, clean); err != nil {
 		return nil, err
-	}
-	if created {
-		if _, err := enforceMode(f, lockFileMode); err != nil {
-			return nil, err
-		}
-		return fi, nil
 	}
 	return fi, privateModeErr(fi, clean)
 }
