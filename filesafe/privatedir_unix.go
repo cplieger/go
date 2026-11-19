@@ -136,15 +136,17 @@ func checkPrivateDirInRoot(root *os.Root, clean string) error {
 	}
 	f, err := openDirInRoot(root, clean)
 	if err != nil {
-		// Classified from a lookup after the refusal, not from before, so an
-		// owner change in between is seen; SameFile keeps a name swapped since
-		// from labelling the refusal.
-		if err = racedOpen(root, clean, before, err); errors.Is(err, ErrRaced) {
-			return err
+		if !errors.Is(err, fs.ErrPermission) {
+			return racedOpen(root, clean, before, err)
 		}
+		// One lookup after the refusal classifies it, so an owner change
+		// since the Lstat is seen and a swap is ErrRaced.
 		now, lerr := root.Lstat(clean)
-		if lerr != nil || !os.SameFile(before, now) {
+		switch {
+		case lerr != nil:
 			return rootDirRefusal(root, clean, err)
+		case !os.SameFile(before, now):
+			return fmt.Errorf("%w: %w", ErrRaced, err)
 		}
 		return foreignDirErr(err, now, clean)
 	}
