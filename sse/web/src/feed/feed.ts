@@ -394,9 +394,9 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     }
   }
 
-  // The answer covers only (since, rev] on the request's epoch, so a subscription stopped, staled
-  // or re-seeded outside that span since the request takes none of it. A seed's own check catches
-  // it up from the seed when it is below its floor.
+  // The answer covers only the commits after since on the request's epoch, so a subscription
+  // re-seeded below since or onto another epoch takes none of it, and its seed's own check
+  // decides it.
   function holds(s: Sub, flight: Flight): s is Held {
     return (
       !s.stopped &&
@@ -464,7 +464,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         applyRows(s, epoch, a.rev, signals.has(s.kind), own(upserts, s.kind), own(removed, s.kind));
       } catch (e: unknown) {
         reportError(e);
-        if (!s.stopped) {
+        if (!s.stopped && !s.rereading) {
           stale(s);
         }
       }

@@ -612,6 +612,37 @@ describe("rule 5: apply", () => {
     expect(bad.log).toEqual([]);
   });
 
+  it("a sink that re-seeds its own subscription onto another epoch and then throws is read once", async () => {
+    const reported: unknown[] = [];
+    vi.stubGlobal("reportError", (e: unknown) => reported.push(e));
+    const boom = new Error("sink");
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    let self: Subscription | null = null;
+    const bad: RecordingSink = {
+      ...sink(),
+      upsert: (): void => {
+        self?.seed(position(["store", E2, 5]));
+        throw boom;
+      },
+    };
+    self = h.feed.watch("runs", bad, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({ rev: 150, upserts: { runs: [{ id: "a" }] } });
+    expect(reported).toEqual([boom]);
+    expect(bad.log).toEqual(["stale"]);
+
+    self.seed(position(["store", E1, 150]));
+    for (const r of bad.reads) {
+      r.resolve();
+    }
+    await settle();
+    h.feed.onFrame(changed("store", E1, 160, ["runs"]));
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q.since)).toEqual([100, 150]);
+  });
+
   it("an answer on another epoch than its request's stales the subscription as a full answer does", async () => {
     const h = harness();
     h.feed.onFrame(store({ runs: 100 }));
