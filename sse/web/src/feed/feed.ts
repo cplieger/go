@@ -51,6 +51,9 @@ interface Sub {
   stopped: boolean;
 }
 
+/** A subscription an in-flight answer still applies to: `holds` decides it. */
+type Held = Sub & { watermark: Watermark };
+
 interface Flight {
   readonly epoch: string;
   readonly since: number;
@@ -374,7 +377,12 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     );
   }
 
-  function endFlight(src: Src): void {
+  // A later flight may be in flight already: a sink's callback can stop this one's last
+  // subscription mid-settle, and stop() ends it and sends the queued catch-up.
+  function endFlight(src: Src, flight: Flight): void {
+    if (src.inFlight !== flight) {
+      return;
+    }
     src.inFlight = null;
     if (src.again) {
       src.again = false;
@@ -386,35 +394,46 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     }
   }
 
+  // The answer covers only (since, rev] on the request's epoch, so a subscription stopped, staled
+  // or re-seeded outside that span since the request takes none of it. A seed's own check catches
+  // it up from the seed when it is below its floor.
+  function holds(s: Sub, flight: Flight): s is Held {
+    return (
+      !s.stopped &&
+      !s.rereading &&
+      s.watermark?.epoch === flight.epoch &&
+      s.watermark.rev >= flight.since
+    );
+  }
+
+  // Checked at each subscription's turn: a sink's callback may stop or re-seed a later one.
+  function eachHeld(flight: Flight, fn: (s: Held) => void): void {
+    for (const s of flight.subs) {
+      if (holds(s, flight)) {
+        fn(s);
+      }
+    }
+  }
+
   function settleCatchUp(src: Src, flight: Flight, r: CatchUpResult): void {
     if (flight.controller.signal.aborted) {
       return;
     }
     // The source's epoch moved or was forgotten since the request: its listening frame decides.
     if (src.epoch !== flight.epoch) {
-      endFlight(src);
+      endFlight(src, flight);
       return;
     }
-    // A subscription staled or re-seeded on another epoch since the request is no longer its, nor
-    // is one re-seeded below its `since`: the answer lacks the changes between the two, and the
-    // seed's own check has marked it for a catch-up from the seed.
-    const subs = flight.subs.filter(
-      (s) =>
-        !s.stopped &&
-        !s.rereading &&
-        s.watermark?.epoch === flight.epoch &&
-        s.watermark.rev >= flight.since,
-    );
     try {
       if (r.ok) {
         src.retries = 0;
-        applyAnswer(flight.epoch, subs, r.answer);
+        applyAnswer(flight, r.answer);
       } else if (r.failure === "refused") {
-        subs.forEach(stale);
+        eachHeld(flight, stale);
       } else {
-        for (const s of subs) {
+        eachHeld(flight, (s) => {
           s.marked = true;
-        }
+        });
         src.retries++;
         src.retryWait = setTimeout(() => {
           src.retryWait = null;
@@ -422,63 +441,69 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
         }, backoff(src.retries));
       }
     } finally {
-      endFlight(src);
+      endFlight(src, flight);
     }
   }
 
   // Rule 5. An answer on another epoch than its request's cannot be placed in the request's
   // numbering, so it reads as a full answer from the server that restored the source.
-  function applyAnswer(epoch: string, subs: readonly Sub[], a: ChangesAnswer<R>): void {
+  function applyAnswer(flight: Flight, a: ChangesAnswer<R>): void {
+    const epoch = flight.epoch;
     if (a.full || a.epoch !== epoch) {
-      for (const s of subs) {
+      eachHeld(flight, (s) => {
         s.otherEpochStaled ||= a.epoch !== epoch;
         stale(s);
-      }
+      });
       return;
     }
     const signals = new Set(a.signals ?? []);
     const upserts = a.upserts as ByKind<unknown>;
     const removed = a.removed as ByKind<string>;
-    for (const s of subs) {
+    eachHeld(flight, (s) => {
       try {
         applyRows(s, epoch, a.rev, signals.has(s.kind), own(upserts, s.kind), own(removed, s.kind));
       } catch (e: unknown) {
         reportError(e);
-        stale(s);
+        if (!s.stopped) {
+          stale(s);
+        }
       }
-    }
+    });
   }
 
   // A sink that cannot take the answer's rows of its kind (no upsert, or removals and no remove)
   // is re-read: moving its watermark would show rows the answer changed as covered.
   function applyRows(
-    s: Sub,
+    s: Held,
     epoch: string,
     rev: number,
     signal: boolean,
     rows: readonly unknown[],
     keys: readonly string[],
   ): void {
-    const wm = s.watermark;
-    if (wm === null) {
-      return;
-    }
     const sink = s.sink;
     if (signal || sink.upsert === undefined || (keys.length > 0 && sink.remove === undefined)) {
       stale(s);
       return;
     }
+    const wm = s.watermark;
     // A seed newer than the answer already holds these rows or newer ones.
-    if (wm.rev <= rev) {
-      if (rows.length > 0) {
-        sink.upsert(rows);
-      }
-      if (keys.length > 0) {
-        sink.remove?.(keys);
-      }
-      s.watermark = { epoch, rev };
+    if (wm.rev > rev) {
+      compare(s, wm);
+      return;
     }
-    compare(s, s.watermark ?? wm);
+    // The sink's own upsert may stop or re-seed it, and that seed's check then stands.
+    const untouched = (): boolean => !s.stopped && s.watermark === wm;
+    if (rows.length > 0) {
+      sink.upsert(rows);
+    }
+    if (keys.length > 0 && untouched()) {
+      sink.remove?.(keys);
+    }
+    if (untouched()) {
+      s.watermark = { epoch, rev };
+      compare(s, s.watermark);
+    }
   }
 
   // An app callback's throw is reported, never left to stop the frame that called it.
@@ -632,7 +657,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     const flight = sub.src.inFlight;
     if (flight?.subs.every((s) => s.stopped) === true) {
       flight.controller.abort();
-      endFlight(sub.src);
+      endFlight(sub.src, flight);
     }
   }
 
