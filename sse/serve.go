@@ -167,7 +167,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 		h.flusherOnce.Do(func() {
 			h.logger.Error("sse: response writer cannot flush; streaming refused", "writer", fmt.Sprintf("%T", w))
 		})
-		httpserver.WriteError(w, r, http.StatusInternalServerError, "streaming_unsupported", "streaming not supported")
+		h.cfg.errs(w, r, http.StatusInternalServerError, "streaming_unsupported", "streaming not supported")
 		return
 	}
 	req, ok := h.connectRequest(w, r, &sc, tag)
@@ -179,7 +179,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts ...ServeOption)
 		if errors.Is(err, errClientCap) {
 			h.logger.Info("sse: client cap reached", "clients", h.ClientCount(), "max", h.maxClients())
 		}
-		httpserver.WriteError(w, r, http.StatusServiceUnavailable, "sse_unavailable", "sse unavailable")
+		h.cfg.errs(w, r, http.StatusServiceUnavailable, "sse_unavailable", "sse unavailable")
 		return
 	}
 	c := sub.c
@@ -229,7 +229,7 @@ func (h *Hub) connectRequest(w http.ResponseWriter, r *http.Request, sc *serveCo
 	s, err := requestScope(r)
 	if err != nil {
 		h.logger.Debug("sse: connect scope refused", "error", err)
-		httpserver.WriteError(w, r, http.StatusBadRequest, "sse_scope", "scope outside the topic grammar or bound")
+		h.cfg.errs(w, r, http.StatusBadRequest, "sse_scope", "scope outside the topic grammar or bound")
 		return req, false
 	}
 	req.scope = s

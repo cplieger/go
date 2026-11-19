@@ -27,8 +27,15 @@ Each option refuses its own value at once. The rules that compare two options ru
 | `WithWriteTimeout(d)` | `2 × keepalive` | at or below the keepalive |
 | `WithLogger(l)` | `slog.Default()` | never, and nil means the default, so the last one wins |
 | `WithPresence(fn)` | none | never, and nil removes the hook |
+| `WithErrors(r)` | `httpserver.WriteError` | never, and nil means the default, so the last one wins |
 
 The replay size is the `WithReplay` capacity. A client that falls `WithClientBuffer` frames behind is reset as slow.
+
+## Error answers
+
+Every refusal the hub writes goes through one `httpserver.ErrorResponder`: `Serve`'s `streaming_unsupported`, `sse_unavailable` and `sse_scope`, `ScopeHandler`'s `scope_*` codes and `DigestHandler`'s `digest_*` codes. `WithErrors(r)` sets it, so an application with its own error catalog answers in its own words and with its own request id. With none, `httpserver.WriteError` writes the envelope.
+
+`CodeSpecs()` returns each of those codes with the status the hub answers it with, a default remediation line and whether the refused request changed nothing (`NoEffect`, true only for `sse_unavailable`). It holds exactly the codes the package writes, so adding it to your catalog declares every code the hub can answer.
 
 ## The replay buffer
 
