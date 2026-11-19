@@ -635,6 +635,8 @@ func (c *newChecker) document() *Schema {
 			c.fail("row %q is %s, but the document's operation is %s %s", ep.Name, pattern(c.t.Prefix, ep), op.method, op.path)
 		default:
 			c.idempotencyPolicy(ep, op)
+			c.rawContent(ep, op)
+			c.conditionalParts(ep, op)
 			if !r.mount {
 				c.decodedParts(ep, op)
 			}
@@ -646,6 +648,63 @@ func (c *newChecker) document() *Schema {
 		}
 	}
 	return s
+}
+
+// rawContent matches a Raw row's ContentTypes with the media types its
+// primary response declares, one to one.
+func (c *newChecker) rawContent(ep *Endpoint, op *operation) {
+	if ep.Kind != Raw {
+		return
+	}
+	status := primaryStatus(ep)
+	declared := map[string]bool{}
+	if r := op.responses[status]; r != nil {
+		for _, m := range r.media {
+			declared[m] = true
+		}
+	}
+	want := map[string]bool{}
+	for _, t := range ep.ContentTypes {
+		m := mediaOf(t)
+		want[m] = true
+		if !declared[m] {
+			c.fail("row %q answers %s, but the document's %d does not declare it", ep.Name, m, status)
+		}
+	}
+	for _, m := range slices.Sorted(maps.Keys(declared)) {
+		if !want[m] {
+			c.fail("row %q: the document's %d declares %s, which is not one of the row's ContentTypes", ep.Name, status, m)
+		}
+	}
+}
+
+// conditionalParts matches a Conditional row with a bodiless 304 and an
+// optional If-None-Match header parameter in op, and any other row with
+// neither.
+func (c *newChecker) conditionalParts(ep *Endpoint, op *operation) {
+	notModified := op.responses[http.StatusNotModified]
+	inm := op.params[paramKeyOf(inHeader, headerIfNoneMatch)]
+	if !ep.Conditional {
+		if notModified != nil {
+			c.fail("row %q is not Conditional, but the document's operation declares a 304", ep.Name)
+		}
+		if inm != nil {
+			c.fail("row %q is not Conditional, but the document's operation takes an If-None-Match header", ep.Name)
+		}
+		return
+	}
+	switch {
+	case notModified == nil:
+		c.fail("row %q is Conditional, but the document's operation declares no 304", ep.Name)
+	case len(notModified.media) > 0:
+		c.fail("row %q: the document's 304 declares a body, which a 304 never has", ep.Name)
+	}
+	switch {
+	case inm == nil:
+		c.fail("row %q is Conditional, but the document's operation takes no If-None-Match header", ep.Name)
+	case inm.required:
+		c.fail("row %q: the document's If-None-Match header parameter is required, but a client sends one only with an ETag it holds", ep.Name)
+	}
 }
 
 // idempotencyPolicy holds a Keyed row's x-idempotency to the policy the

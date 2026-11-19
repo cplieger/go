@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"mime"
 	"net/http"
 	"reflect"
 	"slices"
@@ -432,9 +433,7 @@ func (c *tableChecker) kindAndStatus(ep *Endpoint, at string) {
 	if ep.Kind != JSON && ep.Response != nil {
 		c.fail("%s: a %s row sets no Response", at, kind)
 	}
-	if (ep.Kind == Raw) != (len(ep.ContentTypes) > 0) {
-		c.fail("%s: ContentTypes is set exactly on a Raw row", at)
-	}
+	c.rawFields(ep, at)
 	if (ep.Kind == Stream || ep.Kind == Redirect) && ep.Method != http.MethodGet {
 		c.fail("%s: a %s row is a GET", at, kind)
 	}
@@ -456,6 +455,35 @@ func (c *tableChecker) kindAndStatus(ep *Endpoint, at string) {
 		seen[s.Status] = true
 	}
 	c.bodyTypes(ep, at)
+}
+
+// rawFields holds ContentTypes and Conditional to a Raw row, refusing an
+// entry that is no single media type and one named twice, since media types
+// compare case-insensitively (RFC 9110 section 8.3.1).
+func (c *tableChecker) rawFields(ep *Endpoint, at string) {
+	if (ep.Kind == Raw) != (len(ep.ContentTypes) > 0) {
+		c.fail("%s: ContentTypes is set exactly on a Raw row", at)
+	}
+	if ep.Conditional && (ep.Kind != Raw || ep.Method != http.MethodGet) {
+		c.fail("%s: Conditional is set only on a Raw GET row", at)
+	}
+	seen := map[string]bool{}
+	for _, t := range ep.ContentTypes {
+		media, _, err := mime.ParseMediaType(t)
+		switch {
+		case err != nil || !strings.Contains(media, "/") || strings.Contains(media, "*"):
+			c.fail("%s: ContentTypes entry %q is not one media type, type/subtype", at, t)
+		case seen[media]:
+			c.fail("%s: ContentTypes names %s twice", at, media)
+		}
+		seen[media] = true
+	}
+}
+
+// mediaOf is a media type's type/subtype, lower case, without parameters.
+func mediaOf(t string) string {
+	base, _, _ := strings.Cut(t, ";")
+	return strings.ToLower(strings.TrimSpace(base))
 }
 
 func primaryStatus(ep *Endpoint) int {

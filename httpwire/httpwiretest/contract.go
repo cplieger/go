@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/httpserver/v2"
@@ -231,8 +232,11 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
 	case !httpserver.ValidRequestID(id):
 		a.fail("X-Request-Id %q is not a valid request id", id)
 	}
-	statuses := successes(ep)
 	st := a.rec.Code
+	if c.conditionalAnswer(ep, r, a) {
+		return
+	}
+	statuses := successes(ep)
 	resp, declared := statuses[st]
 	switch {
 	case declared && r.Method != http.MethodHead:
@@ -243,6 +247,76 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
 	case r.Method != http.MethodHead:
 		c.refusal(ep, h.Get(httpserver.HeaderRequestID), a)
 	}
+}
+
+// conditionalAnswer checks the conditional rule on a 304 or a Conditional
+// row's 200, reporting whether the answer was a 304, which nothing else
+// declares.
+func (c *checker) conditionalAnswer(ep *httpwire.Endpoint, r *http.Request, a answer) bool {
+	switch {
+	case a.rec.Code == http.StatusNotModified:
+		notModified(ep, r, a)
+		return true
+	case ep.Conditional && a.rec.Code == http.StatusOK:
+		c.conditional(ep, r, a)
+	}
+	return false
+}
+
+// notModified checks a 304: only a Conditional row answers one, only to a
+// request carrying If-None-Match, and with no body (RFC 9110 section
+// 15.4.5).
+func notModified(ep *httpwire.Endpoint, r *http.Request, a answer) {
+	switch {
+	case !ep.Conditional:
+		a.fail("a 304 on a row that is not Conditional")
+	case r.Header.Get(headerIfNoneMatch) == "":
+		a.fail("a 304 to a request with no If-None-Match")
+	}
+	if n := a.rec.Body.Len(); n > 0 && r.Method != http.MethodHead {
+		a.fail("a 304 with a body of %d bytes", n)
+	}
+}
+
+// conditional checks that a Conditional row's 200 carries an entity-tag and,
+// on a request with no If-None-Match, sends it again naming that tag and
+// expects a 304.
+func (c *checker) conditional(ep *httpwire.Endpoint, r *http.Request, a answer) {
+	etag := a.rec.Header().Get("ETag")
+	switch {
+	case etag == "":
+		a.fail("a 200 with no ETag on a Conditional row")
+		return
+	case !isEntityTag(etag):
+		a.fail("ETag %q is not an entity-tag (RFC 9110 section 8.8.3)", etag)
+		return
+	case r.Header.Get(headerIfNoneMatch) != "":
+		return
+	}
+	again := r.Clone(r.Context())
+	again.Header.Set(headerIfNoneMatch, etag)
+	if again.Body != nil {
+		again.Body = http.NoBody
+	}
+	if rec := c.serve(ep, again); rec.Code != http.StatusNotModified {
+		c.t.Errorf("httpwiretest: row %q, %s %s sent again with If-None-Match %s answered %d, want 304", ep.Name, r.Method, r.URL.RequestURI(), etag, rec.Code)
+	}
+}
+
+const headerIfNoneMatch = "If-None-Match"
+
+// isEntityTag reports whether s is [W/] DQUOTE *etagc DQUOTE.
+func isEntityTag(s string) bool {
+	s = strings.TrimPrefix(s, "W/")
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return false
+	}
+	for _, ch := range []byte(s[1 : len(s)-1]) {
+		if ch == '"' || ch < 0x21 || ch == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // successes are ep's success statuses, each to its Response type (nil for
@@ -272,7 +346,7 @@ func (c *checker) success(ep *httpwire.Endpoint, status int, resp reflect.Type, 
 			a.fail("a redirect with no Location")
 		}
 	case ep.Kind == httpwire.Raw && status == wirelink.Primary(ep):
-		mediaIs(a, ep.ContentTypes[0], "the row declares")
+		mediaIn(a, ep.ContentTypes)
 	case ep.Kind == httpwire.Raw || resp == nil:
 		if len(body) != 0 {
 			a.fail("a body of %d bytes on a status the row declares none for", len(body))
@@ -288,6 +362,19 @@ func (c *checker) success(ep *httpwire.Endpoint, status int, resp reflect.Type, 
 }
 
 const mediaJSON = "application/json"
+
+// mediaIn fails an answer whose media type is none of types.
+func mediaIn(a answer, types []string) {
+	ct := a.rec.Header().Get("Content-Type")
+	media, _, err := mime.ParseMediaType(ct)
+	if err == nil && slices.ContainsFunc(types, func(t string) bool {
+		m, _, _ := mime.ParseMediaType(t)
+		return m == media
+	}) {
+		return
+	}
+	a.fail("Content-Type %q; the row declares %s", ct, strings.Join(types, ", "))
+}
 
 // mediaIs reports whether the answer's media type is want, failing it when
 // not.

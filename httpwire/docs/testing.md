@@ -8,7 +8,8 @@ This page covers the `httpwiretest` package and the TypeScript fixtures, for any
 
 - a success status the row does not declare;
 - a body that does not decode strictly into the status's `Response` type, or breaks its schema;
-- a `Raw` answer of another media type;
+- a `Raw` answer of a media type outside the row's `ContentTypes`;
+- on a `Conditional` row, a 200 with no `ETag` or one that is no entity-tag, and a resend of the case naming that `ETag` in `If-None-Match` that does not answer 304; on any row, a 304 with a body, a 304 to a request with no `If-None-Match`, and a 304 on a row that is not `Conditional`;
 - an error that is not an envelope of a code in the row's union, at the catalog's status;
 - an answer without this API's `Wire-Version` or a valid `X-Request-Id`.
 

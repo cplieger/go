@@ -665,7 +665,7 @@ func (s *Schema) bodySchema(opID string, status int, body []byte) (n *node, requ
 		return nil, false, "the operation declares no status " + strconv.Itoa(status)
 	case r.schema != nil:
 		return r.schema, true, ""
-	case !r.content && len(bytes.TrimSpace(body)) == 0:
+	case len(r.media) == 0 && len(bytes.TrimSpace(body)) == 0:
 		return nil, false, ""
 	}
 	return nil, false, "status " + strconv.Itoa(status) + " declares no JSON body"
