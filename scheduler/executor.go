@@ -305,11 +305,13 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 		case stateAdmitting, stateEnded:
 		}
 	}
+	e.writeLocked()
 	idle := e.idle
 	e.mu.Unlock()
 	for _, en := range dequeued {
 		e.ended(ctx, en, *en.stopEnd)
 	}
+	e.wrote()
 	<-idle
 	e.wg.Wait()
 	close(stopMoves)

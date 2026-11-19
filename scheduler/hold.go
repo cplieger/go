@@ -27,11 +27,13 @@ func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err er
 	}
 	end := End{Result: ResultInterrupted}
 	e.mu.Lock()
+	e.writeLocked()
 	dequeued, waits := e.quietLocked(end)
 	e.mu.Unlock()
 	for _, en := range dequeued {
 		e.ended(ctx, en, end)
 	}
+	e.wrote()
 
 	var once sync.Once
 	resume = func() { once.Do(func() { e.resume(context.WithoutCancel(ctx)) }) }
