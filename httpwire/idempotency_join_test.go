@@ -20,7 +20,7 @@ const quickOne = "{\"id\":\"one\",\"pad\":\"\"}\n"
 func blockedClaimant(t *testing.T, kf *keyedFixture) (release chan struct{}, answer func() *httptest.ResponseRecorder) {
 	t.Helper()
 	release = make(chan struct{})
-	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		<-release
 		return jobAnswer{ID: "one"}, nil
 	}
@@ -173,7 +173,7 @@ func TestJoinWaiterWhoseClientLeftAnswersNothing(t *testing.T) {
 func TestJoinAfterADroppedClaimantRunsAgain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-		kf.quick = func(ctx context.Context, _ httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+		kf.quick = func(ctx context.Context, _ httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 			if kf.runsOf("jobs.quick") == 1 {
 				<-ctx.Done()
 				return jobAnswer{}, ctx.Err()
@@ -205,7 +205,7 @@ func TestJoinAfterAPanickingClaimantRunsAgain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
 		release := make(chan struct{})
-		kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+		kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 			if kf.runsOf("jobs.quick") == 1 {
 				<-release
 				panic("boom")
@@ -258,7 +258,7 @@ func TestKeyedHandlerContextEndsAtTheRowDeadline(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
 				var left time.Duration
-				kf.quick = func(ctx context.Context, _ httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+				kf.quick = func(ctx context.Context, _ httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 					start := time.Now()
 					<-ctx.Done()
 					left = time.Since(start)
@@ -279,7 +279,7 @@ func TestKeyedHandlerContextEndsAtTheRowDeadline(t *testing.T) {
 func TestCommitAfterTheDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-		kf.quick = func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+		kf.quick = func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 			<-ctx.Done()
 			if c.Body.Kind == "rollback" {
 				return jobAnswer{}, ctx.Err()
@@ -330,7 +330,7 @@ func TestUnknownOutcomeKeptAfterTheClientLeaves(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
 				leave := make(chan struct{})
-				kf.quick = func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+				kf.quick = func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 					if c.Body.Kind != "leave" {
 						return jobAnswer{ID: "again"}, nil
 					}
@@ -345,7 +345,7 @@ func TestUnknownOutcomeKeptAfterTheClientLeaves(t *testing.T) {
 				}()
 				body := `{"kind":"leave","size":1}`
 				kf.api.ServeHTTP(httptest.NewRecorder(), keyedRequest(http.MethodPost, "/api/jobs/quick", body, `"k"`).WithContext(ctx))
-				kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+				kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 					return jobAnswer{ID: "again"}, nil
 				}
 				rec := kf.do(http.MethodPost, "/api/jobs/quick", body, `"k"`)
@@ -377,7 +377,7 @@ func TestAnswerCommittedThroughIdempotencyIsReplayed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := &txStore{answers: map[httpwire.IdempotencyKey]httpwire.KeptAnswer{}}
 		kf := newKeyed(t, httpwire.IdempotencyOptions{Store: store}, nil)
-		kf.quick = func(ctx context.Context, _ httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+		kf.quick = func(ctx context.Context, _ httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 			k, fp, ok := httpwire.Idempotency(ctx)
 			if !ok {
 				t.Error("Idempotency answered false inside a Keyed handler")

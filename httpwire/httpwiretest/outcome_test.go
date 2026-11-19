@@ -32,7 +32,7 @@ func outcomeAPI(t *testing.T) *httpwire.API {
 	}, Mounts: []httpwire.Mount{{Handler: http.NotFoundHandler(), Rows: []httpwire.Endpoint{
 		row("mount.act", http.MethodPut, "/api/mount/act", "Act through the mount", "outcome_unknown"),
 	}}}}
-	none := func(context.Context, httpwire.Call[httpwire.None, httpwire.None, httpwire.None]) (httpwire.None, error) {
+	none := func(context.Context, httpwire.Call[httpwire.None, httpwire.None, httpwire.None, httpwire.None]) (httpwire.None, error) {
 		return httpwire.None{}, nil
 	}
 	api, err := httpwire.New(tb, []httpwire.Binding{

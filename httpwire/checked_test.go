@@ -178,10 +178,10 @@ func checkedAPI(t *testing.T, cases []checkCase, log *bytes.Buffer) *httpwire.AP
 		row("items.checkplus", "/api/items/checkplus", "Check an item with its read time", reflect.TypeFor[checkedPlus]()),
 	}}
 	api, err := httpwire.New(tb, []httpwire.Binding{
-		httpwire.Bind("items.check", func(_ context.Context, c httpwire.Call[noP, checkQuery, noB]) (httpwire.Checked[checkedItem], error) {
+		httpwire.Bind("items.check", func(_ context.Context, c httpwire.Call[noP, checkQuery, noB, noH]) (httpwire.Checked[checkedItem], error) {
 			return byName[string(c.Query.Case)].value, nil
 		}),
-		httpwire.Bind("items.checkplus", func(_ context.Context, c httpwire.Call[noP, checkQuery, noB]) (checkedPlus, error) {
+		httpwire.Bind("items.checkplus", func(_ context.Context, c httpwire.Call[noP, checkQuery, noB, noH]) (checkedPlus, error) {
 			return checkedPlus{ReadAt: "2026-11-17T10:00:05.1Z", Checked: byName[string(c.Query.Case)].value}, nil
 		}),
 	}, httpwire.WithSchema(doc), httpwire.WithLogger(slog.New(slog.NewJSONHandler(log, nil))))

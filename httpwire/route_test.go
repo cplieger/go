@@ -110,7 +110,7 @@ func TestRoutingReachesEachKindOfRow(t *testing.T) {
 func TestRoutingAMatchedWildcardIsTheRow(t *testing.T) {
 	c := newCase(t)
 	var got string
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		got = "reached"
 		return job{}, nil
 	})

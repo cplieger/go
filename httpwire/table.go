@@ -11,6 +11,9 @@ import (
 // own beside it.
 type Endpoint struct {
 	Params, Query, Request, Response reflect.Type // nil is none
+	// Headers is a struct of the request headers the row takes, each field
+	// naming its header in a header tag; nil is none.
+	Headers reflect.Type
 
 	// Reasons maps a code of the row's union to the reasons it may carry.
 	Reasons map[string]ReasonSet

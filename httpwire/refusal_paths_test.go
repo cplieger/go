@@ -122,19 +122,19 @@ func newDrive(t *testing.T) *driveFixture {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	big := strings.Repeat("x", 2<<10)
-	c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB]) ([]job, error) {
+	c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB, noH]) ([]job, error) {
 		return []job{}, f.handlerError(answerOf(ctx))
 	})
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		return job{ID: "one"}, f.handlerError(answerOf(ctx))
 	})
-	c.binds["jobs.start"] = httpwire.Bind("jobs.start", func(ctx context.Context, c httpwire.Call[noP, noQ, startRequest]) (job, error) {
+	c.binds["jobs.start"] = httpwire.Bind("jobs.start", func(ctx context.Context, c httpwire.Call[noP, noQ, startRequest, noH]) (job, error) {
 		if c.Body.Kind == "big" {
 			return job{ID: big}, nil
 		}
 		return job{ID: "new"}, f.handlerError(answerOf(ctx))
 	})
-	c.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+	c.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 		return httpwire.None{}, f.handlerError(answerOf(ctx))
 	})
 	c.binds["archive.export"] = httpwire.BindRaw("archive.export", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +146,7 @@ func newDrive(t *testing.T) *driveFixture {
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = w.Write([]byte("PK"))
 	}))
-	c.binds["events.wait"] = httpwire.Bind("events.wait", func(ctx context.Context, _ httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+	c.binds["events.wait"] = httpwire.Bind("events.wait", func(ctx context.Context, _ httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 		return httpwire.Answer(http.StatusNoContent, nudge{}), f.handlerError(answerOf(ctx))
 	})
 	limiter, err := httpserver.NewKeyedRateLimiter(httpserver.KeyedRate{Burst: 1, Interval: time.Hour})

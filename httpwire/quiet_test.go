@@ -46,13 +46,13 @@ type quietCase struct {
 func newQuietCase(t *testing.T) *quietCase {
 	t.Helper()
 	q := &quietCase{apiCase: newCase(t), write: newGate(), read: newGate(), held: newGate(), stream: newGate(), rawWrite: newGate()}
-	q.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+	q.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 		return httpwire.None{}, q.write.hold(ctx)
 	})
-	q.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB]) ([]job, error) {
+	q.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB, noH]) ([]job, error) {
 		return []job{{ID: "a"}}, q.read.hold(ctx)
 	})
-	q.binds["events.wait"] = httpwire.Bind("events.wait", func(ctx context.Context, _ httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+	q.binds["events.wait"] = httpwire.Bind("events.wait", func(ctx context.Context, _ httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 		return httpwire.Answer(http.StatusOK, nudge{At: 1}), q.held.hold(ctx)
 	})
 	q.binds["live.stream"] = httpwire.BindStream("live.stream", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +274,7 @@ func TestQuiesceSkipsDetachedCallerRequest(t *testing.T) {
 						callerCancel error
 					}
 					outcomes := make(chan outcome, 1)
-					q.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+					q.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 						qctx, cancel := derive(ctx)
 						defer cancel()
 						began := time.Now()
@@ -587,7 +587,7 @@ func TestQuietAllWithAJobRunnerAfterTheAPI(t *testing.T) {
 		q := newQuietCase(t)
 		runner := &jobRunner{}
 		jobEnded := make(chan time.Time, 1)
-		q.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+		q.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 			runner.start(ctx, func(ctx context.Context) {
 				<-ctx.Done()
 				time.Sleep(2 * time.Second)

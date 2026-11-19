@@ -67,7 +67,7 @@ func ExampleNew() {
 			Access: httpwire.Access{Class: httpwire.Public},
 		}},
 	}
-	get := func(_ context.Context, c httpwire.Call[exampleRef, httpwire.None, httpwire.None]) (exampleItem, error) {
+	get := func(_ context.Context, c httpwire.Call[exampleRef, httpwire.None, httpwire.None, httpwire.None]) (exampleItem, error) {
 		return exampleItem{ID: string(c.Params.ID), Name: "first"}, nil
 	}
 	api, err := httpwire.New(table, []httpwire.Binding{httpwire.Bind("items.get", get)},

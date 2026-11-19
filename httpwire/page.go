@@ -252,13 +252,13 @@ func (l *listCursor) seal(dir direction, pos []byte) (string, error) {
 // item: a request with it has Position pos and Backward false. It is bound
 // to this row, this query (Page aside) and WithCursorOwner's owner, and
 // answers ErrPositionTooLong for a pos over 1,024 bytes.
-func (c Call[P, Q, B]) SealNext(pos []byte) (string, error) { return c.list.seal(forward, pos) }
+func (c Call[P, Q, B, H]) SealNext(pos []byte) (string, error) { return c.list.seal(forward, pos) }
 
 // SealPrev answers the prev_cursor ending before pos, the page's first
 // item: a request with it has Position pos and Backward true, and answers
 // the Limit rows before pos in list order, or the first page when fewer
 // precede it. It is bound as SealNext's is.
-func (c Call[P, Q, B]) SealPrev(pos []byte) (string, error) { return c.list.seal(backward, pos) }
+func (c Call[P, Q, B, H]) SealPrev(pos []byte) (string, error) { return c.list.seal(backward, pos) }
 
 var (
 	pageType   = reflect.TypeFor[Page]()

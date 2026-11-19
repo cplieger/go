@@ -86,10 +86,10 @@ func newNoteStore(t *testing.T, doc []byte) *noteStore {
 	t.Helper()
 	s := &noteStore{current: httpwire.Tag{Open: thisOpen, Rev: 7}}
 	api, err := httpwire.New(ifMatchTable(), []httpwire.Binding{
-		httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB]) (note, error) {
+		httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB, noH]) (note, error) {
 			return note{Text: "hello", Tag: s.current}, nil
 		}),
-		httpwire.Bind("notes.save", func(_ context.Context, c httpwire.Call[noteParams, noQ, noteBody]) (httpwire.None, error) {
+		httpwire.Bind("notes.save", func(_ context.Context, c httpwire.Call[noteParams, noQ, noteBody, noH]) (httpwire.None, error) {
 			s.got = append(s.got, c.IfMatch)
 			if c.IfMatch != s.current {
 				return httpwire.None{}, &httpwire.Error{Code: "stale_version", Message: "the note changed since it was read"}
@@ -98,7 +98,7 @@ func newNoteStore(t *testing.T, doc []byte) *noteStore {
 			s.current.Rev++
 			return httpwire.None{}, nil
 		}),
-		httpwire.Bind("notes.merge", func(_ context.Context, c httpwire.Call[noteParams, noQ, mergeBody]) (httpwire.None, error) {
+		httpwire.Bind("notes.merge", func(_ context.Context, c httpwire.Call[noteParams, noQ, mergeBody, noH]) (httpwire.None, error) {
 			s.got = append(s.got, c.IfMatch, c.Body.Base)
 			return httpwire.None{}, nil
 		}),
@@ -289,11 +289,11 @@ func TestNewMatchesTheIfMatchHeader(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := httpwire.New(ifMatchTable(), []httpwire.Binding{
-				httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB]) (note, error) { return note{}, nil }),
-				httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noteParams, noQ, noteBody]) (httpwire.None, error) {
+				httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB, noH]) (note, error) { return note{}, nil }),
+				httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noteParams, noQ, noteBody, noH]) (httpwire.None, error) {
 					return httpwire.None{}, nil
 				}),
-				httpwire.Bind("notes.merge", func(context.Context, httpwire.Call[noteParams, noQ, mergeBody]) (httpwire.None, error) {
+				httpwire.Bind("notes.merge", func(context.Context, httpwire.Call[noteParams, noQ, mergeBody, noH]) (httpwire.None, error) {
 					return httpwire.None{}, nil
 				}),
 			}, httpwire.WithSchema(edit(t, tc.edit)))

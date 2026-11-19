@@ -8,11 +8,12 @@ import (
 )
 
 // Call is what a bound handler receives: the request's decoded parts.
-type Call[P, Q, B any] struct {
-	Params P
-	Query  Q
-	Body   B
-	list   *listCursor
+type Call[P, Q, B, H any] struct {
+	Params  P
+	Query   Q
+	Body    B
+	Headers H
+	list    *listCursor
 	// Position is the position a List row's cursor sealed; nil on the first
 	// page. See SealNext and SealPrev.
 	Position []byte
@@ -29,10 +30,10 @@ type Call[P, Q, B any] struct {
 // Handler is a JSON row's handler. Its error is answered through the row's
 // union: an *Error whose code the union holds, else the first owner
 // sentinel it wraps, else internal_error.
-type Handler[P, Q, B, R any] func(context.Context, Call[P, Q, B]) (R, error)
+type Handler[P, Q, B, H, R any] func(context.Context, Call[P, Q, B, H]) (R, error)
 
-// None is a row's type where it declares none: a P, Q or B the row has no
-// Params, Query or Request for, and the R of a row with no Response (a 204).
+// None is a row's type where it declares none: a P, Q, B or H the row has
+// no Params, Query, Request or Headers for, and the R of a row with no Response (a 204).
 type None struct{}
 
 // Status is the answer of a JSON row that declares Successes: one of the
@@ -89,8 +90,8 @@ var bindNames = map[bindKind]string{bindJSON: "Bind", bindRaw: "BindRaw", bindSt
 // Binding pairs a row, by name, with its handler. New checks it against
 // the row.
 type Binding struct {
-	params, query, body, result reflect.Type
-	handler                     http.Handler
+	params, query, body, headers, result reflect.Type
+	handler                              http.Handler
 	// run answers the handler's status, zero for the row's primary one,
 	// its body and its error.
 	run        func(context.Context, *decoded) (int, any, error)
@@ -102,27 +103,28 @@ type Binding struct {
 // decoded is a request's decoded parts, each a value of the binding's type
 // or nil for its zero value.
 type decoded struct {
-	params, query, body any
-	list                *listCursor
-	key                 string
-	position            []byte
-	rawBody             []byte // a Keyed Raw row's body digest
-	ifMatch             Tag
-	limit               int
-	backward            bool
+	params, query, body, headers any
+	list                         *listCursor
+	key                          string
+	position                     []byte
+	rawBody                      []byte // a Keyed Raw row's body digest
+	ifMatch                      Tag
+	limit                        int
+	backward                     bool
 }
 
-// Bind binds a JSON row: P, Q and B are its Params, Query and Request types
-// (None where it has none), and R its Response type, None when it has none,
-// or Status[T] when it declares Successes.
-func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
+// Bind binds a JSON row: P, Q, B and H are its Params, Query, Request and
+// Headers types (None where it has none), and R its Response type, None
+// when it has none, or Status[T] when it declares Successes.
+func Bind[P, Q, B, H, R any](name string, h Handler[P, Q, B, H, R]) Binding {
 	b := Binding{
 		name: name, kind: bindJSON, nilHandler: h == nil,
-		params: reflect.TypeFor[P](), query: reflect.TypeFor[Q](), body: reflect.TypeFor[B](), result: reflect.TypeFor[R](),
+		params: reflect.TypeFor[P](), query: reflect.TypeFor[Q](), body: reflect.TypeFor[B](), headers: reflect.TypeFor[H](),
+		result: reflect.TypeFor[R](),
 	}
 	_, isStatus := statusBody(b.result)
 	b.run = func(ctx context.Context, d *decoded) (code int, body any, err error) {
-		var c Call[P, Q, B]
+		var c Call[P, Q, B, H]
 		if v, ok := d.params.(P); ok {
 			c.Params = v
 		}
@@ -131,6 +133,9 @@ func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
 		}
 		if v, ok := d.body.(B); ok {
 			c.Body = v
+		}
+		if v, ok := d.headers.(H); ok {
+			c.Headers = v
 		}
 		c.IfMatch = d.ifMatch
 		c.Position, c.Backward, c.Limit, c.list = d.position, d.backward, d.limit, d.list

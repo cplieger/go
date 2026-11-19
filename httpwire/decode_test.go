@@ -155,7 +155,7 @@ func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI 
 	t.Helper()
 	d := &decodeAPI{}
 	api, err := httpwire.New(decodeTable(), []httpwire.Binding{
-		httpwire.Bind("items.get", func(_ context.Context, c httpwire.Call[itemParams, noQ, noB]) (itemOut, error) {
+		httpwire.Bind("items.get", func(_ context.Context, c httpwire.Call[itemParams, noQ, noB, noH]) (itemOut, error) {
 			d.params = &c.Params
 			return itemOut{Name: "x"}, nil
 		}),
@@ -163,15 +163,15 @@ func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI 
 			d.file = true
 			w.Header().Set("Content-Type", "text/plain")
 		})),
-		httpwire.Bind("items.list", func(_ context.Context, c httpwire.Call[noP, itemQuery, noB]) ([]itemOut, error) {
+		httpwire.Bind("items.list", func(_ context.Context, c httpwire.Call[noP, itemQuery, noB, noH]) ([]itemOut, error) {
 			d.query = &c.Query
 			return nil, nil
 		}),
-		httpwire.Bind("items.holders", func(_ context.Context, c httpwire.Call[noP, holdersQuery, noB]) ([]string, error) {
+		httpwire.Bind("items.holders", func(_ context.Context, c httpwire.Call[noP, holdersQuery, noB, noH]) ([]string, error) {
 			d.held = &c.Query
 			return nil, nil
 		}),
-		httpwire.Bind("items.put", func(_ context.Context, c httpwire.Call[noP, noQ, itemBody]) (httpwire.None, error) {
+		httpwire.Bind("items.put", func(_ context.Context, c httpwire.Call[noP, noQ, itemBody, noH]) (httpwire.None, error) {
 			d.body = &c.Body
 			return httpwire.None{}, nil
 		}),

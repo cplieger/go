@@ -24,6 +24,7 @@ var libraryCodes = map[string]struct {
 }{
 	"bad_body":                     {400, false},
 	"bad_query":                    {400, false},
+	"bad_header":                   {400, false},
 	"body_too_large":               {413, false},
 	"unsupported_media_type":       {415, true},
 	"cursor_invalid":               {400, false},

@@ -40,8 +40,8 @@ type (
 	sealedHandle struct {
 		Value string `json:"value"`
 	}
-	listCall   = httpwire.Call[noP, entryQuery, noB]
-	handleCall = httpwire.Call[noP, noQ, noB]
+	listCall   = httpwire.Call[noP, entryQuery, noB, noH]
+	handleCall = httpwire.Call[noP, noQ, noB, noH]
 )
 
 func (entryKind) MaxBytes() int { return 16 }

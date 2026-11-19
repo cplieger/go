@@ -46,7 +46,7 @@ func statusAPI(t *testing.T, s httpwire.Status[nudge]) (*httpwire.API, *logSink)
 	c := newCase(t)
 	sink := &logSink{}
 	c.opts["logger"] = httpwire.WithLogger(slog.New(sink))
-	c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+	c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 		return s, nil
 	})
 	return c.mustBuild(t), sink
@@ -118,7 +118,7 @@ func errorAPI(t *testing.T, err error) (*httpwire.API, *logSink) {
 	ep.Owners = append(ep.Owners, down)
 	sink := &logSink{}
 	c.opts["logger"] = httpwire.WithLogger(slog.New(sink))
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		return job{ID: "x"}, err
 	})
 	return c.mustBuild(t), sink
@@ -208,7 +208,7 @@ func TestMapErrorLogsALeftClientAtDebug(t *testing.T) {
 
 func TestBinderLinesGoToTheDefaultLoggerWhenWritten(t *testing.T) {
 	c := newCase(t)
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		return job{}, errUnmapped
 	})
 	api := c.mustBuild(t)
@@ -230,7 +230,7 @@ type wrappedStatus struct {
 func TestATypeEmbeddingStatusIsAPlainBody(t *testing.T) {
 	c := newCase(t)
 	row(c.tb, "jobs.get").Response = reflect.TypeFor[wrappedStatus]()
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (wrappedStatus, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (wrappedStatus, error) {
 		return wrappedStatus{httpwire.Answer(http.StatusCreated, nudge{At: 3})}, nil
 	})
 	rec := serve(c.mustBuild(t), http.MethodGet, "/api/jobs/abc", "")
@@ -258,7 +258,7 @@ func TestHeldRowAnswers200And204(t *testing.T) {
 					next.ServeHTTP(w, r)
 				})
 			})
-			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 				return tc.answer, nil
 			})
 			api := c.mustBuild(t)

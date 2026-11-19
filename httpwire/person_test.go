@@ -76,7 +76,7 @@ func newPersonCase(t *testing.T, opts ...httpwire.Option) *personCase {
 	}
 	pc := &personCase{}
 	tb := personTable(t)
-	inRow := func(ctx context.Context, _ httpwire.Call[noP, noQ, noB]) (httpwire.None, error) {
+	inRow := func(ctx context.Context, _ httpwire.Call[noP, noQ, noB, noH]) (httpwire.None, error) {
 		err := httpwire.RequirePerson(ctx, pc.action)
 		pc.got = append(pc.got, err)
 		return httpwire.None{}, err

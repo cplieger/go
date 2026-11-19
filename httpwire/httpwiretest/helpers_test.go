@@ -118,9 +118,9 @@ type probeParams struct {
 
 type (
 	none      = httpwire.None
-	jobsCall  = httpwire.Call[none, none, none]
-	pageCall  = httpwire.Call[none, jobQuery, none]
-	jobCall   = httpwire.Call[jobParams, none, none]
+	jobsCall  = httpwire.Call[none, none, none, none]
+	pageCall  = httpwire.Call[none, jobQuery, none, none]
+	jobCall   = httpwire.Call[jobParams, none, none, none]
 	principal = string
 )
 

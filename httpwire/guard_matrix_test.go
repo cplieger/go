@@ -97,7 +97,7 @@ func TestGuardMatrix(t *testing.T) {
 	c := newCase(t)
 	g := matrixGuard{catalog: c.tb.Catalog, mu: &sync.Mutex{}, wrapped: map[string]httpwire.Access{}}
 	c.opts["guard"] = httpwire.WithGuard(g)
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		p, _ := ctx.Value(admittedAs{}).(string)
 		return job{ID: "as " + p}, nil
 	})

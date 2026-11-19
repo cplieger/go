@@ -116,7 +116,7 @@ type keyedFixture struct {
 	api     *httpwire.API
 	catalog *httpwire.Catalog
 	log     *logSink
-	quick   func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error)
+	quick   func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error)
 	runs    map[string]int
 	users   map[string]bool
 	keys    []httpwire.IdempotencyKey
@@ -175,7 +175,7 @@ func (kf *keyedFixture) hold(next http.Handler) http.Handler {
 }
 
 func (kf *keyedFixture) jobs(row string) httpwire.Binding {
-	return httpwire.Bind(row, func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	return httpwire.Bind(row, func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		kf.ran(row)
 		kf.mu.Lock()
 		if k, _, ok := httpwire.Idempotency(ctx); ok {
@@ -192,8 +192,8 @@ func (kf *keyedFixture) jobs(row string) httpwire.Binding {
 
 func (kf *keyedFixture) bindings() []httpwire.Binding {
 	return []httpwire.Binding{
-		httpwire.Bind("users.read", func(context.Context, httpwire.Call[noP, noQ, noB]) ([]account, error) { return nil, nil }),
-		httpwire.Bind("users.register", func(_ context.Context, c httpwire.Call[noP, noQ, regBody]) (httpwire.Status[account], error) {
+		httpwire.Bind("users.read", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) ([]account, error) { return nil, nil }),
+		httpwire.Bind("users.register", func(_ context.Context, c httpwire.Call[noP, noQ, regBody, noH]) (httpwire.Status[account], error) {
 			kf.ran("users.register")
 			kf.mu.Lock()
 			defer kf.mu.Unlock()
@@ -203,18 +203,18 @@ func (kf *keyedFixture) bindings() []httpwire.Binding {
 			kf.users[c.Body.Name] = true
 			return httpwire.Answer(http.StatusCreated, account{Name: c.Body.Name, Created: true}), nil
 		}),
-		httpwire.Bind("jobs.read", func(context.Context, httpwire.Call[noP, noQ, noB]) ([]jobAnswer, error) { return nil, nil }),
+		httpwire.Bind("jobs.read", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) ([]jobAnswer, error) { return nil, nil }),
 		kf.jobs("jobs.start"),
 		kf.jobs("jobs.quick"),
-		httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody]) (jobAnswer, error) {
+		httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody, noH]) (jobAnswer, error) {
 			kf.ran("jobs.retry")
 			return jobAnswer{ID: string(c.Params.ID) + "-" + string(c.Query.Mode)}, nil
 		}),
-		httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noP, noQ, noteText]) (httpwire.None, error) {
+		httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noP, noQ, noteText, noH]) (httpwire.None, error) {
 			kf.ran("notes.save")
 			return httpwire.None{}, nil
 		}),
-		httpwire.Bind("notes.touch", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.None, error) {
+		httpwire.Bind("notes.touch", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.None, error) {
 			kf.ran("notes.touch")
 			return httpwire.None{}, nil
 		}),
@@ -529,7 +529,7 @@ func TestRegisterAnswers201Or200Replayed(t *testing.T) {
 
 func TestReplayWritesKeptHeadersAndFreshWireHeaders(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{}, &httpwire.Error{Code: "outcome_unknown", Message: "the queue did not answer", RetryAfter: 7 * time.Second}
 	}
 	id1, id2 := httpserver.NewRequestID(), httpserver.NewRequestID()
@@ -564,7 +564,7 @@ func TestReplayWritesKeptHeadersAndFreshWireHeaders(t *testing.T) {
 
 func TestWhatIsKept(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		switch c.Body.Kind {
 		case "full":
 			return jobAnswer{}, &httpwire.Error{Code: "queue_full", Message: "the queue is full"}
@@ -606,7 +606,7 @@ func TestKeptRuleReadsTheCodePastMaxAnswer(t *testing.T) {
 	for i := range fields {
 		fields[i] = httpwire.FieldError{Path: "items[" + strconv.Itoa(i) + "]", Code: "invalid", Message: strings.Repeat("m", 200)}
 	}
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{}, &httpwire.Error{Code: c.Body.Kind, Message: "the queue refused the items", Fields: fields}
 	}
 	for _, tc := range []struct {
@@ -709,7 +709,7 @@ func TestFingerprint(t *testing.T) {
 func TestOversizeAnswerIsACompletion(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{MaxAnswer: 1024}, nil)
 	pad := strings.Repeat("p", 2000)
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{ID: c.Body.Kind, Pad: pad}, nil
 	}
 	for _, tc := range []struct{ target, row, remediation string }{
