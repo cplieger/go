@@ -515,7 +515,7 @@ func TestEveryJobEndIsReportedOnce(t *testing.T) {
 }
 
 // A cancelled timer job is not a moving end: the scope's deadline stays and
-// its timer wakes an interval after the cancelled wake.
+// its timer wakes an interval after the cancel.
 func TestCancelledTimerJobWakesAtItsInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		scan := spec("scan", "passes")
@@ -536,7 +536,7 @@ func TestCancelledTimerJobWakesAtItsInterval(t *testing.T) {
 		if got := r.ex.Deadline("scan", "source:a"); !got.Equal(deadline) {
 			t.Errorf("Deadline = %v after a cancel, want %v", got, deadline)
 		}
-		r.nextWake(t, "scan", "source:a", woke.QueuedAt, time.Hour)
+		r.nextWake(t, "scan", "source:a", time.Now(), time.Hour)
 	})
 }
 
