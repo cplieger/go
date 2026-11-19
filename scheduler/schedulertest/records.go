@@ -35,7 +35,7 @@ func Records(t *testing.T, open func() scheduler.Records) {
 	t.Run("history pages newest first", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) { history(t, open()) })
 	})
-	t.Run("last ends", func(t *testing.T) { synctest.Test(t, func(t *testing.T) { lastEnds(t, open()) }) })
+	t.Run("last ends answer every scope", func(t *testing.T) { synctest.Test(t, func(t *testing.T) { lastEnds(t, open()) }) })
 	t.Run("of ends at one instant the later written is last", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) { lastEndsTie(t, open()) })
 	})
@@ -521,6 +521,8 @@ func history(t *testing.T, r scheduler.Records) {
 	}
 }
 
+// lastEnds runs with no executor, so no scope here is scheduled: a store that
+// answered scheduled scopes only would fail every check.
 func lastEnds(t *testing.T, r scheduler.Records) {
 	f := &fixture{t: t, r: r}
 	f.ran("scan", "a", scheduler.ResultOK)

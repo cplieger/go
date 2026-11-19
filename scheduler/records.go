@@ -43,9 +43,9 @@ type Records interface {
 	// newest first, after the cursor after, and the cursor of the next page
 	// ("" on the last); n below 1 answers an empty last page.
 	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
-	// LastEnds answers each scheduled scope's last moving end: the end of a
-	// job that started and did not end cancelled or interrupted, the one
-	// written last among ends at one instant.
+	// LastEnds answers each kind and scope's last moving end, scheduled or
+	// not: the end of a job that started and did not end cancelled or
+	// interrupted, the one written last among ends at one instant.
 	LastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error)
 }
 
@@ -88,13 +88,13 @@ type PhaseAt struct {
 	Phase Phase
 }
 
-// LastEnd is a scheduled scope's last moving end.
+// LastEnd is a kind and scope's last moving end.
 type LastEnd struct {
 	At     time.Time
 	Result Result
 }
 
-// ScheduledScope names one scheduled scope: the key of LastEnds.
+// ScheduledScope names one kind and scope: the key of LastEnds.
 type ScheduledScope struct {
 	Kind  Kind
 	Scope string
