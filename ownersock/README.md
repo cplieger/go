@@ -11,13 +11,13 @@ It replaces the unix-socket listener, stale-socket cleanup and permission checks
 ownersock is built for Go servers that take admin commands from a command-line tool on the same host or in the same container.
 
 - Every accepted connection's peer uid, read with `SO_PEERCRED`, must equal the server's effective uid. A connection from another user is closed inside `Accept` before any byte is read or written, so no request from it reaches your HTTP handlers.
-- A second start beside a live server at the same path is refused, a socket left behind by a crashed process is replaced, and a file at the path that is not a socket is refused and left alone. Starts racing on one path bind one at a time, so one of them wins.
+- A second start beside a live server at the same path is refused, a socket left behind by a crashed process is replaced, and a file at the path that is not a socket is refused and left alone. Starts racing on one path take turns through a lease on the lock file `<socket path>.lock`, so one of them wins. `Listen` creates that file at mode 0600 beside the socket and never removes it.
 - The socket's directory must be private: `Listen` creates a missing one at mode 0700, refuses an existing one that grants group or other access, is owned by another user or is a symlink, and never changes its mode. The socket is bound at mode 0600.
 - A path longer than the 107 bytes Linux's `sun_path` holds is refused before the directory is touched, with an error naming the path and the limit, instead of failing at bind with a bare `invalid argument`.
 - `Client` reports a refused connection, a missing server and a permission error as three stable codes, each with a hint your command-line tool can print as it is.
 - `Peer` marks a request that arrived on a peer-checked connection. No header or cookie can set the mark, so a handler can tell a socket request from a TCP one.
 
-Every operating system other than Linux refuses every connection, because the peer check reads Linux's `SO_PEERCRED`. On Windows `Listen` fails, because the private directory check is not available there.
+Every operating system other than Linux refuses every connection, because the peer check reads Linux's `SO_PEERCRED`. On Windows `Listen` fails, because the private directory check is not available there, and on AIX and Solaris it fails because the lease is not.
 
 Consider a plain [`net.Listen("unix", path)`](https://pkg.go.dev/net#Listen) in a directory only your user can open if the directory's permissions are the only boundary you need.
 
@@ -65,7 +65,7 @@ if errors.As(err, &oerr) {
 
 `Client` reports a connection the server closes before any answer as `admin_peer_refused`, so serve handlers that always answer, a panic included.
 
-Closing the listener removes the socket file.
+Closing the listener removes the socket file and leaves the lock file in place.
 
 ## API
 
