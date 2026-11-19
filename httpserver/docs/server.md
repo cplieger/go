@@ -116,6 +116,29 @@ return httpserver.RunWithOps(ctx, ops, httpserver.Served{
 - `Listen(ctx, setting)` binds one TCP listener. A blank address is an error. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error, or `ctx` ending, fails at once. The error names the setting and the address, with control characters cleaned, and wraps the cause, so `errors.Is(err, syscall.EADDRINUSE)` and `CausedByCancellation` see through it. Bind each product listener with it.
 - `ListenOps` binds through `Listen` before it returns, `Setting` naming `Addr` in its error. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.
 - It answers `GET` and `HEAD` on `/healthz` and `/metrics` only. Another path answers `not_found` and another method `method_not_allowed` with `Allow: GET, HEAD`, both as the error envelope through `Errors` (nil is `WriteError`).
-- With no `Hosts` (nil, empty or all blank), the listener answers every `Host`: `/healthz` and `/metrics` hold nothing a DNS rebinding page could steal. Bind `Addr` to `127.0.0.1` to keep the port private. With `Hosts` set, a `Host` outside it answers 403 `host_not_allowed`, as on every listener. An entry is a host name or an IP literal (`192.0.2.10`, `2001:db8::1` or `[2001:db8::1]`), compared exactly after `CanonicalHost`. An entry no `Host` can match fails `ListenOps`, naming `HostsSetting`, the setting the entries came from, so the operator sees the one to fix (`OpsConfig.Hosts` when it is blank). A request from the host's own network stack passes whatever its names (`WithLoopbackExempt`), so the image's healthcheck on `127.0.0.1` works.
+- The listener checks `Host` in one of three forms, described below.
 - Both routes log at Debug (`WithProbeLogLevel`) to `Logger`, and `Recoverer` answers a panic with `internal_error`. `ReadTimeout` is 10 s and `WriteTimeout` 30 s, since each route answers in one short response.
 - `RunWithOps` serves each `Served` with `Run` and its `Options`, and the ops listener beside them, until `ctx` ends or one fails. A product listener's return, or an ops failure, stops the rest, and every error is returned, joined. The ops listener stops only after every product `Run` has returned, so `/healthz` answers through the drain (its draining 503 included). Its own grace is then 1 s, and a request still running at its end is cut and logged at Warn, never returned. With no `Served`, it serves the ops listener alone. One `Ops` serves once.
+
+### The ops listener's host check
+
+A DNS rebinding page on the network can point its own name at the ops port and read what `/healthz` and `/metrics` answer. Pick the form that matches what those routes hold:
+
+- **No check.** With no `Hosts` (nil, empty or all blank) and no `HostPolicy`, the listener answers every `Host`. This fits most apps: `/metrics` labels carry no secret and `/healthz` reasons are fixed sentences. Bind `Addr` to `127.0.0.1` to keep the port private.
+- **A fixed `Hosts` list.** A `Host` outside the list answers 403 `host_not_allowed`, as on every listener. An entry is a host name or an IP literal (`192.0.2.10`, `2001:db8::1` or `[2001:db8::1]`), compared exactly after `CanonicalHost`. An entry no `Host` can match fails `ListenOps`, naming `HostsSetting`, the setting the entries came from, so the operator sees the one to fix (`OpsConfig.Hosts` when it is blank).
+- **A live `HostPolicy`.** Use it when your `/metrics` or `/healthz` names something a page on the network must not read, such as private repository names, and the names the port answers change at run time or include any IP literal. `HostPolicy` is called on each request, from many goroutines at once, and the `Host` is checked against the `*HostPolicy` it returns, so a policy the app swaps in (for a public URL saved in its settings) applies from the next request with no restart. Build the policy with `ParseHostList`, adding `WithIPLiteralHosts(true)` to admit any address. A refusal answers `host_not_allowed` through `Errors`, not the policy's `WithHostResponder`, and logs through the policy's `WithHostAllowlistLogger`. The returned policy always checks, even one parsed from no non-blank entry: before a public URL is saved, `ParseHostList` over the blank setting with `WithIPLiteralHosts(true)` admits only IP literals. A nil return refuses every `Host` that `LoopbackRequest` does not pass, logged to `Logger`, so a live source with nothing to say keeps the port closed. Setting `HostPolicy` beside a non-blank `Hosts` fails `ListenOps`, naming both fields.
+
+```go
+var live atomic.Pointer[httpserver.HostPolicy]
+live.Store(publicPolicy(settings.PublicURL())) // and again whenever the setting is saved
+ops, err := httpserver.ListenOps(ctx, httpserver.OpsConfig{
+	Setting:    "OPS_LISTEN_ADDR",
+	Addr:       opsAddr,
+	Metrics:    reg.Handler(),
+	Healthz:    health.CheckHandler(checks...),
+	HostPolicy: live.Load,
+	Errors:     catalog.Responder(),
+})
+```
+
+Under the fixed list and the live policy alike, a request passes whatever the list or policy says only when `LoopbackRequest` holds: the socket peer and the `Host` both name this host, either a loopback peer with `localhost` or a loopback address as its `Host`, or a peer at the listener's own address with that address as its `Host`. So the image's healthcheck on `127.0.0.1` works, while a page that resolves its own name to `127.0.0.1` is still refused.

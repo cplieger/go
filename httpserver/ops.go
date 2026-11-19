@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,18 +39,27 @@ type OpsConfig struct {
 	Healthz http.Handler
 	// Errors writes every refusal; nil is WriteError.
 	Errors ErrorResponder
-	// Logger takes the access lines, refusals and recovered panics; nil is
-	// slog.Default() as it is when each line is logged.
+	// HostPolicy, when set, is called on each request, concurrently, for the
+	// policy its Host is checked against in place of Hosts, even one parsed
+	// from no non-blank entry: a refusal answers host_not_allowed through
+	// Errors and logs through the policy's logger. A nil return refuses every
+	// Host (fail closed). A request LoopbackRequest holds passes whatever it
+	// returns. Setting it beside a non-blank Hosts fails ListenOps.
+	HostPolicy func() *HostPolicy
+	// Logger takes the access lines, refusals and recovered panics, except a
+	// HostPolicy's host refusals, which log through that policy's logger; nil
+	// is slog.Default() as it is when each line is logged.
 	Logger *slog.Logger
 	// Setting names the setting Addr came from ("OPS_LISTEN_ADDR") in errors.
 	Setting string
-	// HostsSetting names the setting Hosts came from ("ALLOWED_HOSTS") in the
-	// error for an entry no Host can match; blank is "OpsConfig.Hosts".
+	// HostsSetting names the setting Hosts came from ("ALLOWED_HOSTS") in
+	// ListenOps' errors about Hosts; blank is "OpsConfig.Hosts".
 	HostsSetting string
 	// Addr is read through ListenAddr; blank opens nothing.
 	Addr string
 	// Hosts, when it has a non-blank entry, are the host names or IP literals
-	// answered besides loopback's; empty answers every Host.
+	// answered besides loopback's; empty, with no HostPolicy, answers every
+	// Host.
 	Hosts []string
 }
 
@@ -66,13 +77,16 @@ type Ops struct {
 // ListenOps binds the ops listener with Listen, Setting naming Addr, before it
 // returns: GET and HEAD on /healthz and /metrics only, under WithProbeLogLevel
 // and Recoverer, with a 10 s read and 30 s write timeout, and refusals through
-// Errors. With Hosts empty every Host is answered; otherwise a Host outside
-// Hosts is refused unless LoopbackRequest holds. A nil handler is an error
-// even with the listener off. The listener closes when ctx ends before
-// RunWithOps takes it. docs/server.md has the rest.
+// Errors. HostPolicy or Hosts decides which Host it answers. A nil handler, or
+// HostPolicy beside a non-blank Hosts, is an error even with the listener off.
+// The listener closes when ctx ends before RunWithOps takes it.
+// docs/server.md has the rest.
 func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	if c.Metrics == nil || c.Healthz == nil {
 		return nil, errors.New("httpserver: ListenOps needs non-nil Metrics and Healthz handlers")
+	}
+	if c.HostPolicy != nil && slices.ContainsFunc(c.Hosts, func(h string) bool { return strings.TrimSpace(h) != "" }) {
+		return nil, fmt.Errorf("httpserver: OpsConfig.HostPolicy and OpsConfig.Hosts%s are both set; set one", hostsFrom(c.HostsSetting))
 	}
 	addr := ListenAddr(c.Addr, "")
 	if addr == "" {
@@ -82,9 +96,15 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	if errs == nil {
 		errs = WriteError
 	}
-	hosts, err := opsHostPolicy(c.Hosts, errs, c.Logger)
-	if err != nil {
-		return nil, fmt.Errorf("httpserver: %s: %w", cmp.Or(c.HostsSetting, "OpsConfig.Hosts"), err)
+	var hostCheck Middleware
+	if c.HostPolicy != nil {
+		hostCheck = liveHostCheck(c.HostPolicy, errs, c.Logger)
+	} else {
+		hosts, err := opsHostPolicy(c.Hosts, errs, c.Logger)
+		if err != nil {
+			return nil, fmt.Errorf("httpserver: %s: %w", cmp.Or(c.HostsSetting, "OpsConfig.Hosts"), err)
+		}
+		hostCheck = hosts.Middleware()
 	}
 	ln, err := Listen(ctx, ListenSetting{Name: c.Setting, Addr: addr})
 	if err != nil {
@@ -93,7 +113,7 @@ func ListenOps(ctx context.Context, c OpsConfig) (*Ops, error) { //nolint:gocrit
 	srv := New(Chain(opsRoutes(c.Metrics, c.Healthz, errs),
 		Logging(WithLogger(c.Logger), WithProbeLogLevel("/healthz", "/metrics")),
 		Recoverer(WithRecoverLogger(c.Logger), WithRecoverResponder(errs)),
-		hosts.Middleware()))
+		hostCheck))
 	srv.ReadTimeout = opsReadTimeout
 	srv.WriteTimeout = opsWriteTimeout
 	return &Ops{
@@ -127,6 +147,33 @@ func opsHostPolicy(hosts []string, errs ErrorResponder, logger *slog.Logger) (*H
 		return nil, fmt.Errorf("hosts no Host can match: %q", invalid)
 	}
 	return p, nil
+}
+
+// hostsFrom names the setting Hosts came from, when there is one.
+func hostsFrom(setting string) string {
+	if setting == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (from %s)", setting)
+}
+
+// liveHostCheck checks each request's Host against policy's answer as an
+// active policy, so an answer parsed from no entry still refuses a rebinding
+// Host. A nil answer stands in as a policy that lists nothing and logs to
+// logger.
+func liveHostCheck(policy func() *HostPolicy, errs ErrorResponder, logger *slog.Logger) Middleware {
+	closed := &HostPolicy{logger: logger}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := cmp.Or(policy(), closed)
+			if p.admits(r) || LoopbackRequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			p.LogRefusal(r)
+			errs(w, r, http.StatusForbidden, hostRefusalCode, hostRefusalMsg)
+		})
+	}
 }
 
 func opsRoutes(metrics, healthz http.Handler, errs ErrorResponder) http.Handler {

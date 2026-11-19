@@ -118,7 +118,7 @@ For a non-empty `subjects` list, `must_refetch` is true when the request epoch i
 
 ## Digest refusals
 
-The handler refuses a request with httpserver's [JSON error envelope](https://github.com/cplieger/go/blob/main/httpserver/docs/requests-and-responses.md#errors), whose `code` is one of these:
+The handler refuses a request through the hub's `WithErrors` responder, by default httpserver's `WriteError`, which writes the [JSON error envelope](https://github.com/cplieger/go/blob/main/httpserver/docs/requests-and-responses.md#errors). Its `code` is one of these:
 
 - 405 `digest_method`, with `Allow: POST`, for any method other than `POST`.
 - 415 `digest_content_type` when `Content-Type` is not `application/json`.

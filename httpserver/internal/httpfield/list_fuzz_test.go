@@ -13,7 +13,7 @@ import (
 var listPieces = map[Syntax]struct{ plain, quoted []string }{
 	Tokens:        {plain: []string{"a", "Z", ";", "=", "/", "*", "~", `"`, `\`}},
 	QuotedStrings: {plain: []string{"a", "Z", ";", "=", "/", "*", "~"}, quoted: []string{",", " ", "*", `\"`, `\\`, `\,`, "a"}},
-	EntityTags:    {plain: []string{"a", "Z", ";", "=", "/", "*", "~", "W/"}, quoted: []string{",", "*", `\`, "a", "/"}},
+	entityTags:    {plain: []string{"a", "Z", ";", "=", "/", "*", "~", "W/"}, quoted: []string{",", "*", `\`, "a", "/"}},
 }
 
 func buildListElements(ops []byte, syntax Syntax) []string {
@@ -74,8 +74,8 @@ func FuzzList_roundTrip(f *testing.F) {
 	f.Add([]byte{5, 0, 9, 0, 13}, []byte{1, 4, 3}, uint8(Tokens))
 	f.Add([]byte{1, 3 | 3<<2, 0, 1}, []byte{0}, uint8(QuotedStrings))
 	f.Add([]byte{3 | 5<<2, 0, 3 | 9<<2, 1, 0, 2}, []byte{2, 4}, uint8(QuotedStrings))
-	f.Add([]byte{3 | 4<<2, 0, 3 | 2<<2}, []byte{1}, uint8(EntityTags))
-	f.Add([]byte{29, 3 | 13<<2, 0, 3 | 7<<2}, []byte{3, 4}, uint8(EntityTags))
+	f.Add([]byte{3 | 4<<2, 0, 3 | 2<<2}, []byte{1}, uint8(entityTags))
+	f.Add([]byte{29, 3 | 13<<2, 0, 3 | 7<<2}, []byte{3, 4}, uint8(entityTags))
 	f.Fuzz(func(t *testing.T, ops, seps []byte, syn uint8) {
 		syntax := Syntax(syn % 3)
 		elems := buildListElements(ops, syntax)

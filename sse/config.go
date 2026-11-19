@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // ErrConfig is wrapped by every construction-time refusal New returns; the
@@ -33,6 +35,7 @@ type config struct {
 	logger          *slog.Logger
 	now             func() time.Time
 	presence        func(PresenceEvent)
+	errs            httpserver.ErrorResponder
 	keepaliveEvent  string
 	epoch           string
 	keepalive       time.Duration
@@ -52,6 +55,7 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		logger:         slog.Default(),
+		errs:           httpserver.WriteError,
 		now:            time.Now,
 		keepaliveEvent: defaultKeepaliveEvent,
 		keepalive:      defaultKeepalive,

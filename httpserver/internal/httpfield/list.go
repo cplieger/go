@@ -19,9 +19,9 @@ const (
 	// QuotedStrings holds RFC 9110 section 5.6.4 quoted-strings, with
 	// quoted-pair escapes.
 	QuotedStrings
-	// EntityTags holds RFC 9110 section 8.8.3 opaque-tags: quoted, with
+	// entityTags holds RFC 9110 section 8.8.3 opaque-tags: quoted, with
 	// no escape, so a '\' before the closing quote is part of the tag.
-	EntityTags
+	entityTags
 )
 
 // List yields h's name field as one RFC 9110 section 5.6.1 list: field
@@ -57,7 +57,7 @@ func List(h http.Header, name string, syntax Syntax) iter.Seq[string] {
 // strong entity-tag (RFC 9110 section 13.1.2).
 func IfNoneMatch(h http.Header, etag string) bool {
 	members, wildcard := 0, false
-	for member := range List(h, "If-None-Match", EntityTags) {
+	for member := range List(h, "If-None-Match", entityTags) {
 		members++
 		wildcard = member == "*"
 		if strings.TrimPrefix(member, "W/") == etag {

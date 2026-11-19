@@ -275,6 +275,11 @@ func (p *HostPolicy) Allows(r *http.Request) bool {
 	if p == nil || !p.active {
 		return true
 	}
+	return p.admits(r)
+}
+
+// admits applies p's rule to r whether or not p is active.
+func (p *HostPolicy) admits(r *http.Request) bool {
 	host := CanonicalHost(r.Host)
 	if _, ok := p.allowed[host]; ok {
 		return true

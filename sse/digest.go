@@ -154,28 +154,28 @@ func (h *Hub) DigestHandler(resolve Resolver, opts ...DigestOption) (http.Handle
 		if r.Method != http.MethodPost {
 			h.logger.Debug("sse: digest method refused", "method", sanitizeLogValue(r.Method))
 			w.Header().Set("Allow", http.MethodPost)
-			httpserver.WriteError(w, r, http.StatusMethodNotAllowed, "digest_method", "POST required")
+			h.cfg.errs(w, r, http.StatusMethodNotAllowed, "digest_method", "POST required")
 			return
 		}
 		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
 			h.logger.Debug("sse: digest content type refused", "length", len(r.Header.Get("Content-Type")))
-			httpserver.WriteError(w, r, http.StatusUnsupportedMediaType, "digest_content_type", "Content-Type must be application/json")
+			h.cfg.errs(w, r, http.StatusUnsupportedMediaType, "digest_content_type", "Content-Type must be application/json")
 			return
 		}
 		var req digestRequest
 		if err := httpserver.DecodeJSONInto(w, r, &req, cfg.maxBody); err != nil {
 			if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
 				h.logger.Debug("sse: digest body over cap", "max_body", cfg.maxBody)
-				httpserver.WriteError(w, r, http.StatusRequestEntityTooLarge, "digest_too_large", fmt.Sprintf("body exceeds %d bytes", cfg.maxBody))
+				h.cfg.errs(w, r, http.StatusRequestEntityTooLarge, "digest_too_large", fmt.Sprintf("body exceeds %d bytes", cfg.maxBody))
 				return
 			}
 			h.logger.Debug("sse: digest body malformed", "error", err)
-			httpserver.WriteError(w, r, http.StatusBadRequest, "digest_invalid", "malformed JSON body")
+			h.cfg.errs(w, r, http.StatusBadRequest, "digest_invalid", "malformed JSON body")
 			return
 		}
 		if msg := validateDigestRequest(&req, cfg.maxSubjects); msg != "" {
 			h.logger.Debug("sse: digest request invalid", "rule", msg)
-			httpserver.WriteError(w, r, http.StatusBadRequest, "digest_invalid", msg)
+			h.cfg.errs(w, r, http.StatusBadRequest, "digest_invalid", msg)
 			return
 		}
 		h.answerDigest(w, r, &req, resolve)

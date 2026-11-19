@@ -23,8 +23,8 @@ func TestList(t *testing.T) {
 		{"a quoted-pair escapes the quote", []string{`x="a\",b", y`}, QuotedStrings, []string{`x="a\",b"`, "y"}},
 		{"an escaped backslash ends with the quote", []string{`x="a\\", y`}, QuotedStrings, []string{`x="a\\"`, "y"}},
 		{"an unclosed quoted-string runs to the end", []string{`x="a, b`, "c"}, QuotedStrings, []string{`x="a, b,c`}},
-		{"an opaque-tag keeps its comma and star", []string{`"other,*,tag", W/"a,*"`}, EntityTags, []string{`"other,*,tag"`, `W/"a,*"`}},
-		{"a backslash in an opaque-tag escapes nothing", []string{`"a\", "b"`}, EntityTags, []string{`"a\"`, `"b"`}},
+		{"an opaque-tag keeps its comma and star", []string{`"other,*,tag", W/"a,*"`}, entityTags, []string{`"other,*,tag"`, `W/"a,*"`}},
+		{"a backslash in an opaque-tag escapes nothing", []string{`"a\", "b"`}, entityTags, []string{`"a\"`, `"b"`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

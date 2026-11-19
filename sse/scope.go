@@ -172,20 +172,20 @@ func (h *Hub) ScopeHandler(authorize func(r *http.Request, owner any) error) (ht
 		}
 		owner, ok := h.connOwner(req.Conn)
 		if !ok {
-			httpserver.WriteError(w, r, http.StatusNotFound, "scope_conn", "no live connection")
+			h.cfg.errs(w, r, http.StatusNotFound, "scope_conn", "no live connection")
 			return
 		}
 		if authErr := authorize(r, owner); authErr != nil {
 			h.logger.Debug("sse: scope caller refused", "error", authErr)
-			httpserver.WriteError(w, r, http.StatusForbidden, "scope_forbidden", "not this connection's owner")
+			h.cfg.errs(w, r, http.StatusForbidden, "scope_forbidden", "not this connection's owner")
 			return
 		}
 		offset, err := h.setScopeSeq(req.Conn, uint64(req.Seq), s) //nolint:gosec // G115: decodeScopeRequest refuses a seq at or below zero
 		switch {
 		case errors.Is(err, errUnknownConn):
-			httpserver.WriteError(w, r, http.StatusNotFound, "scope_conn", "no live connection")
+			h.cfg.errs(w, r, http.StatusNotFound, "scope_conn", "no live connection")
 		case errors.Is(err, errStaleSeq):
-			httpserver.WriteError(w, r, http.StatusConflict, "scope_stale", "a later request already applied")
+			h.cfg.errs(w, r, http.StatusConflict, "scope_stale", "a later request already applied")
 		default:
 			httpserver.WriteJSON(w, scopeResponse{Epoch: h.epoch, Offset: offset})
 		}
@@ -197,30 +197,30 @@ func (h *Hub) ScopeHandler(authorize func(r *http.Request, owner any) error) (ht
 func (h *Hub) decodeScopeRequest(w http.ResponseWriter, r *http.Request) (req scopeRequest, s Scope, ok bool) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		httpserver.WriteError(w, r, http.StatusMethodNotAllowed, "scope_method", "POST required")
+		h.cfg.errs(w, r, http.StatusMethodNotAllowed, "scope_method", "POST required")
 		return req, s, false
 	}
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
-		httpserver.WriteError(w, r, http.StatusUnsupportedMediaType, "scope_content_type", "Content-Type must be application/json")
+		h.cfg.errs(w, r, http.StatusUnsupportedMediaType, "scope_content_type", "Content-Type must be application/json")
 		return req, s, false
 	}
 	if err := httpserver.DecodeJSONInto(w, r, &req, maxScopeBody); err != nil {
 		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
-			httpserver.WriteError(w, r, http.StatusRequestEntityTooLarge, "scope_too_large", fmt.Sprintf("body exceeds %d bytes", maxScopeBody))
+			h.cfg.errs(w, r, http.StatusRequestEntityTooLarge, "scope_too_large", fmt.Sprintf("body exceeds %d bytes", maxScopeBody))
 			return req, s, false
 		}
-		httpserver.WriteError(w, r, http.StatusBadRequest, "scope_invalid", "malformed JSON body")
+		h.cfg.errs(w, r, http.StatusBadRequest, "scope_invalid", "malformed JSON body")
 		return req, s, false
 	}
 	// An absent topics field decodes to nil, which is not JSON null.
 	if req.Conn == "" || req.Seq <= 0 || req.Topics == nil {
-		httpserver.WriteError(w, r, http.StatusBadRequest, "scope_invalid", "conn, a positive seq and topics are required")
+		h.cfg.errs(w, r, http.StatusBadRequest, "scope_invalid", "conn, a positive seq and topics are required")
 		return req, s, false
 	}
 	s, err := parseScope(req.Topics)
 	if err != nil {
 		h.logger.Debug("sse: scope refused", "error", err)
-		httpserver.WriteError(w, r, http.StatusBadRequest, "sse_scope", "scope outside the topic grammar or bound")
+		h.cfg.errs(w, r, http.StatusBadRequest, "sse_scope", "scope outside the topic grammar or bound")
 		return req, s, false
 	}
 	return req, s, true
