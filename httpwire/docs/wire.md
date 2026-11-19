@@ -13,6 +13,8 @@ This page describes what an httpwire API sends and accepts, for anyone writing a
 | `Feed-Position` | answer | Every 2xx of a row with `Changes`, from the change feed |
 | `Retry-After` | answer | Whole seconds, rounded up, on a refusal that carries a wait; the envelope's `retry_after_ms` gives the exact wait |
 
+A row may also take request headers of its own, each an `in: header` parameter of its operation. A header name matches in any case. Each takes one value, and a required one missing, one sent twice, or a value outside its schema answers `bad_header` (400), with a `fields` entry per refused header named canonically (`X-Thing`). No row takes `Wire-Version`, `X-Request-Id`, `Idempotency-Key`, `If-Match`, a credential, body framing or connection header, or the client version header as its own.
+
 The wire version is the first 16 lowercase hex characters of the SHA-256 of the document's normal form. The normal form drops `summary` and `description` where each is an OpenAPI keyword, the top-level `info` object and each `x-error-codes` entry's `remediation`, then writes the rest with sorted keys and no whitespace. So editing a description never moves the version.
 
 ## The error envelope
@@ -31,6 +33,8 @@ Every refusal is one JSON object, decoded by the same rules in Go (`DecodeEnvelo
 | `upstream` | optional: `service` in the same grammar, `status` from 100 to 599, `message` at most 512 bytes |
 
 A member present as `null` breaks its rule, and an unknown member is ignored. `internal_error` carries the message `internal error` and nothing else. `upstream.message` is another service's text: no code or remediation depends on it.
+
+`outcome_unknown` (502) answers a write whose effect is not known: the server sent it on to another service and lost the answer. It may have run, so it is kept like a success: only a `Keyed` row answers it, and a resend with the same `Idempotency-Key` replays it instead of running the write again. A client reads the result before it sends a new request.
 
 ## Request bodies
 
@@ -54,6 +58,25 @@ A cursor is base64url of a 12-byte nonce, a format, direction and issue-time hea
 
 A tag is `<16 lowercase hex>.<decimal>`, the decimal with no sign or leading zero and at most 2^64 - 1: the value inside `If-Match`'s quotes and a read answer's `tag` field. Its hex half is the token of what the revision lives in: `OpenToken` of a store file's epoch, read inside the transaction that reads or checks the revision, or the first 8 bytes of a shared file's SHA-256. A revision that an older file puts back never matches a tag read before.
 
+## Open checks
+
+An open check reads one item again at each source it came from, and answers `Checked[T]`, generic over the item:
+
+```json
+{"sources": [{"source": "upstream_a", "answer": "updated", "row": {}, "stored": true}]}
+```
+
+Each entry names its `source` once, and its `answer` decides which other members it carries:
+
+| `answer` | Meaning | Members |
+| --- | --- | --- |
+| `same` | found, and the stored item already matches it | `stored: false`, and no `row`, `not_stored`, `code` or `upstream` |
+| `updated` | found, and the item changed | `row` (as stored when `stored`, else as the source answered it), and exactly one of `stored: true` and `not_stored` |
+| `gone` | the source no longer has the item | exactly one of `stored: true` and `not_stored`, and no `row` |
+| `error` | the read failed | `code` in the envelope's code grammar, `upstream` when the source answered (held to the envelope's `upstream` rules), `stored: false`, and no `row` or `not_stored` |
+
+`not_stored` is `superseded` when the stored item moved while the check read, and `store_unwritable` when the store refused the write. Only `error` carries `code` or `upstream`. The server never writes an answer that breaks these rules (it answers `internal_error` instead), and the TypeScript `checkChecked` refuses one.
+
 ## The document
 
 `ParseSchema` reads the OpenAPI 3.1 document wiregen writes, and refuses any schema keyword outside this set:
@@ -63,6 +86,6 @@ A tag is `<16 lowercase hex>.<decimal>`, the decimal with no sign or leading zer
 - `$ref`, `anyOf`, `oneOf`, `discriminator`
 - the annotations `description`, `format`, `contentEncoding` and `default`
 
-A `Keyed` operation carries `x-idempotency`, the policy the binder enforces: `window_s` (the row's window in whole seconds, rounded down), `scope: "credential,operation"`, `concurrent: "join"`, `kept: "success_and_effectful_refusals"`, and `max_kept` and `result` when the row sets them. `New` refuses a document whose policy differs from the row's. It is part of the wire version's normal form, so a changed window is a new wire version. A query parameter that repeats is `type: array` with `items`, `maxItems`, `style: form` and `explode: true`; a client sends one `name=value` per element.
+A `Keyed` operation carries `x-idempotency`, the policy the binder enforces (`PolicyOf` answers it for a row): `window_s` (the row's window in whole seconds, rounded down), `scope: "credential,operation"`, `concurrent: "join"`, `kept: "success_and_effectful_refusals"`, and `max_kept` and `result` when the row sets them. `New` refuses a document whose policy differs from the row's. It is part of the wire version's normal form, so a changed window is a new wire version. A query parameter that repeats is `type: array` with `items`, `maxItems`, `style: form` and `explode: true`; a client sends one `name=value` per element.
 
 A `pattern` must be one of the six `Pattern*` constants, which both halves match with one verdict. It also refuses an unresolved `$ref`, a `$ref` cycle with no object between, and an OpenAPI member wiregen never writes. An object with `properties` and no `additionalProperties` admits no other member. Numbers are read exactly, an integer as `int64` or `uint64`.
