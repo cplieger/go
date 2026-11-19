@@ -712,23 +712,62 @@ func TestScheduleRefuses(t *testing.T) {
 	})
 }
 
-// A Start after Run has returned writes its record ended skipped queue_full
-// and runs nothing.
-func TestStartAfterShutdownIsRefused(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		r, stop := (&rig{store: memrecords.New(), log: &runLog{}}).openUntil(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("check", "")}})
-		stop()
-		if _, err := r.ex.Start(t.Context(), api("check", "", "alice", payload{})); !errors.Is(err, scheduler.ErrQueueFull) {
-			t.Errorf("Start after Run returned = %v, want ErrQueueFull", err)
-		}
-		synctest.Wait()
-		all := r.store.All()
-		if len(all) != 1 {
-			t.Fatalf("%d records, want the refused start's one", len(all))
-		}
-		r.wantEnd(t, all[0].ID, scheduler.ResultSkipped, scheduler.Reason{Code: scheduler.ReasonQueueFull})
-		if !all[0].StartedAt.IsZero() || r.log.ran(all[0].ID) {
-			t.Errorf("refused record %+v, want it never started", all[0])
-		}
+func TestStartAfterShutdownWritesNoRecord(t *testing.T) {
+	t.Run("a timer start waiting on an admission when Run's context ends", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := newGatedStore()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			r, done := (&rig{store: s.Store, log: &runLog{}}).run(t, ctx, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+				Records: s,
+			})
+			synctest.Wait()
+			r.schedule(t, "scan", "source:a", scheduler.Scheduled(time.Hour))
+			g := s.gate(memrecords.OpInsert)
+			type answer struct {
+				s   scheduler.Started
+				err error
+			}
+			admitted := make(chan answer, 1)
+			go func() {
+				st, err := r.ex.Start(t.Context(), api("scan", "source:a", "alice", payload{}))
+				admitted <- answer{st, err}
+			}()
+			<-g.entered
+			_, hi := jitterBand(time.Hour)
+			time.Sleep(hi + time.Minute) // the timer's start waits on the held write
+			synctest.Wait()
+			cancel()
+			synctest.Wait()
+			close(g.release)
+			<-done
+			a := <-admitted
+			if a.err != nil {
+				t.Fatalf("the API start whose write was in flight = %v, want nil", a.err)
+			}
+			synctest.Wait()
+			r.wantEnd(t, a.s.Job, scheduler.ResultInterrupted)
+			if w := r.wakes("scan", "source:a"); len(w) != 0 {
+				t.Errorf("the timer's start refused at shutdown wrote %d records, the first ended %+v, want none", len(w), w[0].End)
+			}
+		})
+	})
+
+	t.Run("a start after Run returned", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r, stop := (&rig{store: memrecords.New(), log: &runLog{}}).openUntil(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("check", "")}})
+			stop()
+			if _, err := r.ex.Start(t.Context(), api("check", "", "alice", payload{})); !errors.Is(err, scheduler.ErrQueueFull) {
+				t.Errorf("Start after Run returned = %v, want ErrQueueFull", err)
+			}
+			synctest.Wait()
+			if all := r.store.All(); len(all) != 0 {
+				t.Errorf("Start after Run returned wrote %d records, the first ended %+v, want none", len(all), all[0].End)
+			}
+			if len(r.log.ids()) != 0 {
+				t.Errorf("jobs run after Run returned = %v, want none", r.log.ids())
+			}
+		})
 	})
 }
