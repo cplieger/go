@@ -116,7 +116,8 @@ type idemCall struct {
 const (
 	headerIdempotencyKey = "Idempotency-Key"
 	maxIdempotencyKey    = 255
-	// maxEntries bounds the in-memory store's kept answers and runs.
+	// maxEntries is the in-memory store's full mark for kept answers and
+	// runs; past it each credential gets a share, and twice it is the ceiling.
 	maxEntries = 10_000
 )
 

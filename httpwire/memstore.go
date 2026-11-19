@@ -140,23 +140,28 @@ func (s *memStore) sweepCred(cred string, now time.Time) {
 	}
 }
 
-// admit reports whether credential cred, with claims runs of its own in
-// flight and all runs in flight in total, may start one more. Its share of
+// admit reports whether credential cred may start one more run. claims
+// holds the runs in flight per credential, and all their sum. Its share of
 // kept bytes reserves maxAnswer for each run in flight, so a credential
-// passes its share by at most one answer. With the store full of entries,
-// only the credential holding the most live answers is refused.
-func (s *memStore) admit(cred string, claims, all int, l *idemLimits) bool {
+// passes its share by at most one answer. With the store full of entries, a
+// credential is admitted only below maxEntries over the credentials holding
+// entries or claims, and at twice maxEntries none is, so the store holds at
+// most twice maxEntries and a credential below its share is never refused
+// for another's answers until then.
+func (s *memStore) admit(cred string, claims map[string]int, all int, l *idemLimits) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.sweepDue(now)
-	over := func() bool {
-		c := s.creds[cred]
-		var n, bytes int
-		if c != nil {
+	held := func() (n, bytes int) {
+		if c := s.creds[cred]; c != nil {
 			n, bytes = len(c.keys), c.bytes
 		}
-		return n+claims >= l.perCred || bytes+l.maxAnswer*claims >= l.perCredBytes
+		return n + claims[cred], bytes + l.maxAnswer*claims[cred]
+	}
+	over := func() bool {
+		n, bytes := held()
+		return n >= l.perCred || bytes >= l.perCredBytes
 	}
 	if over() {
 		s.sweepCred(cred, now)
@@ -171,14 +176,15 @@ func (s *memStore) admit(cred string, claims, all int, l *idemLimits) bool {
 	if len(s.entries)+all < maxEntries {
 		return true
 	}
-	held := 0
-	if c := s.creds[cred]; c != nil {
-		held = len(c.keys)
+	if len(s.entries)+all >= 2*maxEntries {
+		return false
 	}
-	for _, c := range s.creds {
-		if len(c.keys) > held {
-			return true
+	holders := len(s.creds)
+	for c := range claims {
+		if s.creds[c] == nil {
+			holders++
 		}
 	}
-	return false
+	n, _ := held()
+	return n < maxEntries/holders
 }

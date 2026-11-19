@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -78,7 +79,7 @@ func TestStoreBudgetKeepsAnAnswerOversize(t *testing.T) {
 	}
 }
 
-func TestStoreFullOfEntriesRefusesOnlyTheLargestHolder(t *testing.T) {
+func TestStoreFullOfEntriesRefusesOnlyAHolderPastItsShare(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{MaxPerCredential: 10_000}, nil)
 	a, b := asCredential("s:a"), asCredential("s:b")
 	for i := range 10_000 {
@@ -91,7 +92,7 @@ func TestStoreFullOfEntriesRefusesOnlyTheLargestHolder(t *testing.T) {
 		}
 	}
 	if rec := kf.quickJob(`"more"`, a...); codeOf(t, rec) != "idempotency_store_full" || kf.runsOf("jobs.quick") != 10_000 {
-		t.Errorf("the largest holder answered %d %s, want idempotency_store_full and no run", rec.Code, rec.Body)
+		t.Errorf("a holder past its share answered %d %s, want idempotency_store_full and no run", rec.Code, rec.Body)
 	}
 	for _, cred := range [][]string{b, asCredential("s:c")} {
 		if rec := kf.quickJob(`"more"`, cred...); rec.Code != http.StatusOK {
@@ -101,6 +102,106 @@ func TestStoreFullOfEntriesRefusesOnlyTheLargestHolder(t *testing.T) {
 	if rec := kf.quickJob(`"0"`, a...); rec.Code != http.StatusOK || kf.runsOf("jobs.quick") != 10_002 {
 		t.Errorf("the oldest live answer answered %d after %d runs, want it replayed, never evicted", rec.Code, kf.runsOf("jobs.quick"))
 	}
+}
+
+// TestStoreWideCeilingWithManyCredentials holds the store full of entries,
+// 10,000, and adds new credentials: past it each is admitted only below
+// 10,000 over the credentials holding entries or claims, and at 20,000
+// entries and runs every new claim is refused.
+func TestStoreWideCeilingWithManyCredentials(t *testing.T) {
+	const full, ceiling = 10_000, 20_000
+	tied := func(t *testing.T, kf *keyedFixture) {
+		t.Helper()
+		for c := range 10 {
+			for i := range 1_000 {
+				if rec := kf.quickJob(`"`+strconv.Itoa(i)+`"`, asCredential("s:tied"+strconv.Itoa(c))...); rec.Code != http.StatusOK {
+					t.Fatalf("tied credential %d, key %d answered %d %s", c, i, rec.Code, rec.Body)
+				}
+			}
+		}
+	}
+	// admitted sends keys from cred until one is refused, answering how many ran.
+	admitted := func(t *testing.T, kf *keyedFixture, cred []string) int {
+		t.Helper()
+		for n := 0; ; n++ {
+			rec := kf.quickJob(`"`+strconv.Itoa(n)+`"`, cred...)
+			if rec.Code == http.StatusOK && n < 1_000 {
+				continue
+			}
+			if codeOf(t, rec) != "idempotency_store_full" || rec.Header().Get("Retry-After") != "60" {
+				t.Fatalf("%s key %d answered %d %s Retry-After %q, want 503 idempotency_store_full, Retry-After 60", cred[1], n, rec.Code, rec.Body, rec.Header().Get("Retry-After"))
+			}
+			return n
+		}
+	}
+	// hold makes the first n runs from now wait for the returned release.
+	hold := func(kf *keyedFixture, n int32) (release func()) {
+		ch := make(chan struct{})
+		var started atomic.Int32
+		kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+			if started.Add(1) <= n {
+				<-ch
+			}
+			return jobAnswer{ID: c.Body.Kind}, nil
+		}
+		return func() { close(ch) }
+	}
+	t.Run("a stream of new credentials", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
+			tied(t, kf)
+			release := hold(kf, 5)
+			var wg sync.WaitGroup
+			for c := range 5 {
+				wg.Go(func() { kf.quickJob(`"held"`, asCredential("s:claim"+strconv.Itoa(c))...) })
+			}
+			synctest.Wait()
+			holders := 15
+			for c := 0; ; c++ {
+				n := admitted(t, kf, asCredential("s:new"+strconv.Itoa(c)))
+				total := kf.runsOf("jobs.quick")
+				if total > ceiling {
+					t.Fatalf("after %d new credentials the store holds %d answers and runs, want at most %d", c+1, total, ceiling)
+				}
+				if n == 0 {
+					break
+				}
+				holders++
+				if share := full / holders; n != share && total < ceiling || n > share {
+					t.Errorf("new credential %d ran %d with %d credentials holding answers or runs, want its share %d", c, n, holders, share)
+				}
+			}
+			release()
+			wg.Wait()
+			if total := kf.runsOf("jobs.quick"); total != ceiling {
+				t.Errorf("the store stopped at %d answers, want the ceiling %d", total, ceiling)
+			}
+			if rec := kf.quickJob(`"more"`, asCredential("s:tied0")...); codeOf(t, rec) != "idempotency_store_full" || rec.Header().Get("Retry-After") != "60" || kf.runsOf("jobs.quick") != ceiling {
+				t.Errorf("at the ceiling, a holder below its share answered %d %s, want 503 idempotency_store_full and no run", rec.Code, rec.Body)
+			}
+			if rec := kf.quickJob(`"0"`, asCredential("s:tied0")...); rec.Code != http.StatusOK || kf.runsOf("jobs.quick") != ceiling {
+				t.Errorf("at the ceiling, a kept answer's resend answered %d %s, want it replayed and no run", rec.Code, rec.Body)
+			}
+		})
+	})
+	t.Run("a credential's own runs count toward its share", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
+			tied(t, kf)
+			release := hold(kf, 5)
+			x := asCredential("s:x")
+			var wg sync.WaitGroup
+			for i := range 5 {
+				wg.Go(func() { kf.quickJob(`"held`+strconv.Itoa(i)+`"`, x...) })
+			}
+			synctest.Wait()
+			if n, share := admitted(t, kf, x), full/11; n != share-5 {
+				t.Errorf("with 5 runs of its own in flight, s:x ran %d more, want its share %d less those 5", n, share)
+			}
+			release()
+			wg.Wait()
+		})
+	})
 }
 
 // TestExpiredAnswersNeverFillTheStore keeps answers that expired after the
@@ -139,11 +240,11 @@ func TestExpiredAnswersNeverFillTheStore(t *testing.T) {
 				}
 			}
 			if rec := kf.quickJob(`"full"`, a...); codeOf(t, rec) != "idempotency_store_full" {
-				t.Fatalf("with the store full, the largest holder answered %d %s", rec.Code, rec.Body)
+				t.Fatalf("with the store full, a holder past its share answered %d %s", rec.Code, rec.Body)
 			}
 			time.Sleep(40 * time.Second)
 			if rec := kf.quickJob(`"more"`, a...); rec.Code != http.StatusOK {
-				t.Errorf("with its answers expired, the largest holder answered %d %s, want its run", rec.Code, rec.Body)
+				t.Errorf("with its answers expired, the holder answered %d %s, want its run", rec.Code, rec.Body)
 			}
 		})
 	})

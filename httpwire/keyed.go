@@ -81,9 +81,9 @@ func (s *keyedRuns) claim(k IdempotencyKey, fp [32]byte) (*claim, *KeptAnswer, c
 	if a, ok, _ := s.mem.Load(context.Background(), k); ok {
 		return nil, &a, claimKept
 	}
-	claims, all := s.byCred[k.Credential], len(s.claims)
+	claims, all := s.byCred, len(s.claims)
 	if s.fallback {
-		claims, all = 0, 0
+		claims, all = nil, 0
 	}
 	if !s.mem.admit(k.Credential, claims, all, &s.lim) {
 		return nil, nil, claimFull
@@ -131,7 +131,7 @@ func (a *API) keyed(w http.ResponseWriter, r *http.Request, ep *Endpoint, d *dec
 			a.reused(w, r, ep)
 			return
 		case claimFull:
-			a.table.Catalog.WriteError(w, r, &Error{Code: codeStoreFull, Message: "this credential holds as many kept answers as the server keeps", RetryAfter: time.Minute})
+			a.table.Catalog.WriteError(w, r, &Error{Code: codeStoreFull, Message: "the server keeps no more answers for this credential now", RetryAfter: time.Minute})
 			return
 		case claimKept:
 			a.replay(w, r, ep, fp, kept, false)
