@@ -49,7 +49,7 @@ func personTable(t *testing.T) *httpwire.Table {
 		Endpoints: []httpwire.Endpoint{
 			{
 				Name: "archive.export", Method: http.MethodPost, Path: "/archive", Summary: "Export an archive", Description: "Export an archive.",
-				Kind: httpwire.Raw, ContentType: "application/zip", Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
+				Kind: httpwire.Raw, ContentTypes: []string{"application/zip"}, Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
 			},
 			{
 				Name: "settings.save", Method: http.MethodPost, Path: "/settings", Summary: "Save settings", Description: "Save settings.",

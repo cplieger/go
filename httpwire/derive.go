@@ -432,8 +432,8 @@ func (c *tableChecker) kindAndStatus(ep *Endpoint, at string) {
 	if ep.Kind != JSON && ep.Response != nil {
 		c.fail("%s: a %s row sets no Response", at, kind)
 	}
-	if (ep.Kind == Raw) != (ep.ContentType != "") {
-		c.fail("%s: ContentType is set exactly on a Raw row", at)
+	if (ep.Kind == Raw) != (len(ep.ContentTypes) > 0) {
+		c.fail("%s: ContentTypes is set exactly on a Raw row", at)
 	}
 	if (ep.Kind == Stream || ep.Kind == Redirect) && ep.Method != http.MethodGet {
 		c.fail("%s: a %s row is a GET", at, kind)

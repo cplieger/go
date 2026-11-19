@@ -107,7 +107,7 @@ func matrixTable(t testing.TB) *httpwire.Table {
 	}
 	session := httpwire.Access{Class: httpwire.Session}
 	feed := row("feed.read", http.MethodGet, "/feed", "Read the feed", httpwire.Access{Class: httpwire.Key})
-	feed.Kind, feed.ContentType = httpwire.Raw, "text/plain"
+	feed.Kind, feed.ContentTypes = httpwire.Raw, []string{"text/plain"}
 	get := row("items.get", http.MethodGet, "/items/{id}", "Read an item", httpwire.Access{Class: httpwire.Scoped, Scope: "read"})
 	get.Params = reflect.TypeFor[itemParams]()
 	live := row("live.stream", http.MethodGet, "/live", "Stream the live events", httpwire.Access{Class: httpwire.Session, Passive: true})

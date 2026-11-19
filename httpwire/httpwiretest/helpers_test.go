@@ -215,7 +215,7 @@ func (f *fixture) table(personal bool) *httpwire.Table {
 	get := row("jobs.get", http.MethodGet, "/jobs/{id}", "Read a job", session)
 	get.Params, get.Response, get.Codes, get.Changes = reflect.TypeFor[jobParams](), reflect.TypeFor[job](), []httpserver.ErrorCode{"job_missing"}, []string{"jobs"}
 	csv := row("jobs.csv", http.MethodGet, "/jobs.csv", "Export jobs", session)
-	csv.Kind, csv.ContentType, csv.Changes, csv.Personal = httpwire.Raw, "text/csv", []string{"jobs"}, personal
+	csv.Kind, csv.ContentTypes, csv.Changes, csv.Personal = httpwire.Raw, []string{"text/csv"}, []string{"jobs"}, personal
 	csv.Successes = []httpwire.Success{{Status: http.StatusNoContent}}
 	stream := row("live.stream", http.MethodGet, "/stream", "Stream", session)
 	stream.Kind, stream.Events = httpwire.Stream, []httpwire.Event{{Name: "changed", Data: reflect.TypeFor[job]()}}
@@ -227,7 +227,7 @@ func (f *fixture) table(personal bool) *httpwire.Table {
 	pmake.Successes = []httpwire.Success{{Status: http.StatusOK, Response: reflect.TypeFor[probe]()}}
 	pdrop := row("probe.drop", http.MethodDelete, "/probe", "Drop the probe", public)
 	pfile := row("probe.file", http.MethodGet, "/probe/file", "Read the probe file", public)
-	pfile.Kind, pfile.ContentType = httpwire.Raw, "text/csv"
+	pfile.Kind, pfile.ContentTypes = httpwire.Raw, []string{"text/csv"}
 	paway := row("probe.away", http.MethodGet, "/probe/away", "Leave the probe", public)
 	paway.Kind = httpwire.Redirect
 	pitem := row("probe.item", http.MethodGet, "/probe/{name}", "Read a named probe", public)

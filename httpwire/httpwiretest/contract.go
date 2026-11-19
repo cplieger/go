@@ -272,7 +272,7 @@ func (c *checker) success(ep *httpwire.Endpoint, status int, resp reflect.Type, 
 			a.fail("a redirect with no Location")
 		}
 	case ep.Kind == httpwire.Raw && status == wirelink.Primary(ep):
-		mediaIs(a, ep.ContentType, "the row declares")
+		mediaIs(a, ep.ContentTypes[0], "the row declares")
 	case ep.Kind == httpwire.Raw || resp == nil:
 		if len(body) != 0 {
 			a.fail("a body of %d bytes on a status the row declares none for", len(body))

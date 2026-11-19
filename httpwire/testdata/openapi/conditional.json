@@ -1,0 +1,53 @@
+{
+  "info": {
+    "title": "conditional fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/plain": {
+      "get": {
+        "description": "Read the plain poster.",
+        "operationId": "poster.plain",
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the plain poster"
+      }
+    },
+    "/api/poster": {
+      "get": {
+        "description": "Read the poster.",
+        "operationId": "poster.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {},
+              "image/webp": {}
+            },
+            "description": "OK"
+          },
+          "304": {
+            "description": "Not Modified"
+          }
+        },
+        "summary": "Read the poster"
+      }
+    }
+  }
+}

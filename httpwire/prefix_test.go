@@ -15,7 +15,7 @@ func prefixTable() *httpwire.Table {
 	raw := func(name, path, summary, description string) httpwire.Endpoint {
 		return httpwire.Endpoint{
 			Name: name, Method: http.MethodGet, Path: path, Summary: summary, Description: description,
-			Kind: httpwire.Raw, ContentType: "text/plain", Access: public,
+			Kind: httpwire.Raw, ContentTypes: []string{"text/plain"}, Access: public,
 		}
 	}
 	return &httpwire.Table{Prefix: "/api", Catalog: httpwire.NewCatalog(), Endpoints: []httpwire.Endpoint{

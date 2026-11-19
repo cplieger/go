@@ -30,8 +30,9 @@ type Endpoint struct {
 	Path        string
 	Summary     string
 	Description string
-	// ContentType is a Raw row's 2xx media type, required there and only there.
-	ContentType string
+	// ContentTypes are a Raw row's 2xx media types, one or more, required
+	// there and only there.
+	ContentTypes []string
 	// Result names the read row that returns a Keyed row's result, for an
 	// answer too large to replay.
 	Result string
@@ -72,7 +73,10 @@ type Endpoint struct {
 
 	Keyed   bool // takes an Idempotency-Key
 	IfMatch bool // takes If-Match naming the Tag it was read at
-	List    bool // a list read: takes Page, answers List[T]
+	// Conditional marks a Raw GET row whose 200 carries an ETag and whose
+	// handler answers 304 with no body to a matching If-None-Match.
+	Conditional bool
+	List        bool // a list read: takes Page, answers List[T]
 	// Personal marks a read whose rows differ per principal within one shape;
 	// it names a kind only in a OnePerson table.
 	Personal bool
@@ -143,7 +147,8 @@ type Kind uint8
 const (
 	// JSON answers Response as JSON, or nothing with no Response.
 	JSON Kind = iota
-	// Raw answers a body of the row's ContentType the handler writes itself.
+	// Raw answers a body of one of the row's ContentTypes the handler writes
+	// itself.
 	Raw
 	// Stream answers text/event-stream.
 	Stream

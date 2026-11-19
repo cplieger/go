@@ -862,7 +862,7 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 		"a List write": {func(tb *httpwire.Table) { listRow(tb).Method = http.MethodPost }, []string{`row "items.list"`, "GET"}},
 		"a Raw List row": {func(tb *httpwire.Table) {
 			ep := listRow(tb)
-			ep.Kind, ep.ContentType, ep.Response = httpwire.Raw, "text/csv", nil
+			ep.Kind, ep.ContentTypes, ep.Response = httpwire.Raw, []string{"text/csv"}, nil
 		}, []string{`row "items.list"`, "JSON"}},
 		"a mount List row with no Page": {func(tb *httpwire.Table) {
 			tb.Mounts = []httpwire.Mount{{Handler: http.NotFoundHandler(), Rows: []httpwire.Endpoint{{

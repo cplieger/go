@@ -89,7 +89,7 @@ func headerTable(t *testing.T) *httpwire.Table {
 			},
 			{
 				Name: "agents.file", Method: http.MethodGet, Path: "/agents/file", Summary: "Download the agent's file",
-				Description: "Downloads the calling agent's file.", Kind: httpwire.Raw, ContentType: "text/plain", Headers: h, Access: public,
+				Description: "Downloads the calling agent's file.", Kind: httpwire.Raw, ContentTypes: []string{"text/plain"}, Headers: h, Access: public,
 			},
 			{
 				Name: "agents.watch", Method: http.MethodGet, Path: "/agents/watch", Summary: "Watch the agent",

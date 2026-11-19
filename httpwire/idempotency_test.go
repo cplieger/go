@@ -104,7 +104,7 @@ func keyedTable(t testing.TB) *httpwire.Table {
 			},
 			{
 				Name: "files.get", Method: http.MethodGet, Path: "/files", Summary: "Read a file", Description: "Read a file.",
-				Kind: httpwire.Raw, ContentType: "text/plain", Access: session,
+				Kind: httpwire.Raw, ContentTypes: []string{"text/plain"}, Access: session,
 			},
 		},
 	}

@@ -115,7 +115,7 @@ func decodeTable() *httpwire.Table {
 			},
 			{
 				Name: "items.file", Method: http.MethodGet, Path: "/items/{kind}/{n}/file", Summary: "Download an item",
-				Description: "Downloads one item's file.", Params: reflect.TypeFor[itemParams](), Kind: httpwire.Raw, ContentType: "text/plain",
+				Description: "Downloads one item's file.", Params: reflect.TypeFor[itemParams](), Kind: httpwire.Raw, ContentTypes: []string{"text/plain"},
 				Access: public,
 			},
 			{
@@ -134,7 +134,7 @@ func decodeTable() *httpwire.Table {
 			{
 				Name: "items.import", Method: http.MethodPost, Path: "/items/import", Summary: "Import an item",
 				Description: "Imports one item, answering its receipt.", Request: reflect.TypeFor[itemBody](), Kind: httpwire.Raw,
-				ContentType: "text/plain", Access: public,
+				ContentTypes: []string{"text/plain"}, Access: public,
 			},
 		},
 	}

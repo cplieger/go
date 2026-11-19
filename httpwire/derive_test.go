@@ -136,7 +136,7 @@ func fixtureTable(t *testing.T) *httpwire.Table {
 			},
 			{
 				Name: "archive.export", Method: http.MethodPost, Path: "/archive", Summary: "Export", Description: "Exports an archive.",
-				Kind: httpwire.Raw, ContentType: "application/zip", Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
+				Kind: httpwire.Raw, ContentTypes: []string{"application/zip"}, Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
 			},
 			{
 				Name: "events.wait", Method: http.MethodGet, Path: "/events/wait", Summary: "Wait", Description: "Waits for a nudge.",
@@ -486,8 +486,8 @@ func TestDeriveRefusesNamesMethodsAndPaths(t *testing.T) {
 func TestDeriveRefusesKindsAndStatuses(t *testing.T) {
 	runRefusals(t, map[string]refusal{
 		"unknown kind":           {edit("jobs.list", func(e *httpwire.Endpoint) { e.Kind = 9 }), []string{`row "jobs.list"`, "Kind"}},
-		"content type on JSON":   {edit("jobs.list", func(e *httpwire.Endpoint) { e.ContentType = "text/csv" }), []string{`row "jobs.list"`, "ContentType"}},
-		"raw with no type":       {edit("archive.export", func(e *httpwire.Endpoint) { e.ContentType = "" }), []string{`row "archive.export"`, "ContentType"}},
+		"content type on JSON":   {edit("jobs.list", func(e *httpwire.Endpoint) { e.ContentTypes = []string{"text/csv"} }), []string{`row "jobs.list"`, "ContentTypes"}},
+		"raw with no type":       {edit("archive.export", func(e *httpwire.Endpoint) { e.ContentTypes = nil }), []string{`row "archive.export"`, "ContentTypes"}},
 		"response on raw":        {edit("archive.export", func(e *httpwire.Endpoint) { e.Response = reflect.TypeFor[job]() }), []string{`row "archive.export"`, "Response"}},
 		"response on stream":     {edit("live.stream", func(e *httpwire.Endpoint) { e.Response = reflect.TypeFor[job]() }), []string{`row "live.stream"`, "Response"}},
 		"response on redirect":   {edit("auth.sso", func(e *httpwire.Endpoint) { e.Response = reflect.TypeFor[job]() }), []string{`row "auth.sso"`, "Response"}},
@@ -815,7 +815,7 @@ func TestDeriveRefusesAnIncomparableSentinel(t *testing.T) {
 
 func TestUnionOfARawRead(t *testing.T) {
 	tb := fixtureTable(t)
-	addRow(httpwire.Endpoint{Name: "files.get", Method: http.MethodGet, Path: "/file", Kind: httpwire.Raw, ContentType: "text/csv", DuringOutage: true})(tb)
+	addRow(httpwire.Endpoint{Name: "files.get", Method: http.MethodGet, Path: "/file", Kind: httpwire.Raw, ContentTypes: []string{"text/csv"}, DuringOutage: true})(tb)
 	got, err := httpwire.Derive(tb, guardCodes)
 	if err != nil {
 		t.Fatal(err)
