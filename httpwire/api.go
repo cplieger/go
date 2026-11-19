@@ -192,7 +192,7 @@ func (a *API) decoded(ep *Endpoint, b *Binding) http.Handler {
 	capped := own && ep.Kind == Raw && isWrite(ep.Method) && ep.Request == nil
 	limit := cmp.Or(ep.MaxBody, a.table.MaxBody)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		aw := &answerWriter{ResponseWriter: w, a: a, r: r, ep: ep, own: own}
+		aw := &answerWriter{ResponseWriter: w, a: a, r: r, ep: ep, own: own, pre: w.Header().Clone()}
 		defer a.recoverRow(aw)
 		d, body, e := a.decode(r, ep)
 		if e == nil && capped && r.ContentLength > int64(limit) {
@@ -239,7 +239,7 @@ func (a *API) recoverRow(aw *answerWriter) {
 	if aw.wrote {
 		panic(http.ErrAbortHandler)
 	}
-	dropHandlerHeaders(aw.Header())
+	aw.restoreHeader()
 	a.table.Catalog.WriteError(aw.ResponseWriter, aw.r, &Error{Code: codeInternal})
 }
 

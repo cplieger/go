@@ -3,10 +3,9 @@ package httpwire
 import (
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
-
-	"github.com/cplieger/go/httpserver/v2"
 )
 
 const (
@@ -24,6 +23,7 @@ type answerWriter struct {
 	r        *http.Request
 	ep       *Endpoint
 	body     *cappedBody
+	pre      http.Header // the header before the handler ran
 	position string
 	own      bool // the handler writes its own status
 	wrote    bool
@@ -98,19 +98,18 @@ func (w *answerWriter) undeclared(code int) bool {
 
 // refuseBody replaces the handler's answer with the cap's refusal.
 func (w *answerWriter) refuseBody() {
-	dropHandlerHeaders(w.Header())
+	w.restoreHeader()
 	w.wrote, w.dropped = true, true
 	w.a.table.Catalog.WriteError(w.ResponseWriter, w.r, tooLarge(w.body.limit))
 }
 
-// dropHandlerHeaders drops every header but the binder's own, before a
-// refusal replaces a handler's answer.
-func dropHandlerHeaders(h http.Header) {
-	for k := range h {
-		if k != headerWireVersion && k != http.CanonicalHeaderKey(httpserver.HeaderRequestID) {
-			delete(h, k)
-		}
-	}
+// restoreHeader puts back the header the row started with, the binder's
+// and the app's middleware's, before a refusal replaces a handler's
+// answer: what the handler set or overwrote is undone.
+func (w *answerWriter) restoreHeader() {
+	h := w.Header()
+	clear(h)
+	maps.Copy(h, w.pre)
 }
 
 // cappedBody notes when its reader hits the cap http.MaxBytesReader holds

@@ -182,9 +182,10 @@ func TestRawWriteBodyIsCapped(t *testing.T) {
 		t.Run("an unannounced body over the cap, "+name, func(t *testing.T) {
 			api, runs := rawWriteAPI(t, func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("X-Handler", "set before the read")
+				w.Header().Set("Cache-Control", "max-age=60")
 				h(w, r)
 			})
-			rec := answer(api, chunked("123456789"))
+			rec := answer(outerHeaders(api), chunked("123456789"))
 			env := envelopeOf(t, rec)
 			if rec.Code != http.StatusRequestEntityTooLarge || env.Code != "body_too_large" || *runs != 1 {
 				t.Errorf("answer %d %s, handler ran %d times", rec.Code, env.Code, *runs)
@@ -192,6 +193,7 @@ func TestRawWriteBodyIsCapped(t *testing.T) {
 			if rec.Header().Get("X-Handler") != "" || rec.Header().Get("Content-Disposition") != "" || rec.Header().Get("Wire-Version") == "" {
 				t.Errorf("headers %v: want the handler's dropped and the binder's kept", rec.Header())
 			}
+			checkOuterHeaders(t, rec.Header())
 		})
 	}
 	t.Run("a read error is the handler's to see", func(t *testing.T) {

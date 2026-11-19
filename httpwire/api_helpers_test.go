@@ -172,6 +172,23 @@ func serve(api http.Handler, method, target, body string) *httptest.ResponseReco
 	return rec
 }
 
+// outerHeaders is the app's middleware before the API, setting headers
+// every answer must carry, a refusal that replaces a handler's included.
+func outerHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'")
+		h.ServeHTTP(w, r)
+	})
+}
+
+func checkOuterHeaders(t *testing.T, h http.Header) {
+	t.Helper()
+	if h.Get("Cache-Control") != "no-store" || h.Get("Content-Security-Policy") != "default-src 'none'" {
+		t.Errorf("headers %v, want the outer Cache-Control and Content-Security-Policy", h)
+	}
+}
+
 // envelopeOf decodes an error answer, failing when it is not the envelope.
 func envelopeOf(t *testing.T, rec *httptest.ResponseRecorder) httpwire.Envelope {
 	t.Helper()

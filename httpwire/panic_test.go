@@ -12,10 +12,12 @@ import (
 )
 
 // panicking binds name to a handler that panics with v before it writes
-// anything, a Raw or Stream one after setting a header.
+// anything, a Raw or Stream one after setting a header and overwriting
+// an outer one.
 func panicking(name string, v any) httpwire.Binding {
 	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "/api/jobs/half")
+		w.Header().Set("Cache-Control", "max-age=60")
 		panic(v)
 	})
 	switch name {
@@ -48,7 +50,7 @@ func TestPanicAnswersInternalError(t *testing.T) {
 						t.Errorf("the handler's panic reached the caller as %v", v)
 					}
 				}()
-				rec = serve(api, tc.method, tc.target, "")
+				rec = serve(outerHeaders(api), tc.method, tc.target, "")
 			}()
 			if rec == nil {
 				return
@@ -59,6 +61,7 @@ func TestPanicAnswersInternalError(t *testing.T) {
 			if got := rec.Header().Get("Location"); got != "" {
 				t.Errorf("the handler's Location %q is on the refusal", got)
 			}
+			checkOuterHeaders(t, rec.Header())
 			if rec.Header().Get("Wire-Version") == "" || rec.Header().Get("X-Request-Id") == "" {
 				t.Errorf("headers = %v, want Wire-Version and X-Request-Id", rec.Header())
 			}

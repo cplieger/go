@@ -28,7 +28,7 @@ A path or query value decodes into a `TextUnmarshaler`, a string type with a `Ma
 
 A path value outside its type or schema answers `not_found`, because it names no resource. A query value answers `bad_query` and a body `bad_body`, each with `fields` naming the refused paths.
 
-A row whose body the binder decodes takes only `application/json`, matched case-insensitively, with any parameters and a charset of `utf-8` if one is given. A missing, unparsable or other media type answers `unsupported_media_type` (415) before the body is read and before any idempotency key is claimed. A `Raw` row with no `Request` reads its own body, held to the row's `MaxBody`, so it takes any media type.
+A row whose body the binder decodes takes only `application/json`, matched case-insensitively, with any parameters and a charset of `utf-8` if one is given. A missing, unparsable or other media type answers `unsupported_media_type` (415) before the body is read and before any idempotency key is claimed. A `Raw` row with no `Request` reads its own body, held to the row's `MaxBody`, so it takes any media type. A handler that reads past the cap has its answer replaced by `body_too_large`, with the header the row started with: the handler's headers are undone and the app's middleware's kept.
 
 A JSON body is one JSON value no larger than the row's `MaxBody` (the table's, 64 KiB by default), else `body_too_large`. It is checked against the document's schema, which admits no member the type does not declare, and against the bound methods of its field types, and every failing path is listed in `fields`.
 
@@ -46,7 +46,7 @@ Every row's union ends with the codes any row may answer: `accounts_unavailable`
 
 A `Raw` row's handler writes its own answer, which must use the row's `ContentType`. Its refusals go through `Catalog.WriteError`.
 
-A panic while a row decodes or runs is logged at ERROR with its stack and keeps nothing: a `Keyed` row's claim is released and its spool file removed. While nothing of the answer is written it answers `internal_error`, with every header the handler set dropped. Once the answer has started, the binder panics with `http.ErrAbortHandler`, so net/http cuts the connection and the client never reads a cut answer as a whole one. A handler's own `http.ErrAbortHandler` passes through untouched.
+A panic while a row decodes or runs is logged at ERROR with its stack and keeps nothing: a `Keyed` row's claim is released and its spool file removed. While nothing of the answer is written it answers `internal_error` with the header the row started with: every header the handler set or overwrote is undone, and those the app's middleware set before the API are kept. Once the answer has started, the binder panics with `http.ErrAbortHandler`, so net/http cuts the connection and the client never reads a cut answer as a whole one. A handler's own `http.ErrAbortHandler` passes through untouched.
 
 ## Person-only actions
 
