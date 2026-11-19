@@ -152,15 +152,19 @@ func keyedResend(t *testing.T, r scheduler.Records) {
 		Credential: credential, Row: row, Key: "k1", Fingerprint: [32]byte{1}, Window: 24 * time.Hour,
 		Until: time.Now().Add(-time.Hour),
 	}
-	first := f.insert(f.record("scan", ""), key)
+	sent := f.record("scan", "")
+	sent.QueuedAt = key.Until
+	first := f.insert(sent, key)
 	stored := f.get(first.ID)
-	if stored.Key == nil {
-		t.Fatal("the stored record holds no key, want the insert's")
+	if stored.Key == nil || first.Key == nil {
+		t.Fatalf("Insert answered key %+v and stored key %+v, want the insert's in both", first.Key, stored.Key)
+	}
+	until := stored.QueuedAt.Add(key.Window)
+	if !first.Key.Until.Equal(until) || !stored.Key.Until.Equal(until) {
+		t.Errorf("the key's Until = %v answered, %v stored, want %v: the stored QueuedAt plus the window, not the sent %v",
+			first.Key.Until, stored.Key.Until, until, key.Until)
 	}
 	held, want := *stored.Key, *key
-	if until := first.QueuedAt.Add(key.Window); !held.Until.Equal(until) {
-		t.Errorf("the stored key's Until = %v, want %v: the stored QueuedAt plus the window", held.Until, until)
-	}
 	held.Until, want.Until = time.Time{}, time.Time{}
 	if held != want {
 		t.Errorf("the stored key = %+v, want %+v", held, want)
@@ -175,8 +179,13 @@ func keyedResend(t *testing.T, r scheduler.Records) {
 		t.Error("a resend wrote its own record, want none")
 	}
 
-	if got, ok, err := r.ByKey(t.Context(), credential, row, "k1"); err != nil || !ok || got.ID != first.ID {
-		t.Errorf("ByKey = id %s found %v, %v; want id %s", got.ID, ok, err, first.ID)
+	byKey(t, r, first.ID)
+}
+
+func byKey(t *testing.T, r scheduler.Records, id scheduler.ID) {
+	t.Helper()
+	if got, ok, err := r.ByKey(t.Context(), credential, row, "k1"); err != nil || !ok || got.ID != id {
+		t.Errorf("ByKey = id %s found %v, %v; want id %s", got.ID, ok, err, id)
 	}
 	for name, k := range map[string][3]string{
 		"another credential": {"other", row, "k1"},
