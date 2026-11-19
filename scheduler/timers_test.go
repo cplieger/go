@@ -938,3 +938,139 @@ func countContaining(lines []string, s string) int {
 	}
 	return n
 }
+
+// dailyRetry is quick's cadence in the covering-end tests.
+var dailyRetry = scheduler.Scheduled(24 * time.Hour).Retry(15 * time.Minute)
+
+// coveredKinds is quick and full, whose Covers covers quick; neither has a
+// slot, and full's jobs wait on their Gate and end failed.
+func coveredKinds() []scheduler.KindSpec[payload] {
+	full := spec("full", "")
+	full.Covers = func(_, other scheduler.Job[payload]) bool { return other.Kind == "quick" }
+	full.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+		select {
+		case <-r.Job().Payload.Gate:
+		case <-ctx.Done():
+		}
+		return scheduler.End{Result: scheduler.ResultFailed}
+	}
+	return []scheduler.KindSpec[payload]{spec("quick", ""), full}
+}
+
+// tiedEnds schedules quick, runs a quick job that ends ok, then a full job
+// that ends failed, and lets them end at one instant, the kinds in order one
+// after the other; it answers the instant.
+func tiedEnds(t *testing.T, r *rig, order []scheduler.Kind) time.Time {
+	t.Helper()
+	r.schedule(t, "quick", "", dailyRetry)
+	time.Sleep(10 * time.Minute)
+	gates := map[scheduler.Kind]chan struct{}{}
+	ids := map[scheduler.Kind]scheduler.ID{}
+	// quick runs before full starts, so full's Covers finds nothing queued.
+	for _, k := range []scheduler.Kind{"quick", "full"} {
+		gates[k] = make(chan struct{})
+		ids[k] = r.start(t, api(k, "", "alice", payload{Gate: gates[k]})).Job
+		synctest.Wait()
+	}
+	at := time.Now()
+	for _, k := range order {
+		close(gates[k])
+		synctest.Wait()
+	}
+	for k, id := range ids {
+		if rec := r.rec(t, id); rec.State != scheduler.StateEnded || !rec.EndedAt.Equal(at) {
+			t.Fatalf("%s %s at %v, want ended at %v: the two ends must tie", k, rec.State, rec.EndedAt, at)
+		}
+	}
+	return at
+}
+
+func TestCoveringEndTiedWithOwnEnd(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		order []scheduler.Kind
+	}{
+		{"own ok end noted first", []scheduler.Kind{"quick", "full"}},
+		{"covering failed end noted first", []scheduler.Kind{"full", "quick"}},
+	} {
+		t.Run(c.name+", in process", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := newRig(t, scheduler.Config[payload]{Kinds: coveredKinds()})
+				at := tiedEnds(t, r, c.order)
+				r.nextWake(t, "quick", "", at, 24*time.Hour)
+			})
+		})
+
+		t.Run(c.name+", after a restart", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				base := &rig{store: memrecords.New(), log: &runLog{}}
+				cfg := scheduler.Config[payload]{Kinds: coveredKinds()}
+				before, stop := base.openUntil(t, cfg)
+				at := tiedEnds(t, before, c.order)
+				stop()
+
+				r := base.open(t, cfg)
+				synctest.Wait()
+				r.schedule(t, "quick", "", dailyRetry)
+				r.nextWake(t, "quick", "", at, 24*time.Hour)
+			})
+		})
+	}
+}
+
+// heldEnds holds the End of one job after the store wrote it, until release
+// closes, so the executor notes that end after a later one.
+type heldEnds struct {
+	*memrecords.Store
+	entered, release chan struct{}
+	id               scheduler.ID
+	mu               sync.Mutex
+}
+
+func (s *heldEnds) hold(id scheduler.ID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.id = id
+}
+
+func (s *heldEnds) End(ctx context.Context, id scheduler.ID, end scheduler.End) (scheduler.Record, error) {
+	rec, err := s.Store.End(ctx, id, end)
+	s.mu.Lock()
+	held := id == s.id
+	s.mu.Unlock()
+	if held {
+		close(s.entered)
+		<-s.release
+	}
+	return rec, err
+}
+
+func TestOlderCoveringEndNotedLate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := &heldEnds{Store: memrecords.New(), entered: make(chan struct{}), release: make(chan struct{})}
+		r := (&rig{store: s.Store, log: &runLog{}}).open(t, scheduler.Config[payload]{Kinds: coveredKinds(), Records: s})
+		r.schedule(t, "quick", "", dailyRetry)
+		time.Sleep(10 * time.Minute)
+		quickGate, fullGate := make(chan struct{}), make(chan struct{})
+		q := r.start(t, api("quick", "", "alice", payload{Gate: quickGate}))
+		synctest.Wait()
+		f := r.start(t, api("full", "", "bob", payload{Gate: fullGate}))
+		s.hold(f.Job)
+		close(fullGate)
+		<-s.entered
+		time.Sleep(time.Minute)
+		close(quickGate)
+		synctest.Wait()
+		own := r.rec(t, q.Job).EndedAt
+		close(s.release)
+		synctest.Wait()
+
+		if got := r.rec(t, f.Job).EndedAt; !got.Before(own) {
+			t.Fatalf("full ended at %v, want before quick's own end at %v", got, own)
+		}
+		if got, want := r.ex.Deadline("quick", ""), own.Add(72*time.Hour); !got.Equal(want) {
+			t.Errorf("Deadline after an older covering end noted late = %v, want %v: quick's own later end plus the lease", got, want)
+		}
+		r.nextWake(t, "quick", "", own, 24*time.Hour)
+	})
+}
