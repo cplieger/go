@@ -274,24 +274,29 @@ type opaqueWriter struct{ http.ResponseWriter }
 
 // A Raw handler's refusal is kept by the code of the answer it started:
 // the code the catalog wrote through a wrap that unwraps, whatever its
-// size, else the code its kept body holds.
+// size, else the code its kept body holds within MaxAnswer; past it the
+// code is unread and the refusal is kept as too large to replay.
 func TestKeyedRawRefusalKeptByItsCode(t *testing.T) {
 	var catalog *httpwire.Catalog
 	cases := map[string]struct {
 		write  func(w http.ResponseWriter, r *http.Request)
 		status int
+		resend int
 		runs   int
 	}{
 		"past MaxAnswer through a wrap that unwraps": {func(w http.ResponseWriter, r *http.Request) {
 			catalog.WriteError(unwrapWriter{w}, r, &httpwire.Error{Code: "held_limit", Message: strings.Repeat("m", 2000)})
-		}, http.StatusTooManyRequests, 2},
+		}, http.StatusTooManyRequests, http.StatusTooManyRequests, 2},
 		"within MaxAnswer through a wrap that does not": {func(w http.ResponseWriter, r *http.Request) {
 			catalog.WriteError(opaqueWriter{w}, r, &httpwire.Error{Code: "held_limit", Message: "wait"})
-		}, http.StatusTooManyRequests, 2},
+		}, http.StatusTooManyRequests, http.StatusTooManyRequests, 2},
+		"past MaxAnswer through a wrap that does not": {func(w http.ResponseWriter, r *http.Request) {
+			catalog.WriteError(opaqueWriter{w}, r, &httpwire.Error{Code: "held_limit", Message: strings.Repeat("m", 2000)})
+		}, http.StatusTooManyRequests, http.StatusConflict, 1},
 		"a refusal of its own, then the catalog's": {func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the upstream failed", http.StatusBadGateway)
 			catalog.WriteError(w, r, &httpwire.Error{Code: "held_limit", Message: "wait"})
-		}, http.StatusBadGateway, 1},
+		}, http.StatusBadGateway, http.StatusBadGateway, 1},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -307,11 +312,11 @@ func TestKeyedRawRefusalKeptByItsCode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			for i := range 2 {
+			for i, want := range []int{tc.status, tc.resend} {
 				rec := httptest.NewRecorder()
 				api.ServeHTTP(rec, keyedRequest(http.MethodPost, "/api/import", "archive", `"k"`))
-				if rec.Code != tc.status {
-					t.Errorf("answer %d is %d %q, want %d", i, rec.Code, rec.Body, tc.status)
+				if rec.Code != want {
+					t.Errorf("answer %d is %d %q, want %d", i, rec.Code, rec.Body, want)
 				}
 			}
 			if runs != tc.runs {
