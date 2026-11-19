@@ -208,13 +208,13 @@ func unsupportedErr(path string) error {
 func (f *KeyFile) Sealer() *Sealer { return &Sealer{src: f.src} }
 
 // Close releases f's lease and its keys: f's Sealer answers ErrNoKey, and
-// f's writes fail with fs.ErrClosed. It waits only for a key-file write
-// already running, until filesafe returns: that write's ctx is checked
-// between filesafe's steps, not inside a sync or rename the kernel holds. A
-// Create, Rotate or Retire that has not begun its write answers fs.ErrClosed
-// and writes nothing, and a Create waiting for the lease stops at once.
-// Close it last, after the stores that use its Sealer. A second Close
-// answers nil.
+// f's writes fail with fs.ErrClosed. A Create waiting for another holder's
+// lease stops at once. A Create, Rotate or Retire whose filesystem step is
+// running (the directory sync, lease check, re-read or write) holds Close
+// until filesafe returns, since that call's ctx is checked only between
+// filesafe's steps; one that has not begun its write then answers
+// fs.ErrClosed and writes nothing. Close it last, after the stores that use
+// its Sealer. A second Close answers nil.
 func (f *KeyFile) Close() error {
 	if f.path == "" {
 		return nil
@@ -373,7 +373,8 @@ func (f *KeyFile) checkAbsent(ctx context.Context) error {
 // the new key once Rotate returns, so an app keeps it; only a Subkey, a copy
 // that keeps the old key, is taken again. It answers ErrNoKey when f
 // holds no key, ErrRotationPending while a previous key is held, and
-// ErrKeyFileChanged or ErrNotDurable as their docs say.
+// ErrKeyFileChanged or ErrNotDurable as their docs say. It checks the file
+// first, so a changed file answers ErrKeyFileChanged, not ErrRotationPending.
 func (f *KeyFile) Rotate(ctx context.Context) error {
 	return f.rewrite(ctx, func(r *ring) (*ring, error) {
 		if r.n == 2 {
@@ -391,8 +392,9 @@ func (f *KeyFile) Rotate(ctx context.Context) error {
 // no longer opens what was sealed under it; a Subkey of that key taken
 // earlier is a copy Retire cannot reach, so rebuild what holds it, or
 // restart. It is never automatic: call it once every such value is sealed
-// again. With no previous key it writes nothing and answers nil. Its errors
-// are Rotate's, less ErrRotationPending.
+// again. With no previous key it writes nothing and answers nil, unless the
+// file changed (ErrKeyFileChanged). Its errors are Rotate's, less
+// ErrRotationPending.
 func (f *KeyFile) Retire(ctx context.Context) error {
 	return f.rewrite(ctx, func(r *ring) (*ring, error) {
 		if r.n == 1 {

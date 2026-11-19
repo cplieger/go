@@ -6,7 +6,7 @@ This page covers where to put the key file, how one process holds it and how to 
 
 - Pass an absolute path from your app's own setting. The module reads no environment variable.
 - Put the file in a directory only the app's user can enter, owned by that user, with no group or other access. `Create` makes a missing directory, one level, at 0700. It also syncs the directory's entry into its parent, so the app's user must be able to read the parent at the start that creates the file.
-- The file is written at 0600, owned by the app's effective user. An open accepts 0600 or 0400 and refuses any other mode, another user's file, a symlink and anything that is not a regular file.
+- The file is written at 0600, owned by the app's effective user. An open accepts a mode with no permission bit outside 0600, such as 0600 or 0400. It refuses any other bit (group or other access, owner execute, setuid, setgid or sticky), another user's file, a symlink and anything that is not a regular file.
 - The directory must be on a writable filesystem, since the lock file and every rotation are written there.
 
 ## Opening and creating
@@ -24,7 +24,7 @@ A `KeyFile` that holds a key holds an exclusive lease on the lock file, from `Op
 - Open each key file once per process, and share the `KeyFile`.
 - Run `Rotate` and `Retire` in the process that serves the key file, from the app's own admin command. A second process that opens the file waits, then is refused.
 - When an old and a new instance overlap during a restart, the new one waits for the lease within the context it passes to `OpenKeyFile`. The wait ends when the old process exits.
-- Close the `KeyFile` last at shutdown, after the stores that use its `Sealer`. `Close` waits only for a key-file write already running, until filesafe returns. A `Create` still waiting for another holder's lease stops at once with an error matching `fs.ErrClosed`. After `Close`, the `Sealer` answers `ErrNoKey`.
+- Close the `KeyFile` last at shutdown, after the stores that use its `Sealer`. `Close` never waits on another holder: a `Create` still waiting for another holder's lease stops at once with an error matching `fs.ErrClosed`. It waits for a `Create`, `Rotate` or `Retire` whose filesystem step is running, such as the key directory's sync, the re-read or the write, until filesafe returns. Such a call that has not begun its write then answers an error matching `fs.ErrClosed` and writes nothing. After `Close`, the `Sealer` answers `ErrNoKey`.
 
 ## Rotating keys
 
@@ -35,7 +35,7 @@ A `KeyFile` that holds a key holds an exclusive lease on the lock file, from `Op
 
 Keep the one `Sealer` the `KeyFile` gave you for the life of the process, since it reads the keys at each call. Keep values a store holds on that `Sealer`, never on a `Subkey`.
 
-`Rotate` and `Retire` answer `ErrKeyFileChanged` when the file is missing, holds keys this `KeyFile` neither installed nor wrote, or its lock file was replaced. A person or another tool changed it, so nothing is written. Once someone decides which file is right, restart the app. Or close the `KeyFile`, open the path again, and hand every holder of the old `Sealer` the new one.
+`Rotate` and `Retire` answer `ErrKeyFileChanged` when the file is missing, holds keys this `KeyFile` neither installed nor wrote, or its lock file was replaced. They check this first, so a changed file answers `ErrKeyFileChanged` even where `Rotate` would answer `ErrRotationPending` or `Retire` nil. A person or another tool changed it, so nothing is written. Once someone decides which file is right, restart the app. Or close the `KeyFile`, open the path again, and hand every holder of the old `Sealer` the new one.
 
 ## Writes that survive a power loss
 
@@ -74,7 +74,7 @@ An error from a done context wraps the context's error. A key-file error names t
   - An NFS mount with `nolock`.
 - An NFS server exported with `async` may lose a key file it reported written, as exports(5) warns.
 - An existing key file in a read-only directory makes `OpenKeyFile` fail with the filesystem's error, because the lock file cannot be created or opened for writing there.
-- On an NFS `hard` mount whose server is down, a running write holds `Close` until the server answers.
+- On an NFS `hard` mount whose server is down, a running sync, re-read or write holds `Close` until the server answers.
 
 ## Systems
 

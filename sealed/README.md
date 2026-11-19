@@ -81,7 +81,7 @@ Beside the key file, the module keeps an empty lock file, the key file's name wi
 
 Back up the key file by copying it, and restore it only while the app is stopped. Losing it loses every value sealed under it, the secrets in an export included.
 
-A key-file write the filesystem does not report durable installs nothing and answers `ErrNotDurable`. Fix the disk and reboot the host before the app starts again, or retry once the cause is fixed. The key file needs a writable filesystem on one host. Windows, AIX and Solaris refuse a key file, and `New` and `NewEphemeral` work everywhere. [The key file](docs/key-file.md) covers the lease, rotation, every error, and the filesystems and systems that work.
+A key-file write the filesystem does not report durable installs nothing and answers `ErrNotDurable`. Fix the disk and reboot the host before the app starts again, or retry once the cause is fixed. The key file needs a writable filesystem on one host. Windows, AIX and Solaris refuse a key file, and `New` and `NewEphemeral` work there too. [The key file](docs/key-file.md) covers the lease, rotation, every error, and the filesystems and systems that work.
 
 ## Values
 

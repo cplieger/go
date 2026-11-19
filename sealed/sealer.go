@@ -109,8 +109,10 @@ func NewEphemeral() *Sealer { return newSealer(randomKey()) }
 func newSealer(key [keyLen]byte) *Sealer {
 	rk, err := newRingKey(key)
 	if err != nil {
-		// Unreachable: hkdf.Key fails only for an over-long output or a key under 112 bits.
-		return &Sealer{}
+		// Unreachable: hkdf.Key fails only for an over-long output or a key
+		// under 112 bits. New has no error to return, and a keyless Sealer
+		// would hide the failure behind ErrNoKey.
+		panic(fmt.Errorf("sealed: %w", err))
 	}
 	src := new(keySource)
 	src.ring.Store(&ring{keys: [2]ringKey{rk}, n: 1})

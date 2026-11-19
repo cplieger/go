@@ -481,11 +481,12 @@ func TestSubkeyAcrossRotation(t *testing.T) {
 
 // TestKeyFileChanged checks that Rotate and Retire never write over a file
 // they did not leave (the ErrKeyFileChanged godoc): with another key file
-// at the path, no file, or a lock file that is not the one A's lease
-// locked (flock(2) locks an open file, so a new lock file takes a second
-// lease), both answer ErrKeyFileChanged, the path stays as it was, and A
-// keeps sealing under its keys. A lease check whose lookup fails (EIO)
-// answers that error and writes nothing; a later Rotate writes.
+// at the path, no file, or a lock file other than the one A's lease locked
+// (flock(2) locks an open file, so a new one takes a second lease), both
+// answer ErrKeyFileChanged, before ErrRotationPending or Retire's nil, the
+// path stays as it was, and A keeps sealing under its keys. A lease check
+// whose lookup fails (EIO) answers that error and writes nothing; a later
+// Rotate writes.
 func TestKeyFileChanged(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -508,20 +509,30 @@ func TestKeyFileChanged(t *testing.T) {
 			openKeyFile(t, path)
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(privateDir(t), "sealing.key")
-			a := createKeyFile(t, path)
-			ids := a.Sealer().KeyIDs()
-			tc.change(t, path)
-			before := statePath(t, path)
-			for name, write := range map[string]func(context.Context) error{"Rotate": a.Rotate, "Retire": a.Retire} {
-				if err := write(t.Context()); !errors.Is(err, ErrKeyFileChanged) {
-					t.Errorf("%s = %v, want ErrKeyFileChanged", name, err)
+		for _, start := range []struct {
+			name   string
+			rotate bool
+		}{{"one key", false}, {"two keys", true}} {
+			t.Run(tc.name+" with "+start.name, func(t *testing.T) {
+				path := filepath.Join(privateDir(t), "sealing.key")
+				a := createKeyFile(t, path)
+				if start.rotate {
+					if err := a.Rotate(t.Context()); err != nil {
+						t.Fatalf("Rotate before the change: %v", err)
+					}
 				}
-			}
-			checkUnchanged(t, path, before)
-			checkSeals(t, a.Sealer(), ids)
-		})
+				ids := a.Sealer().KeyIDs()
+				tc.change(t, path)
+				before := statePath(t, path)
+				for name, write := range map[string]func(context.Context) error{"Rotate": a.Rotate, "Retire": a.Retire} {
+					if err := write(t.Context()); !errors.Is(err, ErrKeyFileChanged) {
+						t.Errorf("%s = %v, want ErrKeyFileChanged", name, err)
+					}
+				}
+				checkUnchanged(t, path, before)
+				checkSeals(t, a.Sealer(), ids)
+			})
+		}
 	}
 	t.Run("lease check fails", func(t *testing.T) {
 		path := filepath.Join(privateDir(t), "sealing.key")
