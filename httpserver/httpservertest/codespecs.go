@@ -3,16 +3,24 @@
 package httpservertest
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
+	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/cplieger/go/httpserver/v2"
@@ -24,21 +32,20 @@ const (
 	errorResponseType = "ErrorResponse"
 )
 
-// rootWriters are the httpserver functions that take an ErrorCode, with its
-// argument positions.
-var rootWriters = map[string][]int{"WriteError": {3}, "NewErrorResponse": {1}}
+// rootWriters are the httpserver functions that write the codes they are
+// given.
+var rootWriters = map[string]bool{"WriteError": true, "NewErrorResponse": true}
 
-// CheckCodeSpecs fails t unless specs holds exactly the codes the non-test Go
-// files in dir write, naming each missing from specs and each key nothing
-// writes. A code is written when a string literal, a string constant or an
-// ErrorCode conversion of one is an ErrorCode argument of a call (WriteError,
-// NewErrorResponse, an ErrorResponder, or a function or func type dir declares)
-// or fills an ErrorCode field of a composite literal, including
-// ErrorResponse.Code. Build envelopes with NewErrorResponse; a literal's code
-// is still counted. A code in a variable is counted where its literal enters.
+// CheckCodeSpecs fails t unless specs holds exactly the codes the package in
+// dir writes, naming each missing from specs and each key nothing writes. It
+// type-checks dir's non-test files as go build selects them, so the package
+// must compile. A code is a string constant expression passed as an ErrorCode
+// argument to WriteError, NewErrorResponse, a function the package declares or
+// a func value, or set in an ErrorCode field of the package's struct or of
+// ErrorResponse; another package's functions do not write.
 func CheckCodeSpecs(t testing.TB, dir string, specs map[httpserver.ErrorCode]httpserver.CodeSpec) {
 	t.Helper()
-	written, err := writtenCodes(dir)
+	written, err := writtenCodes(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("CheckCodeSpecs: %v", err)
 	}
@@ -54,249 +61,255 @@ func CheckCodeSpecs(t testing.TB, dir string, specs map[httpserver.ErrorCode]htt
 	}
 }
 
-// codeScan holds what the declarations in one directory say about where an
-// ErrorCode goes, and the codes found so far.
+// codeScan holds one type-checked package and the codes found in it so far.
 type codeScan struct {
-	fset      *token.FileSet
-	written   map[httpserver.ErrorCode]string
-	consts    map[string]string
-	funcs     map[string][]int // function, method or func-typed value name: its ErrorCode argument positions
-	funcTypes map[string][]int // func type name: its ErrorCode parameter positions
-	fields    map[string]bool  // ErrorCode-typed struct field names
+	fset    *token.FileSet
+	info    *types.Info
+	pkg     *types.Package
+	written map[httpserver.ErrorCode]string
 }
 
-// writtenCodes parses the non-test Go files in dir and returns each code they
-// write with the position of its first occurrence.
-func writtenCodes(dir string) (map[httpserver.ErrorCode]string, error) {
-	entries, err := os.ReadDir(dir)
+// writtenCodes type-checks the package in dir and returns each code its
+// non-test files write with the position of its first occurrence.
+func writtenCodes(ctx context.Context, dir string) (map[httpserver.ErrorCode]string, error) {
+	listed, err := listPackage(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
 	s := &codeScan{
-		fset:      token.NewFileSet(),
-		written:   make(map[httpserver.ErrorCode]string),
-		consts:    make(map[string]string),
-		funcs:     make(map[string][]int),
-		funcTypes: map[string][]int{"ErrorResponder": {3}},
-		fields:    make(map[string]bool),
+		fset:    token.NewFileSet(),
+		info:    &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}},
+		written: make(map[httpserver.ErrorCode]string),
 	}
-	var files []*ast.File
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(s.fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
-		if err != nil {
-			return nil, err
+	files := make([]*ast.File, 0, len(listed.root.GoFiles))
+	for _, name := range listed.root.GoFiles {
+		f, perr := parser.ParseFile(s.fset, filepath.Join(listed.root.Dir, name), nil, parser.SkipObjectResolution)
+		if perr != nil {
+			return nil, perr
 		}
 		files = append(files, f)
 	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("no non-test Go files in %s", dir)
+	conf := types.Config{
+		Importer: importer.ForCompiler(s.fset, "gc", listed.lookup),
+		Sizes:    types.SizesFor("gc", runtime.GOARCH),
 	}
-	// Func types first, since a field or parameter of one is a writer.
-	for _, f := range files {
-		s.declareFuncTypes(f)
-	}
-	for _, f := range files {
-		s.declare(f)
+	if s.pkg, err = conf.Check(listed.root.ImportPath, s.fset, files, s.info); err != nil {
+		return nil, fmt.Errorf("type-check %s: %w", dir, err)
 	}
 	for _, f := range files {
-		s.collect(f)
+		ast.Inspect(f, s.visit)
 	}
 	return s.written, nil
 }
 
-// httpserverName is the name f refers to httpserver by, "" when f is in
-// package httpserver itself and the qualifier is absent.
-func httpserverName(f *ast.File) (string, bool) {
-	if f.Name.Name == "httpserver" {
-		return "", true
+// listedPackage is what go list reports of one package.
+type listedPackage struct {
+	Error      *struct{ Err string }
+	ImportMap  map[string]string
+	ImportPath string
+	Dir        string
+	Export     string
+	GoFiles    []string
+	CgoFiles   []string
+	DepOnly    bool
+}
+
+// listing is the package in a directory and the export data of everything it
+// imports.
+type listing struct {
+	exports map[string]string // import path: export data file
+	root    listedPackage
+}
+
+// listPackage runs go list in dir for its package and the export data of its
+// dependencies, which go list builds through the build cache.
+func listPackage(ctx context.Context, dir string) (*listing, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-export", "-e", "-json=ImportPath,Dir,GoFiles,CgoFiles,Export,ImportMap,Error,DepOnly", ".")
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("go list in %s: %w: %s", dir, err, bytes.TrimSpace(stderr.Bytes()))
 	}
-	for _, imp := range f.Imports {
-		if p, _ := strconv.Unquote(imp.Path.Value); p == httpserverPath {
-			if imp.Name != nil {
-				return imp.Name.Name, true
-			}
-			return "httpserver", true
+	l := &listing{exports: make(map[string]string)}
+	found := false
+	for dec := json.NewDecoder(bytes.NewReader(out)); ; {
+		var p listedPackage
+		if err := dec.Decode(&p); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("go list in %s: %w", dir, err)
 		}
-	}
-	return "", false
-}
-
-// typeName returns the name of an httpserver type expression (ErrorCode inside
-// the package, httpserver.ErrorCode outside it), or a local type's name.
-func typeName(f *ast.File, e ast.Expr) string {
-	switch e := e.(type) {
-	case *ast.Ident:
-		return e.Name
-	case *ast.SelectorExpr:
-		if x, ok := e.X.(*ast.Ident); ok {
-			if q, ok := httpserverName(f); ok && x.Name == q {
-				return e.Sel.Name
-			}
-		}
-	}
-	return ""
-}
-
-// codePositions returns the argument positions of ft whose type is ErrorCode.
-func codePositions(f *ast.File, ft *ast.FuncType) []int {
-	var pos []int
-	i := 0
-	for _, p := range ft.Params.List {
-		n := max(len(p.Names), 1)
-		if typeName(f, p.Type) == errorCodeType {
-			for k := range n {
-				pos = append(pos, i+k)
-			}
-		}
-		i += n
-	}
-	return pos
-}
-
-func (s *codeScan) declareFuncTypes(f *ast.File) {
-	ast.Inspect(f, func(n ast.Node) bool {
-		if ts, ok := n.(*ast.TypeSpec); ok {
-			if ft, ok := ts.Type.(*ast.FuncType); ok {
-				if pos := codePositions(f, ft); len(pos) > 0 {
-					s.funcTypes[ts.Name.Name] = pos
-				}
-			}
-		}
-		return true
-	})
-}
-
-// declare records the constants, the writer functions and values, and the
-// ErrorCode fields f declares.
-func (s *codeScan) declare(f *ast.File) {
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.FuncDecl:
-			if pos := codePositions(f, n.Type); len(pos) > 0 {
-				s.funcs[n.Name.Name] = pos
-			}
-		case *ast.ValueSpec:
-			s.declareValues(f, n)
-		case *ast.Field:
-			s.declareField(f, n)
-		}
-		return true
-	})
-}
-
-func (s *codeScan) declareValues(f *ast.File, v *ast.ValueSpec) {
-	for i, name := range v.Names {
-		if i < len(v.Values) {
-			if lit, ok := stringLit(v.Values[i]); ok {
-				s.consts[name.Name] = lit
-			}
-		}
-		if v.Type != nil {
-			if pos, ok := s.funcTypes[typeName(f, v.Type)]; ok {
-				s.funcs[name.Name] = pos
-			}
-		}
-	}
-}
-
-func (s *codeScan) declareField(f *ast.File, fd *ast.Field) {
-	tn := typeName(f, fd.Type)
-	for _, name := range fd.Names {
-		if tn == errorCodeType {
-			s.fields[name.Name] = true
-		}
-		if pos, ok := s.funcTypes[tn]; ok {
-			s.funcs[name.Name] = pos
-		}
-	}
-}
-
-// collect records every code f writes.
-func (s *codeScan) collect(f *ast.File) {
-	q, imported := httpserverName(f)
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.CallExpr:
-			for _, i := range s.callPositions(n, q, imported) {
-				if i < len(n.Args) {
-					s.record(f, n.Args[i])
-				}
-			}
-		case *ast.CompositeLit:
-			s.collectFields(f, n)
-		}
-		return true
-	})
-}
-
-// collectFields records the codes lit gives its ErrorCode-typed fields.
-func (s *codeScan) collectFields(f *ast.File, lit *ast.CompositeLit) {
-	_, qualified := lit.Type.(*ast.SelectorExpr)
-	envelope := qualified && typeName(f, lit.Type) == errorResponseType
-	for _, el := range lit.Elts {
-		kv, ok := el.(*ast.KeyValueExpr)
-		if !ok {
+		if p.DepOnly {
+			l.exports[p.ImportPath] = p.Export
 			continue
 		}
-		if key, ok := kv.Key.(*ast.Ident); ok && (s.fields[key.Name] || envelope && key.Name == "Code") {
-			s.record(f, kv.Value)
+		l.root, found = p, true
+	}
+	switch {
+	case !found:
+		return nil, fmt.Errorf("go list names no package in %s", dir)
+	case l.root.Error != nil:
+		return nil, fmt.Errorf("go list in %s: %s", dir, l.root.Error.Err)
+	case len(l.root.CgoFiles) > 0:
+		return nil, fmt.Errorf("%s uses cgo, which CheckCodeSpecs cannot type-check", dir)
+	case len(l.root.GoFiles) == 0:
+		return nil, fmt.Errorf("no non-test Go files in %s", dir)
+	}
+	return l, nil
+}
+
+// lookup opens the export data of the package path names, path as the
+// package's source writes it.
+func (l *listing) lookup(path string) (io.ReadCloser, error) {
+	if mapped, ok := l.root.ImportMap[path]; ok {
+		path = mapped
+	}
+	file := l.exports[path]
+	if file == "" {
+		return nil, fmt.Errorf("go list built no export data for %s", path)
+	}
+	return os.Open(file)
+}
+
+// visit records the codes a call or a composite literal writes.
+func (s *codeScan) visit(n ast.Node) bool {
+	switch n := n.(type) {
+	case *ast.CallExpr:
+		s.collectCall(n)
+	case *ast.CompositeLit:
+		s.collectFields(n)
+	}
+	return true
+}
+
+// collectCall records each constant passed as an ErrorCode argument of call
+// when its callee writes codes.
+func (s *codeScan) collectCall(call *ast.CallExpr) {
+	if tv := s.info.Types[call.Fun]; tv.IsType() || tv.IsBuiltin() || !s.writer(call.Fun) {
+		return
+	}
+	sig, ok := s.info.TypeOf(call.Fun).Underlying().(*types.Signature)
+	if !ok {
+		return
+	}
+	params := sig.Params()
+	for i, arg := range call.Args {
+		var param types.Type
+		switch last := params.Len() - 1; {
+		case sig.Variadic() && i >= last && !call.Ellipsis.IsValid():
+			slice, ok := params.At(last).Type().(*types.Slice)
+			if !ok {
+				continue
+			}
+			param = slice.Elem()
+		case i <= last:
+			param = params.At(i).Type()
+		default:
+			continue
+		}
+		if isErrorCode(param) {
+			s.record(arg)
 		}
 	}
 }
 
-// callPositions returns the ErrorCode argument positions of call.
-func (s *codeScan) callPositions(call *ast.CallExpr, q string, imported bool) []int {
-	switch fn := call.Fun.(type) {
+// writer reports whether a call through fun writes the codes it is given: a
+// root writer, a function or method the package declares, or a func value.
+func (s *codeScan) writer(fun ast.Expr) bool {
+	fun = ast.Unparen(fun)
+	switch e := fun.(type) {
+	case *ast.IndexExpr:
+		fun = e.X
+	case *ast.IndexListExpr:
+		fun = e.X
+	}
+	var obj types.Object
+	switch e := ast.Unparen(fun).(type) {
 	case *ast.Ident:
-		return s.funcs[fn.Name]
+		obj = s.info.Uses[e]
 	case *ast.SelectorExpr:
-		if x, ok := fn.X.(*ast.Ident); ok && imported && q != "" && x.Name == q {
-			return rootWriters[fn.Sel.Name]
+		if sel, ok := s.info.Selections[e]; ok {
+			obj = sel.Obj()
+		} else {
+			obj = s.info.Uses[e.Sel]
 		}
-		return s.funcs[fn.Sel.Name]
+	}
+	f, ok := obj.(*types.Func)
+	if !ok {
+		return true
+	}
+	if f.Pkg() == s.pkg {
+		return true
+	}
+	sig, _ := f.Type().(*types.Signature)
+	return f.Pkg() != nil && f.Pkg().Path() == httpserverPath && rootWriters[f.Name()] && sig != nil && sig.Recv() == nil
+}
+
+// collectFields records the constants lit gives the ErrorCode fields of a
+// struct the package declares, or of ErrorResponse.
+func (s *codeScan) collectFields(lit *ast.CompositeLit) {
+	t := types.Unalias(s.info.TypeOf(lit))
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok || !s.ownStruct(t) {
+		return
+	}
+	for i, el := range lit.Elts {
+		field, value := (*types.Var)(nil), el
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			field, value = fieldNamed(st, key.Name), kv.Value
+		} else if i < st.NumFields() {
+			field = st.Field(i)
+		}
+		if field != nil && isErrorCode(field.Type()) {
+			s.record(value)
+		}
+	}
+}
+
+// ownStruct reports whether t is a struct type the package declares, an
+// unnamed struct, or httpserver's ErrorResponse.
+func (s *codeScan) ownStruct(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return true
+	}
+	obj := named.Origin().Obj()
+	return obj.Pkg() == s.pkg || isHTTPServerType(obj, errorResponseType)
+}
+
+func fieldNamed(st *types.Struct, name string) *types.Var {
+	for f := range st.Fields() {
+		if f.Name() == name {
+			return f
+		}
 	}
 	return nil
 }
 
-// record adds the code e names, when e is a literal, a constant or an
-// ErrorCode conversion of one.
-func (s *codeScan) record(f *ast.File, e ast.Expr) {
-	code, ok := s.resolve(f, e)
-	if !ok {
+// isErrorCode reports whether t is httpserver's ErrorCode.
+func isErrorCode(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	return ok && isHTTPServerType(named.Obj(), errorCodeType)
+}
+
+func isHTTPServerType(obj *types.TypeName, name string) bool {
+	return obj.Name() == name && obj.Pkg() != nil && obj.Pkg().Path() == httpserverPath
+}
+
+// record adds the code e names when e is a constant of string value.
+func (s *codeScan) record(e ast.Expr) {
+	v := s.info.Types[e].Value
+	if v == nil || v.Kind() != constant.String {
 		return
 	}
-	c := httpserver.ErrorCode(code)
+	c := httpserver.ErrorCode(constant.StringVal(v))
 	if _, seen := s.written[c]; !seen {
 		s.written[c] = s.fset.Position(e.Pos()).String()
 	}
-}
-
-func (s *codeScan) resolve(f *ast.File, e ast.Expr) (string, bool) {
-	switch e := e.(type) {
-	case *ast.BasicLit:
-		return stringLit(e)
-	case *ast.Ident:
-		v, ok := s.consts[e.Name]
-		return v, ok
-	case *ast.CallExpr:
-		if len(e.Args) == 1 && typeName(f, e.Fun) == errorCodeType {
-			return s.resolve(f, e.Args[0])
-		}
-	case *ast.ParenExpr:
-		return s.resolve(f, e.X)
-	}
-	return "", false
-}
-
-func stringLit(e ast.Expr) (string, bool) {
-	lit, ok := e.(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return "", false
-	}
-	v, err := strconv.Unquote(lit.Value)
-	return v, err == nil
 }
