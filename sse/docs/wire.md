@@ -34,7 +34,7 @@ Event names that start with `sse:` are reserved for these frames. `Wire` is the 
 
 ## The hello and its verdicts
 
-The hello's data is a JSON object with eight fields, and a ninth, `conn`, on a connection served with `WithRequestScope`:
+The hello's data is a JSON object with eight fields, a ninth, `conn`, on a connection served with `WithRequestScope`, and a tenth, `build`, from a hub built with `WithBuild`:
 
 | Field | Meaning |
 | --- | --- |
@@ -47,6 +47,9 @@ The hello's data is a JSON object with eight fields, and a ninth, `conn`, on a c
 | `keepalive_ms` | the keepalive interval in milliseconds |
 | `keepalive_event` | the keepalive frame's name, empty for the comment form |
 | `conn` | the 22-character id that names this connection to the scope endpoint, absent unless the connection can be rescoped; it is a capability, so never log it |
+| `build` | the server's build, a string set once per process by `WithBuild`, absent when none is set |
+
+A client ignores a hello field it does not know, so a field added that way leaves `Wire` unchanged.
 
 A client branches on `resumed` only. The verdict is one of seven values:
 

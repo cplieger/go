@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cplieger/go/httpserver/v2"
 )
@@ -38,6 +39,7 @@ type config struct {
 	errs            httpserver.ErrorResponder
 	keepaliveEvent  string
 	epoch           string
+	build           string
 	keepalive       time.Duration
 	ttl             time.Duration
 	writeTimeout    time.Duration
@@ -166,6 +168,20 @@ func WithKeepaliveEvent(name string) Option {
 			return fmt.Errorf("%w: WithKeepaliveEvent name spans lines", ErrConfig)
 		}
 		c.keepaliveEvent = name
+		return nil
+	}
+}
+
+// WithBuild sets the server build the hello announces as build, so a client
+// can tell it reconnected to another deployment before it reads anything. The
+// empty string, the default, leaves the field out. A string that is not valid
+// UTF-8 is refused, since JSON would deliver it altered.
+func WithBuild(id string) Option {
+	return func(c *config) error {
+		if !utf8.ValidString(id) {
+			return fmt.Errorf("%w: WithBuild id is not valid UTF-8", ErrConfig)
+		}
+		c.build = id
 		return nil
 	}
 }

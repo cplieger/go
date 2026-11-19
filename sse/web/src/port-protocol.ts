@@ -20,6 +20,8 @@ export interface PortRevalidateContext {
   readonly epoch: string | null;
   readonly generation: number;
   readonly full: boolean;
+  /** RevalidateContext's build; absent from an older host. */
+  readonly build?: string | null;
   /** The host's digest verdict for this run, when its `revalidate` body performed one. */
   readonly changed?: readonly Changed[];
   readonly removed?: readonly Removed[];

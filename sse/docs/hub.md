@@ -23,6 +23,7 @@ Each option refuses its own value at once. The rules that compare two options ru
 | `WithMaxClients(n)` | `0`, unlimited | never, and zero or negative means unlimited |
 | `WithKeepalive(d)` | `15s` | below 1ms |
 | `WithKeepaliveEvent(name)` | `sse:keepalive` | CR or LF in the name, and `""` selects the `: keepalive` comment form |
+| `WithBuild(id)` | `""`, the hello carries no `build` | not valid UTF-8 |
 | `WithReconnectDelay(d)` | `1500ms` | below 1ms |
 | `WithWriteTimeout(d)` | `2 × keepalive` | at or below the keepalive |
 | `WithLogger(l)` | `slog.Default()` | never, and nil means the default, so the last one wins |

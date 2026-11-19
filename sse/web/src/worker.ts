@@ -183,7 +183,13 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
   }
 
   function portContext(ctx: RevalidateContext, verdict?: DigestVerdict): PortRevalidateContext {
-    const base = { cause: ctx.cause, epoch: ctx.epoch, generation: ctx.generation, full: ctx.full };
+    const base = {
+      cause: ctx.cause,
+      epoch: ctx.epoch,
+      generation: ctx.generation,
+      full: ctx.full,
+      build: ctx.build,
+    };
     return verdict === undefined
       ? base
       : { ...base, changed: [...verdict.changed], removed: [...verdict.removed] };
@@ -489,6 +495,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         epoch: opts.versions.epoch(),
         generation: stream.state().generation,
         full: true,
+        build: controls.build(),
       },
     });
   }

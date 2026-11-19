@@ -402,13 +402,38 @@ describe("attachToWorker: the port conversation", () => {
     h.latest().host({
       type: "revalidate_run",
       runId: 11,
-      ctx: { cause: "hello", epoch: "e1", generation: 1, full: true },
+      ctx: { cause: "hello", epoch: "e1", generation: 1, full: true, build: null },
     });
     await waitFor("done", () => h.latest().sent.some((m) => m.type === "revalidate_done"));
     expect(h.latest().sent.filter((m) => m.type === "revalidate_done")).toEqual([
       { type: "revalidate_done", runId: 11 },
     ]);
     expect(seen[0]).toMatchObject({ cause: "hello", full: true });
+  });
+
+  it("hands a routed run's build to the body, and null for a run from a host that sends none", async () => {
+    const seen: TabRevalidateContext[] = [];
+    const h = harness({
+      supported: true,
+      revalidate(ctx) {
+        seen.push(ctx);
+        return Promise.resolve();
+      },
+    });
+    h.latest().host({
+      type: "revalidate_run",
+      runId: 1,
+      ctx: { cause: "hello", epoch: "e1", generation: 1, full: false, build: "b2" },
+    });
+    const older: Record<string, unknown> = {
+      cause: "hello",
+      epoch: "e1",
+      generation: 2,
+      full: false,
+    };
+    h.latest().host({ type: "revalidate_run", runId: 2, ctx: older } as unknown as WorkerToTab);
+    await waitFor("both runs", () => seen.length === 2);
+    expect(seen.map((ctx) => ctx.build)).toEqual(["b2", null]);
   });
 
   it("answers a routed run with revalidate_failed carrying the body's message", async () => {
@@ -419,7 +444,7 @@ describe("attachToWorker: the port conversation", () => {
     h.latest().host({
       type: "revalidate_run",
       runId: 12,
-      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false },
+      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false, build: null },
     });
     await waitFor("failed", () => h.latest().sent.some((m) => m.type === "revalidate_failed"));
     expect(h.latest().sent.filter((m) => m.type === "revalidate_failed")).toEqual([
@@ -435,7 +460,7 @@ describe("attachToWorker: the port conversation", () => {
     h.latest().host({
       type: "revalidate_run",
       runId: 14,
-      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false },
+      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false, build: null },
     });
     await waitFor("failed", () => h.latest().sent.some((m) => m.type === "revalidate_failed"));
     expect(h.latest().sent.filter((m) => m.type === "revalidate_failed")).toEqual([
@@ -453,7 +478,7 @@ describe("attachToWorker: the port conversation", () => {
     h.latest().host({
       type: "revalidate_run",
       runId: 13,
-      ctx: { cause: "visible", epoch: null, generation: 1, full: false },
+      ctx: { cause: "visible", epoch: null, generation: 1, full: false, build: null },
     });
     await waitFor("failed", () => h.latest().sent.some((m) => m.type === "revalidate_failed"));
     expect(h.latest().sent.filter((m) => m.type === "revalidate_failed")).toEqual([
@@ -466,7 +491,7 @@ describe("attachToWorker: the port conversation", () => {
     h.latest().host({
       type: "revalidate_run",
       runId: 14,
-      ctx: { cause: "hello", epoch: "e1", generation: 1, full: true },
+      ctx: { cause: "hello", epoch: "e1", generation: 1, full: true, build: null },
     });
     await waitFor("done", () => h.latest().sent.some((m) => m.type === "revalidate_done"));
     expect(h.latest().sent.filter((m) => m.type === "revalidate_done")).toEqual([
@@ -490,7 +515,7 @@ describe("attachToWorker: the port conversation", () => {
     h.latest().host({
       type: "revalidate_run",
       runId: 15,
-      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false },
+      ctx: { cause: "visible", epoch: "e1", generation: 1, full: false, build: null },
     });
     await waitFor("abort", () => reasons.length === 1, 4000);
     expect(reasons[0]?.name).toBe("TimeoutError");

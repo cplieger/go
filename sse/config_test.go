@@ -25,6 +25,8 @@ func TestNew_refusalMatrix(t *testing.T) {
 		{name: "LineFeedKeepaliveName", opts: []Option{WithKeepaliveEvent("beat\nid: 9")}, wantErr: true},
 		{name: "CarriageReturnKeepaliveName", opts: []Option{WithKeepaliveEvent("beat\rid: 9")}, wantErr: true},
 		{name: "EmptyKeepaliveName", opts: []Option{WithKeepaliveEvent("")}},
+		{name: "InvalidUTF8Build", opts: []Option{WithBuild("v1\xff")}, wantErr: true},
+		{name: "EmptyBuild", opts: []Option{WithBuild("")}},
 		{name: "NegativeRing", opts: []Option{WithReplay(-1)}, wantErr: true},
 		{name: "ByteCapBelowOneFrame", opts: []Option{WithReplayMaxBytes(MaxFrameBytes - 1)}, wantErr: true},
 		{name: "ByteCapOfOneFrame", opts: []Option{WithReplayMaxBytes(MaxFrameBytes)}},

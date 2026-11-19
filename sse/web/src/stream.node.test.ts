@@ -210,6 +210,36 @@ describe("stream runtime", () => {
     expect(h.versions.epoch()).toBe(A);
   });
 
+  it("revalidate('hello') receives the hello's build on entry, null when the hello carries none", async () => {
+    const h = harness();
+    const first = await h.open({ head: "5" });
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", build: null });
+    h.runs[0]!.resolve();
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_TIMING.stableMs + 1);
+    first.end();
+    await flush();
+    h.last().push(helloFrame({ head: "6", build: "2026.11.19-a1b2c3" }));
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "2026.11.19-a1b2c3" });
+  });
+
+  it("a run whose cause is not a hello receives build null", async () => {
+    const h = harness();
+    const conn = await h.open({ build: "b1" });
+    h.runs[0]!.resolve();
+    await flush();
+    h.visibility.emit("hidden");
+    h.visibility.emit("visible");
+    await flush();
+    expect(conn.request.aborted).toBe(false);
+    expect(h.runs.map((r) => [r.ctx.cause, r.ctx.build])).toEqual([
+      ["hello", "b1"],
+      ["visible", null],
+    ]);
+  });
+
   it("a resumed hello keeps the cursor and adopts head after the first non-replay frame", async () => {
     const h = harness();
     const first = await h.open({ head: "5" });

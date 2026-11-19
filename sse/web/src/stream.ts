@@ -105,6 +105,8 @@ export interface RevalidateContext {
   readonly generation: number;
   /** The map was just cleared by bind(); the application must run its full body without a digest. */
   readonly full: boolean;
+  /** The latest hello's build stamp for a `hello` run; null for another cause or an unstamped hello. */
+  readonly build: string | null;
   /** Aborted by stop() and at revalidateTimeoutMs, never by reconnect(). */
   readonly signal: AbortSignal;
 }
@@ -156,6 +158,8 @@ export interface StreamInternals {
    * while `assured()` does not cover it or the cursor is null.
    */
   coveredSince(scope: readonly string[] | null): Cursor | null;
+  /** The latest accepted hello's build stamp, null before one or when it carried none. */
+  build(): string | null;
 }
 
 type HeldEntry =
@@ -374,6 +378,7 @@ export function createStream(opts: StreamOptions): Stream {
 
   let connection: { readonly generation: number; readonly conn: Connection } | null = null;
   let hello: Hello | null = null;
+  let serverBuild: string | null = null;
   let adopted = false;
   let retryMs = DEFAULT_RETRY_MS;
   let beats = 0;
@@ -628,6 +633,7 @@ export function createStream(opts: StreamOptions): Stream {
       return;
     }
     hello = h;
+    serverBuild = h.build ?? null;
     adopted = !h.resumed;
     binding = true;
     const dropped = opts.versions.bind(h.epoch);
@@ -907,6 +913,7 @@ export function createStream(opts: StreamOptions): Stream {
       epoch: opts.versions.epoch(),
       generation: state.generation,
       full: slot.full,
+      build: slot.cause === "hello" ? serverBuild : null,
       signal: controller.signal,
     };
     const current: Run = {
@@ -1357,6 +1364,7 @@ export function createStream(opts: StreamOptions): Stream {
       };
     },
     coveredSince,
+    build: () => serverBuild,
   });
   return stream;
 }
