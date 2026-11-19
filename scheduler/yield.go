@@ -36,6 +36,7 @@ func (r *Run[P]) Yield(ctx context.Context, until time.Time) error {
 	en.yield = y
 	held := en.w
 	en.w = nil
+	e.freeLocked()
 	e.moved()
 	e.mu.Unlock()
 	if held != nil {

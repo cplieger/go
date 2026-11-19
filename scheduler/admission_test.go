@@ -254,6 +254,39 @@ func TestCoalescingRules(t *testing.T) {
 			})
 		})
 
+		t.Run("cancel the running job", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				base := &rig{store: memrecords.New(), log: &runLog{}}
+				slow := kinds()[0]
+				slow.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+					base.log.add(run.Job())
+					if gate := run.Job().Payload.Gate; gate != nil {
+						select {
+						case <-gate:
+						case <-ctx.Done():
+							time.Sleep(10 * time.Second) // a Run that takes a while to return
+						}
+					}
+					return scheduler.End{Result: scheduler.ResultOK}
+				}
+				r := base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{slow}})
+				gate := make(chan struct{})
+				defer close(gate)
+				running, follow := queue(t, r, gate)
+				if stopping, err := r.ex.Cancel(t.Context(), running.Job); !stopping || err != nil {
+					t.Fatalf("Cancel(running) = (%t, %v), want (true, nil)", stopping, err)
+				}
+				synctest.Wait()
+				if !r.log.ran(follow.Job) {
+					t.Errorf("the follow-up did not start once the cancel stopped %s, want it running", running.Job)
+				}
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				r.wantEnd(t, running.Job, scheduler.ResultCancelled)
+				r.wantEnd(t, follow.Job, scheduler.ResultOK)
+			})
+		})
+
 		t.Run("cover", func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				r := newRig(t, scheduler.Config[payload]{Kinds: kinds()})

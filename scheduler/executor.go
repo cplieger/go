@@ -42,8 +42,9 @@ type KindSpec[P any] struct {
 	// Run does the job's work and must return once ctx is done.
 	Run  func(ctx context.Context, r *Run[P]) End
 	Kind Kind
-	// Slot "" runs at once beside anything; a named slot runs one job at a
-	// time, in class order.
+	// Slot "" runs beside any other job; a named slot runs one job at a time,
+	// in class order. Either way a follow-up waits for the running job of its
+	// scope.
 	Slot   string
 	Phases []Phase // the pipeline, for step N of M; each phase once, at most 32
 	// Kept is how long an ended record is kept: 0 writes no record, else 15
@@ -158,6 +159,7 @@ type Executor[P any] struct {
 	ready     chan struct{} // closed by Run
 	stop      chan struct{} // closed once Run's context ended
 	kick      chan struct{} // a Live count changed; relayMoves drains it
+	freed     chan struct{} // closed and replaced by freeLocked
 	// idle closes once no record write writeLocked counted is in flight; a
 	// hold and a shutdown wait on it, since those writes run off any job's run.
 	idle     chan struct{}
@@ -204,6 +206,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		ready:       make(chan struct{}),
 		stop:        make(chan struct{}),
 		kick:        make(chan struct{}, 1),
+		freed:       make(chan struct{}),
 		idle:        make(chan struct{}),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
@@ -368,6 +371,33 @@ func (e *Executor[P]) stopLocked(en *job[P], end End) {
 	en.stopped = true
 	en.stopEnd = &end
 	en.cancel()
+	e.freeLocked()
+}
+
+// serves reports whether the job is the running job rule 3 reads for j: of
+// j's scope (sameScope), running, and neither stopped nor yielded.
+func (en *job[P]) serves(j *Job[P]) bool {
+	return en.state == stateRunning && !en.stopped && en.yield == nil && en.sameScope(j)
+}
+
+// freeLocked wakes each follow-up waiting in begin; it is called whenever a
+// job stops serving its scope: it yields, is stopped or ends.
+func (e *Executor[P]) freeLocked() {
+	close(e.freed)
+	e.freed = make(chan struct{})
+}
+
+// behindLocked answers the channel to wait on while a running job serves
+// en's scope, which en, its follow-up (rule 3), runs after; nil when none
+// does. A named slot already orders them; a batch or a kind with no slot does
+// not.
+func (e *Executor[P]) behindLocked(en *job[P]) <-chan struct{} {
+	for _, q := range e.live {
+		if q.serves(&en.j) {
+			return e.freed
+		}
+	}
+	return nil
 }
 
 // waits reports whether the job takes its kind's slot before its Run starts:
@@ -409,10 +439,22 @@ func (e *Executor[P]) await(en *job[P]) {
 	e.begin(en)
 }
 
-// begin runs a job that holds its slot, unless it left the queue as its
-// grant came.
+// begin runs a job that holds its slot once no running job serves its scope,
+// unless it left the queue first.
 func (e *Executor[P]) begin(en *job[P]) {
 	e.mu.Lock()
+	for en.state == stateQueued {
+		freed := e.behindLocked(en)
+		if freed == nil {
+			break
+		}
+		e.mu.Unlock()
+		select {
+		case <-freed:
+		case <-en.gone:
+		}
+		e.mu.Lock()
+	}
 	if en.state != stateQueued {
 		e.mu.Unlock()
 		return
@@ -481,6 +523,7 @@ func (e *Executor[P]) finish(en *job[P], end End) {
 	e.mu.Lock()
 	en.state = stateEnded
 	e.removeLocked(en)
+	e.freeLocked()
 	// An end the store does not hold moves nothing a restart would not read.
 	if kept && moving(stored.Result) {
 		e.noteEndLocked(en, stored.Result, at)

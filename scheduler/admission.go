@@ -214,18 +214,16 @@ func (en *job[P]) sameScope(j *Job[P]) bool {
 // waiting reports whether the job is admitting or queued.
 func (en *job[P]) waiting() bool { return en.state == stateAdmitting || en.state == stateQueued }
 
-// answerLocked answers j from a running job of its kind and scope that no
-// cancel has stopped and that is not yielded (rule 3):
-// one that started inside the kind's Fresh window joins it, and so does a
-// timer request, which never queues a follow-up behind it, and a proposing
-// kind's, whose scope holds its expectation. Otherwise a Fresh
-// kind refuses j with *RecentError inside the window after its scope's last
-// moving end (rule 4). ok false and a nil error leave j to be queued.
+// answerLocked answers j from the newest job that serves it (rule 3): one
+// that started inside the kind's Fresh window joins it, and so does a timer
+// request, which never queues a follow-up behind it, and a proposing kind's,
+// whose scope holds its expectation. Otherwise a Fresh kind refuses j with
+// *RecentError inside the window after its scope's last moving end (rule 4).
+// ok false and a nil error leave j to be queued.
 func (e *Executor[P]) answerLocked(spec *KindSpec[P], j *Job[P]) (s Started, ok bool, err error) {
 	var run *job[P]
 	for _, q := range e.live {
-		if q.state == stateRunning && !q.stopped && q.yield == nil && q.sameScope(j) &&
-			(run == nil || q.startedAt.After(run.startedAt)) {
+		if q.serves(j) && (run == nil || q.startedAt.After(run.startedAt)) {
 			run = q
 		}
 	}
