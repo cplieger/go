@@ -105,6 +105,8 @@ export interface RevalidateContext {
   readonly generation: number;
   /** The map was just cleared by bind(); the application must run its full body without a digest. */
   readonly full: boolean;
+  /** The latest hello's build stamp for a `hello` run; null for another cause or an unstamped hello. */
+  readonly build: string | null;
   /** Aborted by stop() and at revalidateTimeoutMs, never by reconnect(). */
   readonly signal: AbortSignal;
 }
@@ -156,6 +158,8 @@ export interface StreamInternals {
    * while `assured()` does not cover it or the cursor is null.
    */
   coveredSince(scope: readonly string[] | null): Cursor | null;
+  /** The open connection's hello build stamp; null when the stream is not open or the hello carried none. */
+  build(): string | null;
 }
 
 type HeldEntry =
@@ -174,6 +178,8 @@ type HeldEntry =
 interface Slot {
   readonly cause: RevalidateCause;
   readonly full: boolean;
+  /** The build of the hello that scheduled this slot; it travels with the slot past its connection. */
+  readonly build: string | null;
 }
 
 interface Run {
@@ -374,6 +380,7 @@ export function createStream(opts: StreamOptions): Stream {
 
   let connection: { readonly generation: number; readonly conn: Connection } | null = null;
   let hello: Hello | null = null;
+  let serverBuild: string | null = null;
   let adopted = false;
   let retryMs = DEFAULT_RETRY_MS;
   let beats = 0;
@@ -434,7 +441,7 @@ export function createStream(opts: StreamOptions): Stream {
       return;
     }
     if (epoch === previous) {
-      queued = { cause: queued.cause, full: false };
+      queued = { ...queued, full: false };
     }
   });
   staleListener(opts.versions, (subject, epoch) => {
@@ -628,6 +635,7 @@ export function createStream(opts: StreamOptions): Stream {
       return;
     }
     hello = h;
+    serverBuild = h.build ?? null;
     adopted = !h.resumed;
     binding = true;
     const dropped = opts.versions.bind(h.epoch);
@@ -667,7 +675,8 @@ export function createStream(opts: StreamOptions): Stream {
     if (unverified || helloRun.full) {
       schedule("hello", helloRun.full);
     } else if (queued !== null && inflight === null) {
-      const slot = queued;
+      // The slot runs on this connection's hello, so it carries this hello's build.
+      const slot: Slot = { ...queued, build: serverBuild };
       queued = null;
       run(slot);
     }
@@ -890,23 +899,33 @@ export function createStream(opts: StreamOptions): Stream {
       if (coalesces && !full) {
         return;
       }
-      queued = { cause, full: (queued?.full ?? false) || full };
+      queued = joinQueued(cause, full);
       return;
     }
-    const slot: Slot = { cause, full: (queued?.full ?? false) || full };
+    const slot = joinQueued(cause, full);
     queued = null;
     run(slot);
   }
 
+  /** Joins a cause to the queued slot. A queued hello is never demoted, so its build is never lost. */
+  function joinQueued(cause: RevalidateCause, full: boolean): Slot {
+    return {
+      cause: queued?.cause === "hello" ? "hello" : cause,
+      full: (queued?.full ?? false) || full,
+      build: cause === "hello" ? serverBuild : (queued?.build ?? null),
+    };
+  }
+
   function run(queuedSlot: Slot): void {
     // A full run that failed stays owed: every start, schedule's or settle's, carries it.
-    const slot: Slot = { cause: queuedSlot.cause, full: queuedSlot.full || unverifiedFull };
+    const slot: Slot = { ...queuedSlot, full: queuedSlot.full || unverifiedFull };
     const controller = new AbortController();
     const ctx: RevalidateContext = {
       cause: slot.cause,
       epoch: opts.versions.epoch(),
       generation: state.generation,
       full: slot.full,
+      build: slot.cause === "hello" ? slot.build : null,
       signal: controller.signal,
     };
     const current: Run = {
@@ -1347,7 +1366,7 @@ export function createStream(opts: StreamOptions): Stream {
   internals.set(stream, {
     revalidate: schedule,
     queueFull() {
-      queued = { cause: queued?.cause ?? "hello", full: true };
+      queued = { cause: queued?.cause ?? "hello", full: true, build: queued?.build ?? null };
     },
     assured,
     onScope(listener) {
@@ -1357,6 +1376,7 @@ export function createStream(opts: StreamOptions): Stream {
       };
     },
     coveredSince,
+    build: () => (state.kind === "open" ? serverBuild : null),
   });
   return stream;
 }

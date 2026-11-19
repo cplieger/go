@@ -40,13 +40,15 @@ const stream = createStream({
 stream.start();
 ```
 
-The first frame of every connection is a hello: it names the server epoch, the ring's floor and head, the keepalive interval and event name, and whether the cursor the client presented was resumed; a hello whose `wire` is outside `[minWire, maxWire]` (both default to the package's `WIRE`) ends the connection with a `wire_unsupported` record and keeps the cursor.
+The first frame of every connection is a hello: it names the server epoch, the ring's floor and head, the keepalive interval and event name, the server's build when the hub sets one, and whether the cursor the client presented was resumed; a hello whose `wire` is outside `[minWire, maxWire]` (both default to the package's `WIRE`) ends the connection with a `wire_unsupported` record and keeps the cursor.
 
 The client keeps its cursor as `epoch:offset`, presents it as `Last-Event-ID` on every connect, and advances it only as frames are delivered to `onFrame`, so a reconnect after a gap either replays exactly the missed frames or reports through the hello that the gap could not be covered, and the application reconciles instead of trusting the replay.
 
 `stream.state()` returns a `StreamState`: the connection kind (`stopped`, `connecting`, `open`, `backoff`, `offline` or `hidden_closed`), its generation and attempt, and the readings that kind acts on, such as `visible`, `online`, the hello's `keepaliveMs` and when a backoff ends. The package exports the factories, the wire helpers and the types they take and return; its parser, reducer and tab fold are internal.
 
-While `revalidate` runs, incoming frames are held and delivered in order once it settles; runs are single-flight, a second cause queues at most one more run, and a held queue past 2000 frames or 64 MiB ends the connection so the next connect resumes from the cursor instead.
+Each run's `RevalidateContext` carries its `cause`, the map's `epoch`, the connection's `generation`, `full`, `build` and `signal`. For a `hello` run, `build` is the build that hello carries, so a page that reconnects to a redeployed server learns it before its first read; it is `null` when the hello carries none and for every other cause.
+
+While `revalidate` runs, incoming frames are held and delivered in order once it settles; runs are single-flight, a second cause queues at most one more run (a queued `hello` keeps its cause and its `build` when a later wake joins it, even after a revalidate timeout ends that hello's connection), and a held queue past 2000 frames or 64 MiB ends the connection so the next connect resumes from the cursor instead.
 
 With `alive` set, every keepalive (or every `everyBeats`-th) is acknowledged with a `POST` to that URL carrying the stream's headers, so a server-side presence table keyed on `SSE-Client` sees which clients are still reading; a failed acknowledgement is reported as an `alive_ack` record.
 
@@ -56,7 +58,7 @@ A 401 ends the session's stream instead of retrying it: a 401 on the stream requ
 
 The host presents the first non-empty tag a tab attaches with and replaces it, reconnecting once, when a later attach or `setTag` carries a different one; the empty tag is ignored.
 
-The host's `revalidate(ctx, tabs)` body performs one digest for the profile and fans the verdict to every tab through `tabs.run(ctx, { changed, removed })`, so each tab's `revalidate` receives a `TabRevalidateContext` carrying `changed` and `removed` beside its own `signal`. A `state` message reaches a tab before the `lifecycle` record of the same transition, so `attachment.state()`, a `StreamState`, is current inside the handler, and a tab attaching to a live stream receives `state` and then a `tab_attached` record naming that state.
+The host's `revalidate(ctx, tabs)` body performs one digest for the profile and fans the verdict to every tab through `tabs.run(ctx, { changed, removed })`, so each tab's `revalidate` receives a `TabRevalidateContext` carrying the host run's `build`, `changed` and `removed` beside its own `signal`. A tab's own full run when it returns carries the open connection's build, and `null` while the stream is between connections or when the host sends none. A `state` message reaches a tab before the `lifecycle` record of the same transition, so `attachment.state()`, a `StreamState`, is current inside the handler, and a tab attaching to a live stream receives `state` and then a `tab_attached` record naming that state.
 
 ### Scopes
 

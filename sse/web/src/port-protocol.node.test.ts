@@ -18,6 +18,7 @@ import {
   scriptedFetch,
 } from "./test-helpers/scripted-fetch.js";
 import { fakeOnline, fakeVisibility } from "./test-helpers/stream-harness.js";
+import { DEFAULT_TIMING } from "./timing.js";
 import { type VersionMap, createVersionMap } from "./versions.js";
 import { createVisibilityManager } from "./visibility.js";
 import { type TabSet, type WorkerHost, createWorkerHost } from "./worker.js";
@@ -830,6 +831,7 @@ describe("port protocol", () => {
       epoch: A,
       generation: 1,
       full: false,
+      build: null,
       changed: [{ kind: "chat", ref: "c1", version: "4" }],
       removed: [{ kind: "chat", ref: "c2", reason: "gone" }],
     });
@@ -838,9 +840,117 @@ describe("port protocol", () => {
     raw.send({ type: "revalidate_done", runId: raw.ofType("revalidate_run")[1]!.runId });
     await withoutVerdict;
     const plain = raw.ofType("revalidate_run")[1]!.ctx;
-    expect(plain).toEqual({ cause: "hello", epoch: A, generation: 1, full: false });
+    expect(plain).toEqual({ cause: "hello", epoch: A, generation: 1, full: false, build: null });
     expect("changed" in plain).toBe(false);
     expect("removed" in plain).toBe(false);
+  });
+
+  it("on a reconnect to a redeployed server, the host's revalidate('hello') and every tab's routed run carry the hello's build; a hello without one gives null", async () => {
+    const h = track(hostHarness());
+    const t = tabHarness([h.host]);
+    tabs.push(t.attachment);
+    const raw = rawTab(h, { tabId: "raw" });
+    await hello(h, { head: "0" });
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", build: null });
+    const first = h.runs[0]!.tabs.run(h.runs[0]!.ctx);
+    await settle();
+    raw.send({ type: "revalidate_done", runId: raw.ofType("revalidate_run")[0]!.runId });
+    await first;
+    h.runs[0]!.resolve();
+    await settle();
+    expect(t.runs.map((r) => r.build)).toEqual([null]);
+    expect(raw.ofType("revalidate_run")[0]!.ctx.build).toBeNull();
+
+    raw.send({ type: "reconnect", resetCursor: false });
+    await hello(h, { epoch: B, head: "0", build: "2026.11.19-a1b2c3" });
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "2026.11.19-a1b2c3" });
+    const second = h.runs[1]!.tabs.run(h.runs[1]!.ctx);
+    await settle();
+    raw.send({ type: "revalidate_done", runId: raw.ofType("revalidate_run")[1]!.runId });
+    await second;
+    expect(t.runs.map((r) => [r.cause, r.build])).toEqual([
+      ["hello", null],
+      ["hello", "2026.11.19-a1b2c3"],
+    ]);
+    expect(raw.ofType("revalidate_run")[1]!.ctx).toMatchObject({
+      cause: "hello",
+      build: "2026.11.19-a1b2c3",
+    });
+  });
+
+  it("a hello still queued when its blocker times out reaches the host and every tab with its build when a wake in backoff runs it", async () => {
+    const h = track(hostHarness());
+    const t = tabHarness([h.host]);
+    tabs.push(t.attachment);
+    const raw = rawTab(h, { tabId: "raw" });
+    await hello(h, { head: "5", build: "b1" });
+    expect(h.runs).toHaveLength(1);
+    h.sf.connections[0]!.end();
+    await settle();
+    vi.advanceTimersByTime(1500);
+    await hello(h, { head: "6", build: "b2" });
+    const untilTimeout = DEFAULT_TIMING.revalidateTimeoutMs - 1500;
+    await beats(Math.floor(untilTimeout / HB));
+    vi.advanceTimersByTime(untilTimeout % HB);
+    await settle();
+    expect(h.ofKind("revalidate_timeout")).toHaveLength(1);
+    expect(h.host.stream().state().kind).toBe("backoff");
+    expect(h.runs).toHaveLength(1);
+    t.visibility.emit("hidden");
+    raw.send({ type: "visibility", ev: "hidden" });
+    await settle();
+    raw.send({ type: "visibility", ev: "visible" });
+    await settle();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
+    const fanned = h.runs[1]!.tabs.run(h.runs[1]!.ctx);
+    await settle();
+    const routed = raw.ofType("revalidate_run").at(-1)!;
+    expect(routed.ctx).toMatchObject({ cause: "hello", build: "b2" });
+    raw.send({ type: "revalidate_done", runId: routed.runId });
+    await fanned;
+    expect(t.runs.map((r) => [r.cause, r.build])).toEqual([["hello", "b2"]]);
+  });
+
+  it("a returning tab's own full run carries the open connection's build", async () => {
+    const h = track(hostHarness());
+    rawTab(h, { tabId: "a" });
+    await hello(h, { resumed: true, build: "b7" });
+    const back = rawTab(h, { tabId: "b", hadWorker: true });
+    await settle();
+    expect(back.ofType("revalidate_run")).toMatchObject([
+      { ctx: { cause: "hello", full: true, build: "b7" } },
+    ]);
+  });
+
+  it("a tab returning between connections gets build null in its own full run; the next hello's build reaches the host and every tab", async () => {
+    const h = track(hostHarness());
+    const a = rawTab(h, { tabId: "a" });
+    await hello(h, { resumed: true, build: "v1" });
+    h.sf.connections[0]!.end();
+    await settle();
+    expect(h.host.stream().state().kind).toBe("backoff");
+    const back = rawTab(h, { tabId: "b", hadWorker: true });
+    await settle();
+    expect(back.ofType("revalidate_run")).toMatchObject([
+      { ctx: { cause: "hello", full: true, build: null } },
+    ]);
+    back.send({ type: "revalidate_done", runId: back.ofType("revalidate_run")[0]!.runId });
+    await settle();
+
+    vi.advanceTimersByTime(1500);
+    await hello(h, { head: "0", build: "v2" });
+    expect(h.runs).toHaveLength(1);
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", build: "v2" });
+    const fanned = h.runs[0]!.tabs.run(h.runs[0]!.ctx);
+    await settle();
+    for (const tab of [a, back]) {
+      const routed = tab.ofType("revalidate_run").at(-1)!;
+      expect(routed.ctx).toMatchObject({ cause: "hello", build: "v2" });
+      tab.send({ type: "revalidate_done", runId: routed.runId });
+    }
+    await fanned;
   });
 
   it("reconnect() on a worker-mode attachment reconnects the host's stream once, keeping the cursor unless resetCursor is set; in fallback mode it drives the fallback stream", async () => {

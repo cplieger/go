@@ -146,6 +146,20 @@ describe("validateHello", () => {
     );
   });
 
+  it("validateHello keeps a non-empty string build and leaves out an absent, empty or non-string one", () => {
+    const range = { minWire: 1, maxWire: 1 };
+    const stamped = validateHello(hello({ build: "2026.11.19-a1b2c3" }), range);
+    expect(stamped.ok && stamped.hello.build).toBe("2026.11.19-a1b2c3");
+    for (const record of [
+      hello(),
+      ...["", 7, null, { id: "x" }].map((build) => hello({ build })),
+    ]) {
+      const result = validateHello(record, range);
+      expect(result.ok, JSON.stringify(record)).toBe(true);
+      expect(result.ok && "build" in result.hello, JSON.stringify(record)).toBe(false);
+    }
+  });
+
   it("validateHello reads resumed strictly as true", () => {
     const resumed = validateHello(hello({ resumed: true }), { minWire: 1, maxWire: 1 });
     const fresh = validateHello(hello({ resumed: false, verdict: "fresh" }), {
