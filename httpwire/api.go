@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"github.com/cplieger/go/sealed"
 )
 
 // API serves one checked table under its Prefix. It is safe for concurrent
@@ -29,7 +29,7 @@ type API struct {
 	mux     *http.ServeMux
 	logger  *slog.Logger
 	schema  *Schema
-	sealer  *sealer
+	sealer  *sealed.Sealer
 	idem    *keyedRuns
 	version string
 	quiet   quietState
@@ -595,20 +595,15 @@ func (c *newChecker) floor() {
 	}
 }
 
-// sealer builds the cursor sealer under WithCursorKey's key, else a random
-// one.
-func (c *newChecker) sealer() *sealer {
-	var key [32]byte
-	if c.o.cursorKey != nil {
-		key = *c.o.cursorKey
-	} else {
-		_, _ = rand.Read(key[:])
+// sealer answers WithSealer's sealer, else an ephemeral one.
+func (c *newChecker) sealer() *sealed.Sealer {
+	if !c.o.sealerSet {
+		return sealed.NewEphemeral()
 	}
-	s, err := newSealer(key)
-	if err != nil {
-		c.fail("the cursor key: %w", err)
+	if c.o.sealer.KeyIDs().Current == "" {
+		c.fail("WithSealer: the sealer holds no key")
 	}
-	return s
+	return c.o.sealer
 }
 
 // document parses WithSchema's document and matches its operations with

@@ -3,10 +3,7 @@ package httpwire
 import (
 	"cmp"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -14,6 +11,8 @@ import (
 	"net/http"
 	"reflect"
 	"time"
+
+	"github.com/cplieger/go/sealed"
 )
 
 // Cursor is a page cursor as the query carries it: opaque, at most 1,416
@@ -21,9 +20,8 @@ import (
 // row, query and owner answers cursor_invalid.
 type Cursor string
 
-// MaxBytes is base64url of the 12-byte nonce, the format, direction and
-// issue-time header, the longest position and the 16-byte tag:
-// 12 + 1 + 1 + 8 + 1,024 + 16 bytes.
+// MaxBytes is the length go/sealed gives a direction byte and the longest
+// position, sealed.ExpiringLen(1 + 1,024).
 func (Cursor) MaxBytes() int { return maxSealed }
 
 // Limit is a page size, 1 to 200; absent is 50.
@@ -62,20 +60,13 @@ func (l List[T]) facts() listFacts {
 }
 
 const (
-	maxPosition  = 1024
+	maxPosition = 1024
+	// maxSealed is sealed.ExpiringLen(1 + maxPosition), which a function
+	// call cannot give a constant; a test holds the two equal.
 	maxSealed    = 1416
 	defaultLimit = 50
 	maxTotal     = 999_999_999_999_999
 	cursorAge    = 24 * time.Hour
-	sealFormat   = 1
-	sealHeader   = 10 // format, direction, issue time
-)
-
-// The first field of the additional data keeps a list cursor and a purpose
-// handle apart whatever purpose an app names.
-const (
-	cursorDomain = "cursor"
-	handleDomain = "seal"
 )
 
 type direction byte
@@ -91,7 +82,7 @@ var (
 	// internal_error.
 	ErrPositionTooLong = errors.New("httpwire: a sealed position or payload is at most 1,024 bytes")
 	// ErrSealed is Open's answer for a value that does not open: tampered,
-	// sealed under another key, purpose or credential, past its age, or
+	// sealed under another sealer, purpose or credential, past its ttl, or
 	// opened outside a request the binder serves or on a Public row.
 	ErrSealed = errors.New("httpwire: the sealed value does not open")
 
@@ -100,67 +91,41 @@ var (
 	errPublicSeal = errors.New("httpwire: Seal refuses a Public row, where no credential binds the handle")
 )
 
-// sealedText is strict so one sealed value has one spelling.
-var sealedText = base64.RawURLEncoding.Strict()
-
-// sealer seals with AES-256-GCM under a random 12-byte nonce, prepended.
-type sealer struct{ aead cipher.AEAD }
-
-func newSealer(key [32]byte) (*sealer, error) {
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		return nil, err
-	}
-	return &sealer{aead: aead}, nil
-}
-
-func (s *sealer) seal(dir direction, payload, aad []byte) (string, error) {
-	if len(payload) > maxPosition {
-		return "", ErrPositionTooLong
-	}
-	pt := make([]byte, 0, sealHeader+len(payload))
-	pt = append(pt, sealFormat, byte(dir))
-	pt = binary.BigEndian.AppendUint64(pt, uint64(max(time.Now().Unix(), 0)))
-	pt = append(pt, payload...)
-	return sealedText.EncodeToString(s.aead.Seal(nil, nil, pt, aad)), nil //nolint:gosec // NewGCMWithRandomNonce draws the nonce; its Seal takes none (https://pkg.go.dev/crypto/cipher#NewGCMWithRandomNonce)
-}
-
-// open answers the direction and payload of a value seal made with aad no
-// longer than maxAge ago. A value longer than any seal makes is refused
-// unread.
-func (s *sealer) open(sealed string, aad []byte, maxAge time.Duration) (dir direction, payload []byte, ok bool) {
-	if len(sealed) > maxSealed {
-		return 0, nil, false
-	}
-	ct, err := sealedText.DecodeString(sealed)
-	if err != nil {
-		return 0, nil, false
-	}
-	pt, err := s.aead.Open(nil, nil, ct, aad)
-	if err != nil || len(pt) < sealHeader || pt[0] != sealFormat || direction(pt[1]) > backward {
-		return 0, nil, false
-	}
-	// Only seal makes a plaintext that opens, and it writes a time past 1970.
-	secs := int64(binary.BigEndian.Uint64(pt[2:sealHeader])) //nolint:gosec // G115: see above
-	if time.Since(time.Unix(secs, 0)) > maxAge {
-		return 0, nil, false
-	}
-	return direction(pt[1]), pt[sealHeader:], true
-}
-
-// additionalData joins fields, each after its length, so no two field
+// lengthPrefixed joins fields, each after its length, so no two field
 // lists give one byte string.
-func additionalData(fields ...string) []byte {
+func lengthPrefixed(fields ...string) string {
 	var b []byte
 	for _, f := range fields {
 		b = binary.AppendUvarint(b, uint64(len(f)))
 		b = append(b, f...)
 	}
-	return b
+	return string(b)
+}
+
+// cursorPurpose and handlePurpose start with different bytes, so a list
+// cursor never opens as a handle whatever purpose an app names.
+func cursorPurpose(row, queryHash, owner string) sealed.Purpose {
+	return sealed.Purpose("cursor:" + lengthPrefixed(row, queryHash, owner))
+}
+
+func handlePurpose(purpose, credential string) sealed.Purpose {
+	return sealed.Purpose("seal:" + lengthPrefixed(purpose, credential))
+}
+
+// openCursor answers the direction and position of a cursor sealed for p.
+// A value longer than any cursor is refused unread.
+func openCursor(s *sealed.Sealer, p sealed.Purpose, value string) (direction, []byte, error) {
+	if len(value) > maxSealed {
+		return 0, nil, sealed.ErrInvalid
+	}
+	b, _, err := s.Open(p, value)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(b) == 0 || direction(b[0]) > backward {
+		return 0, nil, sealed.ErrInvalid
+	}
+	return direction(b[0]), b[1:], nil
 }
 
 // scope is what the binder knows of a request's principal, carried in its
@@ -197,55 +162,77 @@ func CursorOwnerOf(ctx context.Context) string {
 	return ""
 }
 
-// Seal seals payload, at most 1,024 bytes, under the API's cursor key,
-// bound to purpose and CredentialOf(ctx), so only that credential opens it.
-// It refuses a Public row, where a handle would come back from anyone.
-func Seal(ctx context.Context, purpose string, payload []byte) (string, error) {
+// Seal seals payload, at most 1,024 bytes, under WithSealer's sealer until
+// ttl from now, bound to purpose and CredentialOf(ctx), so only that
+// credential opens it. It refuses a Public row, where a handle would come
+// back from anyone, and wraps sealed's refusals (sealed.ErrShortTTL,
+// sealed.ErrNoKey).
+func Seal(ctx context.Context, purpose string, payload []byte, ttl time.Duration) (string, error) {
 	s := scopeOf(ctx)
 	switch {
 	case s == nil:
 		return "", errNoScope
 	case s.public:
 		return "", errPublicSeal
+	case len(payload) > maxPosition:
+		return "", ErrPositionTooLong
 	}
-	return s.api.sealer.seal(forward, payload, additionalData(handleDomain, purpose, s.credential))
+	v, err := s.api.sealer.Seal(handlePurpose(purpose, s.credential), payload, ttl)
+	if err != nil {
+		return "", fmt.Errorf("httpwire: Seal: %w", err)
+	}
+	return v, nil
 }
 
 // Open answers the payload Seal sealed for purpose and this request's
-// credential no longer than maxAge ago, else ErrSealed.
-func Open(ctx context.Context, purpose, sealed string, maxAge time.Duration) ([]byte, error) {
+// credential, before its ttl, else ErrSealed. A sealer holding no key
+// answers an error wrapping sealed.ErrNoKey instead, which is the server's
+// fault and not the client's.
+func Open(ctx context.Context, purpose, value string) ([]byte, error) {
 	s := scopeOf(ctx)
 	if s == nil {
 		return nil, ErrSealed
 	}
 	// No handle opens on a Public row: Seal refuses one, so none is sealed
-	// to its empty credential. Only Seal seals under handleDomain, forward.
-	_, payload, ok := s.api.sealer.open(sealed, additionalData(handleDomain, purpose, s.credential), maxAge)
-	if !ok {
+	// to its empty credential.
+	payload, _, err := s.api.sealer.Open(handlePurpose(purpose, s.credential), value)
+	switch {
+	case errors.Is(err, sealed.ErrNoKey):
+		return nil, fmt.Errorf("httpwire: Open: %w", err)
+	case err != nil:
 		return nil, ErrSealed
 	}
 	return payload, nil
 }
 
-// WithCursorKey sets the key list cursors and Seal's handles are sealed
-// under. Without it, New draws one at random, so cursors stop opening at a
-// restart and a client reads the list again from its first page.
-func WithCursorKey(key [32]byte) Option {
-	return func(o *options) { o.cursorKey = &key }
+// WithSealer sets the sealer list cursors and Seal's handles are sealed
+// under, such as a sealed.KeyFile's Sealer, so they outlive a restart.
+// Without it, New uses sealed.NewEphemeral, so cursors stop opening at a
+// restart and a client reads the list again from its first page. New
+// refuses a nil Sealer and one holding no key.
+func WithSealer(s *sealed.Sealer) Option {
+	return func(o *options) { o.sealer, o.sealerSet = s, true }
 }
 
 // listCursor seals a List request's cursors, bound to its row, its query
 // without Page, and its owner.
 type listCursor struct {
-	sealer *sealer
-	aad    []byte
+	sealer  *sealed.Sealer
+	purpose sealed.Purpose
 }
 
 func (l *listCursor) seal(dir direction, pos []byte) (string, error) {
-	if l == nil {
+	switch {
+	case l == nil:
 		return "", errNotList
+	case len(pos) > maxPosition:
+		return "", ErrPositionTooLong
 	}
-	return l.sealer.seal(dir, pos, l.aad)
+	v, err := l.sealer.Seal(l.purpose, append([]byte{byte(dir)}, pos...), cursorAge)
+	if err != nil {
+		return "", fmt.Errorf("httpwire: sealing a cursor: %w", err)
+	}
+	return v, nil
 }
 
 // SealNext answers the next_cursor resuming after pos, the page's last
@@ -367,13 +354,17 @@ func (a *API) openPage(r *http.Request, ep *Endpoint, d *decoded) *Error {
 		return &Error{Code: codeInternal}
 	}
 	hash := sha256.Sum256(canonical)
-	d.list = &listCursor{sealer: a.sealer, aad: additionalData(cursorDomain, ep.Name, string(hash[:]), CursorOwnerOf(r.Context()))}
+	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, string(hash[:]), CursorOwnerOf(r.Context()))}
 	d.limit = cmp.Or(int(p.Limit), defaultLimit)
 	if p.Cursor == "" {
 		return nil
 	}
-	dir, pos, ok := a.sealer.open(string(p.Cursor), d.list.aad, cursorAge)
-	if !ok {
+	dir, pos, err := openCursor(a.sealer, d.list.purpose, string(p.Cursor))
+	switch {
+	case errors.Is(err, sealed.ErrNoKey):
+		a.log().ErrorContext(r.Context(), "httpwire: the sealer holds no key", "row", ep.Name, "error", err)
+		return &Error{Code: codeInternal}
+	case err != nil:
 		return &Error{Code: codeCursor, Message: "the cursor does not open for this list"}
 	}
 	d.position, d.backward = pos, dir == backward

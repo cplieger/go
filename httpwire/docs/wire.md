@@ -50,9 +50,9 @@ A List row's query takes `cursor` (at most 1,416 bytes) and `limit` (1 to 200, 5
 
 `offset` is the count of items before the page's first and `total` the count matching the query at this read, at most 999,999,999,999,999. `prev_cursor` is absent exactly when `offset` is 0, and `next_cursor` exactly when the page ends at `total`. A `prev_cursor` answers the `limit` items before the page in list order, or the first page when fewer precede it. Both halves refuse a page that breaks these rules.
 
-A cursor is base64url of a 12-byte nonce, a format, direction and issue-time header, a position of at most 1,024 bytes and a 16-byte tag, sealed with AES-256-GCM. Its additional data binds it to the row, the query without its page parameters, and the owner `WithCursorOwner` names, so every session of one person opens it and nobody else does. It opens for 24 hours. Without `WithCursorKey`, the key is drawn at each start, so cursors stop opening at a restart. A cursor that does not open answers `cursor_invalid`, and the client reads the list again from its first page.
+A cursor is a [go/sealed](https://github.com/cplieger/go/tree/main/sealed) value that expires in 24 hours: its payload is a direction byte and a position of at most 1,024 bytes, so a cursor is at most `sealed.ExpiringLen(1 + 1,024)`, 1,416 bytes, and a URI holding one stays under the 8,000 octets RFC 9110 section 4.1 asks every recipient to support. A longer value is refused before it is opened. Its purpose binds it to the row, the query without its page parameters, and the owner `WithCursorOwner` names, so every session of one person opens it and nobody else does. The sealer is `WithSealer`'s, such as a key file's `Sealer`, so cursors outlive a restart; without it, `New` uses `sealed.NewEphemeral`, and cursors stop opening at a restart. A cursor that does not open answers `cursor_invalid`, and the client reads the list again from its first page. A sealer that holds no key, such as a closed key file's, answers `internal_error`.
 
-`Seal` and `Open` use the same sealing for a handle bound to one purpose and one credential.
+`Seal` and `Open` use the same sealer for a handle bound to one purpose and one credential, which opens until the ttl `Seal` was given.
 
 ## Tags
 

@@ -45,7 +45,7 @@ api, err := httpwire.New(table, []httpwire.Binding{httpwire.Bind("items.get", ge
 	httpwire.WithSchema(openapiJSON))
 ```
 
-`ExampleNew` in `example_test.go` runs this with its document, and `go test` keeps it true. The document is the one [wiregen](https://github.com/cplieger/go/tree/main/wiregen) writes from the same table, committed beside it. A row that is not `Public` also needs `WithGuard`, `WithCredential` and `WithCursorOwner`, and `New` names each missing option.
+`ExampleNew` in `example_test.go` runs this with its document, and `go test` keeps it true. The document is the one [wiregen](https://github.com/cplieger/go/tree/main/wiregen) writes from the same table, committed beside it. A row that is not `Public` also needs `WithGuard`, `WithCredential` and `WithCursorOwner`, and `New` names each missing option. Pass `WithSealer(keyFile.Sealer())`, a [go/sealed](https://github.com/cplieger/go/tree/main/sealed) key file's sealer, so list cursors outlive a restart.
 
 ## API
 
@@ -68,7 +68,7 @@ A handler's error answers through the row's union: an `*Error` whose code the un
 
 ## The wire both halves agree on
 
-Every answer carries `Wire-Version`, the first 16 hex characters of the SHA-256 of the document's normal form, and the request's `X-Request-Id`. Refusals are one envelope (`code`, `message`, `remediation`, `request_id`, optional `reason`, `fields`, `retry_after_ms` and `upstream`), decoded by the same rules in Go and TypeScript. A List row's page carries `offset`, `total` and cursors sealed under AES-256-GCM, bound to the row, the query and the owner, that open for 24 hours. [The wire](docs/wire.md) lists the headers, the envelope bounds, the page rules, the open check's answer, the tag form and the schema keywords `ParseSchema` accepts.
+Every answer carries `Wire-Version`, the first 16 hex characters of the SHA-256 of the document's normal form, and the request's `X-Request-Id`. Refusals are one envelope (`code`, `message`, `remediation`, `request_id`, optional `reason`, `fields`, `retry_after_ms` and `upstream`), decoded by the same rules in Go and TypeScript. A List row's page carries `offset`, `total` and cursors sealed by [go/sealed](https://github.com/cplieger/go/tree/main/sealed) under `WithSealer`'s sealer, bound to the row, the query and the owner, that open for 24 hours. [The wire](docs/wire.md) lists the headers, the envelope bounds, the page rules, the open check's answer, the tag form and the schema keywords `ParseSchema` accepts.
 
 ## Documentation
 

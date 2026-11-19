@@ -2,7 +2,6 @@ package httpwire_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
+	"github.com/cplieger/go/sealed"
 )
 
 type (
@@ -109,7 +109,9 @@ const (
 	socket   = "socket"
 )
 
-var pageKey = [32]byte{1, 2, 3}
+// pageSealer is the app's sealer, which every pageStore build shares, as
+// a key file's Sealer outlives a restart.
+var pageSealer = sealed.New([32]byte{1, 2, 3})
 
 // pageStore is a set of keys listed in ascending order, its List handlers
 // paging it both ways with the reference keyset scan.
@@ -122,29 +124,34 @@ type pageStore struct {
 	mu     sync.Mutex
 }
 
-// newPageStore holds keys 1 to n under an API with a fixed cursor key.
+// newPageStore holds keys 1 to n under an API with pageSealer.
 func newPageStore(t testing.TB, n int, opts ...httpwire.Option) *pageStore {
 	t.Helper()
 	s := &pageStore{keys: map[uint64]bool{}}
 	for k := range n {
 		s.keys[uint64(k+1)] = true
 	}
-	s.api = s.build(t, append([]httpwire.Option{httpwire.WithCursorKey(pageKey)}, opts...)...)
+	s.api = s.build(t, append([]httpwire.Option{httpwire.WithSealer(pageSealer)}, opts...)...)
 	return s
 }
 
 func (s *pageStore) build(t testing.TB, opts ...httpwire.Option) *httpwire.API {
 	t.Helper()
-	api, err := httpwire.New(pageTable(t), s.bindings(), append([]httpwire.Option{
+	api, err := s.newAPI(t, opts...)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return api
+}
+
+func (s *pageStore) newAPI(t testing.TB, opts ...httpwire.Option) (*httpwire.API, error) {
+	t.Helper()
+	return httpwire.New(pageTable(t), s.bindings(), append([]httpwire.Option{
 		httpwire.WithSchema(pageDoc(t)),
 		httpwire.WithGuard(fixtureGuard{}),
 		httpwire.WithCredential(func(r *http.Request) string { c, _ := principalOf(r); return c }),
 		httpwire.WithCursorOwner(func(r *http.Request) string { _, o := principalOf(r); return o }),
 	}, opts...)...)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	return api
 }
 
 func (s *pageStore) bindings() []httpwire.Binding {
@@ -576,8 +583,8 @@ func TestCursorRefusals(t *testing.T) {
 			wantCursorInvalid(t, s, s.get(target, sessionA), n)
 		})
 	}
-	t.Run("another key", func(t *testing.T) {
-		s.api = s.build(t, httpwire.WithCursorKey([32]byte{9}))
+	t.Run("another sealer", func(t *testing.T) {
+		s.api = s.build(t, httpwire.WithSealer(sealed.New([32]byte{9})))
 		n := s.ran()
 		wantCursorInvalid(t, s, s.get(withCursor("/api/items", good, "limit", "3"), sessionA), n)
 	})
@@ -589,8 +596,8 @@ func TestCursorRefusals(t *testing.T) {
 		n := s.ran()
 		wantCursorInvalid(t, s, s.get(withCursor("/api/items", c, "limit", "3"), sessionA), n)
 	})
-	t.Run("a changed limit keeps the cursor", func(t *testing.T) {
-		s.api = s.build(t, httpwire.WithCursorKey(pageKey))
+	t.Run("the same sealer after a restart, a changed limit", func(t *testing.T) {
+		s.api = s.build(t, httpwire.WithSealer(pageSealer))
 		wantPage(t, pageOf(t, s.get(withCursor("/api/items", good, "limit", "2"), sessionA)), span(4, 5), 3, 10)
 	})
 }
@@ -599,7 +606,7 @@ func TestCursorRefusedPastADay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := newPageStore(t, 10)
 		c := pageOf(t, s.get("/api/items?limit=3", sessionA)).NextCursor
-		time.Sleep(24 * time.Hour)
+		time.Sleep(24*time.Hour - time.Second)
 		wantPage(t, pageOf(t, s.get(withCursor("/api/items", c, "limit", "3"), sessionA)), span(4, 6), 3, 10)
 		time.Sleep(time.Second)
 		n := s.ran()
@@ -610,25 +617,15 @@ func TestCursorRefusedPastADay(t *testing.T) {
 func TestCursorSealBounds(t *testing.T) {
 	sink := &logSink{}
 	s := newPageStore(t, 0, httpwire.WithLogger(slog.New(sink)))
-	nonces := map[string]bool{}
 	var longest int
 	var tooLong []error
 	s.answer = func(c listCall) (httpwire.List[entry], error) {
-		pos := position(7)
-		for range 100_000 {
-			sealed, err := c.SealNext(pos)
-			raw, derr := base64.RawURLEncoding.DecodeString(sealed)
-			if err != nil || derr != nil || len(raw) < 12 {
-				t.Fatalf("SealNext = %q, %v (%v)", sealed, err, derr)
-			}
-			nonces[string(raw[:12])] = true
-		}
 		for _, seal := range []func([]byte) (string, error){c.SealNext, c.SealPrev} {
-			sealed, err := seal(make([]byte, 1024))
+			v, err := seal(make([]byte, 1024))
 			if err != nil {
 				t.Fatalf("a 1,024-byte position: %v", err)
 			}
-			longest = max(longest, len(sealed))
+			longest = max(longest, len(v))
 			_, err = seal(make([]byte, 1025))
 			tooLong = append(tooLong, err)
 		}
@@ -638,11 +635,8 @@ func TestCursorSealBounds(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answered %d %q", rec.Code, rec.Body.String())
 	}
-	if len(nonces) != 100_000 {
-		t.Errorf("100,000 cursors over one position carry %d distinct nonces", len(nonces))
-	}
-	if longest == 0 || longest > 1416 {
-		t.Errorf("a 1,024-byte position sealed to %d bytes, want at most 1,416", longest)
+	if longest != 1416 {
+		t.Errorf("a 1,024-byte position sealed to %d bytes, want 1,416", longest)
 	}
 	for _, err := range tooLong {
 		if !errors.Is(err, httpwire.ErrPositionTooLong) {
@@ -730,16 +724,16 @@ func describe(b []byte, err error) string {
 func TestSealBindsAHandleToItsCredential(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := newPageStore(t, 0)
-		sealed := sealOn(t, s, "/api/handles", sessionA, func(ctx context.Context) string {
-			v, err := httpwire.Seal(ctx, "state", []byte("payload"))
+		handle := sealOn(t, s, "/api/handles", sessionA, func(ctx context.Context) string {
+			v, err := httpwire.Seal(ctx, "state", []byte("payload"), time.Hour)
 			if err != nil {
 				return "error " + err.Error()
 			}
 			return v
 		})
-		openAs := func(principal, path, purpose string, maxAge time.Duration) string {
+		openOn := func(s *pageStore, principal, path, purpose string) string {
 			return sealOn(t, s, path, principal, func(ctx context.Context) string {
-				return describe(httpwire.Open(ctx, purpose, sealed, maxAge))
+				return describe(httpwire.Open(ctx, purpose, handle))
 			})
 		}
 		for name, tc := range map[string]struct {
@@ -750,52 +744,75 @@ func TestSealBindsAHandleToItsCredential(t *testing.T) {
 			"another purpose":                {sessionA, "/api/handles", "other", "ErrSealed"},
 			"a Public row":                   {sessionA, "/api/public/handles", "state", "ErrSealed"},
 		} {
-			if got := openAs(tc.principal, tc.path, tc.purpose, time.Hour); got != tc.want {
+			if got := openOn(s, tc.principal, tc.path, tc.purpose); got != tc.want {
 				t.Errorf("%s: Open = %s, want %s", name, got, tc.want)
 			}
 		}
-		time.Sleep(time.Hour)
-		if got := openAs(sessionA, "/api/handles", "state", time.Hour); got != "opened payload" {
-			t.Errorf("Open at maxAge = %s, want it opened", got)
+		if got := openOn(newPageStore(t, 0, httpwire.WithSealer(sealed.New([32]byte{9}))), sessionA, "/api/handles", "state"); got != "ErrSealed" {
+			t.Errorf("Open under another sealer = %s, want ErrSealed", got)
+		}
+		if got := openOn(newPageStore(t, 0), sessionA, "/api/handles", "state"); got != "opened payload" {
+			t.Errorf("Open under the same sealer after a restart = %s, want it opened", got)
+		}
+		time.Sleep(time.Hour - time.Second)
+		if got := openOn(s, sessionA, "/api/handles", "state"); got != "opened payload" {
+			t.Errorf("Open a second before its ttl = %s, want it opened", got)
 		}
 		time.Sleep(time.Second)
-		if got := openAs(sessionA, "/api/handles", "state", time.Hour); got != "ErrSealed" {
-			t.Errorf("Open past maxAge = %s, want ErrSealed", got)
+		if got := openOn(s, sessionA, "/api/handles", "state"); got != "ErrSealed" {
+			t.Errorf("Open at its ttl = %s, want ErrSealed", got)
 		}
 		l := newPageStore(t, 10)
-		sealed = pageOf(t, l.get("/api/items?limit=3", sessionA)).NextCursor
-		if got := openAs(sessionA, "/api/handles", "cursor:items.list", 24*time.Hour); got != "ErrSealed" {
+		handle = pageOf(t, l.get("/api/items?limit=3", sessionA)).NextCursor
+		if got := openOn(s, sessionA, "/api/handles", "cursor:items.list"); got != "ErrSealed" {
 			t.Errorf("Open of a list cursor = %s, want ErrSealed", got)
 		}
 	})
-	t.Run("a payload over 1,024 bytes", func(t *testing.T) {
+	sealAs := func(t *testing.T, path string, payload []byte, ttl time.Duration, want func(string, error) bool) {
+		t.Helper()
 		s := newPageStore(t, 0)
-		got := sealOn(t, s, "/api/handles", sessionA, func(ctx context.Context) string {
-			_, err := httpwire.Seal(ctx, "state", make([]byte, 1025))
-			return strconv.FormatBool(errors.Is(err, httpwire.ErrPositionTooLong))
+		got := sealOn(t, s, path, sessionA, func(ctx context.Context) string {
+			v, err := httpwire.Seal(ctx, "state", payload, ttl)
+			return strconv.FormatBool(want(v, err))
 		})
 		if got != "true" {
-			t.Error("Seal of 1,025 bytes did not answer ErrPositionTooLong")
+			t.Error("Seal did not answer the error")
 		}
+	}
+	t.Run("a payload over 1,024 bytes", func(t *testing.T) {
+		sealAs(t, "/api/handles", make([]byte, 1025), time.Hour, func(_ string, err error) bool {
+			return errors.Is(err, httpwire.ErrPositionTooLong)
+		})
+	})
+	t.Run("a ttl under one second", func(t *testing.T) {
+		sealAs(t, "/api/handles", []byte("p"), time.Second-1, func(_ string, err error) bool {
+			return errors.Is(err, sealed.ErrShortTTL)
+		})
 	})
 	t.Run("Seal refuses a Public row", func(t *testing.T) {
-		s := newPageStore(t, 0)
-		got := sealOn(t, s, "/api/public/handles", sessionA, func(ctx context.Context) string {
-			v, err := httpwire.Seal(ctx, "state", []byte("p"))
-			return strconv.FormatBool(err != nil && v == "")
+		sealAs(t, "/api/public/handles", []byte("p"), time.Hour, func(v string, err error) bool {
+			return err != nil && v == ""
 		})
-		if got != "true" {
-			t.Error("Seal on a Public row did not answer an error")
-		}
 	})
 	t.Run("outside a request", func(t *testing.T) {
-		if v, err := httpwire.Seal(t.Context(), "state", []byte("p")); err == nil || v != "" {
+		if v, err := httpwire.Seal(t.Context(), "state", []byte("p"), time.Hour); err == nil || v != "" {
 			t.Errorf("Seal outside a request = %q, %v", v, err)
 		}
-		if _, err := httpwire.Open(t.Context(), "state", "AAAA", time.Hour); !errors.Is(err, httpwire.ErrSealed) {
+		if _, err := httpwire.Open(t.Context(), "state", "AAAA"); !errors.Is(err, httpwire.ErrSealed) {
 			t.Errorf("Open outside a request = %v, want ErrSealed", err)
 		}
 	})
+}
+
+func TestNewRefusesASealerWithNoKey(t *testing.T) {
+	s := &pageStore{keys: map[uint64]bool{}}
+	for name, sl := range map[string]*sealed.Sealer{"nil": nil, "the zero Sealer": {}} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s.newAPI(t, httpwire.WithSealer(sl)); err == nil || !strings.Contains(err.Error(), "WithSealer") {
+				t.Errorf("New = %v, want an error naming WithSealer", err)
+			}
+		})
+	}
 }
 
 func TestCredentialAndOwnerOfARequest(t *testing.T) {
