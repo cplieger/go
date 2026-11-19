@@ -89,3 +89,34 @@ func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, e
 	}
 	return ensurePrivateDir(clean, c)
 }
+
+// CheckPrivateDir proves from an open handle that the absolute dir is a
+// directory, not a symlink, owned by the effective uid with no group or other
+// access: EnsurePrivateDir's verdict, reached without creating, changing or
+// syncing anything. A missing dir matches fs.ErrNotExist; refusals are
+// EnsurePrivateDir's (ErrEmptyPath, ErrUnsafePath, ErrSymlinkTarget,
+// ErrNotDirectory, ErrNotOwned, ErrModeTooOpen). On Windows a valid dir
+// returns ErrModeUnsupported.
+func CheckPrivateDir(dir string) error {
+	clean, err := validateAbsClean(dir)
+	if err != nil {
+		return err
+	}
+	return checkPrivateDir(clean)
+}
+
+// CheckPrivateDirInRoot is CheckPrivateDir for name inside root, where "."
+// checks root's own directory as it is now. A symlink at name is refused, an
+// in-root symlinked ancestor resolves, and a name whose identity changes
+// during the check is ErrRaced. A relative, NUL-free name is required
+// (ErrEmptyPath, ErrUnsafePath) and a nil root returns ErrUnsafePath.
+func CheckPrivateDirInRoot(root *os.Root, name string) error {
+	if root == nil {
+		return fmt.Errorf("%w: nil root", ErrUnsafePath)
+	}
+	clean, err := validateRootName(name)
+	if err != nil {
+		return err
+	}
+	return checkPrivateDirInRoot(root, clean)
+}

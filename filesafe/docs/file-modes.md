@@ -2,7 +2,7 @@
 
 This page explains how filesafe sets file and directory modes, and how `EnsurePrivateDir` sets up a directory only one user may enter, for a developer writing credentials, configuration or backups.
 
-None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, and any write or probe given a nonzero `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A zero mode is `ErrInvalidArgument` on every platform. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll(true)` creates missing parent directories the same way.
+None of it applies on Windows. There Go's chmod only sets or clears the read-only attribute, and access is governed by the ACL a new file inherits from its directory. `EnforceMode`, `EnsurePrivateDir`, `CheckPrivateDir`, `CheckPrivateDirInRoot`, and any write or probe given a nonzero `WithMode` or `WithMkdirMode` return `ErrModeUnsupported` before anything is created or changed. A zero mode is `ErrInvalidArgument` on every platform. A write without them creates the file with the directory's inherited ACL, and `WithMkdirAll(true)` creates missing parent directories the same way.
 
 ## Ordinary and enforced modes
 
@@ -43,8 +43,14 @@ The result is meaningful only beside a nil error. A non-nil error can follow a s
 
 `WithLogger` sets the logger for the one `Warn` a repair emits, since a filesystem that ignores mode requests affects every other `mkdir` in the program too. `EnsurePrivateDir` takes only these two options, so a write option passed to it does not compile, and the mode is not a parameter.
 
+### Checking without creating
+
+`CheckPrivateDir(dir)` reaches the same verdict on a directory that must already exist, and creates, changes and syncs nothing. It opens `dir` the same way, then requires a directory owned by the effective uid with no group or other bit set. A missing `dir` matches `fs.ErrNotExist`. The refusals are `EnsurePrivateDir`'s: `ErrSymlinkTarget`, `ErrNotDirectory`, `ErrNotOwned` and `ErrModeTooOpen`, which is never repaired here. Use it where a missing or widened directory means something is wrong, such as a key directory a separate setup step created.
+
+`CheckPrivateDirInRoot(root, name)` runs the same check on `name` inside an `*os.Root` you hold, and `"."` checks the root's own directory as it is now, so a chmod after the root was opened is seen. A symlink at `name` is refused, and a name swapped for another directory during the check returns `ErrRaced`, which a retry can cure. Re-run it before each use of a long-held root.
+
 ## One level per call
 
-`EnsurePrivateDir` does not create, inspect or vouch for the parent of `dir`. It opens the parent only to sync it. For a path of several levels, loop over the levels yourself, outermost first, because only the caller knows which levels are its own.
+`EnsurePrivateDir` and `CheckPrivateDir` do not create, inspect or vouch for the parent of `dir`. `EnsurePrivateDir` opens the parent only to sync it, and `CheckPrivateDir` does not open it at all. For a path of several levels, loop over the levels yourself, outermost first, because only the caller knows which levels are its own.
 
 The verdict holds at one point in time. It proves what was true of one directory while a handle was open on it, and the handle is closed before the call returns. A later `ReadDir`, `Remove`, `Open` or `Mkdir` through the pathname resolves every component again and reopens the window the check closed. To keep that window closed, hold the directory open as an `*os.Root` for its whole lifetime and act on the names inside it.

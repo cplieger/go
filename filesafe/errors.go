@@ -24,16 +24,17 @@ var (
 	// errors.Is).
 	ErrFileTooLarge = errors.New("filesafe: file too large")
 	// ErrSymlinkTarget is returned when the target path is a symlink, which
-	// every write entry point, OpenRegularNoFollow, OpenRegularInRootNoFollow
-	// and EnsurePrivateDir refuse, and by OpenParentInRoot (so
-	// RemoveFileInRoot) for a symlinked ancestor of the name.
+	// every write entry point, OpenRegularNoFollow, OpenRegularInRootNoFollow,
+	// EnsurePrivateDir and the CheckPrivateDir pair refuse, and by
+	// OpenParentInRoot (so RemoveFileInRoot) for a symlinked ancestor.
 	ErrSymlinkTarget = errors.New("filesafe: target is a symlink")
 	// ErrRaced is returned when a name changed between a check and the open
 	// that followed it, so the check could not be shown to cover what was
 	// opened: by OpenRegularInRootNoFollow for the name it refused a symlink
-	// at, and by OpenParentInRoot (so RemoveFileInRoot) for an ancestor
-	// directory. A retry is the sane response, unlike ErrSymlinkTarget, which
-	// is a permanent verdict about what is at the name. Match with errors.Is.
+	// at, by CheckPrivateDirInRoot for the directory it checked, and by
+	// OpenParentInRoot (so RemoveFileInRoot) for an ancestor directory. A retry
+	// is the sane response, unlike ErrSymlinkTarget, which is a permanent
+	// verdict about what is at the name. Match with errors.Is.
 	ErrRaced = errors.New("filesafe: path changed between the check and the open")
 	// ErrNotRegular is returned when a name resolves to something other than a
 	// regular file. ReadBounded, ReadBoundedInRoot, OpenRegularNoFollow,
@@ -42,18 +43,18 @@ var (
 	// refuses to publish over it. Match with errors.Is; for the mode itself,
 	// errors.As a *NotRegularError rather than parsing the message.
 	ErrNotRegular = errors.New("filesafe: not a regular file")
-	// ErrNotDirectory is returned by EnsurePrivateDir when the name is occupied
-	// by something other than a directory, and by OpenParentInRoot for an
-	// ancestor of the name that is neither a directory nor a symlink. Match
-	// with errors.Is.
+	// ErrNotDirectory is returned by EnsurePrivateDir and the CheckPrivateDir
+	// pair when the name is occupied by something other than a directory, and
+	// by OpenParentInRoot for an ancestor of the name that is neither a
+	// directory nor a symlink. Match with errors.Is.
 	ErrNotDirectory = errors.New("filesafe: not a directory")
-	// ErrNotOwned is returned by EnsurePrivateDir when the directory's owner is
-	// not the effective uid, or ownership could not be determined. Match with
-	// errors.Is.
+	// ErrNotOwned is returned by EnsurePrivateDir and the CheckPrivateDir pair
+	// when the directory's owner is not the effective uid, or ownership could
+	// not be determined. Match with errors.Is.
 	ErrNotOwned = errors.New("filesafe: directory not owned by the effective uid")
-	// ErrModeTooOpen is returned by EnsurePrivateDir when a pre-existing
-	// directory grants group or other access; it is deliberately not repaired
-	// unless WithRepairOwnedDir is set. Match with errors.Is.
+	// ErrModeTooOpen is returned when a pre-existing directory grants group or
+	// other access: by EnsurePrivateDir unless WithRepairOwnedDir repairs it,
+	// and by the CheckPrivateDir pair, which never repairs. Match with errors.Is.
 	ErrModeTooOpen = errors.New("filesafe: directory mode grants group or other access")
 	// ErrModeNotStored is returned when the mode read back after a chmod does
 	// not match what was requested, a mount property rather than a permission
@@ -76,9 +77,9 @@ var (
 	// Windows reports the same way. Match with errors.Is.
 	ErrFileBusy = errors.New("filesafe: target in use or access denied")
 	// ErrModeUnsupported is returned on Windows by EnforceMode,
-	// EnsurePrivateDir and any write or probe given a nonzero WithMode or
-	// WithMkdirMode, before anything is created: Go's chmod there only sets the
-	// read-only attribute. A zero mode is ErrInvalidArgument on every platform.
+	// EnsurePrivateDir, the CheckPrivateDir pair and any write or probe given a
+	// nonzero WithMode or WithMkdirMode, before anything is created: Go's chmod
+	// there only sets the read-only attribute. A zero mode is ErrInvalidArgument on every platform.
 	// Match with errors.Is.
 	ErrModeUnsupported = errors.New("filesafe: file modes are not supported on this platform")
 )

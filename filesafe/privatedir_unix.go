@@ -106,6 +106,59 @@ func verifyFoundDir(f *os.File, fi os.FileInfo, clean string, c *cfg) (PrivateDi
 	return PrivateDirResult{Mode: stored, Repaired: true}, nil
 }
 
+// checkPrivateDir is CheckPrivateDir after path validation.
+func checkPrivateDir(clean string) error {
+	f, err := openPrivateDir(clean)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = checkPrivateDirHandle(f, clean)
+	return err
+}
+
+// checkPrivateDirInRoot is CheckPrivateDirInRoot after argument validation.
+// os.Root follows an in-root symlink at the final component, so the Lstat
+// before the open is the refusal, and SameFile proves the open reached the
+// directory the Lstat saw.
+func checkPrivateDirInRoot(root *os.Root, clean string) error {
+	before, err := root.Lstat(clean)
+	switch {
+	case err != nil:
+		return err
+	case before.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
+	case !before.IsDir():
+		return fmt.Errorf("%w: %s (type %s)", ErrNotDirectory, clean, before.Mode().Type())
+	}
+	if pinOpenHook != nil {
+		pinOpenHook(clean)
+	}
+	f, err := openDirInRoot(root, clean)
+	if err != nil {
+		return racedOpen(root, clean, before, err)
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := checkPrivateDirHandle(f, clean)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, fi) {
+		return fmt.Errorf("%w: %s", ErrRaced, clean)
+	}
+	return nil
+}
+
+// checkPrivateDirHandle is the private-directory verdict on an open
+// directory; ensurePrivateDir reaches the same one through its two halves.
+func checkPrivateDirHandle(f *os.File, dir string) (os.FileInfo, error) {
+	fi, err := statOwnedDir(f, dir)
+	if err != nil {
+		return nil, err
+	}
+	return fi, privateModeErr(fi, dir)
+}
+
 // privateModeErr is ErrModeTooOpen when fi grants group or other access.
 func privateModeErr(fi os.FileInfo, dir string) error {
 	if m := chmodBits(fi.Mode()); m&0o077 != 0 {

@@ -18,6 +18,8 @@ This page maps each job to the filesafe call that does it and lists every option
 | Act twice on one name and know it is the same file both times | `OpenParentInRoot` |
 | Set a mode and prove the filesystem stored it (not on Windows) | `EnforceMode` |
 | Create a directory only your user can enter (not on Windows) | `EnsurePrivateDir` |
+| Prove a directory is private without creating it (not on Windows) | `CheckPrivateDir` |
+| Re-check a directory you hold open as an `os.Root` (not on Windows) | `CheckPrivateDirInRoot` |
 | Check that a directory takes writes before relying on it | `ProbeWritable`, `ProbeWritableInRoot` |
 | Reclaim temp files left by a crash | `CleanupStaleTemps`, `CleanupStaleTempsInRoot` |
 | Name your own file so the sweeps reclaim it | `TempName`, `IsPackageTemp` |

@@ -63,17 +63,17 @@ Every error matches with `errors.Is` or `errors.As`.
 | `ErrUnsafePath` | The path is not absolute, holds a NUL byte or names no entry (`.`, `..`), or a root-relative name is absolute. On Windows a rooted path (`\data`) or a drive-relative one (`C:data`) is not absolute. See [Confinement](confinement.md). A nil `*os.Root` or `*os.File` is refused with it too |
 | `ErrInvalidArgument` | An argument no call could mean: a non-positive sweep `maxAge`, a negative read `maxBytes`, `WithMode(0)` or `WithMkdirMode(0)`, or a nil reader or walk function. Nothing is created, read or removed first |
 | `ErrFileTooLarge` | A file exceeded the read limit, or content exceeded a `WithMaxBytes` cap. On a write it may arrive inside a `*WriteError` |
-| `ErrSymlinkTarget` | The target of a write is a symlink, `OpenRegularNoFollow`, `OpenRegularInRootNoFollow` or `EnsurePrivateDir` refused one, or `OpenParentInRoot` found a symlinked ancestor |
-| `ErrRaced` | `OpenRegularInRootNoFollow` saw the name change identity between its symlink check and its open, or `OpenParentInRoot` saw an ancestor directory do so. A retry is the right response |
+| `ErrSymlinkTarget` | The target of a write is a symlink, `OpenRegularNoFollow`, `OpenRegularInRootNoFollow`, `EnsurePrivateDir` or a `CheckPrivateDir` call refused one, or `OpenParentInRoot` found a symlinked ancestor |
+| `ErrRaced` | `OpenRegularInRootNoFollow` saw the name change identity between its symlink check and its open, `CheckPrivateDirInRoot` saw it change between its check and its open, or `OpenParentInRoot` saw an ancestor directory do so. A retry is the right response |
 | `ErrNotRegular` | The name resolved to a directory, FIFO, device node or socket. Refused on read, on remove and on write |
-| `ErrNotDirectory` | `EnsurePrivateDir` found a file, FIFO, device node or socket at the name, or `OpenParentInRoot` found one in an ancestor's place |
-| `ErrNotOwned` | `EnsurePrivateDir` found a directory not owned by the effective user, or could not tell |
-| `ErrModeTooOpen` | `EnsurePrivateDir` found a pre-existing directory with group or other access, and no repair was asked for |
+| `ErrNotDirectory` | `EnsurePrivateDir` or a `CheckPrivateDir` call found a file, FIFO, device node or socket at the name, or `OpenParentInRoot` found one in an ancestor's place |
+| `ErrNotOwned` | `EnsurePrivateDir` or a `CheckPrivateDir` call found a directory not owned by the effective user, or could not tell |
+| `ErrModeTooOpen` | `EnsurePrivateDir` found a pre-existing directory with group or other access, and no repair was asked for, or a `CheckPrivateDir` call found one, which it never repairs |
 | `ErrParentNotSynced` | `EnsurePrivateDir` could not open or fsync the parent of the directory after every check passed. A directory the call created is removed again while it is still empty; one it found, or one another writer has already filled, stays, and the error also carries any removal failure. Safe to retry, unlike the other `EnsurePrivateDir` errors |
 | `ErrModeNotStored` | `EnforceMode`, or a write or probe under `WithMode` or `WithMkdirMode`, found the filesystem stored a different mode than asked. A directory level refused this way is removed again while it is still an empty directory, so a retry fails the same way; one another writer has already filled stays, and the error also carries the removal failure |
 | `ErrAborted` | `PendingFile.Commit` was called after `Cleanup` or `Close` aborted the write |
 | `ErrFileBusy` | Windows only. Another handle refused the replace on every retry, or the context ended while waiting to retry. It arrives inside a `*WriteError` with `PhaseRename`, wrapping the last `syscall.Errno`: a sharing or lock violation means a handle held the file, and access denied is either such a handle or an ACL refusal |
-| `ErrModeUnsupported` | Windows only. `EnforceMode`, `EnsurePrivateDir`, or a write or probe given a nonzero `WithMode` or `WithMkdirMode`; a zero mode is `ErrInvalidArgument`. Returned before anything is created |
+| `ErrModeUnsupported` | Windows only. `EnforceMode`, `EnsurePrivateDir`, a `CheckPrivateDir` call, or a write or probe given a nonzero `WithMode` or `WithMkdirMode`; a zero mode is `ErrInvalidArgument`. Returned before anything is created |
 
 `ErrNotRegular` arrives as a `*NotRegularError` carrying `Name` and `Mode`. Use `errors.As` to report what was there instead of parsing the message.
 
