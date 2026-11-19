@@ -48,12 +48,12 @@ var (
 
 // Listen creates c.Path's directory at 0700 if missing or proves an existing
 // one private, binds the socket at mode 0600 and returns a listener whose
-// Accept peer-checks every connection. A path over 107 bytes, or not
-// absolute and clean, is refused before the directory is touched. A socket a
-// server answers on refuses start, one nothing answers is replaced, any other
-// file is refused and left as it is, and of starts racing on one path one
-// wins. Directory refusals match filesafe's sentinels with errors.Is.
-// Closing the listener removes the socket.
+// Accept peer-checks every connection; closing it removes the socket. A path
+// over 107 bytes, or not absolute and clean, is refused before the directory
+// is touched. A live socket refuses start, a dead one is replaced and any
+// other file is refused untouched. Starts on one path wait their turn on a
+// filesafe lease on c.Path+".lock", a file that stays after Close. Directory
+// and lock file refusals match filesafe's sentinels with errors.Is.
 func Listen(c Config) (net.Listener, error) {
 	path := c.Path
 	if err := checkPathLen(path); err != nil {
@@ -67,12 +67,12 @@ func Listen(c Config) (net.Listener, error) {
 	if _, err := filesafe.EnsurePrivateDir(dir); err != nil {
 		return nil, fmt.Errorf("ownersock: socket directory: %w", err)
 	}
-	unlock, err := lockDir(dir)
+	lease, err := filesafe.AcquireLease(context.Background(), path+".lock")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ownersock: socket lock: %w", err)
 	}
 	ul, err := bind(path)
-	unlock()
+	_ = lease.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +106,9 @@ func checkPathLen(path string) error {
 
 // bind binds first, so nothing is removed while the path is free.
 // EADDRINUSE asks what is at the path, and a dead socket's removal is
-// followed by one more bind, never a loop. The caller holds lockDir, so no
-// other start removes or binds between the probe and the second bind.
+// followed by one more bind, never a loop. The caller holds the socket's
+// lease, so no other start removes or binds between the probe and the second
+// bind.
 func bind(path string) (*net.UnixListener, error) {
 	ul, err := listenUnix(path)
 	if !errors.Is(err, syscall.EADDRINUSE) {
