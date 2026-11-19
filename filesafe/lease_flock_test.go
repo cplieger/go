@@ -267,14 +267,14 @@ func TestLease_ExcludesAnotherProcess(t *testing.T) {
 		child := startLeaseHolder(t, path, "hold")
 
 		if l, err := TryLease(path); !errors.Is(err, ErrLeaseHeld) {
-			_ = closeIfLease(l)
+			closeIfLease(l)
 			t.Errorf("TryLease while a child holds it = %v, want ErrLeaseHeld", err)
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 		defer cancel()
 		l, err := AcquireLease(ctx, path)
 		if !errors.Is(err, ErrLeaseHeld) || !errors.Is(err, context.DeadlineExceeded) {
-			_ = closeIfLease(l)
+			closeIfLease(l)
 			t.Errorf("AcquireLease(200ms) while a child holds it = %v, want ErrLeaseHeld and DeadlineExceeded", err)
 		}
 
@@ -319,22 +319,21 @@ func TestLease_ExcludesAnotherProcess(t *testing.T) {
 	})
 }
 
-func closeIfLease(l *Lease) error {
-	if l == nil {
-		return nil
+func closeIfLease(l *Lease) {
+	if l != nil {
+		_ = l.Close()
 	}
-	return l.Close()
 }
 
 func TestLease_SecondLeaseInOneProcessWaits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.lock")
 	mustTryLease(t, path)
 	if l, err := TryLease(path); !errors.Is(err, ErrLeaseHeld) {
-		_ = closeIfLease(l)
+		closeIfLease(l)
 		t.Errorf("second TryLease in one process = %v, want ErrLeaseHeld", err)
 	}
 	if l, err := TrySharedLease(path); !errors.Is(err, ErrLeaseHeld) {
-		_ = closeIfLease(l)
+		closeIfLease(l)
 		t.Errorf("TrySharedLease beside this process's exclusive lease = %v, want ErrLeaseHeld", err)
 	}
 }
@@ -353,7 +352,7 @@ func TestAcquireLease_ContextCancelWhileWaiting(t *testing.T) {
 				t.Errorf("returned %v after the start, want soon after the 120ms cancel", elapsed)
 			}
 			if !errors.Is(err, ErrLeaseHeld) || !errors.Is(err, context.Canceled) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want ErrLeaseHeld and context.Canceled", err)
 			}
 		})
@@ -376,7 +375,7 @@ func TestAcquireLease_SeesAReleaseWithinOnePoll(t *testing.T) {
 		defer cancel()
 		l, err := AcquireLease(ctx, path)
 		at := time.Now()
-		_ = closeIfLease(l)
+		closeIfLease(l)
 		got <- result{at: at, err: err}
 	}()
 	pause(t, 170*time.Millisecond)
@@ -399,7 +398,7 @@ func TestAcquireLease_DoneContextOpensNothing(t *testing.T) {
 	t.Run("AcquireLease", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "app.lock")
 		if l, err := AcquireLease(ctx, path); !errors.Is(err, context.Canceled) {
-			_ = closeIfLease(l)
+			closeIfLease(l)
 			t.Errorf("AcquireLease(done ctx) = %v, want context.Canceled", err)
 		}
 		if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
@@ -409,7 +408,7 @@ func TestAcquireLease_DoneContextOpensNothing(t *testing.T) {
 	t.Run("AcquireSharedLease", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "app.lock")
 		if l, err := AcquireSharedLease(ctx, path); !errors.Is(err, context.Canceled) || errors.Is(err, fs.ErrNotExist) {
-			_ = closeIfLease(l)
+			closeIfLease(l)
 			t.Errorf("AcquireSharedLease(done ctx, missing file) = %v, want context.Canceled before any open", err)
 		}
 	})
@@ -424,7 +423,7 @@ func TestAcquireLease_RefusesADirectory(t *testing.T) {
 			}
 			l, err := form.take(t.Context(), path)
 			if !errors.Is(err, ErrNotRegular) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Fatalf("err = %v, want ErrNotRegular", err)
 			}
 			nr, ok := errors.AsType[*NotRegularError](err)
@@ -445,7 +444,7 @@ func TestAcquireLease_RefusesASymlink(t *testing.T) {
 					t.Fatalf("symlink: %v", err)
 				}
 				if l, err := form.take(t.Context(), path); !errors.Is(err, ErrSymlinkTarget) {
-					_ = closeIfLease(l)
+					closeIfLease(l)
 					t.Errorf("err = %v, want ErrSymlinkTarget", err)
 				}
 				l := mustTryLease(t, target)
@@ -459,7 +458,7 @@ func TestAcquireLease_RefusesASymlink(t *testing.T) {
 					t.Fatalf("symlink: %v", err)
 				}
 				if l, err := form.take(t.Context(), path); !errors.Is(err, ErrSymlinkTarget) {
-					_ = closeIfLease(l)
+					closeIfLease(l)
 					t.Errorf("err = %v, want ErrSymlinkTarget", err)
 				}
 				if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
@@ -479,7 +478,7 @@ func TestAcquireLease_RefusesAFIFO(t *testing.T) {
 			}
 			l, err := form.take(t.Context(), path)
 			if !errors.Is(err, ErrNotRegular) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want ErrNotRegular", err)
 			}
 		})
@@ -494,7 +493,7 @@ func TestAcquireLease_RefusesAWideMode(t *testing.T) {
 				t.Fatalf("chmod: %v", err)
 			}
 			if l, err := form.take(t.Context(), path); !errors.Is(err, ErrModeTooOpen) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want ErrModeTooOpen", err)
 			}
 			fi, err := os.Lstat(path)
@@ -515,7 +514,7 @@ func TestAcquireLease_ReportsAModeTheFilesystemDidNotStore(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "app.lock")
 			if l, err := form.take(t.Context(), path); !errors.Is(err, ErrModeNotStored) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want ErrModeNotStored", err)
 			}
 			if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
@@ -537,7 +536,7 @@ func TestAcquireLease_RefusesAForeignOwner(t *testing.T) {
 				t.Fatalf("chown: %v", err)
 			}
 			if l, err := form.take(t.Context(), path); !errors.Is(err, ErrNotOwned) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want ErrNotOwned", err)
 			}
 		})
@@ -655,7 +654,7 @@ func TestAcquireLease_RejectsBadPaths(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
 					if l, err := form.take(t.Context(), tc.path); !errors.Is(err, tc.want) {
-						_ = closeIfLease(l)
+						closeIfLease(l)
 						t.Errorf("err = %v, want %v", err, tc.want)
 					}
 				})
@@ -667,14 +666,14 @@ func TestAcquireLease_RejectsBadPaths(t *testing.T) {
 				}
 				l, err := form.take(t.Context(), filepath.Join(loop, "app.lock"))
 				if !errors.Is(err, ErrSymlinkTarget) || !errors.Is(err, syscall.ELOOP) {
-					_ = closeIfLease(l)
+					closeIfLease(l)
 					t.Errorf("err = %v, want ErrSymlinkTarget wrapping ELOOP", err)
 				}
 			})
 			t.Run("missing parent", func(t *testing.T) {
 				parent := filepath.Join(t.TempDir(), "missing")
 				if l, err := form.take(t.Context(), filepath.Join(parent, "app.lock")); !errors.Is(err, fs.ErrNotExist) {
-					_ = closeIfLease(l)
+					closeIfLease(l)
 					t.Errorf("err = %v, want fs.ErrNotExist", err)
 				}
 				if _, err := os.Lstat(parent); !errors.Is(err, fs.ErrNotExist) {
@@ -742,7 +741,7 @@ func TestTryLease_ReplacedLockFileIsRaced(t *testing.T) {
 			path := newLockFile(t)
 			stubLeaseLockedHook(t, replaceOnce(t))
 			if l, err := form.take(t.Context(), path); !errors.Is(err, ErrRaced) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want ErrRaced", err)
 			}
 		})
@@ -789,7 +788,7 @@ func TestAcquireLease_ContextEndWhileTheLockFileKeepsBeingReplacedIsRaced(t *tes
 			if errors.Is(err, ErrLeaseHeld) {
 				t.Errorf("err = %v, want it not to match ErrLeaseHeld: nobody held the lease", err)
 			}
-			_ = closeIfLease(l)
+			closeIfLease(l)
 		})
 	}
 }
@@ -819,7 +818,7 @@ func TestAcquireLease_NoAttemptStartsOnceContextIsDone(t *testing.T) {
 				if !errors.Is(err, ErrRaced) || !errors.Is(err, context.Canceled) {
 					t.Errorf("err = %v, want ErrRaced and context.Canceled", err)
 				}
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				cancel()
 			}
 		})
@@ -830,13 +829,13 @@ func TestSharedLease_RefusedWhileExclusiveHeld(t *testing.T) {
 	path := newLockFile(t)
 	mustTryLease(t, path)
 	if l, err := TrySharedLease(path); !errors.Is(err, ErrLeaseHeld) {
-		_ = closeIfLease(l)
+		closeIfLease(l)
 		t.Errorf("TrySharedLease = %v, want ErrLeaseHeld", err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	if l, err := AcquireSharedLease(ctx, path); !errors.Is(err, ErrLeaseHeld) || !errors.Is(err, context.DeadlineExceeded) {
-		_ = closeIfLease(l)
+		closeIfLease(l)
 		t.Errorf("AcquireSharedLease(200ms) = %v, want ErrLeaseHeld and DeadlineExceeded", err)
 	}
 }
@@ -847,7 +846,7 @@ func TestSharedLease_TwoHoldersTogether(t *testing.T) {
 		mustTrySharedLease(t, path)
 		mustTrySharedLease(t, path)
 		if l, err := TryLease(path); !errors.Is(err, ErrLeaseHeld) {
-			_ = closeIfLease(l)
+			closeIfLease(l)
 			t.Errorf("TryLease beside two shared holders = %v, want ErrLeaseHeld", err)
 		}
 	})
@@ -880,7 +879,7 @@ func TestAcquireLease_WaitsOnSharedHolders(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		l, err := AcquireLease(ctx, path)
-		_ = closeIfLease(l)
+		closeIfLease(l)
 		got <- err
 	}()
 
@@ -903,7 +902,7 @@ func TestSharedLease_MissingFileIsNotExist(t *testing.T) {
 		t.Run(form.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "app.lock")
 			if l, err := form.take(t.Context(), path); !errors.Is(err, fs.ErrNotExist) {
-				_ = closeIfLease(l)
+				closeIfLease(l)
 				t.Errorf("err = %v, want fs.ErrNotExist", err)
 			}
 			if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
