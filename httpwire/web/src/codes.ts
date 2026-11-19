@@ -23,6 +23,7 @@ const codes = [
   "method_not_allowed",
   "not_found",
   "person_required",
+  "precondition_failed",
   "rate_limited",
   "stale_version",
   "store_unavailable",
