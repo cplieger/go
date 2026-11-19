@@ -44,6 +44,24 @@ var libraryCodes = map[string]struct {
 	"store_unavailable":            {503, true},
 	"accounts_unavailable":         {503, true},
 	"maintenance":                  {503, true},
+	"outcome_unknown":              {502, false},
+}
+
+// TestOutcomeUnknownIsTheLibrarysCode holds outcome_unknown to its spec: 502,
+// kept by a Keyed row's replay since it is not NoEffect, with the default
+// words an app replaces, and never added a second time by an app.
+func TestOutcomeUnknownIsTheLibrarysCode(t *testing.T) {
+	c := httpwire.NewCatalog()
+	want := httpserver.CodeSpec{Status: http.StatusBadGateway, Remediation: "Check the result before sending it again; the action may have run."}
+	if got, ok := c.Lookup("outcome_unknown"); !ok || got != want {
+		t.Errorf("Lookup = %+v, %v; want %+v", got, ok, want)
+	}
+	if err := c.Add("outcome_unknown", httpserver.CodeSpec{Status: http.StatusBadGateway, Remediation: "Check the arr's queue."}); err == nil {
+		t.Error("Add of outcome_unknown succeeded; the catalog already holds it")
+	}
+	if err := c.SetRemediation("outcome_unknown", "Check the arr's queue or history before retrying; the command may have run."); err != nil {
+		t.Errorf("SetRemediation: %v", err)
+	}
 }
 
 func TestNewCatalogHoldsLibraryAndServerCodes(t *testing.T) {
