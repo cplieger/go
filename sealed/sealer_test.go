@@ -389,7 +389,7 @@ func TestAtRestBound(t *testing.T) {
 	const purpose Purpose = "example/bound"
 	t.Run("under GCM's limit", func(t *testing.T) {
 		if MaxAtRestPayload > (1<<39-256)/8 {
-			t.Errorf("MaxAtRestPayload %d is over SP 800-38D's %d octets", MaxAtRestPayload, (1<<39-256)/8)
+			t.Errorf("MaxAtRestPayload %d is over SP 800-38D's %d octets", MaxAtRestPayload, int64((1<<39-256)/8))
 		}
 	})
 	t.Run("MaxAtRestPayload seals and opens", func(t *testing.T) {
@@ -638,18 +638,6 @@ func TestCurrentFalseOnError(t *testing.T) {
 // zero Sealer, a nil *Sealer and New of the all-zero array, as the Sealer
 // and New godoc say, so each zero value says it does not work.
 func TestNoKey(t *testing.T) {
-	value, err := New(k1).Seal("example/nokey", []byte("x"), time.Hour)
-	if err != nil {
-		t.Fatalf("Seal: %v", err)
-	}
-	atRest, err := New(k1).SealAtRest("example/nokey", []byte("x"))
-	if err != nil {
-		t.Fatalf("SealAtRest: %v", err)
-	}
-	id, tag, err := New(k1).MAC("example/nokey", []byte("x"))
-	if err != nil {
-		t.Fatalf("MAC: %v", err)
-	}
 	for _, tc := range []struct {
 		name string
 		s    *Sealer
@@ -658,32 +646,7 @@ func TestNoKey(t *testing.T) {
 		{"nil Sealer", nil},
 		{"New of zero", New([32]byte{})},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if v, err := tc.s.Seal("example/nokey", []byte("x"), time.Hour); v != "" || !errors.Is(err, ErrNoKey) {
-				t.Errorf("Seal = %q, %v", v, err)
-			}
-			if v, err := tc.s.SealAtRest("example/nokey", []byte("x")); v != "" || !errors.Is(err, ErrNoKey) {
-				t.Errorf("SealAtRest = %q, %v", v, err)
-			}
-			if p, cur, err := tc.s.Open("example/nokey", value); p != nil || cur || !errors.Is(err, ErrNoKey) {
-				t.Errorf("Open = %q, %v, %v", p, cur, err)
-			}
-			if p, cur, err := tc.s.OpenAtRest("example/nokey", atRest); p != nil || cur || !errors.Is(err, ErrNoKey) {
-				t.Errorf("OpenAtRest = %q, %v, %v", p, cur, err)
-			}
-			if key, err := tc.s.Subkey("example/nokey"); key != [32]byte{} || !errors.Is(err, ErrNoKey) {
-				t.Errorf("Subkey = %x, %v", key, err)
-			}
-			if gotID, gotTag, err := tc.s.MAC("example/nokey", []byte("x")); gotID != "" || gotTag != nil || !errors.Is(err, ErrNoKey) {
-				t.Errorf("MAC = %q, %x, %v", gotID, gotTag, err)
-			}
-			if cur, err := tc.s.VerifyMAC("example/nokey", []byte("x"), id, tag); cur || !errors.Is(err, ErrNoKey) {
-				t.Errorf("VerifyMAC = %v, %v", cur, err)
-			}
-			if ids := tc.s.KeyIDs(); ids != (KeyIDs{}) {
-				t.Errorf("KeyIDs = %+v, want none", ids)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { checkNoKey(t, tc.s) })
 	}
 }
 

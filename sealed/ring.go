@@ -3,6 +3,7 @@ package sealed
 import (
 	"sync/atomic"
 
+	"github.com/cplieger/go/filesafe"
 	"github.com/cplieger/go/masked"
 )
 
@@ -21,9 +22,12 @@ type ringKey struct {
 }
 
 // keySource is the ring a KeyFile and every Sealer it hands out share, so a
-// Sealer sees each install at its next call.
+// Sealer sees each install at its next call. lease is the KeyFile's, read
+// and set under its mu. Held here, it stays reachable while any Sealer is,
+// so the lock file's finalizer cannot close it and drop the lease early.
 type keySource struct {
-	ring atomic.Pointer[ring]
+	lease *filesafe.Lease
+	ring  atomic.Pointer[ring]
 }
 
 func newRingKey(key [keyLen]byte) (ringKey, error) {

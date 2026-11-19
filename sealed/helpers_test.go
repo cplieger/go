@@ -10,8 +10,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
+	"time"
 )
 
 // k1 and k2 are the keys K1 and K2 of testdata/vectors.json; k3 is a key
@@ -102,6 +104,52 @@ func ringSealer(t *testing.T, keys ...[keyLen]byte) *Sealer {
 	src := new(keySource)
 	src.ring.Store(testRing(t, keys...))
 	return &Sealer{src: src}
+}
+
+// checkNoKey checks that s answers ErrNoKey, with zero values, from every
+// call that needs a key, holds no key id and panics on none, as the
+// Sealer godoc says of a Sealer holding no key.
+func checkNoKey(t *testing.T, s *Sealer) {
+	t.Helper()
+	const purpose Purpose = "example/nokey"
+	const label Label = "example/nokey"
+	keyed := New(k1)
+	value, err := keyed.Seal(purpose, []byte("x"), time.Hour)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	atRest, err := keyed.SealAtRest(purpose, []byte("x"))
+	if err != nil {
+		t.Fatalf("SealAtRest: %v", err)
+	}
+	id, tag, err := keyed.MAC(label, []byte("x"))
+	if err != nil {
+		t.Fatalf("MAC: %v", err)
+	}
+	if v, err := s.Seal(purpose, []byte("x"), time.Hour); v != "" || !errors.Is(err, ErrNoKey) {
+		t.Errorf("Seal = %q, %v", v, err)
+	}
+	if v, err := s.SealAtRest(purpose, []byte("x")); v != "" || !errors.Is(err, ErrNoKey) {
+		t.Errorf("SealAtRest = %q, %v", v, err)
+	}
+	if p, cur, err := s.Open(purpose, value); p != nil || cur || !errors.Is(err, ErrNoKey) {
+		t.Errorf("Open = %q, %v, %v", p, cur, err)
+	}
+	if p, cur, err := s.OpenAtRest(purpose, atRest); p != nil || cur || !errors.Is(err, ErrNoKey) {
+		t.Errorf("OpenAtRest = %q, %v, %v", p, cur, err)
+	}
+	if key, err := s.Subkey(label); key != [32]byte{} || !errors.Is(err, ErrNoKey) {
+		t.Errorf("Subkey = %x, %v", key, err)
+	}
+	if gotID, gotTag, err := s.MAC(label, []byte("x")); gotID != "" || gotTag != nil || !errors.Is(err, ErrNoKey) {
+		t.Errorf("MAC = %q, %x, %v", gotID, gotTag, err)
+	}
+	if cur, err := s.VerifyMAC(label, []byte("x"), id, tag); cur || !errors.Is(err, ErrNoKey) {
+		t.Errorf("VerifyMAC = %v, %v", cur, err)
+	}
+	if ids := s.KeyIDs(); ids != (KeyIDs{}) {
+		t.Errorf("KeyIDs = %+v, want none", ids)
+	}
 }
 
 // rawOf decodes a value's unpadded base64url (RFC 4648 §5).
