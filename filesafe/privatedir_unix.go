@@ -169,7 +169,8 @@ func privateModeErr(fi os.FileInfo, dir string) error {
 
 // syncParent fsyncs dir's parent. A failure leaves dir in place, created or
 // found: another caller may already hold a nil verdict on it, and a retry
-// finds it and syncs again.
+// finds it and syncs again. A parent this uid cannot read fails every retry,
+// so that one is not ErrParentNotSynced.
 func syncParent(dir string, created bool) error {
 	parent := filepath.Dir(dir)
 	err := fsyncDir(parent)
@@ -179,6 +180,10 @@ func syncParent(dir string, created bool) error {
 	how := "found"
 	if created {
 		how = "created"
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("filesafe: parent %s is not readable by the effective uid, so it cannot be synced (%s %s; left in place): %w",
+			parent, dir, how, err)
 	}
 	return fmt.Errorf("%w: %s (%s %s; left in place): %w", ErrParentNotSynced, parent, dir, how, err)
 }

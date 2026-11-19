@@ -73,13 +73,13 @@ func chmodBits(m os.FileMode) os.FileMode {
 }
 
 // EnsurePrivateDir creates the one absolute directory level dir at 0700 if
-// absent, proves from an open handle that it is a directory owned by the
-// effective uid with no group or other access, then fsyncs dir's parent,
-// which it must be able to read but does not check; the verdict holds at one
-// point in time (docs/file-modes.md). Refusals (errors.Is): ErrModeTooOpen
-// unless WithRepairOwnedDir, ErrEmptyPath, ErrUnsafePath, ErrSymlinkTarget,
-// ErrNotDirectory, ErrNotOwned, ErrModeNotStored, and ErrParentNotSynced,
-// the one worth a retry. On Windows a valid dir returns ErrModeUnsupported.
+// absent, proves from an open handle that it is a directory the effective uid
+// owns with no group or other access, then fsyncs dir's parent; the verdict
+// holds at one point in time (docs/file-modes.md). Refusals (errors.Is):
+// ErrModeTooOpen unless WithRepairOwnedDir, ErrEmptyPath, ErrUnsafePath,
+// ErrSymlinkTarget, ErrNotDirectory, ErrNotOwned, ErrModeNotStored,
+// fs.ErrPermission for an unreadable parent, and ErrParentNotSynced, the one
+// worth a retry. On Windows a valid dir returns ErrModeUnsupported.
 func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, error) {
 	c := buildPrivateDirCfg(opts)
 	clean, err := validateAbsClean(dir)

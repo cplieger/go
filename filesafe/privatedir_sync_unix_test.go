@@ -4,9 +4,11 @@ package filesafe
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 )
 
@@ -158,6 +160,38 @@ func TestEnsurePrivateDir_FailedSyncAfterFindRemovesNothing(t *testing.T) {
 	}
 	if got := permOf(t, dir); got != 0o700 {
 		t.Errorf("mode of found dir = %#o, want 0700 unchanged", got)
+	}
+}
+
+// A parent the effective uid can traverse but not read fails the sync's open
+// on every call, so a retry cannot cure it.
+func TestEnsurePrivateDir_UnreadableParentIsFatal(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+	}{
+		{name: "created", setup: func(*testing.T, string) {}},
+		{name: "found", setup: func(t *testing.T, dir string) { mkdirExact(t, dir, 0o700) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "priv")
+			tc.setup(t, dir)
+			stubFsyncDir(t, func(parent string) error {
+				return &fs.PathError{Op: "open", Path: parent, Err: syscall.EACCES}
+			})
+
+			_, err := EnsurePrivateDir(dir)
+			if !errors.Is(err, fs.ErrPermission) {
+				t.Errorf("err = %v, want fs.ErrPermission", err)
+			}
+			if errors.Is(err, ErrParentNotSynced) {
+				t.Errorf("err = %v, want it not to match ErrParentNotSynced, which promises a retry", err)
+			}
+			if _, lerr := os.Lstat(dir); lerr != nil {
+				t.Errorf("Lstat(dir) = %v, want the directory left in place", lerr)
+			}
+		})
 	}
 }
 
