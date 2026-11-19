@@ -83,6 +83,27 @@ func refOpen(t *testing.T, gcmKey, raw []byte) (plain []byte, err error) {
 	return plain, err
 }
 
+// refSeal returns the value of plain under the AES-256 key gcmKey with the
+// given 12-byte nonce, laid out as refOpen reads it, with cipher.NewGCM
+// (NIST SP 800-38D §7.1). It runs inside WithoutEnforcement, since FIPS
+// 140-only mode refuses a caller's nonce: the fuzz seeds' builder.
+func refSeal(tb testing.TB, gcmKey, nonce, plain []byte) string {
+	tb.Helper()
+	var raw []byte
+	fips140.WithoutEnforcement(func() {
+		block, err := aes.NewCipher(gcmKey)
+		if err != nil {
+			tb.Fatalf("aes.NewCipher: %v", err)
+		}
+		aead, err := cipher.NewGCM(block)
+		if err != nil {
+			tb.Fatalf("cipher.NewGCM: %v", err)
+		}
+		raw = aead.Seal(append([]byte{0x01}, nonce...), nonce, plain, []byte{0x01})
+	})
+	return valueOf(raw)
+}
+
 // testRing returns a ring of keys, the first current and the second, if
 // any, previous: the ring a KeyFile installs after Rotate.
 func testRing(tb testing.TB, keys ...[keyLen]byte) *ring {
@@ -99,10 +120,10 @@ func testRing(tb testing.TB, keys ...[keyLen]byte) *ring {
 }
 
 // ringSealer returns a Sealer over testRing(keys).
-func ringSealer(t *testing.T, keys ...[keyLen]byte) *Sealer {
-	t.Helper()
+func ringSealer(tb testing.TB, keys ...[keyLen]byte) *Sealer {
+	tb.Helper()
 	src := new(keySource)
-	src.ring.Store(testRing(t, keys...))
+	src.ring.Store(testRing(tb, keys...))
 	return &Sealer{src: src}
 }
 
