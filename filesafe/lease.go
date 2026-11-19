@@ -20,27 +20,27 @@ var errLeaseBusy = errors.New("filesafe: lease busy")
 // and before the check that the locked file is still the one at its path.
 var leaseLockedHook func(path string)
 
-// Lease is a flock(2) on a lock file, held until Close: exclusive from
-// AcquireLease and TryLease, shared from AcquireSharedLease and
-// TrySharedLease. flock belongs to the open file, so a second lease on one
-// path in one process waits as another process's would. A lease holds no
-// data: keep yours in a file beside the lock file, written with WriteFile
-// while the lease is held. docs/leases.md covers NFS, SMB and hosts sharing
-// a mount. On Windows each form fails with ErrModeUnsupported and
-// errors.ErrUnsupported, and where syscall has no Flock with the latter.
+// Lease is a flock(2) on a lock file, held until Close, or until the *Lease
+// is no longer reachable, since its descriptor closes then: exclusive from
+// AcquireLease and TryLease, shared from AcquireSharedLease and TrySharedLease.
+// flock belongs to the open file, so a second lease on one path in one process
+// waits as another process's would. A lease holds no data: keep yours beside
+// it, written with WriteFile under the lease; docs/leases.md covers NFS and
+// SMB. Each form fails with ErrModeUnsupported and errors.ErrUnsupported on
+// Windows, and with the latter where syscall has no Flock.
 type Lease struct {
 	f    *os.File
 	path string
 }
 
 // AcquireLease takes an exclusive lease on the lock file at the absolute
-// path, creating it at 0600 when absent (never a directory, and never
-// removed), and retries every 50 ms until it is free or ctx is done. A done
-// ctx opens nothing and returns ctx.Err(); ctx ending while another holder
-// has the lease returns ErrLeaseHeld wrapping ctx.Err(). It refuses, before
-// locking: a bad path, a symlink (ErrSymlinkTarget), a non-regular file
-// (ErrNotRegular), another uid's file (ErrNotOwned), group or other access
-// (ErrModeTooOpen), a created file whose 0600 was not stored (ErrModeNotStored).
+// path, creating it at 0600 when absent (never a directory, never removed),
+// retrying every 50 ms until it is free or ctx is done. A done ctx opens
+// nothing and returns ctx.Err(). ctx ending wraps ctx.Err() in ErrLeaseHeld
+// when another holder had the lease, or in ErrRaced when the lock file was
+// last found replaced. Before locking it refuses a bad path, a symlink
+// (ErrSymlinkTarget), ErrNotRegular, ErrNotOwned, ErrModeTooOpen and a
+// created file whose 0600 was not stored (ErrModeNotStored).
 func AcquireLease(ctx context.Context, path string) (*Lease, error) {
 	return acquireLease(ctx, path, false)
 }
@@ -86,6 +86,9 @@ func acquireLease(ctx context.Context, path string, shared bool) (*Lease, error)
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(err, ErrRaced) {
+				return nil, fmt.Errorf("%w: %w", err, ctx.Err())
+			}
 			return nil, fmt.Errorf("%w: %s: %w", ErrLeaseHeld, clean, ctx.Err())
 		case <-ticker.C:
 		}

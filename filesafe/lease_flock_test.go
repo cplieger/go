@@ -754,6 +754,34 @@ func TestAcquireLease_RetriesAReplacedLockFile(t *testing.T) {
 	}
 }
 
+// Nobody holds the lease while its lock file keeps being replaced, so a
+// waiter whose context ends reports the race, not a holder.
+func TestAcquireLease_ContextEndWhileTheLockFileKeepsBeingReplacedIsRaced(t *testing.T) {
+	for _, form := range blockingLeaseForms {
+		t.Run(form.name, func(t *testing.T) {
+			path := newLockFile(t)
+			stubLeaseLockedHook(t, func(path string) {
+				if err := os.Remove(path); err != nil {
+					t.Errorf("remove lock file: %v", err)
+				}
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Errorf("recreate lock file: %v", err)
+				}
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+			defer cancel()
+			l, err := form.take(ctx, path)
+			if !errors.Is(err, ErrRaced) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("err = %v, want ErrRaced and context.DeadlineExceeded", err)
+			}
+			if errors.Is(err, ErrLeaseHeld) {
+				t.Errorf("err = %v, want it not to match ErrLeaseHeld: nobody held the lease", err)
+			}
+			_ = closeIfLease(l)
+		})
+	}
+}
+
 func TestSharedLease_RefusedWhileExclusiveHeld(t *testing.T) {
 	path := newLockFile(t)
 	mustTryLease(t, path)

@@ -6,7 +6,7 @@ This page explains how a filesafe lease lets one process at a time work on a fil
 
 A lease is a `flock(2)` lock on a lock file, held until `Close`. `AcquireLease` waits for it and `TryLease` gives up at once with `ErrLeaseHeld`. Both take an exclusive lease, which one holder has at a time. `AcquireSharedLease` and `TrySharedLease` take a shared lease, which any number of readers hold together while no exclusive holder has it.
 
-`AcquireLease` and `AcquireSharedLease` retry every 50 ms until the lease is free or the context ends. A released lease is seen within one retry. A context already done returns its error and opens nothing. A context that ends while another holder has the lease returns `ErrLeaseHeld`, wrapping the context's error.
+`AcquireLease` and `AcquireSharedLease` retry every 50 ms until the lease is free or the context ends. A released lease is seen within one retry. A context already done returns its error and opens nothing. A context that ends while another holder has the lease returns `ErrLeaseHeld`, wrapping the context's error, and one that ends while the lock file keeps being replaced returns `ErrRaced` instead.
 
 The kernel ties the lock to the open file, so it drops it when the holder closes it or exits, a crash included. Two leases on one path in one process exclude each other as two processes do, so a process takes each lease once and shares it. Keep the `*Lease` reachable until `Close`: one the garbage collector reclaims closes its descriptor, which releases the lease.
 
@@ -26,7 +26,7 @@ Before it locks, every form refuses, from the open descriptor:
 
 Only the final component is checked. The lock file's directory should be one only its users can write, such as the directory the guarded file lives in.
 
-A lock file replaced between its open and its lock is `ErrRaced` from `TryLease` and `TrySharedLease`, and a retry from the waiting forms.
+A lock file replaced between its open and its lock is `ErrRaced` from `TryLease` and `TrySharedLease`, and a retry from the waiting forms. A waiting form whose context ends while the file keeps being replaced returns `ErrRaced` wrapping the context's error, since nobody held the lease.
 
 ## The lease holds no data
 

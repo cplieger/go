@@ -29,8 +29,8 @@ var (
 	// and by OpenParentInRoot (so RemoveFileInRoot) for a symlinked ancestor.
 	ErrSymlinkTarget = errors.New("filesafe: target is a symlink")
 	// ErrRaced is returned when a name changed between a check and the open
-	// after it: by OpenRegularInRootNoFollow, CheckPrivateDirInRoot, TryLease,
-	// TrySharedLease and OpenParentInRoot (so RemoveFileInRoot). A retry is the
+	// after it: by OpenRegularInRootNoFollow, CheckPrivateDirInRoot, the lease
+	// functions and OpenParentInRoot (so RemoveFileInRoot). A retry is the
 	// sane response, unlike ErrSymlinkTarget, a permanent verdict about what is
 	// at the name. Match with errors.Is.
 	ErrRaced = errors.New("filesafe: path changed between the check and the open")
