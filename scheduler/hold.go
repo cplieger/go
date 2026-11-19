@@ -102,6 +102,7 @@ func (e *Executor[P]) resume(ctx context.Context) {
 	}
 	gen := e.readGen
 	e.noted = map[ScheduledScope]LastEnd{}
+	clear(e.unkept) // the read answers every end noted before it
 	e.mu.Unlock()
 	ends, err := e.lastEnds(ctx)
 	now := time.Now()
