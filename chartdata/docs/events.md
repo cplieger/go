@@ -23,6 +23,8 @@ A `FrameEvent` changes a frame the page already drew, without re-sending the fra
 ## How a page applies each kind
 
 - `append`: the frame keeps its span. Its domain, or its x extent when it has none, slides to end at the new column, and the columns before the new start drop.
+  - A frame with no x extent yet, with no column or one, drops nothing and gains no domain, so its first columns set its span.
+  - A frame with no domain takes the slid span as its domain, so appends at uneven steps keep that span.
 - `replace`: the last column or bin takes the new values, and `open` says whether it is still filling.
 - `reset`: a line, area or sparkline breaks at `at` instead of joining across it, and a state history shows a gap there.
 - `set`: the page draws the new frame. A frame drawn with a domain keeps its span, ending where the new frame's domain ends, since a `Sampler`'s `set` carries its whole ring.
