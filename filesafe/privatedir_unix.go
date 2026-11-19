@@ -51,48 +51,67 @@ func ensurePrivateDir(clean string, c *cfg) (PrivateDirResult, error) {
 	if err != nil {
 		return PrivateDirResult{}, err
 	}
-	found := chmodBits(fi.Mode())
-	if !created {
-		if found&0o077 == 0 {
-			if err := syncParent(clean, false); err != nil {
-				return PrivateDirResult{}, err
-			}
-			return PrivateDirResult{Mode: found}, nil
-		}
-		// The euid-ownership check above already proved this directory is
-		// ours, which is what makes narrowing it our call rather than an
-		// intrusion.
-		if !c.repairOwnedDir {
-			return PrivateDirResult{}, fmt.Errorf(
-				"%w: %s: mode %#o grants group or other access, and a pre-existing directory is never repaired without WithRepairOwnedDir(true)",
-				ErrModeTooOpen, clean, found,
-			)
-		}
-		stored, repairErr := EnforceMode(f, privateDirMode)
-		if repairErr != nil {
-			return PrivateDirResult{}, repairErr
-		}
-		c.logger.Warn("filesafe: pre-existing directory was not private; repaired",
-			"dir", clean, "requested", privateDirMode.String(), "found", found.String())
-		if err := syncParent(clean, false); err != nil {
-			return PrivateDirResult{}, err
-		}
-		return PrivateDirResult{Mode: stored, Repaired: true}, nil
+	var res PrivateDirResult
+	if created {
+		res, err = enforceCreatedDir(f, fi, clean, c)
+	} else {
+		res, err = verifyFoundDir(f, fi, clean, c)
 	}
+	if err != nil {
+		return PrivateDirResult{}, err
+	}
+	if syncErr := syncParent(clean, created); syncErr != nil {
+		return PrivateDirResult{}, syncErr
+	}
+	return res, nil
+}
 
+// enforceCreatedDir sets 0700 on a directory this call created, repairing a
+// mode the filesystem widened.
+func enforceCreatedDir(f *os.File, fi os.FileInfo, clean string, c *cfg) (PrivateDirResult, error) {
 	stored, err := EnforceMode(f, privateDirMode)
 	if err != nil {
 		return PrivateDirResult{}, err
 	}
+	found := chmodBits(fi.Mode())
 	repaired := found != privateDirMode
 	if repaired {
 		c.logger.Warn("filesafe: created directory did not keep the requested mode; repaired",
 			"dir", clean, "requested", privateDirMode.String(), "stored", found.String())
 	}
-	if err := syncParent(clean, true); err != nil {
+	return PrivateDirResult{Mode: stored, Created: true, Repaired: repaired}, nil
+}
+
+// verifyFoundDir is the verdict on an owned directory this call did not
+// create: private as found, or repaired under WithRepairOwnedDir.
+func verifyFoundDir(f *os.File, fi os.FileInfo, clean string, c *cfg) (PrivateDirResult, error) {
+	found := chmodBits(fi.Mode())
+	modeErr := privateModeErr(fi, clean)
+	if modeErr == nil {
+		return PrivateDirResult{Mode: found}, nil
+	}
+	// statOwnedDir already proved this directory is ours, which is what makes
+	// narrowing it our call rather than an intrusion.
+	if !c.repairOwnedDir {
+		return PrivateDirResult{}, fmt.Errorf(
+			"%w; a pre-existing directory is never repaired without WithRepairOwnedDir(true)", modeErr,
+		)
+	}
+	stored, err := EnforceMode(f, privateDirMode)
+	if err != nil {
 		return PrivateDirResult{}, err
 	}
-	return PrivateDirResult{Mode: stored, Created: true, Repaired: repaired}, nil
+	c.logger.Warn("filesafe: pre-existing directory was not private; repaired",
+		"dir", clean, "requested", privateDirMode.String(), "found", found.String())
+	return PrivateDirResult{Mode: stored, Repaired: true}, nil
+}
+
+// privateModeErr is ErrModeTooOpen when fi grants group or other access.
+func privateModeErr(fi os.FileInfo, dir string) error {
+	if m := chmodBits(fi.Mode()); m&0o077 != 0 {
+		return fmt.Errorf("%w: %s (mode %#o)", ErrModeTooOpen, dir, m)
+	}
+	return nil
 }
 
 // syncParent fsyncs dir's parent. On failure it removes a dir this call
