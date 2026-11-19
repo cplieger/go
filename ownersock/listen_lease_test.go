@@ -30,11 +30,12 @@ const (
 )
 
 // TestListenHelperProcess is the child half of the two-process lease tests,
-// on helperSocketName in its working directory. Mode "listen" runs Listen,
-// prints "bound" and keeps the listener until stdin reaches EOF; "try-lease"
-// exits 0 when it got the socket's lease, helperExitHeld on ErrLeaseHeld and
-// 1 otherwise. The path is not passed in the environment because gosec's
-// taint analysis would then flag every open in the package.
+// on helperSocketName in its working directory. Mode "listen" prints
+// "listening" just before Listen, "bound" once it returns, and keeps the
+// listener until stdin reaches EOF; "try-lease" exits 0 when it got the
+// socket's lease, helperExitHeld on ErrLeaseHeld and 1 otherwise. The path is
+// not passed in the environment because gosec's taint analysis would then
+// flag every open in the package.
 func TestListenHelperProcess(t *testing.T) {
 	if os.Getenv(listenHelperEnv) != "1" {
 		t.Skip("helper process for the two-process lease tests")
@@ -47,6 +48,7 @@ func TestListenHelperProcess(t *testing.T) {
 	path := filepath.Join(wd, helperSocketName)
 	switch mode := os.Getenv(listenModeEnv); mode {
 	case "listen":
+		fmt.Println("listening")
 		ln, err := Listen(Config{Path: path, Logger: slog.New(slog.DiscardHandler)})
 		if err != nil {
 			fmt.Println("error:", err)
@@ -148,8 +150,9 @@ func TestListen_waitsWhileAnotherProcessHoldsTheSocketsLease(t *testing.T) {
 		_ = child.Wait()
 	})
 
+	waitFor(t, out, "listening\n")
 	time.Sleep(300 * time.Millisecond)
-	if got := out.String(); got != "" {
+	if got := out.String(); got != "listening\n" {
 		t.Fatalf("the child's Listen returned while this process held the lease; output %q", got)
 	}
 	absent(t, path)
