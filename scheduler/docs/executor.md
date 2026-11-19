@@ -54,7 +54,7 @@ A job's upstream calls read as background work, with priority for an `Interactiv
 
 ## Cancel
 
-`Cancel(ctx, id)` ends a queued job `cancelled` without running it, and cancels a running or yielded job's context, so it ends `cancelled` at the phase it reached and commits nothing: its `Run.Commit()` answers false. Once `Commit()` answered true the job is in its commit step, and `Cancel` answers `ErrCommitting` while the job completes. An ended job answers `ErrNotCancellable` and an unknown id `ErrUnknownJob`. A repeat cancel answers as the first one did. Who may cancel whose job is the app's guard over the record's `Owner`.
+`Cancel(ctx, id)` ends a queued job `cancelled` without running it, and cancels a running or yielded job's context, so it ends `cancelled` at the phase it reached and commits nothing: its `Run.Commit()` answers false. A job whose record is still being written counts as queued: it ends `cancelled` without running, and its `Start` answers its id with a nil error. Once `Commit()` answered true the job is in its commit step, and `Cancel` answers `ErrCommitting` while the job completes. An ended job answers `ErrNotCancellable` and an unknown id `ErrUnknownJob`. A repeat cancel answers as the first one did. Who may cancel whose job is the app's guard over the record's `Owner`.
 
 `CredentialEnded(credential)` stops each job of an `OnBehalf` kind that credential started, ending it `cancelled` with reason `credential_ended`; a job not yet running, one whose record is still being written included, never runs, and its `Start` answers the job with a nil error. Call it when a session or key ends, never on an idle timeout.
 
