@@ -485,3 +485,37 @@ func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing
 		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+own+", turned)", CheckPrivateDirInRoot(root, "turned"))
 	})
 }
+
+// A closed root whose directory moved off its path can only be refused: the
+// path then names nothing, or a directory the root does not hold, and neither
+// can turn the refusal into a pass.
+func TestCheckPrivateDirInRoot_RefusesAClosedRootWhoseDirectoryMoved(t *testing.T) {
+	base, ok := asNobody(t, ownWorkspace, nil)
+	if !ok {
+		return
+	}
+	own := ownDir(t, base)
+	for name, refill := range map[string]func(t *testing.T, path string){
+		"nothing at its path": func(*testing.T, string) {},
+		"a private directory it owns at its path": func(t *testing.T, path string) {
+			mkdirExact(t, path, 0o700)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(own, "moving")
+			mkdirExact(t, dir, 0o700)
+			root := openRootAt(t, dir)
+			away, err := os.MkdirTemp(own, "away-")
+			if err != nil {
+				t.Fatalf("MkdirTemp: %v", err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(away) })
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			moved := filepath.Join(away, "moving")
+			mustRename(t, dir, moved)
+			closeDir(t, moved)
+			refill(t, dir)
+			assertPlainPermission(t, "CheckPrivateDirInRoot(moved root, .)", CheckPrivateDirInRoot(root, "."))
+		})
+	}
+}
