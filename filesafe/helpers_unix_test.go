@@ -48,6 +48,38 @@ func recordFsyncRootDir(t *testing.T) func() []string {
 	}
 }
 
+// stubFsyncDir replaces the package fsyncDir seam with fn, restoring the
+// original on test end. Callers must not use t.Parallel: package state.
+func stubFsyncDir(t *testing.T, fn func(dir string) error) {
+	t.Helper()
+	orig := fsyncDir
+	t.Cleanup(func() { fsyncDir = orig })
+	fsyncDir = fn
+}
+
+// recordFsyncDir replaces the package fsyncDir seam with one that records
+// every dir it is asked to sync and then runs the original, restoring it on
+// test end. Returns a function reporting the recorded dirs in call order.
+// Callers must not use t.Parallel: package state.
+func recordFsyncDir(t *testing.T) func() []string {
+	t.Helper()
+	orig := fsyncDir
+	t.Cleanup(func() { fsyncDir = orig })
+	var mu sync.Mutex
+	var seen []string
+	fsyncDir = func(dir string) error {
+		mu.Lock()
+		seen = append(seen, dir)
+		mu.Unlock()
+		return orig(dir)
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
 // withUmask sets the process umask for the test's duration and restores it
 // after. Process-global, so callers must not use t.Parallel. Needed because a
 // mode passed to mkdir(2) is only a REQUEST that umask narrows, and a test

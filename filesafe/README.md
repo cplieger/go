@@ -15,6 +15,7 @@ filesafe is built for Go services that keep state, configuration or credentials 
 - `WithMode` proves the mode the filesystem stored, so a filesystem that widens a 0600 request fails the write instead of publishing a readable file. It is not available on Windows.
 - The `*InRoot` functions run through an `*os.Root`, so a symlink or `..` in a name cannot leave the directory tree.
 - Writes refuse a symlink, FIFO, socket or device node at the target path.
+- A lease lets one process at a time update a file, on a local filesystem, NFS or SMB (see [Leases](docs/leases.md) for the mount options), and frees itself when its holder exits. It is not available on Windows.
 
 Consider [google/renameio](https://github.com/google/renameio) if you also need to replace a symbolic link atomically.
 
@@ -78,14 +79,15 @@ func main() {
 }
 ```
 
-To stream content, use `WriteReader`. To write a file piece by piece, call `NewPendingFile`, write to it, then `Commit` to publish it or `Cleanup` to abort. The 23 runnable examples on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/filesafe#pkg-examples) cover writes, reads, sweeps, probes and private directories, and `go test` runs them.
+To stream content, use `WriteReader`. To write a file piece by piece, call `NewPendingFile`, write to it, then `Commit` to publish it or `Cleanup` to abort. The 24 runnable examples on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/filesafe#pkg-examples) cover writes, reads, sweeps, probes, private directories and leases, and `go test` runs them.
 
 ## API
 
 - Writes: `WriteFile`, `WriteReader`, `NewPendingFile` and their `*InRoot` forms.
 - Reads: `ReadBounded`, `ReadBoundedFile`, `ReadBoundedInRoot`, `OpenRegularNoFollow`, `OpenRegularInRoot`, `OpenRegularInRootNoFollow`.
 - Shared directory trees: `WalkDirInRoot`, `OpenParentInRoot`, `RemoveFileInRoot`.
-- Modes: `EnforceMode`, `EnsurePrivateDir`.
+- Modes: `EnforceMode`, `EnsurePrivateDir`, `CheckPrivateDir`, `CheckPrivateDirInRoot`.
+- Leases: `AcquireLease`, `TryLease`, `AcquireSharedLease`, `TrySharedLease`, and `Lease` with `Close` and `Covers`.
 - Temp files and checks: `CleanupStaleTemps`, `CleanupStaleTempsInRoot`, `TempName`, `IsPackageTemp`, `ProbeWritable`, `ProbeWritableInRoot`, `ValidatePath`, and `Identify` with `FileIdentity`.
 - Options: `WithMode`, `WithMkdirMode`, `WithMkdirAll` and `WithMaxBytes` for writes and probes (`WriteOption`), `WithRecursive` for sweeps (`SweepOption`), `WithRepairOwnedDir` for `EnsurePrivateDir` (`PrivateDirOption`), and `WithLogger`, which all of them take (`Option`).
 - Results and errors: `Result`, `SweepResult`, `ProbeResult` with its `ProbePhase`, `PrivateDirResult`, sentinel values for `errors.Is`, `ErrInvalidArgument`, `ErrFileBusy` and `ErrModeUnsupported` among them, and `*WriteError` with its `WritePhase` and `*NotRegularError` for `errors.As`.
@@ -98,7 +100,7 @@ Every write creates a temp file in the target's directory, writes and syncs it, 
 
 A nil error means the data reached its final path. `Result.Durable` then says whether that content will survive a power loss. It is false when the sync after the rename failed, for example with an `EIO` from a failing disk. A crash could then still bring back the old file. The package logs a warning in that case, and a caller that needs crash durability retries the write or raises an alert. A non-nil error means the data did not reach the path, and the previous file is untouched.
 
-Two writers on one path each publish a whole file, and the last rename wins. The package takes no lock.
+Two writers on one path each publish a whole file, and the last rename wins. A write takes no lock. To let one process at a time update a file, hold a lease on a lock file beside it, as [Leases](docs/leases.md) explains.
 
 A process killed before the rename leaves its temp file behind. Nothing in the package removes it on its own, so call `CleanupStaleTemps` at startup or on a schedule, as [Orphaned temp files](docs/temp-files.md) explains.
 
@@ -110,7 +112,7 @@ Without `WithMode`, filesafe sets no mode. The file is created the way `os.Creat
 
 Pass `WithMode` for any file whose readers must be restricted, such as credentials, configuration and backups. The payload is staged in a file proven owner-only, the final file is proven to hold the mode, and a filesystem that stores anything else fails the write with `ErrModeNotStored`.
 
-`WithMkdirMode` creates missing parent directories at a mode it also proves, and `WithMkdirAll(true)` creates them as `os.MkdirAll` does, proving nothing. `EnsurePrivateDir` sets up one directory level that only the effective user may enter. [File modes and private directories](docs/file-modes.md) explains both.
+`WithMkdirMode` creates missing parent directories at a mode it also proves, and `WithMkdirAll(true)` creates them as `os.MkdirAll` does, proving nothing. `EnsurePrivateDir` sets up one directory level that only the effective user may enter, synced into its parent so it survives a power loss, and `CheckPrivateDir` proves an existing one is still private without creating anything. [File modes and private directories](docs/file-modes.md) explains all three.
 
 ## Windows
 
@@ -122,7 +124,7 @@ These limits apply on Windows:
 - `ErrFileBusy` also covers an access-denied refusal, because Windows reports a file held open and a refusing ACL with the same error. The wrapped `syscall.Errno` tells which.
 - Go renames without POSIX semantics when a filesystem refuses them. That rename is still atomic, but it is refused while any handle is open on the target, even one that allows deletion, so the write retries and fails with `ErrFileBusy` as above.
 - A target with the read-only attribute is refused before anything is written, with an error matching `fs.ErrPermission`.
-- `WithMode` and `WithMkdirMode` with a nonzero mode, `EnforceMode` and `EnsurePrivateDir` return `ErrModeUnsupported` before anything is created. A zero mode is `ErrInvalidArgument` there as everywhere. Go's chmod on Windows only sets the read-only attribute, and access is governed by the ACL the new file inherits from its directory. `WithMkdirAll(true)` creates a missing parent directory there.
+- `WithMode` and `WithMkdirMode` with a nonzero mode, `EnforceMode`, `EnsurePrivateDir`, `CheckPrivateDir` and `CheckPrivateDirInRoot` return `ErrModeUnsupported` before anything is created. The lease functions return an error matching both `ErrModeUnsupported` and `errors.ErrUnsupported`. A zero mode is `ErrInvalidArgument` there as everywhere. Go's chmod on Windows only sets the read-only attribute, and access is governed by the ACL the new file inherits from its directory. `WithMkdirAll(true)` creates a missing parent directory there.
 - There is no directory sync. On a local NTFS volume the write flushes the published file after the rename, which also persists the rename. On ReFS, FAT, exFAT and network shares nothing documents that, so `Result.Durable` is false there, and the package logs that at `Info` once per volume for the life of the process. A share or mapped drive counts as a network share even when its server's volume is NTFS.
 - A symlink at the target is refused with `ErrSymlinkTarget`, as on Linux. A junction or any other reparse point, such as a cloud-sync placeholder, is refused with `ErrNotRegular`.
 - An absolute path starts with a drive letter (`C:\`) or is a UNC path (`\\server\share\`). A rooted path such as `\data` and a drive-relative path such as `C:data` are refused with `ErrUnsafePath`, and so is either form as a root-relative name.
@@ -140,7 +142,8 @@ These are deliberate non-goals, not missing features.
 
 - [Choosing a function](docs/choosing-a-function.md) maps each job to a call and lists every option.
 - [Durability and errors](docs/durability.md) covers the write sequence, `Result` and every error value.
-- [File modes and private directories](docs/file-modes.md) covers `WithMode`, `EnforceMode` and `EnsurePrivateDir`.
+- [File modes and private directories](docs/file-modes.md) covers `WithMode`, `EnforceMode`, `EnsurePrivateDir` and `CheckPrivateDir`.
+- [Leases](docs/leases.md) covers `AcquireLease` and its forms, the lock file's rules, and NFS and SMB.
 - [Confinement, symlinks and special files](docs/confinement.md) covers `*os.Root` use and shared trees.
 - [Orphaned temp files and the writability probe](docs/temp-files.md) covers sweeps and `ProbeWritable`.
 - [Detecting a changed file](docs/reload-staleness.md) covers `FileIdentity` for caches.

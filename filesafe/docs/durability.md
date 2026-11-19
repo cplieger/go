@@ -47,9 +47,11 @@ A caller that needs strict durability treats `Durable == false` as a failure to 
 
 `WithMkdirMode` and `WithMkdirAll` are covered by the same guarantee. Each directory the write creates has its own parent synced as it is made, except on Windows, which has no directory sync: there the write's flush of the published file stands for it on local NTFS, and `Result.Durable` is false on the volumes listed above. A directory entry that was never synced into its parent can vanish in a crash and take the whole subtree with it, including a file that was itself synced and renamed. On Linux and macOS a write that creates three directory levels therefore syncs four directories, and `Result.Durable` is false if any of those syncs failed. A level another writer created between the write's check and its own `mkdir` is synced too on the absolute-path writes; the `*InRoot` writes sync only the levels they create.
 
+`EnsurePrivateDir` syncs the parent of its directory on every call, whether it created the directory or found it, so a file a write reports as durable inside that directory does not vanish with it. A failed sync returns `ErrParentNotSynced`, which is safe to retry. A parent the process can traverse but not read fails the sync on every call, so it returns an error matching `fs.ErrPermission` instead, which a retry does not cure.
+
 ## Concurrent writers
 
-Each write stages its own temp file under a random name, created exclusively. Two writers on one path each publish a whole file, and the last rename wins. The package takes no lock, so a caller that must not lose an update coordinates its writers itself.
+Each write stages its own temp file under a random name, created exclusively. Two writers on one path each publish a whole file, and the last rename wins. A write takes no lock, so a caller that must not lose an update holds a lease around each read and write, as [Leases](leases.md) explains.
 
 ## Errors
 
@@ -61,16 +63,18 @@ Every error matches with `errors.Is` or `errors.As`.
 | `ErrUnsafePath` | The path is not absolute, holds a NUL byte or names no entry (`.`, `..`), or a root-relative name is absolute. On Windows a rooted path (`\data`) or a drive-relative one (`C:data`) is not absolute. See [Confinement](confinement.md). A nil `*os.Root` or `*os.File` is refused with it too |
 | `ErrInvalidArgument` | An argument no call could mean: a non-positive sweep `maxAge`, a negative read `maxBytes`, `WithMode(0)` or `WithMkdirMode(0)`, or a nil reader or walk function. Nothing is created, read or removed first |
 | `ErrFileTooLarge` | A file exceeded the read limit, or content exceeded a `WithMaxBytes` cap. On a write it may arrive inside a `*WriteError` |
-| `ErrSymlinkTarget` | The target of a write is a symlink, `OpenRegularNoFollow`, `OpenRegularInRootNoFollow` or `EnsurePrivateDir` refused one, or `OpenParentInRoot` found a symlinked ancestor |
-| `ErrRaced` | `OpenRegularInRootNoFollow` saw the name change identity between its symlink check and its open, or `OpenParentInRoot` saw an ancestor directory do so. A retry is the right response |
-| `ErrNotRegular` | The name resolved to a directory, FIFO, device node or socket. Refused on read, on remove and on write |
-| `ErrNotDirectory` | `EnsurePrivateDir` found a file, FIFO, device node or socket at the name, or `OpenParentInRoot` found one in an ancestor's place |
-| `ErrNotOwned` | `EnsurePrivateDir` found a directory not owned by the effective user, or could not tell |
-| `ErrModeTooOpen` | `EnsurePrivateDir` found a pre-existing directory with group or other access, and no repair was asked for |
-| `ErrModeNotStored` | `EnforceMode`, or a write or probe under `WithMode` or `WithMkdirMode`, found the filesystem stored a different mode than asked. A directory level refused this way is removed again while it is still an empty directory, so a retry fails the same way; one another writer has already filled stays, and the error also carries the removal failure |
+| `ErrSymlinkTarget` | The target of a write is a symlink, `OpenRegularNoFollow`, `OpenRegularInRootNoFollow`, `EnsurePrivateDir`, a `CheckPrivateDir` call or a lease refused one, or `OpenParentInRoot` found a symlinked ancestor |
+| `ErrRaced` | `OpenRegularInRootNoFollow` saw the name change identity between its symlink check and its open, `CheckPrivateDirInRoot` saw it change between its check and its open, `TryLease` or `TrySharedLease` found the lock file replaced between its open and its lock, `AcquireLease` or `AcquireSharedLease` saw the context end while it kept being replaced (wrapping the context's error), or `OpenParentInRoot` saw an ancestor directory do so. A retry is the right response |
+| `ErrNotRegular` | The name resolved to a directory, FIFO, device node or socket. Refused on read, on remove, on write and as a lock file |
+| `ErrNotDirectory` | `EnsurePrivateDir` or a `CheckPrivateDir` call found a file, FIFO, device node or socket at the name, or `OpenParentInRoot` found one in an ancestor's place |
+| `ErrNotOwned` | `EnsurePrivateDir` or a `CheckPrivateDir` call found a directory, or a lease a lock file, not owned by the effective user, or could not tell |
+| `ErrModeTooOpen` | `EnsurePrivateDir` found a pre-existing directory with group or other access, and no repair was asked for, a `CheckPrivateDir` call found one, which it never repairs, or a lease found a lock file with such access |
+| `ErrLeaseHeld` | `TryLease` or `TrySharedLease` found the lease held by another holder, or `AcquireLease` or `AcquireSharedLease` saw the context end while it was, wrapping the context's error |
+| `ErrParentNotSynced` | `EnsurePrivateDir` could not open or fsync the parent of the directory after every check passed. The directory stays where it is, whether the call created it or found it, so a retry finds it and syncs again. Safe to retry, unlike the other `EnsurePrivateDir` errors. A parent the process cannot read is not this error: it matches `fs.ErrPermission` and fails every retry |
+| `ErrModeNotStored` | `EnforceMode`, a write or probe under `WithMode` or `WithMkdirMode`, or a lease creating its lock file at 0600, found the filesystem stored a different mode than asked. A directory level refused this way is removed again while it is still an empty directory, so a retry fails the same way; one another writer has already filled stays, and the error also carries the removal failure. A lock file refused this way is removed before it reaches its path |
 | `ErrAborted` | `PendingFile.Commit` was called after `Cleanup` or `Close` aborted the write |
 | `ErrFileBusy` | Windows only. Another handle refused the replace on every retry, or the context ended while waiting to retry. It arrives inside a `*WriteError` with `PhaseRename`, wrapping the last `syscall.Errno`: a sharing or lock violation means a handle held the file, and access denied is either such a handle or an ACL refusal |
-| `ErrModeUnsupported` | Windows only. `EnforceMode`, `EnsurePrivateDir`, or a write or probe given a nonzero `WithMode` or `WithMkdirMode`; a zero mode is `ErrInvalidArgument`. Returned before anything is created |
+| `ErrModeUnsupported` | Windows only. `EnforceMode`, `EnsurePrivateDir`, a `CheckPrivateDir` call, a lease (with `errors.ErrUnsupported` too), or a write or probe given a nonzero `WithMode` or `WithMkdirMode`; a zero mode is `ErrInvalidArgument`. Returned before anything is created |
 
 `ErrNotRegular` arrives as a `*NotRegularError` carrying `Name` and `Mode`. Use `errors.As` to report what was there instead of parsing the message.
 

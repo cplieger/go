@@ -101,4 +101,23 @@ func TestModeOptionsRefuse(t *testing.T) {
 			t.Errorf("Lstat(private) = %v, want fs.ErrNotExist (nothing created)", statErr)
 		}
 	})
+
+	t.Run("CheckPrivateDir", func(t *testing.T) {
+		t.Parallel()
+		if err := CheckPrivateDir(t.TempDir()); !errors.Is(err, ErrModeUnsupported) {
+			t.Fatalf("CheckPrivateDir = %v, want ErrModeUnsupported", err)
+		}
+	})
+
+	t.Run("CheckPrivateDirInRoot", func(t *testing.T) {
+		t.Parallel()
+		root, err := os.OpenRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		if err := CheckPrivateDirInRoot(root, "."); !errors.Is(err, ErrModeUnsupported) {
+			t.Fatalf("CheckPrivateDirInRoot = %v, want ErrModeUnsupported", err)
+		}
+	})
 }

@@ -97,3 +97,33 @@ func BenchmarkMkdirChain(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkEnsurePrivateDir separates a call that creates the directory from
+// one that finds it; both fsync the parent.
+func BenchmarkEnsurePrivateDir(b *testing.B) {
+	skipModeOptions(b)
+	b.Run("created", func(b *testing.B) {
+		base := b.TempDir()
+		n := 0
+		b.ReportAllocs()
+		for b.Loop() {
+			n++
+			if _, err := EnsurePrivateDir(fmt.Sprintf("%s/d%d", base, n)); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("found", func(b *testing.B) {
+		dir := b.TempDir() + "/private"
+		if _, err := EnsurePrivateDir(dir); err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := EnsurePrivateDir(dir); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
