@@ -9,7 +9,9 @@ import {
   position,
   settle,
   sink,
+  type RecordingSink,
 } from "./test-helpers/feed-harness.js";
+import type { Subscription } from "./types.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -352,6 +354,137 @@ describe("rule 5: apply", () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  it("a seed older than its catch-up's since takes none of the answer and is caught up from the seed", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ budgets: 100 }));
+    const s = sink();
+    const sub = h.feed.watch("budgets", s, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["budgets"]));
+    await advance(COALESCE);
+    sub.seed(position(["store", E1, 90]));
+    await h.calls[0]?.answer({ rev: 150, removed: { budgets: ["b"] } });
+    expect(s.log).toEqual([]);
+
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q.since)).toEqual([100, 90]);
+    await h.calls[1]?.answer({ rev: 150, removed: { budgets: ["a", "b"] } });
+    expect(s.log).toEqual(["remove a,b"]);
+  });
+
+  it("a later subscription a sink's upsert re-seeds below since takes none of the answer and is caught up from the seed", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100, budgets: 100 }));
+    let later: Subscription | null = null;
+    const base = sink();
+    const runs: RecordingSink = {
+      ...base,
+      upsert(rows) {
+        base.upsert?.(rows);
+        later?.seed(position(["store", E1, 90]));
+      },
+    };
+    const budgets = sink();
+    h.feed.watch("runs", runs, position(["store", E1, 100]));
+    later = h.feed.watch("budgets", budgets, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["budgets", "runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({
+      rev: 150,
+      upserts: { runs: [{ id: "r" }] },
+      removed: { budgets: ["b"] },
+    });
+    expect(runs.log).toEqual(["upsert r"]);
+    expect(budgets.log).toEqual([]);
+
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q)).toEqual([
+      { source: "store", epoch: E1, since: 100, kinds: ["budgets", "runs"] },
+      { source: "store", epoch: E1, since: 90, kinds: ["budgets"] },
+    ]);
+  });
+
+  it("a later subscription a sink's upsert re-seeds on another epoch takes none of the answer and the next frame reads it", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100, budgets: 100 }));
+    let later: Subscription | null = null;
+    const base = sink();
+    const runs: RecordingSink = {
+      ...base,
+      upsert(rows) {
+        base.upsert?.(rows);
+        later?.seed(position(["store", E2, 8]));
+      },
+    };
+    const budgets = sink();
+    h.feed.watch("runs", runs, position(["store", E1, 100]));
+    // An other-epoch seed spends rule 1's allowance until the next listening frame.
+    later = h.feed.watch("budgets", budgets, position(["store", E2, 7]));
+    later.seed(position(["store", E1, 100]));
+    budgets.reads[0]?.resolve();
+    await settle();
+    h.feed.onFrame(changed("store", E1, 150, ["budgets", "runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({
+      rev: 150,
+      upserts: { runs: [{ id: "r" }] },
+      removed: { budgets: ["b"] },
+    });
+    expect(budgets.log).toEqual(["stale"]);
+
+    h.feed.onFrame(store({ runs: 150, budgets: 150 }));
+    expect(budgets.log).toEqual(["stale", "stale"]);
+  });
+
+  it("a later subscription a sink's upsert stops takes none of the answer", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100, budgets: 100 }));
+    let later: Subscription | null = null;
+    const base = sink();
+    const runs: RecordingSink = {
+      ...base,
+      upsert(rows) {
+        base.upsert?.(rows);
+        later?.stop();
+      },
+    };
+    const budgets = sink();
+    h.feed.watch("runs", runs, position(["store", E1, 100]));
+    later = h.feed.watch("budgets", budgets, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["budgets", "runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({
+      rev: 150,
+      upserts: { runs: [{ id: "r" }], budgets: [{ id: "x" }] },
+    });
+    expect(runs.log).toEqual(["upsert r"]);
+    expect(budgets.log).toEqual([]);
+  });
+
+  it("a sink's upsert that re-seeds its own subscription below the answer keeps that seed", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    let self: Subscription | null = null;
+    let reseeded = false;
+    const base = sink();
+    const runs: RecordingSink = {
+      ...base,
+      upsert(rows) {
+        base.upsert?.(rows);
+        if (!reseeded) {
+          reseeded = true;
+          self?.seed(position(["store", E1, 90]));
+        }
+      },
+    };
+    self = h.feed.watch("runs", runs, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({ rev: 150, upserts: { runs: [{ id: "r" }] } });
+
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q.since)).toEqual([100, 90]);
+  });
+
   it("an answer gives each kind only its own rows", async () => {
     const h = harness();
     h.feed.onFrame(store({ runs: 100, budgets: 100 }));
@@ -455,6 +588,59 @@ describe("rule 5: apply", () => {
     h.feed.onFrame(changed("store", E1, 150, ["runs"]));
     await advance(1_000);
     expect(h.calls).toHaveLength(1);
+  });
+
+  it("a sink that stops its own subscription and then throws is reported and not read again", async () => {
+    const reported: unknown[] = [];
+    vi.stubGlobal("reportError", (e: unknown) => reported.push(e));
+    const boom = new Error("sink");
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    let self: Subscription | null = null;
+    const bad = {
+      ...sink(),
+      upsert: (): void => {
+        self?.stop();
+        throw boom;
+      },
+    };
+    self = h.feed.watch("runs", bad, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({ rev: 150, upserts: { runs: [{ id: "a" }] } });
+    expect(reported).toEqual([boom]);
+    expect(bad.log).toEqual([]);
+  });
+
+  it("a sink that re-seeds its own subscription onto another epoch and then throws is read once", async () => {
+    const reported: unknown[] = [];
+    vi.stubGlobal("reportError", (e: unknown) => reported.push(e));
+    const boom = new Error("sink");
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100 }));
+    let self: Subscription | null = null;
+    const bad: RecordingSink = {
+      ...sink(),
+      upsert: (): void => {
+        self?.seed(position(["store", E2, 5]));
+        throw boom;
+      },
+    };
+    self = h.feed.watch("runs", bad, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    await h.calls[0]?.answer({ rev: 150, upserts: { runs: [{ id: "a" }] } });
+    expect(reported).toEqual([boom]);
+    expect(bad.log).toEqual(["stale"]);
+
+    self.seed(position(["store", E1, 150]));
+    for (const r of bad.reads) {
+      r.resolve();
+    }
+    await settle();
+    h.feed.onFrame(changed("store", E1, 160, ["runs"]));
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q.since)).toEqual([100, 150]);
   });
 
   it("an answer on another epoch than its request's stales the subscription as a full answer does", async () => {
@@ -578,6 +764,34 @@ describe("rule 5: apply", () => {
 
     // The queued request is still the one in flight: a frame now waits for it.
     h.feed.onFrame(changed("store", E1, 170, ["runs"]));
+    await advance(COALESCE);
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it("a sink that stops the last subscription of its catch-up during the apply leaves the queued catch-up the one in flight", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ runs: 100, budgets: 100 }));
+    let self: Subscription | null = null;
+    const base = sink();
+    const runs: RecordingSink = {
+      ...base,
+      upsert(rows) {
+        base.upsert?.(rows);
+        self?.stop();
+      },
+    };
+    self = h.feed.watch("runs", runs, position(["store", E1, 100]));
+    h.feed.watch("budgets", sink(), position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["runs"]));
+    await advance(COALESCE);
+    h.feed.onFrame(changed("store", E1, 160, ["budgets"]));
+    await advance(COALESCE);
+    expect(h.calls).toHaveLength(1);
+
+    await h.calls[0]?.answer({ rev: 150, upserts: { runs: [{ id: "r" }] } });
+    expect(h.calls.map((c) => c.q.kinds)).toEqual([["runs"], ["budgets"]]);
+
+    h.feed.onFrame(changed("store", E1, 170, ["budgets"]));
     await advance(COALESCE);
     expect(h.calls).toHaveLength(2);
   });
