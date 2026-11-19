@@ -384,6 +384,101 @@ func TestTimerStoreUnavailableWakesAfterRetry(t *testing.T) {
 	})
 }
 
+// uncountedEnd is a way a timer job ends with no moving end the store keeps.
+// end runs at the job's wake and answers the instant the job ended.
+type uncountedEnd struct {
+	end        func(t *testing.T, r *rig, wake scheduler.Record, release chan<- struct{}) time.Time
+	name       string
+	queued     bool // the job waits behind another job's slot
+	runCancels bool // the timer job's Run answers cancelled at once
+}
+
+func TestTimerJobUncountedEndWaitsFromTheEnd(t *testing.T) {
+	cancel := func(t *testing.T, r *rig, wake scheduler.Record, _ chan<- struct{}) time.Time {
+		sleepUntil(wake.QueuedAt.Add(30 * time.Minute))
+		if _, err := r.ex.Cancel(t.Context(), wake.ID); err != nil {
+			t.Fatalf("Cancel(the timer job) = %v", err)
+		}
+		synctest.Wait()
+		r.wantEnd(t, wake.ID, scheduler.ResultCancelled)
+		return time.Now()
+	}
+	ends := []uncountedEnd{
+		{name: "cancelled while running", end: cancel},
+		{name: "cancelled while queued", end: cancel, queued: true},
+		{name: "Run answers cancelled", runCancels: true, end: func(t *testing.T, r *rig, wake scheduler.Record, _ chan<- struct{}) time.Time {
+			r.wantEnd(t, wake.ID, scheduler.ResultCancelled)
+			return wake.QueuedAt
+		}},
+		{name: "end not recorded", end: func(t *testing.T, r *rig, wake scheduler.Record, release chan<- struct{}) time.Time {
+			sleepUntil(wake.QueuedAt.Add(30 * time.Minute))
+			r.store.Fail(memrecords.OpEnd, errors.New("disk full"))
+			close(release)
+			synctest.Wait()
+			r.store.Fail(memrecords.OpEnd, nil)
+			if rec := r.rec(t, wake.ID); rec.End != nil {
+				t.Fatalf("timer job end = %+v after a refused End, want none stored", rec.End)
+			}
+			return time.Now()
+		}},
+	}
+	cadences := []struct {
+		name string
+		c    scheduler.Cadence
+		next time.Duration
+	}{
+		{"with Retry the next wake is the end plus d", scheduler.Scheduled(time.Hour).Retry(15 * time.Minute), 15 * time.Minute},
+		{"without Retry the next wake is the end plus the interval", scheduler.Scheduled(time.Hour), time.Hour},
+	}
+	for _, u := range ends {
+		for _, c := range cadences {
+			t.Run(u.name+", "+c.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) { wantUncountedEndWait(t, u, c.c, c.next) })
+			})
+		}
+	}
+}
+
+// wantUncountedEndWait schedules full hourly at c after an ok end, ends its
+// next timer job as u says, and fails the test unless the deadline still
+// counts from the ok end and the next wake comes next after that job's end.
+func wantUncountedEndWait(t *testing.T, u uncountedEnd, c scheduler.Cadence, next time.Duration) {
+	t.Helper()
+	release := make(chan struct{})
+	full := spec("full", "passes")
+	full.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+		if run.Job().Trigger == scheduler.TriggerSchedule {
+			if u.runCancels {
+				return scheduler.End{Result: scheduler.ResultCancelled}
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return scheduler.End{Result: scheduler.ResultOK}
+	}
+	r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{full, spec("hold", "passes")}})
+	r.schedule(t, "full", "", c)
+	ok := r.start(t, api("full", "", "alice", payload{}))
+	synctest.Wait()
+	lastEnd := r.rec(t, ok.Job).EndedAt
+	deadline := r.ex.Deadline("full", "")
+	if u.queued {
+		sleepUntil(lastEnd.Add(50 * time.Minute))
+		gate := make(chan struct{})
+		t.Cleanup(func() { close(gate) })
+		r.start(t, api("hold", "", "bob", payload{Gate: gate}))
+		synctest.Wait()
+	}
+	wake := r.nextWake(t, "full", "", lastEnd, time.Hour)
+	endedAt := u.end(t, r, wake, release)
+	if got := r.ex.Deadline("full", ""); !got.Equal(deadline) {
+		t.Errorf("Deadline after the timer job's end = %v, want it unmoved at %v", got, deadline)
+	}
+	r.nextWake(t, "full", "", endedAt, next)
+}
+
 func TestRestartDoesNotRerunDaily(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		base := &rig{store: memrecords.New(), log: &runLog{}}
