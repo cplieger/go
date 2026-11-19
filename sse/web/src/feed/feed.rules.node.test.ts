@@ -352,6 +352,23 @@ describe("rule 5: apply", () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  it("a seed older than its catch-up's since takes none of the answer and is caught up from the seed", async () => {
+    const h = harness();
+    h.feed.onFrame(store({ budgets: 100 }));
+    const s = sink();
+    const sub = h.feed.watch("budgets", s, position(["store", E1, 100]));
+    h.feed.onFrame(changed("store", E1, 150, ["budgets"]));
+    await advance(COALESCE);
+    sub.seed(position(["store", E1, 90]));
+    await h.calls[0]?.answer({ rev: 150, removed: { budgets: ["b"] } });
+    expect(s.log).toEqual([]);
+
+    await advance(COALESCE);
+    expect(h.calls.map((c) => c.q.since)).toEqual([100, 90]);
+    await h.calls[1]?.answer({ rev: 150, removed: { budgets: ["a", "b"] } });
+    expect(s.log).toEqual(["remove a,b"]);
+  });
+
   it("an answer gives each kind only its own rows", async () => {
     const h = harness();
     h.feed.onFrame(store({ runs: 100, budgets: 100 }));

@@ -53,6 +53,7 @@ interface Sub {
 
 interface Flight {
   readonly epoch: string;
+  readonly since: number;
   readonly subs: readonly Sub[];
   readonly controller: AbortController;
 }
@@ -355,7 +356,7 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
     for (const s of subs) {
       s.marked = false;
     }
-    const flight: Flight = { epoch, subs, controller: new AbortController() };
+    const flight: Flight = { epoch, since, subs, controller: new AbortController() };
     src.inFlight = flight;
     let answer: Promise<CatchUpResult>;
     try {
@@ -394,9 +395,15 @@ export function createFeed<R extends Record<string, unknown>>(o: FeedOptions<R>)
       endFlight(src);
       return;
     }
-    // A subscription staled or re-seeded on another epoch since the request is no longer its.
+    // A subscription staled or re-seeded on another epoch since the request is no longer its, nor
+    // is one re-seeded below its `since`: the answer lacks the changes between the two, and the
+    // seed's own check has marked it for a catch-up from the seed.
     const subs = flight.subs.filter(
-      (s) => !s.stopped && !s.rereading && s.watermark?.epoch === flight.epoch,
+      (s) =>
+        !s.stopped &&
+        !s.rereading &&
+        s.watermark?.epoch === flight.epoch &&
+        s.watermark.rev >= flight.since,
     );
     try {
       if (r.ok) {

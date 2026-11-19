@@ -171,6 +171,34 @@ describe("the feed against a model server", () => {
     );
   });
 
+  it("a screen's older read answered during a catch-up loses no change", async () => {
+    const ops: readonly Op[] = [
+      { op: "answer", pick: 1352270679 },
+      { op: "refresh", pick: 0 },
+      { op: "commit", kind: "budgets", key: "a", del: true },
+      { op: "tick", ms: 50 },
+      { op: "answer", pick: 0 },
+      { op: "answer", pick: 419838941 },
+      { op: "commit", kind: "budgets", key: "b", del: true },
+      { op: "answer", pick: 0 },
+      { op: "connect", resume: false },
+      { op: "tick", ms: 0 },
+      { op: "commit", kind: "2fa", key: "a", del: true },
+      { op: "tick", ms: 0 },
+      { op: "commit", kind: "2fa", key: "a", del: true },
+      { op: "replay", pick: 0 },
+      { op: "bump" },
+      { op: "tick", ms: 50 },
+      { op: "open", kind: "2fa" },
+    ];
+    const w = await run(ops, false);
+    expect(w.violations).toEqual([]);
+    for (const s of w.sinks) {
+      expect(sorted(s.rows), s.kind).toEqual(sorted(w.expected(s.kind)));
+    }
+    expect(w.reconnect).not.toHaveBeenCalled();
+  });
+
   it("no request follows a quiet system without a new frame", async () => {
     await fc.assert(
       fc.asyncProperty(opsArb, fc.boolean(), async (ops, resume) => {
