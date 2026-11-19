@@ -14,8 +14,9 @@ import (
 // running one of its scope inside Fresh, of a proposing kind or serving a
 // timer request, answers it instead (Joined). A Hold(all) or shutdown opened
 // during the write ends the job interrupted. Errors: *RecentError; ErrQueueFull
-// past a bound (the record ended skipped, queue_full) or in a Hold(all) (no
-// record); ErrStoreUnavailable or ctx's error; ErrBatchSize, ErrUnknownKind, ErrScope.
+// past a bound (the record ended skipped, queue_full) or in a Hold(all) or
+// after shutdown (no record); ErrStoreUnavailable or ctx's error; ErrBatchSize,
+// ErrUnknownKind, ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -34,7 +35,7 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 		e.mu.Unlock()
 		return s, err
 	}
-	if e.holds > 0 {
+	if e.holds > 0 || e.closed {
 		e.mu.Unlock()
 		return Started{}, ErrQueueFull
 	}
@@ -242,10 +243,9 @@ func (e *Executor[P]) answerLocked(spec *KindSpec[P], j *Job[P]) (s Started, ok 
 	return Started{}, false, nil
 }
 
-// fullLocked reports whether a new waiting job of j's owner is past a bound,
-// or the executor has stopped.
+// fullLocked reports whether a new waiting job of j's owner is past a bound.
 func (e *Executor[P]) fullLocked(j *Job[P]) bool {
-	return e.closed || e.waiting >= e.maxQueued || (j.Owner != "" && e.owners[j.Owner] >= e.maxPerOwner)
+	return e.waiting >= e.maxQueued || (j.Owner != "" && e.owners[j.Owner] >= e.maxPerOwner)
 }
 
 // insert writes en's queued record with its key and keeps the record the
