@@ -242,6 +242,36 @@ func TestProposalsExpireAndBound(t *testing.T) {
 		})
 	})
 
+	t.Run("a request while its owner's job yields joins it and runs nothing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			p := &proposals{}
+			k := p.spec("heavy")
+			k.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+				p.runLog.add(r.Job())
+				if err := r.Yield(ctx, time.Now().Add(time.Minute)); err != nil {
+					return scheduler.End{Result: scheduler.ResultFailed}
+				}
+				p.propose(r, "fit "+r.Job().Scope)
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{k}})
+			alice := r.start(t, api("align", "file:1/expect:7", "alice", payload{}))
+			synctest.Wait()
+			if s := r.start(t, api("align", "file:1/expect:7", "alice", payload{})); !s.Joined || s.Job != alice.Job {
+				t.Errorf("alice's Start while hers yields = %+v, want joined to %s", s, alice.Job)
+			}
+			time.Sleep(time.Minute)
+			synctest.Wait()
+			if got := p.runLog.ids(); len(got) != 1 || got[0] != alice.Job {
+				t.Errorf("proposing runs = %v, want alice's %s only", got, alice.Job)
+			}
+			r.wantEnd(t, alice.Job, scheduler.ResultOK)
+			if _, ok := r.ex.Proposal("alice", p.id(alice.Job)); !ok {
+				t.Error("alice's proposal is not held, want held")
+			}
+		})
+	})
+
 	t.Run("16 held or pending per owner and 256 in all", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			p := &proposals{}

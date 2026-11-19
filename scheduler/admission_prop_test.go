@@ -171,7 +171,8 @@ func (m *ruleModel) request(j scheduler.Job[payload]) ruleWant {
 	}
 	var run *ruleJob
 	for _, q := range m.live {
-		if q.state == ruleRunning && ruleSame(q, j) && (run == nil || q.startedAt.After(run.startedAt)) {
+		serves := q.state == ruleRunning || q.state == ruleYielded && j.Kind == "prop"
+		if serves && ruleSame(q, j) && (run == nil || q.startedAt.After(run.startedAt)) {
 			run = q
 		}
 	}
