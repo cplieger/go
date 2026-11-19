@@ -109,28 +109,37 @@ func (readOnly) End(context.Context, scheduler.ID, scheduler.End) (scheduler.Rec
 // diffResults are the results a job the sequence ends picks from.
 var diffResults = []scheduler.Result{scheduler.ResultOK, scheduler.ResultPartial, scheduler.ResultFailed, scheduler.ResultSkipped}
 
-// diffCovers is cover's and prop's Covers: own at their scope, or every own
-// scope from "all".
+// ownAt reports whether key is own at by's scope, or any own scope when by's
+// scope is "all".
+func ownAt(by, key scheduler.ScheduledScope) bool {
+	return key.Kind == "own" && (by.Scope == "all" || by.Scope == key.Scope)
+}
+
+// diffCovers is cover's and prop's Covers, which read Kind and Scope only.
 func diffCovers(by, key scheduler.ScheduledScope) bool {
-	return (by.Kind == "cover" || by.Kind == "prop") && key.Kind == "own" && (by.Scope == "all" || by.Scope == key.Scope)
+	return (by.Kind == "cover" || by.Kind == "prop") && ownAt(by, key)
 }
 
 // diffKinds is own, the covered kind, which writes for its owner; cover,
-// queued in own's slot; prop, a proposing kind beside it; and sweep, a kind
-// that writes no record and ends at once. Every kind but sweep runs run.
+// queued in own's slot; full, in the same slot, whose Covers holds only for a
+// job whose payload N is 1, so its end never moves own's base; prop, a
+// proposing kind beside them; and sweep, a kind that writes no record and
+// ends at once. Every kind but sweep runs run.
 func diffKinds(run func(context.Context, *scheduler.Run[payload]) scheduler.End) []scheduler.KindSpec[payload] {
-	covers := func(j, other scheduler.Job[payload]) bool {
-		return diffCovers(scheduler.ScheduledScope{Kind: j.Kind, Scope: j.Scope}, scheduler.ScheduledScope{Kind: other.Kind, Scope: other.Scope})
+	scope := func(j scheduler.Job[payload]) scheduler.ScheduledScope {
+		return scheduler.ScheduledScope{Kind: j.Kind, Scope: j.Scope}
 	}
-	own, cover, prop, sweep := spec("own", "s"), spec("cover", "s"), spec("prop", ""), spec("sweep", "")
+	covers := func(j, other scheduler.Job[payload]) bool { return diffCovers(scope(j), scope(other)) }
+	own, cover, full, prop, sweep := spec("own", "s"), spec("cover", "s"), spec("full", "s"), spec("prop", ""), spec("sweep", "")
 	own.OnBehalf = true
 	cover.Covers, prop.Covers, prop.Proposes = covers, covers, true
-	own.Run, cover.Run, prop.Run = run, run, run
+	full.Covers = func(j, other scheduler.Job[payload]) bool { return j.Payload.N == 1 && ownAt(scope(j), scope(other)) }
+	own.Run, cover.Run, full.Run, prop.Run = run, run, run, run
 	sweep.Kept = 0
 	sweep.Run = func(context.Context, *scheduler.Run[payload]) scheduler.End {
 		return scheduler.End{Result: scheduler.ResultOK}
 	}
-	return []scheduler.KindSpec[payload]{own, cover, prop, sweep}
+	return []scheduler.KindSpec[payload]{own, cover, full, prop, sweep}
 }
 
 // diffCadence is a cadence and the waits it was built from.
@@ -155,6 +164,8 @@ var (
 		{Kind: "own", Scope: "c"},
 		{Kind: "cover", Scope: "a"},
 		{Kind: "cover", Scope: "all"},
+		{Kind: "full", Scope: "a"},
+		{Kind: "full", Scope: "all"},
 		{Kind: "prop", Scope: "a"},
 		{Kind: "prop", Scope: "all"},
 		{Kind: "prop", Scope: "p1"},
@@ -230,19 +241,20 @@ type diffRun struct {
 	timing    map[scheduler.ScheduledScope]scheduler.Timing // the scope's timing after the last step
 	windows   map[scheduler.ScheduledScope][]window         // where an idle scope's next wake may fall
 	seen      map[scheduler.ID]bool                         // timer records already checked
+	payloads  map[scheduler.ID]bool                         // full jobs whose payload covers own
 	steps     []string
 	mu        sync.Mutex
 	bound     bool // the sequence passes the held ends' bound halfway
 }
 
 // TestTimingMatchesRestart drives seeded random sequences of starts, ends
-// (ties, late notes, refused Ends, proposals), cancels of queued and running
-// jobs, CredentialEnded, admission refusals, holds, shutdowns mid-run with or
-// without a hold open, cadence changes and ends of a kind that writes no
-// record. After each step every scope that counts from an end must count as a
-// new executor over the same store does (base, wait, deadline), and each idle
-// scope's next wake must fall where a restart puts it or at an end held in
-// memory only plus the wait after work not done.
+// (ties, late notes, refused Ends, proposals), timer wakes joining a queued
+// job whose Covers reads its payload, cancels, CredentialEnded, admission
+// refusals, holds, shutdowns mid-run with or without a hold open, cadence
+// changes and ends of a kind that writes no record. After each step every
+// scope that counts from an end must count as a restart over the same store
+// does (base, wait, deadline), and each idle scope's next wake must fall where
+// a restart puts it or at an end that moved nothing for it plus notDone.
 func TestTimingMatchesRestart(t *testing.T) {
 	for seed := range uint64(300) {
 		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) {
@@ -271,6 +283,7 @@ func runDiff(t *testing.T, seed uint64, bound bool) {
 		timing:    map[scheduler.ScheduledScope]scheduler.Timing{},
 		windows:   map[scheduler.ScheduledScope][]window{},
 		seen:      map[scheduler.ID]bool{},
+		payloads:  map[scheduler.ID]bool{},
 		bound:     bound,
 	}
 	d.open(t)
@@ -443,13 +456,20 @@ func (d *diffRun) start(t *testing.T) {
 	t.Helper()
 	k := diffStarts[d.rnd.IntN(len(diffStarts))]
 	owner := diffOwners[d.rnd.IntN(len(diffOwners))]
-	s, err := d.r.ex.Start(t.Context(), api(k.Kind, k.Scope, owner, payload{}))
-	switch name := fmt.Sprintf("%s %q by %s", k.Kind, k.Scope, owner); {
+	var p payload
+	if k.Kind == "full" {
+		p.N = d.rnd.IntN(2)
+	}
+	s, err := d.r.ex.Start(t.Context(), api(k.Kind, k.Scope, owner, p))
+	switch name := fmt.Sprintf("%s %q N %d by %s", k.Kind, k.Scope, p.N, owner); {
 	case err != nil:
 		d.steps = append(d.steps, fmt.Sprintf("start %s: %v", name, err))
 	case s.Joined:
 		d.steps = append(d.steps, fmt.Sprintf("start %s: joined %s", name, s.Job))
 	default:
+		d.mu.Lock()
+		d.payloads[s.Job] = p.N == 1
+		d.mu.Unlock()
 		d.steps = append(d.steps, fmt.Sprintf("start %s: job %s", name, s.Job))
 	}
 }
@@ -578,9 +598,16 @@ func (d *diffRun) rearmAll() {
 	}
 }
 
-// relevant reports whether a job of by may stand in for key's timer job:
-// its own scope, or one whose kind covers it.
+// relevant reports whether a job of by moves key's base with an end the
+// executor counts: its own scope, or one whose kind covers it.
 func relevant(by, key scheduler.ScheduledScope) bool { return by == key || diffCovers(by, key) }
+
+// joinableLocked reports whether job id may stand in for key's timer job: a
+// relevant one, or a full job whose payload covers key, which a wake joins
+// while it is queued though its end moves nothing for key.
+func (d *diffRun) joinableLocked(id scheduler.ID, j *diffJob, key scheduler.ScheduledScope) bool {
+	return relevant(j.key, key) || j.key.Kind == "full" && d.payloads[id] && ownAt(j.key, key)
+}
 
 // check runs after each step. A timer record first seen after an advance
 // must fall in a window its scope had after the step before; one seen after
@@ -644,7 +671,7 @@ func (d *diffRun) standsIn(key scheduler.ScheduledScope, live map[scheduler.ID]s
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for id := range live {
-		if j := d.jobs[id]; j == nil || relevant(j.key, key) {
+		if j := d.jobs[id]; j == nil || d.joinableLocked(id, j, key) {
 			return true
 		}
 	}
@@ -672,14 +699,16 @@ func (d *diffRun) countedLocked(id scheduler.ID, j *diffJob) bool {
 	return j.started && moving && !d.store.wasRefused(id)
 }
 
-// held answers the windows of each end held in memory only that may
-// have set key's timer since it was last counted again.
+// held answers the windows of each end that may have set key's timer since it
+// was last counted again and that moved nothing for key: held in memory only,
+// or a full job's whose payload covers key.
 func (d *diffRun) held(key scheduler.ScheduledScope, c diffCadence) []window {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var ws []window
 	for id, j := range d.jobs {
-		if j.ended && !d.countedLocked(id, j) && relevant(j.key, key) && d.endStep[id] >= d.rearmed[key] {
+		moved := relevant(j.key, key) && d.countedLocked(id, j)
+		if j.ended && !moved && d.joinableLocked(id, j, key) && d.endStep[id] >= d.rearmed[key] {
 			ws = append(ws, band(j.endAt, c.notDone(), fmt.Sprintf("%s %s %s", j.key.Kind, id, j.result)))
 		}
 	}
