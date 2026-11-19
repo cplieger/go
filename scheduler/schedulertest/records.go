@@ -18,8 +18,10 @@ import (
 // Records runs the Records contract against the stores open answers, one
 // new empty store per case. Cases that read the store's clock run inside a
 // synctest bubble, so open is called there and the store's own clock is the
-// bubble's.
-func Records(t *testing.T, open func() scheduler.Records) {
+// bubble's. prune deletes, through the store's own pruning, every ended
+// record of a store open answered, as once each kind's Kept and each key's
+// Until have passed; nil is a store that deletes no record.
+func Records(t *testing.T, open func() scheduler.Records, prune func(scheduler.Records)) {
 	t.Helper()
 	t.Run("insert then get", func(t *testing.T) { insertThenGet(t, open()) })
 	t.Run("a keyed resend answers the stored record", func(t *testing.T) { keyedResend(t, open()) })
@@ -38,6 +40,9 @@ func Records(t *testing.T, open func() scheduler.Records) {
 	t.Run("last ends answer every scope", func(t *testing.T) { synctest.Test(t, func(t *testing.T) { lastEnds(t, open()) }) })
 	t.Run("of ends at one instant the one whose work was not done is last", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) { lastEndsTie(t, open()) })
+	})
+	t.Run("a scope whose only record Prune removed still answers its end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) { prunedLastEnd(t, open(), prune) })
 	})
 }
 
@@ -589,6 +594,27 @@ func lastEndsTie(t *testing.T, r scheduler.Records) {
 		if !found || le.Result != c.want || !le.At.Equal(at[c.scope]) {
 			t.Errorf("LastEnds[scan %s] written %v at one instant = %+v found %v; want %s at %v", c.scope, c.written, le, found, c.want, at[c.scope])
 		}
+	}
+}
+
+// prunedLastEnd wants a scope's end answered after prune deleted the record
+// it came from, so a restart counts the scope from it as the running executor
+// does. With no prune the case reads the record's own end.
+func prunedLastEnd(t *testing.T, r scheduler.Records, prune func(scheduler.Records)) {
+	f := &fixture{t: t, r: r}
+	ended := f.ran("report", "only", scheduler.ResultOK)
+	if prune != nil {
+		prune(r)
+		if _, found, err := r.Get(t.Context(), ended.ID); found || err != nil {
+			t.Fatalf("Get after prune = found %v, %v; want the ended record deleted", found, err)
+		}
+	}
+	got, err := r.LastEnds(t.Context())
+	if err != nil {
+		t.Fatalf("LastEnds = %v", err)
+	}
+	if le, ok := got[scheduler.ScheduledScope{Kind: "report", Scope: "only"}]; !ok || le.Result != scheduler.ResultOK || !le.At.Equal(ended.EndedAt) {
+		t.Errorf("LastEnds[report only] after its record was pruned = %+v found %v; want the ok end at %v", le, ok, ended.EndedAt)
 	}
 }
 

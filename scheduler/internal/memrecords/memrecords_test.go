@@ -14,7 +14,7 @@ import (
 )
 
 func TestRecordsContract(t *testing.T) {
-	schedulertest.Records(t, func() scheduler.Records { return memrecords.New() })
+	schedulertest.Records(t, func() scheduler.Records { return memrecords.New() }, nil)
 }
 
 func TestEndInContract(t *testing.T) {
