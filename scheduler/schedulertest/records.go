@@ -36,7 +36,7 @@ func Records(t *testing.T, open func() scheduler.Records) {
 		synctest.Test(t, func(t *testing.T) { history(t, open()) })
 	})
 	t.Run("last ends answer every scope", func(t *testing.T) { synctest.Test(t, func(t *testing.T) { lastEnds(t, open()) }) })
-	t.Run("of ends at one instant the later written is last", func(t *testing.T) {
+	t.Run("of ends at one instant the one whose work was not done is last", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) { lastEndsTie(t, open()) })
 	})
 }
@@ -556,26 +556,38 @@ func lastEnds(t *testing.T, r scheduler.Records) {
 	}
 }
 
-// lastEndsTie ends several jobs of each scope at one instant, the failed one
-// written last, so a store resolving the tie in any other order is caught.
+// lastEndsTie ends jobs of each scope at one instant in the order given, so
+// a store that keeps the first or the last written end is caught: the last
+// end is the failed one, else the skipped, else the partial, else ok.
 func lastEndsTie(t *testing.T, r scheduler.Records) {
 	f := &fixture{t: t, r: r}
-	scopes := []string{"a", "b", "c", "d"}
-	want := map[string]*scheduler.Record{}
-	for _, scope := range scopes {
-		for range 7 {
-			f.ran("scan", scope, scheduler.ResultOK)
+	ok, partial := scheduler.ResultOK, scheduler.ResultPartial
+	failed, skipped := scheduler.ResultFailed, scheduler.ResultSkipped
+	cases := []struct {
+		scope   string
+		written []scheduler.Result
+		want    scheduler.Result
+	}{
+		{"a", []scheduler.Result{failed, ok, ok, ok}, failed},
+		{"b", []scheduler.Result{ok, partial, ok}, partial},
+		{"c", []scheduler.Result{skipped, partial, ok}, skipped},
+		{"d", []scheduler.Result{ok, skipped, failed, partial}, failed},
+		{"e", []scheduler.Result{partial, ok}, partial},
+	}
+	at := map[string]time.Time{}
+	for _, c := range cases {
+		for _, res := range c.written {
+			at[c.scope] = f.ran("scan", c.scope, res).EndedAt
 		}
-		want[scope] = f.ran("scan", scope, scheduler.ResultFailed)
 	}
 	got, err := r.LastEnds(t.Context())
 	if err != nil {
 		t.Fatalf("LastEnds = %v", err)
 	}
-	for _, scope := range scopes {
-		le, ok := got[scheduler.ScheduledScope{Kind: "scan", Scope: scope}]
-		if !ok || le.Result != scheduler.ResultFailed || !le.At.Equal(want[scope].EndedAt) {
-			t.Errorf("LastEnds[scan %s] = %+v found %v; want the failed end written last at %v", scope, le, ok, want[scope].EndedAt)
+	for _, c := range cases {
+		le, found := got[scheduler.ScheduledScope{Kind: "scan", Scope: c.scope}]
+		if !found || le.Result != c.want || !le.At.Equal(at[c.scope]) {
+			t.Errorf("LastEnds[scan %s] written %v at one instant = %+v found %v; want %s at %v", c.scope, c.written, le, found, c.want, at[c.scope])
 		}
 	}
 }

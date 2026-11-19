@@ -30,6 +30,13 @@ func (e *Executor[P]) TimingOf(kind Kind, scope string) (Timing, bool) {
 	if t == nil {
 		return Timing{}, false
 	}
-	_, _, fromEnd := e.leadEndLocked(key)
+	_, _, fromEnd := e.lastEndLocked(key)
 	return Timing{Base: t.base, Changed: t.changed, Wait: t.cadence.wait(t.done), FromEnd: fromEnd}, true
+}
+
+// EndsHeld answers how many kinds and scopes' last ends the executor holds.
+func (e *Executor[P]) EndsHeld() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.ends)
 }
