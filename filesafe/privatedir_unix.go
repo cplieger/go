@@ -243,13 +243,21 @@ func statOwnedDir(f *os.File, dir string) (os.FileInfo, error) {
 	if !fi.Mode().IsDir() {
 		return nil, fmt.Errorf("%w: %s (type %s)", ErrNotDirectory, dir, fi.Mode().Type())
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s: ownership could not be determined", ErrNotOwned, dir)
-	}
-	if euid := os.Geteuid(); int(st.Uid) != euid {
-		return nil, fmt.Errorf("%w: %s: owned by uid %d, want the effective uid %d; its owner could replace the checked path",
-			ErrNotOwned, dir, st.Uid, euid)
+	if err := ownerErr(fi, dir); err != nil {
+		return nil, err
 	}
 	return fi, nil
+}
+
+// ownerErr is ErrNotOwned unless fi is owned by the effective uid.
+func ownerErr(fi os.FileInfo, name string) error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%w: %s: ownership could not be determined", ErrNotOwned, name)
+	}
+	if euid := os.Geteuid(); int(st.Uid) != euid {
+		return fmt.Errorf("%w: %s: owned by uid %d, want the effective uid %d; its owner could replace the checked path",
+			ErrNotOwned, name, st.Uid, euid)
+	}
+	return nil
 }
