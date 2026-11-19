@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -215,5 +216,97 @@ func TestCredentialEndedDuringAdmission(t *testing.T) {
 		if stopping, err := r.ex.Cancel(t.Context(), a.s.Job); stopping || err != nil {
 			t.Errorf("Cancel after the credential's end = (%t, %v), want (false, nil) as a repeat cancel", stopping, err)
 		}
+	})
+}
+
+// storedRecords stores the first record inserted, hands its id to stored and
+// holds that Insert's answer until hold closes.
+type storedRecords struct {
+	*memrecords.Store
+	stored chan scheduler.ID
+	hold   chan struct{}
+	once   sync.Once
+}
+
+func newStoredRecords() *storedRecords {
+	return &storedRecords{Store: memrecords.New(), stored: make(chan scheduler.ID, 1), hold: make(chan struct{})}
+}
+
+func (g *storedRecords) Insert(ctx context.Context, rec scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) {
+	got, replayed, err := g.Store.Insert(ctx, rec, key)
+	first := false
+	g.once.Do(func() { first = true })
+	if first && err == nil {
+		g.stored <- got.ID
+		<-g.hold
+	}
+	return got, replayed, err
+}
+
+// A job whose record is stored while its admission has not answered is found
+// by its id: a cancel ends it cancelled without running, and one a covering
+// start already ended answers ErrNotCancellable.
+func TestCancelDuringAdmission(t *testing.T) {
+	t.Run("the job ends cancelled without running", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			g := newStoredRecords()
+			r := (&rig{store: g.Store, log: &runLog{}}).open(t, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+				Records: g,
+			})
+			started := startAsync(t.Context(), r.ex, api("scan", "a", "alice", payload{}))
+			id := <-g.stored
+			for i := range 2 {
+				if stopping, err := r.ex.Cancel(t.Context(), id); stopping || err != nil {
+					t.Errorf("cancel %d during admission = (%t, %v), want (false, nil)", i+1, stopping, err)
+				}
+			}
+			close(g.hold)
+			a := <-started
+			synctest.Wait()
+			if a.err != nil || a.s.Job != id {
+				t.Fatalf("Start = (%+v, %v), want job %s with a nil error", a.s, a.err, id)
+			}
+			if r.log.ran(id) {
+				t.Error("the scan ran after its cancel, want it ended without running")
+			}
+			r.wantEnd(t, id, scheduler.ResultCancelled)
+			if rec := r.rec(t, id); !rec.StartedAt.IsZero() {
+				t.Errorf("record StartedAt = %v, want zero for a job that never started", rec.StartedAt)
+			}
+			if n := len(r.ex.Live()); n != 0 {
+				t.Errorf("%d live jobs, want none", n)
+			}
+			if stopping, err := r.ex.Cancel(t.Context(), id); stopping || err != nil {
+				t.Errorf("a repeat after the end = (%t, %v), want the first answer (false, nil)", stopping, err)
+			}
+		})
+	})
+	t.Run("a job a covering start ended answers ErrNotCancellable", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			g := newStoredRecords()
+			full := spec("full", "heavy")
+			full.Covers = func(_, other scheduler.Job[payload]) bool { return other.Kind == "quick" }
+			r := (&rig{store: g.Store, log: &runLog{}}).open(t, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("quick", "light"), full},
+				Records: g,
+			})
+			started := startAsync(t.Context(), r.ex, api("quick", "a", "alice", payload{}))
+			id := <-g.stored
+			covering := r.start(t, api("full", "a", "bob", payload{}))
+			synctest.Wait()
+			if stopping, err := r.ex.Cancel(t.Context(), id); stopping || !errors.Is(err, scheduler.ErrNotCancellable) {
+				t.Errorf("cancel of a covered job during admission = (%t, %v), want (false, ErrNotCancellable)", stopping, err)
+			}
+			close(g.hold)
+			if a := <-started; a.err != nil || a.s.Job != id {
+				t.Fatalf("Start = (%+v, %v), want job %s with a nil error", a.s, a.err, id)
+			}
+			synctest.Wait()
+			if r.log.ran(id) {
+				t.Error("the covered quick ran, want it ended without running")
+			}
+			r.wantEnd(t, id, scheduler.ResultSkipped, scheduler.Reason{Code: scheduler.ReasonCovered, Subject: string(covering.Job)})
+		})
 	})
 }
