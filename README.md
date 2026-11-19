@@ -33,6 +33,7 @@ Nothing here imports a cplieger repository outside this one.
 | [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy. |
 | [`httpwire`](httpwire) | Declares your Go app's JSON API once, as a table of rows that binds typed handlers, answers one error envelope and replays idempotent writes, with a matching TypeScript decoder for the browser. |
 | [`ownersock`](ownersock) | Gives your Go app an admin socket that only processes running as the app's own user can reach, serving HTTP over a unix socket with a client whose errors tell the command-line user what to do. |
+| [`exclusion`](exclusion) | Lets the person running your Go app write rules that leave matching items out, validated once for the settings save and the draft, with a row that counts each rule's matches as they edit. |
 | [`sse`](sse) | Keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client. |
 
 ### Service runtime
