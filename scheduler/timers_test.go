@@ -1267,23 +1267,33 @@ func TestProposingKindCoveringEndNotedLate(t *testing.T) {
 	}
 }
 
+// TestLastEndsHeldBound ends 10,002 scopes: a store holds at most 10,000
+// last ends, and none for a kind with Kept 0, so past the bound the executor
+// drops those first and counts the scopes a restart can read as a restart
+// does.
 func TestLastEndsHeldBound(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sweep := spec("sweep", "")
 		sweep.Kept = 0
-		r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("own", ""), sweep}})
+		cfg := scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("own", ""), sweep}}
+		base := &rig{store: memrecords.New(), log: &runLog{}}
+		r, stop := base.openUntil(t, cfg)
 		synctest.Wait()
 		r.schedule(t, "own", "a", scheduler.Scheduled(24*time.Hour))
 		time.Sleep(time.Minute)
 		counted := r.start(t, api("own", "a", "alice", payload{})).Job
 		synctest.Wait()
 		time.Sleep(time.Minute)
-		r.start(t, api("own", "old", "alice", payload{}))
+		old := r.start(t, api("own", "old", "alice", payload{})).Job
 		synctest.Wait()
 		time.Sleep(time.Minute)
-		// A store keeps at most 10,000 records in all, so a restart reads no
-		// more last ends than that.
-		for i := range 10_000 {
+		r.start(t, api("sweep", "s0", "alice", payload{}))
+		synctest.Wait()
+		time.Sleep(time.Second)
+		r.start(t, api("sweep", "s1", "alice", payload{}))
+		synctest.Wait()
+		time.Sleep(time.Second)
+		for i := 2; i < 10_000; i++ {
 			r.start(t, api("sweep", fmt.Sprintf("s%d", i), "alice", payload{}))
 			synctest.Wait()
 		}
@@ -1294,11 +1304,32 @@ func TestLastEndsHeldBound(t *testing.T) {
 		end := r.rec(t, counted).EndedAt
 		r.scheduleAt(t, "own", "a", scheduler.Scheduled(12*time.Hour), end.Add(-time.Second))
 		if got, _ := r.ex.TimingOf("own", "a"); !got.FromEnd || !got.Base.Equal(end) {
-			t.Errorf("own a after the bound counts from %v (from an end %v), want its own end at %v, the oldest one held", got.Base, got.FromEnd, end)
+			t.Errorf("own a after the bound counts from %v (from an end %v), want its own end at %v", got.Base, got.FromEnd, end)
 		}
+		oldEnd := r.rec(t, old).EndedAt
 		r.schedule(t, "own", "old", scheduler.Scheduled(24*time.Hour))
-		if got, _ := r.ex.TimingOf("own", "old"); got.FromEnd {
-			t.Errorf("own old after the bound counts from an end at %v, want none: the oldest end no scheduled scope counts from goes first", got.Base)
+		inProcess, _ := r.ex.TimingOf("own", "old")
+		if !inProcess.FromEnd || !inProcess.Base.Equal(oldEnd) {
+			t.Errorf("own old after the bound counts from %v (from an end %v), want its end at %v, which the store still holds",
+				inProcess.Base, inProcess.FromEnd, oldEnd)
+		}
+		for _, c := range []struct {
+			scope   string
+			fromEnd bool
+		}{{"s0", false}, {"s1", false}, {"s2", true}} {
+			r.schedule(t, "sweep", c.scope, scheduler.Scheduled(24*time.Hour))
+			if got, _ := r.ex.TimingOf("sweep", c.scope); got.FromEnd != c.fromEnd {
+				t.Errorf("sweep %s after the bound counts from an end %v, want %v: the two oldest Kept 0 ends go first", c.scope, got.FromEnd, c.fromEnd)
+			}
+		}
+
+		stop()
+		after := base.open(t, cfg)
+		synctest.Wait()
+		after.schedule(t, "own", "old", scheduler.Scheduled(24*time.Hour))
+		if got, _ := after.ex.TimingOf("own", "old"); got.FromEnd != inProcess.FromEnd || !got.Base.Equal(inProcess.Base) {
+			t.Errorf("own old after a restart counts from %v (from an end %v), want %v (from an end %v) as in process",
+				got.Base, got.FromEnd, inProcess.Base, inProcess.FromEnd)
 		}
 	})
 }
