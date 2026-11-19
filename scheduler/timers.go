@@ -227,7 +227,7 @@ func pause(stop <-chan struct{}, d time.Duration) bool {
 // covering kinds' included, and its last cadence change, or with no end from
 // noEndBaseLocked.
 func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
-	end, ok := e.lastEndLocked(key)
+	_, end, ok := e.lastEndLocked(key)
 	if ok && !end.At.Before(t.changed) {
 		t.base, t.done = end.At, workDone(end.Result)
 		t.watch.Beat(end.At)
@@ -269,16 +269,34 @@ func (e *Executor[P]) armAtLocked(key ScheduledScope, t *timed, at time.Time) {
 	t.timer = time.AfterFunc(time.Until(at), func() { e.wake(key, t, gen) })
 }
 
-// lastEndLocked answers the latest moving end that counts for key: its own,
-// or one of a kind whose Covers covers key's timer job.
-func (e *Executor[P]) lastEndLocked(key ScheduledScope) (LastEnd, bool) {
-	end, ok := e.ends[key]
+// lastEndLocked answers the moving end key counts from and the scope that
+// ended it: the first in the order of countsOver among key's own end and
+// those of scopes whose kind covers key's timer job.
+func (e *Executor[P]) lastEndLocked(key ScheduledScope) (from ScheduledScope, end LastEnd, ok bool) {
+	end, ok = e.ends[key]
+	from = key
 	for k, c := range e.ends {
-		if k != key && (!ok || c.At.After(end.At)) && e.coversLocked(k, key) {
-			end, ok = c, true
+		if k != key && e.coversLocked(k, key) && (!ok || countsOver(key, k, c, from, end)) {
+			from, end, ok = k, c, true
 		}
 	}
-	return end, ok
+	return from, end, ok
+}
+
+// countsOver reports whether end, of scope by, comes before have, of scope
+// from, as what key counts from: the later At, then at one instant key's own
+// end, then the least Kind, then Scope. It reads only what Records.LastEnds
+// keeps, so no map order or note order decides, and a restart counts alike.
+func countsOver(key, by ScheduledScope, end LastEnd, from ScheduledScope, have LastEnd) bool {
+	switch {
+	case !end.At.Equal(have.At):
+		return end.At.After(have.At)
+	case by == key || from == key:
+		return by == key
+	case by.Kind != from.Kind:
+		return by.Kind < from.Kind
+	}
+	return by.Scope < from.Scope
 }
 
 // coversLocked reports whether by's kind covers key's timer job. It asks
@@ -290,32 +308,49 @@ func (e *Executor[P]) coversLocked(by, key ScheduledScope) bool {
 		spec.Covers(Job[P]{Kind: by.Kind, Scope: by.Scope}, Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
 }
 
-// noteEndLocked records a started job's moving end at at: its scope's last
-// end, and for its scheduled scope and each one its kind covers, the watch's
-// beat and the next wake.
+// noteEndLocked records a started job's moving end at at as its scope's last
+// end, then moves the watch's beat and the next wake of its scheduled scope
+// and of each one its kind covers whose count this end now leads, so an end
+// noted after a later one moves nothing.
 func (e *Executor[P]) noteEndLocked(en *job[P], r Result, at time.Time) {
 	key := ScheduledScope{Kind: en.j.Kind, Scope: en.j.Scope}
+	end := LastEnd{At: at, Result: r}
+	// A proposing kind's scopes are digests of unbounded keys: only a
+	// scheduled one is kept, so the map stays bounded.
+	kept := e.scheduled[key] != nil || !en.spec.Proposes
+	if kept {
+		e.keepEndLocked(key, end)
+	}
+	if !e.endsRead {
+		return
+	}
 	for k, t := range e.scheduled {
-		if k != key && e.endsRead && e.coversLocked(key, k) {
+		if (k == key || e.coversLocked(key, k)) && e.leadsLocked(k, key, end, kept) {
 			e.movedLocked(k, t, at, workDone(r))
 		}
 	}
-	t := e.scheduled[key]
-	// A proposing kind's scopes are digests of unbounded keys: only a
-	// scheduled one is kept, so the map stays bounded.
-	if t == nil && en.spec.Proposes {
-		return
-	}
-	end := LastEnd{At: at, Result: r}
-	if have, ok := e.ends[key]; !ok || !at.Before(have.At) {
+}
+
+// keepEndLocked keeps end as key's last end, and as one noted during a
+// resume's read, unless the one held is later.
+func (e *Executor[P]) keepEndLocked(key ScheduledScope, end LastEnd) {
+	if have, ok := e.ends[key]; !ok || !end.At.Before(have.At) {
 		e.ends[key] = end
 	}
-	if have, ok := e.noted[key]; e.noted != nil && (!ok || !at.Before(have.At)) {
+	if have, ok := e.noted[key]; e.noted != nil && (!ok || !end.At.Before(have.At)) {
 		e.noted[key] = end
 	}
-	if t != nil && e.endsRead {
-		e.movedLocked(key, t, at, workDone(r))
+}
+
+// leadsLocked reports whether end, of scope by, is what key counts from: the
+// end lastEndLocked answers, or for an end not kept, one that comes before
+// it (countsOver).
+func (e *Executor[P]) leadsLocked(key, by ScheduledScope, end LastEnd, kept bool) bool {
+	from, have, ok := e.lastEndLocked(key)
+	if !kept {
+		return !ok || countsOver(key, by, end, from, have)
 	}
+	return from == by && have.At.Equal(end.At) && have.Result == end.Result
 }
 
 // movedLocked counts a scheduled scope from a moving end at at.
