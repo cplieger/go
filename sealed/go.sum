@@ -1,5 +1,5 @@
-github.com/cplieger/go/filesafe v1.2.0-dev.1 h1:dAx3rSGWZaF4GfrL8a8tnBd7kHliXJ3RR+DFFePvaoE=
-github.com/cplieger/go/filesafe v1.2.0-dev.1/go.mod h1:ji4TnJD8S8kgKelJlCQxlHyX0UXQGTW1ylSBqH5xqhI=
+github.com/cplieger/go/filesafe v1.2.0-dev.2 h1:KzGIp+fvRgpUCJc4ndztIKm56kzMAx5fYM7xeGbPAvA=
+github.com/cplieger/go/filesafe v1.2.0-dev.2/go.mod h1:ji4TnJD8S8kgKelJlCQxlHyX0UXQGTW1ylSBqH5xqhI=
 github.com/cplieger/go/masked v1.0.0-dev.1 h1:Do4+avpvVJP//Jm4LLH1y468Rxrz966dAgESVp/z7wU=
 github.com/cplieger/go/masked v1.0.0-dev.1/go.mod h1:jRx6ZGlfjrDaAQ5n8MTd023wl5rLuacKmtDbnJgrD+g=
 pgregory.net/rapid v1.3.0 h1:vBvO0VSqti75J1jjYqpgPNBLKMd1+gxa9fYo7vk/Exc=
