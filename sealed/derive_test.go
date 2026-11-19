@@ -33,45 +33,30 @@ func TestHKDFEmptySalt(t *testing.T) {
 
 // TestKeyID checks that a key's id is the first 16 bytes of HKDF-SHA256 of
 // the key under the empty salt and info "sealed/key-id" (RFC 5869 §2.3),
-// in lowercase hex: against the ids an independent implementation computed
-// for the docs/format.md vectors, and against the RFC transcription; and
-// that KeyIDs answers those ids for each kind of Sealer.
+// in lowercase hex, against the RFC transcription, and that KeyIDs answers
+// those ids for each kind of Sealer. TestVectors holds the ids to an
+// independent implementation.
 func TestKeyID(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		key  [keyLen]byte
-		want string
-	}{
-		{"K1", k1, "70603bd36c8291d779397aa614e66b28"},
-		{"K2", k2, "0681d8a548d4df142f5e9a3ab863e9ba"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := keyID(tc.key[:])
-			if err != nil {
-				t.Fatalf("keyID: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("keyID = %s, want %s", got, tc.want)
-			}
-			rk, err := newRingKey(tc.key)
-			if err != nil {
-				t.Fatalf("newRingKey: %v", err)
-			}
-			if rk.id != tc.want {
-				t.Errorf("newRingKey id = %s, want %s", rk.id, tc.want)
-			}
-		})
+	refID := func(key [keyLen]byte) string {
+		return hex.EncodeToString(refHKDF(key[:], nil, "sealed/key-id", 16))
 	}
 	t.Run("transcription", func(t *testing.T) {
 		for i := range 16 {
 			key := sha256.Sum256([]byte{byte(i)})
-			want := hex.EncodeToString(refHKDF(key[:], nil, "sealed/key-id", 16))
+			want := refID(key)
 			got, err := keyID(key[:])
 			if err != nil {
 				t.Fatalf("keyID: %v", err)
 			}
 			if got != want {
 				t.Errorf("keyID(%x) = %s, want %s", key, got, want)
+			}
+			rk, err := newRingKey(key)
+			if err != nil {
+				t.Fatalf("newRingKey: %v", err)
+			}
+			if rk.id != want {
+				t.Errorf("newRingKey(%x) id = %s, want %s", key, rk.id, want)
 			}
 		}
 	})
@@ -81,8 +66,8 @@ func TestKeyID(t *testing.T) {
 			s    *Sealer
 			want KeyIDs
 		}{
-			{"New", New(k1), KeyIDs{Current: "70603bd36c8291d779397aa614e66b28"}},
-			{"two-key ring", ringSealer(t, k2, k1), KeyIDs{Current: "0681d8a548d4df142f5e9a3ab863e9ba", Previous: "70603bd36c8291d779397aa614e66b28"}},
+			{"New", New(k1), KeyIDs{Current: refID(k1)}},
+			{"two-key ring", ringSealer(t, k2, k1), KeyIDs{Current: refID(k2), Previous: refID(k1)}},
 			{"zero", &Sealer{}, KeyIDs{}},
 			{"nil", nil, KeyIDs{}},
 			{"New of zero", New([32]byte{}), KeyIDs{}},
@@ -102,19 +87,10 @@ func TestKeyID(t *testing.T) {
 }
 
 // TestSubkey checks Subkey against the RFC 5869 §2 transcription under
-// docs/format.md's info "sealed/subkey" NUL label, with the docs/format.md
-// vector OpenSSL computed: one key per label, derived from the current key,
-// the same at every call.
+// docs/format.md's info "sealed/subkey" NUL label: one key per label,
+// derived from the current key, the same at every call. TestVectors holds
+// it to an independent implementation.
 func TestSubkey(t *testing.T) {
-	t.Run("vector", func(t *testing.T) {
-		got, err := New(k1).Subkey("example/cursor")
-		if err != nil {
-			t.Fatalf("Subkey: %v", err)
-		}
-		if want := fromHex("06a613c5bc49e3e6efd70c3b5f8bf403c9fb981197d71bfaca44446225db35f8"); !bytes.Equal(got[:], want) {
-			t.Errorf("Subkey = %x, want %x", got, want)
-		}
-	})
 	r := ringSealer(t, k2, k1)
 	seen := map[[32]byte]Label{}
 	for _, label := range []Label{"", "a", "a\x00", "b", "httpwire/cursor"} {
@@ -139,24 +115,13 @@ func TestSubkey(t *testing.T) {
 
 // TestMAC checks MAC as HMAC-SHA256 (RFC 2104 §2) under the key of
 // docs/format.md's info "sealed/mac" NUL label (the RFC 5869
-// transcription), with the docs/format.md vector OpenSSL computed, and
-// VerifyMAC's answers: nil with current for its own tag, the previous
-// key's tag with current false, and ErrInvalid with current false for
-// every changed input (tags compared as crypto/hmac.Equal's docs say).
+// transcription), and VerifyMAC's answers: nil with current for its own
+// tag, the previous key's tag with current false, and ErrInvalid with
+// current false for every changed input (tags compared as
+// crypto/hmac.Equal's docs say). TestVectors holds the tag to an
+// independent implementation.
 func TestMAC(t *testing.T) {
 	s := New(k1)
-	t.Run("vector", func(t *testing.T) {
-		id, tag, err := s.MAC("example/manifest", []byte("example manifest"))
-		if err != nil {
-			t.Fatalf("MAC: %v", err)
-		}
-		if id != "70603bd36c8291d779397aa614e66b28" {
-			t.Errorf("key id = %s, want K1's", id)
-		}
-		if want := fromHex("90c989e51170bc63130b9888d84f37a7e962ede9ba867393c5b177351f10fa09"); !bytes.Equal(tag, want) {
-			t.Errorf("tag = %x, want %x", tag, want)
-		}
-	})
 	t.Run("transcription", func(t *testing.T) {
 		for _, label := range []Label{"", "x", "a\x00b", "snapshot/manifest"} {
 			_, tag, err := s.MAC(label, []byte("a manifest"))

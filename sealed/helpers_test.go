@@ -1,6 +1,7 @@
 package sealed
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/fips140"
@@ -8,10 +9,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"os"
 	"testing"
 )
 
-// k1 and k2 are the keys of the vectors in docs/format.md; k3 is a key
+// k1 and k2 are the keys K1 and K2 of testdata/vectors.json; k3 is a key
 // neither ring of the tests holds.
 var (
 	k1 = [keyLen]byte(fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"))
@@ -107,3 +110,82 @@ func rawOf(t *testing.T, v string) []byte {
 
 // valueOf encodes raw as a value, unpadded base64url (RFC 4648 §5).
 func valueOf(raw []byte) string { return base64.RawURLEncoding.EncodeToString(raw) }
+
+// hexBytes is a byte string written in lowercase hex in testdata/vectors.json.
+type hexBytes []byte
+
+func (h *hexBytes) UnmarshalText(text []byte) error {
+	b, err := hex.DecodeString(string(text))
+	*h = b
+	return err
+}
+
+// testVectors is testdata/vectors.json: the vectors of docs/format.md, which
+// an independent implementation computed from the format's definitions.
+// Keys are named by their names in Keys.
+type testVectors struct {
+	Provenance string `json:"provenance"`
+	Keys       []struct {
+		Name string   `json:"name"`
+		Key  hexBytes `json:"key"`
+		ID   string   `json:"id"`
+	} `json:"keys"`
+	KeyFiles []struct {
+		Name     string `json:"name"`
+		Current  string `json:"current"`
+		Previous string `json:"previous"`
+		Text     string `json:"text"`
+	} `json:"keyFiles"`
+	Values struct {
+		Key         string   `json:"key"`
+		Purpose     string   `json:"purpose"`
+		Nonce       hexBytes `json:"nonce"`
+		Payload     string   `json:"payload"`
+		Expiry      int64    `json:"expiry"`
+		ExpiringOKM hexBytes `json:"expiringOKM"`
+		Expiring    string   `json:"expiring"`
+		AtRestOKM   hexBytes `json:"atRestOKM"`
+		AtRest      string   `json:"atRest"`
+	} `json:"values"`
+	Subkey struct {
+		Key   string   `json:"key"`
+		Label string   `json:"label"`
+		OKM   hexBytes `json:"okm"`
+	} `json:"subkey"`
+	MAC struct {
+		Key     string   `json:"key"`
+		Label   string   `json:"label"`
+		Message string   `json:"message"`
+		KeyID   string   `json:"keyId"`
+		Tag     hexBytes `json:"tag"`
+	} `json:"mac"`
+}
+
+// loadVectors reads testdata/vectors.json, refusing a field testVectors
+// does not name.
+func loadVectors(t *testing.T) *testVectors {
+	t.Helper()
+	data, err := os.ReadFile("testdata/vectors.json")
+	if err != nil {
+		t.Fatalf("read the vectors: %v", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	v := new(testVectors)
+	if err := dec.Decode(v); err != nil {
+		t.Fatalf("decode the vectors: %v", err)
+	}
+	return v
+}
+
+// key returns the key the vectors name name.
+func (v *testVectors) key(t *testing.T, name string) [keyLen]byte {
+	t.Helper()
+	for _, k := range v.Keys {
+		if k.Name == name && len(k.Key) == keyLen {
+			return [keyLen]byte(k.Key)
+		}
+	}
+	t.Fatalf("the vectors hold no 32-byte key %q", name)
+	return [keyLen]byte{}
+}

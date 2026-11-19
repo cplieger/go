@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -707,20 +708,24 @@ func TestEphemeral(t *testing.T) {
 }
 
 // TestNew checks that New uses its key as the ring key: New(K1) opens the
-// docs/format.md vectors, which OpenSSL computed from the
-// format's definitions (the expiring one inside a bubble, before its 2100
-// expiry), and what it seals opens under the RFC 5869 transcription's key.
+// values of testdata/vectors.json, which an independent implementation
+// computed from docs/format.md's definitions (the expiring one inside a
+// bubble, before its 2100 expiry), and what it seals opens under the RFC
+// 5869 transcription's key.
 func TestNew(t *testing.T) {
-	s := New(k1)
+	vec := loadVectors(t)
+	vals := vec.Values
+	key := vec.key(t, vals.Key)
+	s := New(key)
 	synctest.Test(t, func(t *testing.T) {
-		got, cur, err := s.Open("example", "AaChoqOkpaanqKmqq89Rc9CQ2lWXBo36gugw72WLmhj7BOGqgdRSRzsp")
-		if err != nil || !cur || string(got) != "hello" {
-			t.Errorf("expiring vector: %q, %v, %v; want hello", got, cur, err)
+		got, cur, err := s.Open(Purpose(vals.Purpose), vals.Expiring)
+		if err != nil || !cur || string(got) != vals.Payload {
+			t.Errorf("expiring vector: %q, %v, %v; want %q", got, cur, err, vals.Payload)
 		}
 	})
-	got, cur, err := s.OpenAtRest("example", "AaChoqOkpaanqKmqq_nCUFgeYVjJApnL6jlNSQwfJWtLNw")
-	if err != nil || !cur || string(got) != "hello" {
-		t.Errorf("at-rest vector: %q, %v, %v; want hello", got, cur, err)
+	got, cur, err := s.OpenAtRest(Purpose(vals.Purpose), vals.AtRest)
+	if err != nil || !cur || string(got) != vals.Payload {
+		t.Errorf("at-rest vector: %q, %v, %v; want %q", got, cur, err, vals.Payload)
 	}
 	for _, tc := range []struct {
 		kind  string
@@ -735,7 +740,7 @@ func TestNew(t *testing.T) {
 			if err != nil {
 				t.Fatalf("seal: %v", err)
 			}
-			plain, err := refOpen(t, refValueKey(k1, tc.kind, "example/new"), rawOf(t, v))
+			plain, err := refOpen(t, refValueKey(key, tc.kind, "example/new"), rawOf(t, v))
 			if err != nil || len(plain) != tc.frame+3 || string(plain[tc.frame:]) != "new" {
 				t.Errorf("reference open: %q, %v; want new after %d bytes", plain, err, tc.frame)
 			}
@@ -764,5 +769,98 @@ func TestPayloadCopies(t *testing.T) {
 				t.Errorf("after changing an opened payload: %q, %v", again, err)
 			}
 		})
+	}
+}
+
+// The format fixture: values the production path sealed under K1 when the
+// format was first released, which every later release must open.
+const (
+	fixturePath    = "testdata/v1-fixture.txt"
+	fixtureRegen   = "UPDATE_GOLDEN=1 go test -run '^TestFormatFixture$' ."
+	fixturePurpose = Purpose("example/fixture")
+	fixturePayload = "sealed by the first release"
+	// fixtureTTL keeps the fixture's expiring value open for a century.
+	fixtureTTL = 100 * 365 * 24 * time.Hour
+)
+
+// TestFormatFixture checks that the values of testdata/v1-fixture.txt still
+// open to their payload with current (docs/format.md, "Versioning": a
+// release opens every version it ever sealed), the expiring one until the
+// expiry second its frame holds, read as docs/format.md defines it (8
+// big-endian Unix seconds before the payload) by the reference opener. The
+// fixture is the production path's own output, so TestVectors pairs it
+// with independent values: a fixture rewritten from a broken format still
+// fails there.
+func TestFormatFixture(t *testing.T) {
+	s := New(k1)
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		writeFixture(t, s)
+	}
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read the fixture: %v; write it with %s", err, fixtureRegen)
+	}
+	values := map[string]string{}
+	for line := range strings.Lines(string(data)) {
+		name, value, ok := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+		if !ok {
+			t.Fatalf("fixture line %q is not a kind, a space and a value; rewrite it with %s", line, fixtureRegen)
+		}
+		values[name] = value
+	}
+	value := func(t *testing.T, kind string) string {
+		t.Helper()
+		v, ok := values[kind]
+		if !ok {
+			t.Fatalf("the fixture holds no %s value; rewrite it with %s", kind, fixtureRegen)
+		}
+		return v
+	}
+	check := func(t *testing.T, kind string, got []byte, current bool, err error) {
+		t.Helper()
+		if err != nil || !current || string(got) != fixturePayload {
+			t.Errorf("the fixture's %s value opens to %q, %v, %v; want %q, true, nil. "+
+				"The format changed, and a release must open what an earlier one sealed: "+
+				"rewrite the fixture with %s only for a format change that is meant",
+				kind, got, current, err, fixturePayload, fixtureRegen)
+		}
+	}
+	t.Run("expiring", func(t *testing.T) {
+		v := value(t, "expiring")
+		plain, err := refOpen(t, refValueKey(k1, "expiring", string(fixturePurpose)), rawOf(t, v))
+		if err != nil || len(plain) < 8 {
+			t.Fatalf("the fixture's expiring value does not open as docs/format.md defines it: %d bytes, %v", len(plain), err)
+		}
+		expiry := time.Unix(int64(binary.BigEndian.Uint64(plain)), 0)
+		synctest.Test(t, func(t *testing.T) {
+			time.Sleep(time.Until(expiry) - time.Nanosecond)
+			got, current, err := s.Open(fixturePurpose, v)
+			check(t, "expiring", got, current, err)
+			time.Sleep(time.Nanosecond)
+			if got, current, err := s.Open(fixturePurpose, v); !errors.Is(err, ErrExpired) {
+				t.Errorf("at the fixture's expiry %v: %q, %v, %v; want ErrExpired", expiry.UTC(), got, current, err)
+			}
+		})
+	})
+	t.Run("at-rest", func(t *testing.T) {
+		got, current, err := s.OpenAtRest(fixturePurpose, value(t, "at-rest"))
+		check(t, "at-rest", got, current, err)
+	})
+}
+
+// writeFixture rewrites the format fixture with values s seals now.
+func writeFixture(t *testing.T, s *Sealer) {
+	t.Helper()
+	expiring, err := s.Seal(fixturePurpose, []byte(fixturePayload), fixtureTTL)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	atRest, err := s.SealAtRest(fixturePurpose, []byte(fixturePayload))
+	if err != nil {
+		t.Fatalf("SealAtRest: %v", err)
+	}
+	data := "expiring " + expiring + "\nat-rest " + atRest + "\n"
+	if err := os.WriteFile(fixturePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write the fixture: %v", err)
 	}
 }
