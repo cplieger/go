@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/cplieger/go/scheduler/v2"
 )
@@ -171,5 +172,95 @@ func TestReachedUnknownPhaseEndsJob(t *testing.T) {
 		wantPanicLogged(t, lines, "judged", "TestReachedUnknownPhaseEndsJob")
 		wantLastResult(t, seen, s.Job, scheduler.ResultFailed)
 		r.wantSlotFreed(t)
+	})
+}
+
+// TestObserverPanicInRunEndsJob pins that an Observer callback panicking on
+// Run's stack ends the job as a panic in Run does: the slot is freed and the
+// Observer gets the end.
+func TestObserverPanicInRunEndsJob(t *testing.T) {
+	t.Run("a batch item's slot wait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			lines, seen := &logLines{}, &transitions{}
+			obs := seen.observer()
+			var panicked1 atomic.Bool
+			obs.SlotWait = func(_ string, c scheduler.Class, _ time.Duration) {
+				if c == scheduler.Batch && panicked1.CompareAndSwap(false, true) {
+					panic("slot wait gauge")
+				}
+			}
+			k := grab(done)
+			k.Slot = "passes"
+			r := newRig(t, scheduler.Config[payload]{
+				Kinds:  []scheduler.KindSpec[payload]{k, spec("next", "passes")},
+				Logger: slog.New(lines), Observer: obs,
+			})
+			s := r.start(t, api("grab", "", "alice", payload{N: 2}))
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultFailed, panicked)
+			wantPanicLogged(t, lines, "slot wait gauge", "TestObserverPanicInRunEndsJob")
+			wantLastResult(t, seen, s.Job, scheduler.ResultFailed)
+			r.wantSlotFreed(t)
+		})
+	})
+	t.Run("a batch item whose slot wait panicked runs when Run recovers and calls it again", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var panicked1 atomic.Bool
+			obs := scheduler.Observer{SlotWait: func(string, scheduler.Class, time.Duration) {
+				if panicked1.CompareAndSwap(false, true) {
+					panic("slot wait gauge")
+				}
+			}}
+			k := spec("grab", "passes")
+			k.MaxItems = 1
+			k.Items = func(payload) int { return 1 }
+			k.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+				fn := func(context.Context) scheduler.Line { return scheduler.Line{State: scheduler.LineDone} }
+				func() {
+					defer func() { _ = recover() }()
+					_ = run.Item(ctx, 0, fn)
+				}()
+				if err := run.Item(ctx, 0, fn); err != nil {
+					t.Errorf("second Item(0) = %v, want nil", err)
+				}
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{
+				Kinds: []scheduler.KindSpec[payload]{k, spec("next", "passes")}, Observer: obs,
+			})
+			s := r.start(t, api("grab", "", "alice", payload{}))
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultOK)
+			r.wantLines(t, s.Job, scheduler.Line{State: scheduler.LineDone})
+			r.wantSlotFreed(t)
+		})
+	})
+	t.Run("a transition of a phase Run reached", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			lines, seen := &logLines{}, &transitions{}
+			record := seen.observer().Transition
+			obs := scheduler.Observer{Transition: func(tr scheduler.Transition) {
+				record(tr)
+				if tr.Phase == "fetched" && tr.Result == "" {
+					panic("transition gauge")
+				}
+			}}
+			full := spec("full", "passes")
+			full.Phases = []scheduler.Phase{"fetched"}
+			full.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+				run.Reached("fetched")
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := newRig(t, scheduler.Config[payload]{
+				Kinds:  []scheduler.KindSpec[payload]{full, spec("next", "passes")},
+				Logger: slog.New(lines), Observer: obs,
+			})
+			s := r.start(t, timer("full", "", payload{}))
+			synctest.Wait()
+			r.wantEnd(t, s.Job, scheduler.ResultFailed, panicked)
+			wantPanicLogged(t, lines, "transition gauge", "TestObserverPanicInRunEndsJob")
+			wantLastResult(t, seen, s.Job, scheduler.ResultFailed)
+			r.wantSlotFreed(t)
+		})
 	})
 }
