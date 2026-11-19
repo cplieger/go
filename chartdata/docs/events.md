@@ -28,6 +28,7 @@ A `FrameEvent` changes a frame the page already drew, without re-sending the fra
 - `replace`: the last column or bin takes the new values, and `open` says whether it is still filling.
 - `reset`: a line, area or sparkline breaks at `at` instead of joining across it, and a state history shows a gap there.
 - `set`: the page draws the new frame. A frame drawn with a domain keeps its span, ending where the new frame's domain ends, since a `Sampler`'s `set` carries its whole ring.
+  - A span an `append` gave a frame with no domain counts as its domain, so a later `set` keeps that span too.
 
 ## Which events a frame takes
 
