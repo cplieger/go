@@ -110,14 +110,189 @@ func TestCoalescingRules(t *testing.T) {
 				t.Errorf("a start 59 s into a run under a 60 s window = %+v, want %+v", joined, want)
 			}
 			time.Sleep(time.Second)
-			follow := r.start(t, api("refresh", "", "carol", payload{}))
-			if follow.Joined || follow.Job == running.Job {
-				t.Errorf("a start 60 s into the run = %+v, want a follow-up of its own", follow)
+			r.followUp(t, running.Job, api("refresh", "", "carol", payload{}), api("refresh", "", "dave", payload{}))
+			close(gate)
+		})
+	})
+
+	t.Run("rule3noslot", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("refresh", "")}})
+			gate := make(chan struct{})
+			running := r.start(t, api("refresh", "connection:3", "alice", payload{Gate: gate}))
+			synctest.Wait()
+			follow := r.followUp(t, running.Job,
+				api("refresh", "connection:3", "bob", payload{}), timer("refresh", "connection:3", payload{}))
+			close(gate)
+			synctest.Wait()
+			if got, want := r.log.ids(), []scheduler.ID{running.Job, follow.Job}; !slices.Equal(got, want) {
+				t.Errorf("ran %v, want %v", got, want)
 			}
-			if again := r.start(t, api("refresh", "", "dave", payload{})); again.Job != follow.Job || !again.Joined {
-				t.Errorf("a start behind the follow-up = %+v, want it joined to %s", again, follow.Job)
+		})
+	})
+
+	t.Run("rule3batch", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			r := base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{gatedBatch(base.log)}})
+			gate := make(chan struct{})
+			running := r.start(t, api("grab", "source:a", "alice", payload{Gate: gate, N: 2}))
+			synctest.Wait()
+			follow := r.followUp(t, running.Job,
+				api("grab", "source:a", "bob", payload{N: 2}), api("grab", "source:a", "carol", payload{N: 3}))
+			close(gate)
+			synctest.Wait()
+			if got, want := r.log.ids(), []scheduler.ID{running.Job, follow.Job}; !slices.Equal(got, want) {
+				t.Errorf("ran %v, want %v", got, want)
+			}
+			r.wantEnd(t, follow.Job, scheduler.ResultOK)
+		})
+	})
+
+	t.Run("rule3freshwindow", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			refresh := spec("refresh", "")
+			refresh.Fresh = forgeFresh
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{refresh}})
+			gate := make(chan struct{})
+			scope := "repo:cplieger/forgeapi"
+			running := r.start(t, api("refresh", scope, "alice", payload{Gate: gate}))
+			synctest.Wait()
+			time.Sleep(15 * time.Second)
+			follow := r.followUp(t, running.Job, api("refresh", scope, "bob", payload{}), api("refresh", scope, "carol", payload{}))
+			time.Sleep(time.Minute)
+			if later := r.start(t, api("refresh", scope, "dave", payload{})); later != (scheduler.Started{Job: follow.Job, Joined: true}) {
+				t.Errorf("a start a minute behind the follow-up = %+v, want it to join the follow-up %s", later, follow.Job)
+			}
+			synctest.Wait()
+			if r.log.ran(follow.Job) {
+				t.Errorf("the follow-up ran while %s runs, want it queued", running.Job)
 			}
 			close(gate)
+			synctest.Wait()
+			if got, want := r.log.ids(), []scheduler.ID{running.Job, follow.Job}; !slices.Equal(got, want) {
+				t.Errorf("ran %v, want %v", got, want)
+			}
+		})
+	})
+
+	t.Run("rule3yield", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			yielded := make(chan struct{})
+			refresh := spec("refresh", "")
+			base := &rig{store: memrecords.New(), log: &runLog{}}
+			refresh.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+				base.log.add(run.Job())
+				if run.Job().Owner == "alice" {
+					close(yielded)
+					_ = run.Yield(ctx, time.Now().Add(time.Hour))
+				}
+				return scheduler.End{Result: scheduler.ResultOK}
+			}
+			r := base.open(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{refresh}})
+			first := r.start(t, api("refresh", "connection:3", "alice", payload{}))
+			<-yielded
+			synctest.Wait()
+			follow := r.start(t, api("refresh", "connection:3", "bob", payload{}))
+			synctest.Wait()
+			if follow.Joined || !r.log.ran(follow.Job) {
+				t.Errorf("a start while its scope's job yields = %+v, ran %t; want a new job that runs", follow, r.log.ran(follow.Job))
+			}
+			if !r.ex.Wake(first.Job) {
+				t.Errorf("Wake(%s) = false, want the yielded job woken", first.Job)
+			}
+			synctest.Wait()
+			r.wantEnd(t, first.Job, scheduler.ResultOK)
+		})
+	})
+
+	t.Run("rule3followupleaves", func(t *testing.T) {
+		kinds := func() []scheduler.KindSpec[payload] {
+			refresh := spec("refresh", "")
+			refresh.Covers = forgeCovers
+			return []scheduler.KindSpec[payload]{refresh}
+		}
+		// queue runs a gated refresh of repo:a/b and queues its follow-up.
+		queue := func(t *testing.T, r *rig, gate <-chan struct{}) (running, follow scheduler.Started) {
+			t.Helper()
+			running = r.start(t, api("refresh", "repo:a/b", "alice", payload{Gate: gate, Conn: 3}))
+			synctest.Wait()
+			follow = r.start(t, api("refresh", "repo:a/b", "bob", payload{Conn: 3}))
+			synctest.Wait()
+			if r.log.ran(follow.Job) {
+				t.Fatalf("the follow-up %s ran while %s runs, want it queued", follow.Job, running.Job)
+			}
+			return running, follow
+		}
+		wantNeverRan := func(t *testing.T, r *rig, id scheduler.ID) {
+			t.Helper()
+			if rec := r.rec(t, id); !rec.StartedAt.IsZero() || r.log.ran(id) {
+				t.Errorf("follow-up record = %+v, want it never started", rec)
+			}
+		}
+
+		t.Run("cancel", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := newRig(t, scheduler.Config[payload]{Kinds: kinds()})
+				gate := make(chan struct{})
+				running, follow := queue(t, r, gate)
+				if stopping, err := r.ex.Cancel(t.Context(), follow.Job); stopping || err != nil {
+					t.Errorf("Cancel(follow-up) = (%t, %v), want (false, nil): it is queued", stopping, err)
+				}
+				synctest.Wait()
+				r.wantEnd(t, follow.Job, scheduler.ResultCancelled)
+				wantNeverRan(t, r, follow.Job)
+				again := r.start(t, api("refresh", "repo:a/b", "carol", payload{Conn: 3}))
+				if again.Joined || again.Job == follow.Job {
+					t.Errorf("a start after the follow-up was cancelled = %+v, want a new follow-up", again)
+				}
+				close(gate)
+				synctest.Wait()
+				if got, want := r.log.ids(), []scheduler.ID{running.Job, again.Job}; !slices.Equal(got, want) {
+					t.Errorf("ran %v, want %v", got, want)
+				}
+			})
+		})
+
+		t.Run("cover", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := newRig(t, scheduler.Config[payload]{Kinds: kinds()})
+				gate := make(chan struct{})
+				_, follow := queue(t, r, gate)
+				conn := r.start(t, api("refresh", "connection:3", "carol", payload{Conn: 3}))
+				synctest.Wait()
+				r.wantEnd(t, follow.Job, scheduler.ResultSkipped, scheduler.Reason{Code: scheduler.ReasonCovered, Subject: string(conn.Job)})
+				wantNeverRan(t, r, follow.Job)
+				close(gate)
+			})
+		})
+
+		t.Run("hold", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := newRig(t, scheduler.Config[payload]{Kinds: kinds()})
+				gate := make(chan struct{})
+				_, follow := queue(t, r, gate)
+				resume, err := r.ex.Hold(t.Context(), true)
+				if err != nil {
+					t.Fatalf("Hold(all) = %v", err)
+				}
+				defer resume()
+				r.wantEnd(t, follow.Job, scheduler.ResultInterrupted)
+				wantNeverRan(t, r, follow.Job)
+				close(gate)
+			})
+		})
+
+		t.Run("shutdown", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r, stop := (&rig{store: memrecords.New(), log: &runLog{}}).openUntil(t, scheduler.Config[payload]{Kinds: kinds()})
+				gate := make(chan struct{})
+				defer close(gate)
+				_, follow := queue(t, r, gate)
+				stop()
+				r.wantEnd(t, follow.Job, scheduler.ResultInterrupted)
+				wantNeverRan(t, r, follow.Job)
+			})
 		})
 	})
 
@@ -231,6 +406,56 @@ func forgeFresh(scope string) time.Duration {
 		return 60 * time.Second
 	}
 	return 15 * time.Second
+}
+
+// followUp starts second while the job running runs and wants it queued as
+// that scope's follow-up, then wants third to join it, neither running.
+func (r *rig) followUp(t *testing.T, running scheduler.ID, second, third scheduler.Job[payload]) scheduler.Started {
+	t.Helper()
+	follow := r.start(t, second)
+	if follow.Joined || follow.Job == running || follow.Position != 0 {
+		t.Errorf("a start while its scope runs = %+v, want one follow-up queued at 0", follow)
+	}
+	synctest.Wait()
+	if rec := r.rec(t, follow.Job); rec.State != scheduler.StateQueued || r.log.ran(follow.Job) {
+		t.Errorf("follow-up record state %s, ran %t; want it queued behind %s", rec.State, r.log.ran(follow.Job), running)
+	}
+	if l, ok := r.ex.Live()[follow.Job]; !ok || l.Position != 0 {
+		t.Errorf("Live()[follow-up] = (%+v, %t), want it live at position 0", l, ok)
+	}
+	if again := r.start(t, third); again != (scheduler.Started{Job: follow.Job, Joined: true}) {
+		t.Errorf("a start behind the follow-up = %+v, want it to join the follow-up %s", again, follow.Job)
+	}
+	synctest.Wait()
+	if got := r.log.ids(); slices.ContainsFunc(got, func(id scheduler.ID) bool { return id != running }) {
+		t.Errorf("ran %v while %s runs, want only it", got, running)
+	}
+	return follow
+}
+
+// gatedBatch is a batch kind of up to 3 items in slot "arr", Payload.N items
+// per job, whose Run logs the job to log and whose items wait on its Gate.
+func gatedBatch(log *runLog) scheduler.KindSpec[payload] {
+	k := spec("grab", "arr")
+	k.MaxItems = 3
+	k.Items = func(p payload) int { return p.N }
+	k.Run = func(ctx context.Context, r *scheduler.Run[payload]) scheduler.End {
+		j := r.Job()
+		log.add(j)
+		for i := range j.Payload.N {
+			_ = r.Item(ctx, i, func(ctx context.Context) scheduler.Line {
+				if j.Payload.Gate != nil {
+					select {
+					case <-j.Payload.Gate:
+					case <-ctx.Done():
+					}
+				}
+				return scheduler.Line{State: scheduler.LineDone}
+			})
+		}
+		return scheduler.End{Result: scheduler.ResultOK}
+	}
+	return k
 }
 
 // forgeCovers is a refresh's covering: all covers a connection and a
