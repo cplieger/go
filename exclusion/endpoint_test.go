@@ -56,8 +56,13 @@ func TestMatchesRowIsPost(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
 		}
-		if row.MaxBody < len(body) {
-			t.Errorf("MaxBody = %d, under the %d bytes of a list at every bound", row.MaxBody, len(body))
+		if exclusion.MaxBody < len(body) {
+			t.Errorf("MaxBody = %d, under the %d bytes of a list at every bound", exclusion.MaxBody, len(body))
+		}
+	})
+	t.Run("the row's cap is MaxBody, 2 MiB", func(t *testing.T) {
+		if exclusion.MaxBody != 2<<20 || row.MaxBody != exclusion.MaxBody {
+			t.Errorf("MaxBody = %d and the row's MaxBody = %d, want both 2 MiB", exclusion.MaxBody, row.MaxBody)
 		}
 	})
 	t.Run("the table derives", func(t *testing.T) {

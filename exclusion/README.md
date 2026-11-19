@@ -44,7 +44,7 @@ if _, left := set.Match(item); left {
 
 ### Validating a settings save
 
-The settings section that holds the rules calls `Validate("rules", rules, fields)` and answers its entries unchanged. Each entry carries the path of the condition it refuses, such as `rules[3].conditions[0].value`, and one of the codes `unknown`, `enum`, `pattern` or `range`.
+The settings section that holds the rules calls `Validate("rules", rules, fields)` and answers its entries unchanged. Each entry carries the path of the condition it refuses, such as `rules[3].conditions[0].value`, and one of the codes `unknown`, `enum`, `pattern` or `range`. Set the `MaxBody` of the settings row that saves this section to at least `exclusion.MaxBody`, 2 MiB, or that row refuses a list at every bound as too large before `Validate` sees it.
 
 ### Counting a draft list on the page
 
@@ -64,13 +64,13 @@ The row is `POST /exclusion/matches` under the table's prefix. Its body is `{"ru
 
 - The rule list: `Rule`, `Condition`, `Field` and its `Kind` (`Text`, `Pattern`, `Bool`, `Choice`), with the bounds `MaxRules`, `MaxConditions`, `MaxValueBytes` and `MaxPatternRunes`.
 - Checking and matching: `Validate`, `Compile`, `Set`, `Set.Match`, `Set.Count` and the `Item` an app answers.
-- The matches row: `Endpoint`, `Binding`, `CountFunc`, `MatchesRequest`, `MatchesResponse` and `CodeSpecs`.
+- The matches row: `Endpoint`, `Binding`, `CountFunc`, `MatchesRequest`, `MatchesResponse`, `CodeSpecs` and the body cap `MaxBody`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/exclusion).
 
 ## Bounds
 
-A list holds at most 100 rules of at most 8 conditions each. A value is 1 to 200 bytes, and a pattern 1 to 200 characters. A value past its bound, a rule with no condition and a list past its bound each answer `range`. The [validation](docs/validation.md) page lists every code and message.
+A list holds at most 100 rules of at most 8 conditions each. A value is 1 to 200 bytes, and a pattern 1 to 200 characters. A value past its bound, a rule with no condition and a list past its bound each answer `range`. A request carrying a list at every bound is about 1 MiB once JSON-escaped, so the matches row takes a body of up to `MaxBody`, 2 MiB. The [validation](docs/validation.md) page lists every code and message.
 
 ## Unsupported by design
 

@@ -45,4 +45,6 @@ A `CountFunc` error, or a count of another length than the rules, answers `inter
 
 ## Body cap
 
-The row accepts a body of up to 2 MiB, above the table's 64 KiB default. A list at every bound (100 rules of 8 conditions, each value 200 bytes) can take about 1 MiB once JSON escapes its characters, and the row must accept every list a settings save accepts.
+The row accepts a body of up to `MaxBody`, 2 MiB, above the table's 64 KiB default. A list at every bound (100 rules of 8 conditions, each value 200 bytes) can take about 1 MiB once JSON escapes its characters, and the row takes every list a settings save takes.
+
+The settings row that saves the section holding the rules needs the same room: set its `MaxBody` to at least `exclusion.MaxBody`, or it refuses a list at every bound with `body_too_large` before your validator runs.

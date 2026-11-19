@@ -4,7 +4,7 @@ This page lists every field error `Validate` and `Compile` answer, with its path
 
 ## One validator for the save and the draft
 
-`Validate(path, rules, fields)` answers the field errors of a list, each under `path`. A settings section that holds the rules under `rules` calls `Validate("rules", rules, fields)` and answers the entries unchanged in its own refusal. The matches row calls `Compile` under the same path, so a draft list and a settings save of the same list answer equal entries, and the page shows a bad pattern beside its condition either way.
+`Validate(path, rules, fields)` answers the field errors of a list, each under `path`. A settings section that holds the rules under `rules` calls `Validate("rules", rules, fields)` and answers the entries unchanged in its own refusal. Its settings row's `MaxBody` is at least `exclusion.MaxBody`, so a list at every bound reaches the validator. The matches row calls `Compile` under the same path, so a draft list and a settings save of the same list answer equal entries, and the page shows a bad pattern beside its condition either way.
 
 `Compile` answers the same entries as `Validate`, or a `Set` when there are none.
 

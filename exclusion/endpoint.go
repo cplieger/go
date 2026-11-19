@@ -15,10 +15,12 @@ import (
 // codeInvalid answers a body whose rule list Validate refuses.
 const codeInvalid httpserver.ErrorCode = "exclusion_invalid"
 
-// maxBody is the matches row's body cap. A list at every bound is about 1 MiB
-// once JSON escapes each value's characters (a control character is six
-// bytes), so the table's default would refuse a list a settings save accepts.
-const maxBody = 2 << 20
+// MaxBody is the matches row's body cap, 2 MiB. A list at every bound (100
+// rules of 8 conditions, each value 200 bytes) is about 1 MiB once JSON
+// escapes its characters (a control character is six bytes), so the row takes
+// every list a settings save takes. A settings row whose section holds a rule
+// list sets its own MaxBody to at least this.
+const MaxBody = 2 << 20
 
 var codeSpecs = map[httpserver.ErrorCode]httpserver.CodeSpec{
 	codeInvalid: {Status: http.StatusUnprocessableEntity, Remediation: "Fix the rules the fields name, then count them again.", NoEffect: true},
@@ -53,7 +55,7 @@ func Endpoint(name string, a httpwire.Access) httpwire.Endpoint {
 		Response:    reflect.TypeFor[MatchesResponse](),
 		Codes:       []string{string(codeInvalid)},
 		Access:      a,
-		MaxBody:     maxBody,
+		MaxBody:     MaxBody,
 	}
 }
 
