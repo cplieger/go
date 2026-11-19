@@ -3,7 +3,7 @@ module github.com/cplieger/go/httpwire
 go 1.27.4
 
 require (
-	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.8
+	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.9
 	github.com/cplieger/go/textsafe v1.1.0
 )
 

@@ -3,7 +3,7 @@ module github.com/cplieger/go/webbundle
 go 1.27.4
 
 require (
-	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.8
+	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.9
 	github.com/evanw/esbuild v0.28.2
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
