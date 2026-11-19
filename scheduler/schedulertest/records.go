@@ -565,14 +565,14 @@ func lastEndsTie(t *testing.T, r scheduler.Records) {
 	failed, skipped := scheduler.ResultFailed, scheduler.ResultSkipped
 	cases := []struct {
 		scope   string
-		written []scheduler.Result
 		want    scheduler.Result
+		written []scheduler.Result
 	}{
-		{"a", []scheduler.Result{failed, ok, ok, ok}, failed},
-		{"b", []scheduler.Result{ok, partial, ok}, partial},
-		{"c", []scheduler.Result{skipped, partial, ok}, skipped},
-		{"d", []scheduler.Result{ok, skipped, failed, partial}, failed},
-		{"e", []scheduler.Result{partial, ok}, partial},
+		{"a", failed, []scheduler.Result{failed, ok, ok, ok}},
+		{"b", partial, []scheduler.Result{ok, partial, ok}},
+		{"c", skipped, []scheduler.Result{skipped, partial, ok}},
+		{"d", failed, []scheduler.Result{ok, skipped, failed, partial}},
+		{"e", partial, []scheduler.Result{partial, ok}},
 	}
 	at := map[string]time.Time{}
 	for _, c := range cases {

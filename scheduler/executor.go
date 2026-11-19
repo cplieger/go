@@ -145,12 +145,10 @@ type Executor[P any] struct {
 	proposals map[ProposalID]*proposal
 	scheduled map[ScheduledScope]*timed
 	seen      map[ScheduledScope]struct{} // every scope scheduled in this executor's life
-	// ends is each scope's last moving end, read from Records at Run and
-	// kept from each later end.
+	// ends is each kind and scope's last moving end, as Records.LastEnds
+	// answers it: read at Run and at each resume, kept from each later end,
+	// at most maxEnds.
 	ends map[ScheduledScope]LastEnd
-	// unkept is, for each scope ever scheduled, the leading end among those
-	// ends does not keep (holdUnkeptLocked).
-	unkept map[ScheduledScope]coveringEnd
 	// noted is each scope's last moving end noted during a resume's LastEnds
 	// read, nil outside one: resume drops every other end it held.
 	noted map[ScheduledScope]LastEnd
@@ -203,7 +201,6 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		scheduled:   map[ScheduledScope]*timed{},
 		seen:        map[ScheduledScope]struct{}{},
 		ends:        map[ScheduledScope]LastEnd{},
-		unkept:      map[ScheduledScope]coveringEnd{},
 		ready:       make(chan struct{}),
 		stop:        make(chan struct{}),
 		kick:        make(chan struct{}, 1),

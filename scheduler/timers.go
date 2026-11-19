@@ -1,8 +1,10 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/cplieger/go/health/v2"
@@ -11,15 +13,16 @@ import (
 // maxScheduled bounds the scheduled scopes of one executor.
 const maxScheduled = 64
 
+// maxEnds bounds the last ends an executor holds: a record store keeps at
+// most 10,000 records in all, so a LastEnds read answers no more scopes.
+const maxEnds = 10_000
+
 // jitter is the ±fraction each scheduled wait is drawn from.
 const jitter = 0.10
 
 // timed is one scheduled scope: its cadence, its watch and its timer. The
 // executor's mu guards every field; the watch guards its own state.
 type timed struct {
-	watch *Watch
-	timer *time.Timer
-	check *time.Timer // fires just after the watch's deadline
 	// base is what the next wake counts from: the last moving end, the
 	// cadence change, or the start when the scope has neither.
 	base  time.Time
@@ -27,17 +30,15 @@ type timed struct {
 	// changed is the last cadence change: Schedule's changed, at most the
 	// call, else the call; zero for a first Schedule that gave none.
 	changed time.Time
-	lease   health.Lease // the kind's Watch(every), or {every, Cycles: 3}
+	watch   *Watch
+	timer   *time.Timer
+	check   *time.Timer    // fires just after the watch's deadline
+	lead    ScheduledScope // the scope whose end base is; zero when base is no end
+	lease   health.Lease   // the kind's Watch(every), or {every, Cycles: 3}
 	cadence Cadence
 	gen     uint64 // bumped at each arm, so a superseded timer's func does nothing
 	done    bool   // base is an end whose work was done, or no end, so the wait is the interval
 	passed  bool   // the deadline passed and its ERROR line was logged
-}
-
-// coveringEnd is an end and the scope that ended it.
-type coveringEnd struct {
-	by  ScheduledScope
-	end LastEnd
 }
 
 // Schedule sets a scheduled scope's live cadence c, which the app committed
@@ -170,13 +171,13 @@ func (e *Executor[P]) readEnds(ctx context.Context, start time.Time) {
 	}
 }
 
-// mergeEndsLocked takes a LastEnds read: each scope keeps the later of its
-// read end and one already noted, and each Fresh window a read end opens
+// mergeEndsLocked takes a LastEnds read: each scope keeps the last
+// (LastEnd.Supersedes) of its read end and one already noted, and each Fresh window a read end opens
 // that is still ahead is opened, so rule 4 holds across a restart.
 func (e *Executor[P]) mergeEndsLocked(ends map[ScheduledScope]LastEnd) {
 	now := time.Now()
 	for key, end := range ends {
-		if have, ok := e.ends[key]; !ok || end.At.After(have.At) {
+		if have, ok := e.ends[key]; !ok || end.Supersedes(have) {
 			e.ends[key] = end
 		}
 		if spec := e.kinds[key.Kind]; spec != nil && spec.Fresh != nil {
@@ -184,6 +185,32 @@ func (e *Executor[P]) mergeEndsLocked(ends map[ScheduledScope]LastEnd) {
 				e.recent[key] = until
 			}
 		}
+	}
+	e.boundEndsLocked()
+}
+
+// boundEndsLocked drops the oldest ends past maxEnds, the least Kind then
+// Scope first at one instant, keeping each one a scheduled scope counts from.
+func (e *Executor[P]) boundEndsLocked() {
+	over := len(e.ends) - maxEnds
+	if over <= 0 {
+		return
+	}
+	leads := map[ScheduledScope]bool{}
+	for _, t := range e.scheduled {
+		leads[t.lead] = true
+	}
+	drop := make([]ScheduledScope, 0, len(e.ends))
+	for k := range e.ends {
+		if !leads[k] {
+			drop = append(drop, k)
+		}
+	}
+	slices.SortFunc(drop, func(a, b ScheduledScope) int {
+		return cmp.Or(e.ends[a].At.Compare(e.ends[b].At), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Scope, b.Scope))
+	})
+	for _, k := range drop[:min(over, len(drop))] {
+		delete(e.ends, k)
 	}
 }
 
@@ -231,20 +258,26 @@ func pause(stop <-chan struct{}, d time.Duration) bool {
 
 // baseLocked counts a scope from the later of its last moving end, its
 // covering kinds' included, and its last cadence change, or with no end from
-// noEndBaseLocked.
-func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) {
-	_, end, ok := e.leadEndLocked(key)
-	if ok && !end.At.Before(t.changed) {
-		t.base, t.done = end.At, workDone(end.Result)
-		t.watch.Beat(end.At)
-		return
+// noEndBaseLocked. It reads only ends, which LastEnds answers alike, and the
+// cadence, so a restart counts alike. It reports whether the base or the
+// wait moved.
+func (e *Executor[P]) baseLocked(key ScheduledScope, t *timed) (moved bool) {
+	from, end, ok := e.lastEndLocked(key)
+	base, done, lead := t.changed, true, ScheduledScope{}
+	switch {
+	case ok && !end.At.Before(t.changed):
+		base, done, lead = end.At, workDone(end.Result), from
+	case !ok:
+		base = e.noEndBaseLocked(t)
 	}
-	from := t.changed
-	if !ok {
-		from = e.noEndBaseLocked(t)
+	moved = !base.Equal(t.base) || done != t.done
+	t.base, t.done, t.lead = base, done, lead
+	if lead != (ScheduledScope{}) {
+		t.watch.Beat(base)
+	} else {
+		t.watch.from(base)
 	}
-	t.base, t.done = from, true
-	t.watch.from(from)
+	return moved
 }
 
 // noEndBaseLocked answers what a scope with no moving end counts from: the
@@ -289,17 +322,6 @@ func (e *Executor[P]) lastEndLocked(key ScheduledScope) (from ScheduledScope, en
 	return from, end, ok
 }
 
-// leadEndLocked answers the moving end key counts from and the scope that
-// ended it: lastEndLocked's, or the unkept end held for key when that one
-// comes before it (countsOver).
-func (e *Executor[P]) leadEndLocked(key ScheduledScope) (from ScheduledScope, end LastEnd, ok bool) {
-	from, end, ok = e.lastEndLocked(key)
-	if u, held := e.unkept[key]; held && (!ok || countsOver(key, u.by, u.end, from, end)) {
-		return u.by, u.end, true
-	}
-	return from, end, ok
-}
-
 // countsOver reports whether end, of scope by, comes before have, of scope
 // from, as what key counts from: the later At, then at one instant key's own
 // end, then the least Kind, then Scope. It reads only what Records.LastEnds
@@ -325,69 +347,34 @@ func (e *Executor[P]) coversLocked(by, key ScheduledScope) bool {
 		spec.Covers(Job[P]{Kind: by.Kind, Scope: by.Scope}, Job[P]{Kind: key.Kind, Scope: key.Scope, Trigger: TriggerSchedule})
 }
 
-// noteEndLocked records a started job's moving end at at as its scope's last
-// end, then moves the watch's beat and the next wake of its scheduled scope
-// and of each one its kind covers whose count this end now leads, so an end
-// noted after a later one moves nothing.
+// noteEndLocked keeps a started job's moving end at at as its scope's last
+// end, then counts again each scheduled scope it is or covers (baseLocked),
+// re-arming one whose base or wait moved, so an end noted after a later one
+// moves nothing.
 func (e *Executor[P]) noteEndLocked(en *job[P], r Result, at time.Time) {
 	key := ScheduledScope{Kind: en.j.Kind, Scope: en.j.Scope}
-	end := LastEnd{At: at, Result: r}
-	// A proposing kind's scopes are digests of unbounded keys: only a
-	// scheduled one is kept, so the map stays bounded.
-	kept := e.scheduled[key] != nil || !en.spec.Proposes
-	if kept {
-		e.keepEndLocked(key, end)
+	e.keepEndLocked(key, LastEnd{At: at, Result: r})
+	if !e.endsRead {
+		return
 	}
-	for k := range e.seen {
-		if k != key && !e.coversLocked(key, k) {
-			continue
-		}
-		e.holdUnkeptLocked(k, key, end, kept)
-		if t := e.scheduled[k]; t != nil && e.endsRead && e.leadsLocked(k, key, end) {
-			e.movedLocked(k, t, at, workDone(r))
+	for k, t := range e.scheduled {
+		if (k == key || e.coversLocked(key, k)) && e.baseLocked(k, t) {
+			e.armLocked(k, t)
+			e.watchLocked(k, t)
 		}
 	}
 }
 
 // keepEndLocked keeps end as key's last end, and as one noted during a
-// resume's read, unless the one held is later.
+// resume's read, when it supersedes the one held (LastEnd.Supersedes).
 func (e *Executor[P]) keepEndLocked(key ScheduledScope, end LastEnd) {
-	if have, ok := e.ends[key]; !ok || !end.At.Before(have.At) {
+	if have, ok := e.ends[key]; !ok || end.Supersedes(have) {
 		e.ends[key] = end
 	}
-	if have, ok := e.noted[key]; e.noted != nil && (!ok || !end.At.Before(have.At)) {
+	if have, ok := e.noted[key]; e.noted != nil && (!ok || end.Supersedes(have)) {
 		e.noted[key] = end
 	}
-}
-
-// holdUnkeptLocked holds, for a scope key ever scheduled, the end of scope by
-// that comes first (countsOver) among the ends not kept in ends, so key
-// counts from it as a restart does from Records.LastEnds; a kept end that
-// comes before it drops it, since ends then holds the later one.
-func (e *Executor[P]) holdUnkeptLocked(key, by ScheduledScope, end LastEnd, kept bool) {
-	u, held := e.unkept[key]
-	switch {
-	case held && !countsOver(key, by, end, u.by, u.end):
-	case kept:
-		delete(e.unkept, key)
-	default:
-		e.unkept[key] = coveringEnd{by: by, end: end}
-	}
-}
-
-// leadsLocked reports whether end, of scope by, is what key counts from
-// (leadEndLocked).
-func (e *Executor[P]) leadsLocked(key, by ScheduledScope, end LastEnd) bool {
-	from, have, ok := e.leadEndLocked(key)
-	return ok && from == by && have.At.Equal(end.At) && have.Result == end.Result
-}
-
-// movedLocked counts a scheduled scope from a moving end at at.
-func (e *Executor[P]) movedLocked(key ScheduledScope, t *timed, at time.Time, done bool) {
-	t.base, t.done = at, done
-	t.watch.Beat(at)
-	e.armLocked(key, t)
-	e.watchLocked(key, t)
+	e.boundEndsLocked()
 }
 
 // wake submits a scheduled scope's timer request, then arms the next wake

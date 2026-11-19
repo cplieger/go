@@ -45,7 +45,7 @@ type Records interface {
 	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
 	// LastEnds answers each kind and scope's last moving end, scheduled or
 	// not: the end of a job that started and did not end cancelled or
-	// interrupted, the one written last among ends at one instant.
+	// interrupted, the one LastEnd.Supersedes puts last among its ends.
 	LastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error)
 }
 
@@ -92,6 +92,31 @@ type PhaseAt struct {
 type LastEnd struct {
 	At     time.Time
 	Result Result
+}
+
+// Supersedes reports whether l, an end of the same kind and scope as have,
+// is its last end over have: the later At, then at one instant the one whose
+// work was not done, failed before skipped and partial before ok, so the
+// order the ends were written or noted in never decides.
+func (l LastEnd) Supersedes(have LastEnd) bool {
+	if !l.At.Equal(have.At) {
+		return l.At.After(have.At)
+	}
+	return tieRank(l.Result) < tieRank(have.Result)
+}
+
+// tieRank orders the moving results of ends at one instant, the least last.
+func tieRank(r Result) int {
+	switch r {
+	case ResultFailed:
+		return 0
+	case ResultSkipped:
+		return 1
+	case ResultPartial:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // ScheduledScope names one kind and scope: the key of LastEnds.

@@ -380,9 +380,9 @@ func (s *Store) History(_ context.Context, kind scheduler.Kind, after string, n 
 	return out, next, nil
 }
 
-// LastEnds answers each kind and scope's last moving end: the latest end of
-// a record that started and did not end cancelled or interrupted, the one
-// written last among ends at one instant. It answers every scope, scheduled
+// LastEnds answers each kind and scope's last moving end: of the ends of
+// records that started and did not end cancelled or interrupted, the one
+// scheduler.LastEnd.Supersedes puts last. It answers every scope, scheduled
 // or not, so the executor can apply covering.
 func (s *Store) LastEnds(_ context.Context) (map[scheduler.ScheduledScope]scheduler.LastEnd, error) {
 	s.mu.Lock()
@@ -398,8 +398,9 @@ func (s *Store) LastEnds(_ context.Context) (map[scheduler.ScheduledScope]schedu
 			continue
 		}
 		k := scheduler.ScheduledScope{Kind: r.Kind, Scope: r.Scope}
-		if old, ok := out[k]; !ok || !r.EndedAt.Before(old.At) {
-			out[k] = scheduler.LastEnd{At: r.EndedAt, Result: r.End.Result}
+		le := scheduler.LastEnd{At: r.EndedAt, Result: r.End.Result}
+		if old, ok := out[k]; !ok || le.Supersedes(old) {
+			out[k] = le
 		}
 	}
 	return out, nil
