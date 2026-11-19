@@ -3,6 +3,8 @@ package httpservertest
 import (
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -51,14 +53,18 @@ func record(t *testing.T, check func(testing.TB)) *recordingTB {
 
 const fixtureDir = "testdata/codespecs/app"
 
+// fixtureCodes are the codes the app fixture writes. registered_code (passed
+// to another package's function), other_struct_code (another package's
+// struct), map_key_code and unwritten_code are not among them.
 var fixtureCodes = []httpserver.ErrorCode{
-	"const_code", "constructor_code", "converted_code", "envelope_code",
-	"field_code", "func_type_code", "literal_code", "option_code",
-	"responder_code",
+	"concat_code", "const_code", "constructor_code", "converted_code",
+	"envelope_code", "field_code", "func_type_code", "literal_code",
+	"option_code", "other_value_code", "paren_code", "positional_code",
+	"responder_code", "second_variadic_code", "shared_code", "variadic_code",
 }
 
 func TestWrittenCodesFindsEachWriterShape(t *testing.T) {
-	got, err := writtenCodes(fixtureDir)
+	got, err := writtenCodes(t.Context(), fixtureDir)
 	if err != nil {
 		t.Fatalf("writtenCodes: %v", err)
 	}
@@ -87,11 +93,25 @@ func TestCheckCodeSpecs(t *testing.T) {
 	})
 	t.Run("missing and extra codes are named", func(t *testing.T) {
 		r := record(t, func(tb testing.TB) {
-			CheckCodeSpecs(tb, fixtureDir, specsFor(append(slices.Clone(fixtureCodes[1:]), "never_written")...))
+			kept := slices.DeleteFunc(slices.Clone(fixtureCodes), func(c httpserver.ErrorCode) bool { return c == "const_code" })
+			CheckCodeSpecs(tb, fixtureDir, specsFor(append(kept, "never_written")...))
 		})
 		joined := strings.Join(r.errors, "\n")
 		if len(r.errors) != 2 || !strings.Contains(joined, `"const_code"`) || !strings.Contains(joined, `"never_written"`) {
 			t.Errorf("failures = %q, want one for const_code and one for never_written", r.errors)
+		}
+	})
+	t.Run("a package that does not compile is fatal", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module broken\n\ngo 1.27\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "broken.go"), []byte("package broken\n\nvar x int = \"text\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r := record(t, func(tb testing.TB) { CheckCodeSpecs(tb, dir, nil) })
+		if !strings.Contains(r.fatal, "broken.go:3") {
+			t.Errorf("fatal = %q, want the compile error at broken.go:3", r.fatal)
 		}
 	})
 	t.Run("a directory with no source is fatal", func(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	hs "github.com/cplieger/go/httpserver/v2"
+	"github.com/cplieger/go/httpserver/v2/httpservertest/testdata/codespecs/codes"
 )
 
 const (
@@ -40,4 +41,20 @@ func (c *config) serve(w http.ResponseWriter, r *http.Request) {
 	hs.WriteErrorBody(w, http.StatusConflict, hs.NewErrorResponse(r, "constructor_code", "m"))
 	hs.WriteErrorBody(w, http.StatusConflict, hs.ErrorResponse{Code: "envelope_code"})
 	http.Error(w, "plain_error_text", http.StatusTeapot)
+	hs.WriteError(w, r, http.StatusConflict, codes.Shared, "imported constant")
+	hs.WriteError(w, r, http.StatusConflict, codes.Concatenated, "concatenation")
+	hs.WriteError(w, r, http.StatusConflict, (hs.ErrorCode)("paren_"+"code"), "m")
+	codes.Register("registered_code")
+	codes.Responder{}.Respond(w, r, http.StatusGone, "other_value_code", "m")
+	_ = codes.Spec{Code: "other_struct_code"}
+	_ = map[hs.ErrorCode]int{"map_key_code": 1}
+	_ = pair{"positional_code", 1}
+	c.warn(w, "variadic_code", "second_variadic_code")
 }
+
+type pair struct {
+	code hs.ErrorCode
+	n    int
+}
+
+func (*config) warn(_ http.ResponseWriter, codes ...hs.ErrorCode) {}
