@@ -125,7 +125,7 @@ func checkPrivateDirInRoot(root *os.Root, clean string) error {
 	before, err := root.Lstat(clean)
 	switch {
 	case err != nil:
-		return err
+		return rootDirRefusal(root, clean, err)
 	case before.Mode()&os.ModeSymlink != 0:
 		return fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
 	case !before.IsDir():
@@ -136,7 +136,10 @@ func checkPrivateDirInRoot(root *os.Root, clean string) error {
 	}
 	f, err := openDirInRoot(root, clean)
 	if err != nil {
-		return racedOpen(root, clean, before, err)
+		if err = racedOpen(root, clean, before, err); errors.Is(err, ErrRaced) {
+			return err
+		}
+		return foreignDirErr(err, before, clean)
 	}
 	defer func() { _ = f.Close() }()
 	fi, err := checkPrivateDirHandle(f, clean)
@@ -218,19 +221,51 @@ func openPrivateDir(dir string) (*os.File, error) {
 // occupantRefusal names a refused open by what lstat finds at dir, since
 // each kernel picks its own errno (a link is ENOTDIR on Linux, EMLINK on
 // FreeBSD; a socket is EOPNOTSUPP on OpenBSD): ErrSymlinkTarget for a link,
-// ErrNotDirectory for another non-directory, the open's error for a
-// directory or a failed lstat. A name swapped in after the failed open can
-// only mislabel the error, never admit a descriptor.
+// ErrNotDirectory for another non-directory, foreignDirErr's answer for a
+// directory, the open's error for a failed lstat. A name swapped in after
+// the failed open can only mislabel the error, never admit a descriptor.
 func occupantRefusal(err error, dir string, lstat func() (os.FileInfo, error)) error {
 	fi, lerr := lstat()
 	switch {
-	case lerr != nil || fi.IsDir():
+	case lerr != nil:
 		return err
+	case fi.IsDir():
+		return foreignDirErr(err, fi, dir)
 	case fi.Mode()&os.ModeSymlink != 0:
 		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, dir, err)
 	default:
 		return fmt.Errorf("%w: %s: %w", ErrNotDirectory, dir, err)
 	}
+}
+
+// foreignDirErr is ErrNotOwned wrapping err when a permission error refused
+// the open of fi, a directory another uid owns: the lstat that found fi
+// already passed every parent, so its owner's mode is what refused.
+func foreignDirErr(err error, fi os.FileInfo, name string) error {
+	if !fi.IsDir() || !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	if oerr := ownerErr(fi, name); oerr != nil {
+		return fmt.Errorf("%w: %w", oerr, err)
+	}
+	return err
+}
+
+// rootDirRefusal names a refused Lstat of root's own directory. os.Root
+// exposes no descriptor to fstat, and every lookup through it, "." included,
+// needs search permission on that directory, so the owner is read from the
+// path the root was opened at. A directory moved since can only mislabel
+// the error. Any other name's refusal is a parent's and comes back as it is.
+func rootDirRefusal(root *os.Root, clean string, err error) error {
+	if clean != "." || !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	dir := filepath.Clean(root.Name())
+	fi, serr := os.Stat(dir)
+	if serr != nil {
+		return err
+	}
+	return foreignDirErr(err, fi, dir)
 }
 
 // statOwnedDir stats the OPEN descriptor and refuses anything that is not

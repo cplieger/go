@@ -47,7 +47,9 @@ var (
 	ErrNotDirectory = errors.New("filesafe: not a directory")
 	// ErrNotOwned is returned by EnsurePrivateDir, the CheckPrivateDir pair and
 	// the lease functions when the directory's or lock file's owner is not the
-	// effective uid, or ownership could not be determined. Match with errors.Is.
+	// effective uid, or ownership could not be determined. When that owner's
+	// mode refused the open, it wraps the open's error too, so it also matches
+	// fs.ErrPermission. Match with errors.Is.
 	ErrNotOwned = errors.New("filesafe: not owned by the effective uid")
 	// ErrModeTooOpen is returned when a pre-existing directory or lock file
 	// grants group or other access: by EnsurePrivateDir unless

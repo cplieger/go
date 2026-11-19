@@ -77,9 +77,11 @@ func chmodBits(m os.FileMode) os.FileMode {
 // owns with no group or other access, then fsyncs dir's parent; the verdict
 // holds at one point in time (docs/file-modes.md). Refusals (errors.Is):
 // ErrModeTooOpen unless WithRepairOwnedDir, ErrEmptyPath, ErrUnsafePath,
-// ErrSymlinkTarget, ErrNotDirectory, ErrNotOwned, ErrModeNotStored,
-// fs.ErrPermission for an unreadable parent, and ErrParentNotSynced, the one
-// worth a retry. On Windows a valid dir returns ErrModeUnsupported.
+// ErrSymlinkTarget, ErrNotDirectory, ErrNotOwned (also for another uid's
+// directory it cannot open, wrapping the open's error), ErrModeNotStored,
+// fs.ErrPermission for a parent it cannot search or read, and
+// ErrParentNotSynced, the one worth a retry. On Windows a valid dir returns
+// ErrModeUnsupported.
 func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, error) {
 	c := buildPrivateDirCfg(opts)
 	clean, err := validateAbsClean(dir)
@@ -92,10 +94,11 @@ func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, e
 // CheckPrivateDir proves from an open handle that the absolute dir is a
 // directory, not a symlink, owned by the effective uid with no group or other
 // access: EnsurePrivateDir's verdict, reached without creating, changing or
-// syncing anything. A missing dir matches fs.ErrNotExist; refusals are
-// EnsurePrivateDir's (ErrEmptyPath, ErrUnsafePath, ErrSymlinkTarget,
-// ErrNotDirectory, ErrNotOwned, ErrModeTooOpen). On Windows a valid dir
-// returns ErrModeUnsupported.
+// syncing anything. A missing dir matches fs.ErrNotExist and a parent it
+// cannot search fs.ErrPermission; refusals are EnsurePrivateDir's
+// (ErrEmptyPath, ErrUnsafePath, ErrSymlinkTarget, ErrNotDirectory,
+// ErrNotOwned, ErrModeTooOpen). On Windows a valid dir returns
+// ErrModeUnsupported.
 func CheckPrivateDir(dir string) error {
 	clean, err := validateAbsClean(dir)
 	if err != nil {
@@ -105,9 +108,9 @@ func CheckPrivateDir(dir string) error {
 }
 
 // CheckPrivateDirInRoot is CheckPrivateDir for name inside root, where "."
-// checks root's own directory as it is now. A symlink at name is refused, an
-// in-root symlinked ancestor resolves, and a name whose identity changes
-// during the check is ErrRaced. A relative, NUL-free name is required
+// checks root's own directory as it is now, ErrNotOwned once another uid
+// owns it. A symlink at name is refused, an in-root symlinked ancestor
+// resolves, and a name whose identity changes during the check is ErrRaced. A relative, NUL-free name is required
 // (ErrEmptyPath, ErrUnsafePath) and a nil root returns ErrUnsafePath.
 func CheckPrivateDirInRoot(root *os.Root, name string) error {
 	if root == nil {
