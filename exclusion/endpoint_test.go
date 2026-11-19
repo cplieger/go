@@ -2,10 +2,12 @@ package exclusion_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/exclusion"
@@ -40,6 +42,22 @@ func TestMatchesRowIsPost(t *testing.T) {
 	t.Run("the path follows the name", func(t *testing.T) {
 		if got := exclusion.Endpoint("rules.matches", settingsRead).Path; got != "/rules/matches" {
 			t.Errorf("Path = %q, want /rules/matches", got)
+		}
+	})
+	t.Run("a list at every bound fits the body cap", func(t *testing.T) {
+		// A control character is six bytes once JSON escapes it.
+		value := strings.Repeat("\x01", exclusion.MaxValueBytes)
+		name := strings.Repeat("f", 64)
+		r := exclusion.Rule{}
+		for range exclusion.MaxConditions {
+			r.Conditions = append(r.Conditions, exclusion.Condition{Field: name, Value: value})
+		}
+		body, err := json.Marshal(exclusion.MatchesRequest{Rules: slices.Repeat([]exclusion.Rule{r}, exclusion.MaxRules)})
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if row.MaxBody < len(body) {
+			t.Errorf("MaxBody = %d, under the %d bytes of a list at every bound", row.MaxBody, len(body))
 		}
 	})
 	t.Run("the table derives", func(t *testing.T) {
@@ -90,6 +108,13 @@ func TestMatchesAnswersCountsInOrder(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a nil count of no rule answers an empty list", func(t *testing.T) {
+		none := func(context.Context, *exclusion.Set) ([]int, error) { return nil, nil }
+		got, err := exclusion.Matches(fields, none)(t.Context(), call{})
+		if err != nil || got.Counts == nil || len(got.Counts) != 0 {
+			t.Errorf("Matches = %#v, %v; want an empty list", got.Counts, err)
+		}
+	})
 }
 
 func TestMatchesCountErrorAnswersNoCounts(t *testing.T) {
