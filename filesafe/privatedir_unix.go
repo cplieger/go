@@ -136,10 +136,17 @@ func checkPrivateDirInRoot(root *os.Root, clean string) error {
 	}
 	f, err := openDirInRoot(root, clean)
 	if err != nil {
+		// Classified from a lookup after the refusal, not from before, so an
+		// owner change in between is seen; SameFile keeps a name swapped since
+		// from labelling the refusal.
 		if err = racedOpen(root, clean, before, err); errors.Is(err, ErrRaced) {
 			return err
 		}
-		return foreignDirErr(err, before, clean)
+		now, lerr := root.Lstat(clean)
+		if lerr != nil || !os.SameFile(before, now) {
+			return rootDirRefusal(root, clean, err)
+		}
+		return foreignDirErr(err, now, clean)
 	}
 	defer func() { _ = f.Close() }()
 	fi, err := checkPrivateDirHandle(f, clean)
@@ -251,11 +258,12 @@ func foreignDirErr(err error, fi os.FileInfo, name string) error {
 	return err
 }
 
-// rootDirRefusal names a refused Lstat of root's own directory. os.Root
+// rootDirRefusal names a refusal on root's own directory. os.Root
 // exposes no descriptor to fstat, and every lookup through it, "." included,
-// needs search permission on that directory, so the owner is read from the
-// path the root was opened at. A directory moved since can only mislabel
-// the error. Any other name's refusal is a parent's and comes back as it is.
+// needs search permission on that directory, so the owner is that of what
+// root.Name() names now, relative to the current directory. A directory moved
+// off that name answers err; a name that now names another directory is
+// labelled from it. Any other name comes back as err.
 func rootDirRefusal(root *os.Root, clean string, err error) error {
 	if clean != "." || !errors.Is(err, fs.ErrPermission) {
 		return err
