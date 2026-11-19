@@ -600,6 +600,52 @@ func wantUncountedEndWait(t *testing.T, u uncountedEnd, c scheduler.Cadence, nex
 	r.nextWake(t, "full", "", endedAt, next)
 }
 
+// TestTimerWakeAnsweredByHeldProposal schedules a proposing kind whose first
+// timer job proposes and ends with result. Its proposal is held 15 minutes
+// after that end and answers each wake before then, running nothing, so a
+// wake it answers is a served request: the next waits as that end set, and
+// the first wake past the 15 minutes runs the next job lo to hi after it.
+func TestTimerWakeAnsweredByHeldProposal(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		result scheduler.Result
+		lo, hi time.Duration
+	}{
+		// The wake at the end plus [9m, 11m] is answered, the next is that
+		// wake plus [9m, 11m], past the proposal.
+		{"after an ok end the next run waits the interval from the answered wake", scheduler.ResultOK, 18 * time.Minute, 22 * time.Minute},
+		// Each wake is Retry's [54s, 66s] after the one before.
+		{"after a failed end the answered wakes wait Retry's d", scheduler.ResultFailed, 15 * time.Minute, 15*time.Minute + 66*time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) { wantHeldProposalWait(t, c.result, c.lo, c.hi) })
+		})
+	}
+}
+
+func wantHeldProposalWait(t *testing.T, result scheduler.Result, lo, hi time.Duration) {
+	prop := spec("prop", "")
+	prop.Proposes = true
+	var once sync.Once
+	prop.Run = func(_ context.Context, run *scheduler.Run[payload]) scheduler.End {
+		end := scheduler.End{Result: scheduler.ResultOK}
+		once.Do(func() {
+			if _, err := run.Propose("held"); err != nil {
+				t.Errorf("Propose() = %v, want nil", err)
+			}
+			end.Result = result
+		})
+		return end
+	}
+	r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{prop}})
+	synctest.Wait()
+	scheduledAt := time.Now()
+	r.schedule(t, "prop", "a", scheduler.Scheduled(10*time.Minute).Retry(time.Minute))
+	first := r.nextWake(t, "prop", "a", scheduledAt, 10*time.Minute)
+	r.wantEnd(t, first.ID, result)
+	r.wakeIn(t, "prop", "a", r.rec(t, first.ID).EndedAt, lo, hi)
+}
+
 func TestRestartDoesNotRerunDaily(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		base := &rig{store: memrecords.New(), log: &runLog{}}

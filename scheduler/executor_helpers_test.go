@@ -184,13 +184,19 @@ func (r *rig) wakes(kind scheduler.Kind, scope string) []scheduler.Record {
 func (r *rig) nextWake(t *testing.T, kind scheduler.Kind, scope string, base time.Time, d time.Duration) scheduler.Record {
 	t.Helper()
 	lo, hi := jitterBand(d)
+	return r.wakeIn(t, kind, scope, base, lo, hi)
+}
+
+// wakeIn is nextWake for a wake in [lo, hi] after base.
+func (r *rig) wakeIn(t *testing.T, kind scheduler.Kind, scope string, base time.Time, lo, hi time.Duration) scheduler.Record {
+	t.Helper()
 	sleepUntil(base.Add(lo - time.Second))
 	for {
 		for _, rec := range r.wakes(kind, scope) {
 			if !rec.QueuedAt.After(base) {
 				continue
 			}
-			if off := rec.QueuedAt.Sub(base); !inBand(off, d) {
+			if off := rec.QueuedAt.Sub(base); off < lo || off > hi {
 				t.Fatalf("timer of %s %q woke %v after %v, want within [%v, %v]", kind, scope, off, base, lo, hi)
 			}
 			return rec
