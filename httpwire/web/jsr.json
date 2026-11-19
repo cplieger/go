@@ -1,0 +1,13 @@
+{
+  "name": "@cplieger/httpwire",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "publish": {
+    "include": ["LICENSE", "NOTICE", "README.md", "src/**/*.ts", "jsr.json"],
+    "exclude": ["src/**/*.test.ts", "src/**/*-setup.ts", "src/**/test-helpers/**"]
+  }
+}

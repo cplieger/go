@@ -1,0 +1,146 @@
+{
+  "components": {
+    "schemas": {
+      "MergeBody": {
+        "properties": {
+          "base": {
+            "type": "string"
+          }
+        },
+        "required": ["base"],
+        "type": "object"
+      },
+      "Note": {
+        "properties": {
+          "tag": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": ["text", "tag"],
+        "type": "object"
+      },
+      "NoteBody": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "x-max-bytes": 16
+          }
+        },
+        "required": ["text"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "if-match fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/notes/{id}": {
+      "get": {
+        "description": "Reads one note and its tag.",
+        "operationId": "notes.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read a note"
+      },
+      "put": {
+        "description": "Saves a note read at its tag.",
+        "operationId": "notes.save",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Save a note"
+      }
+    },
+    "/api/notes/{id}/merge": {
+      "post": {
+        "description": "Merges a note from a base tag.",
+        "operationId": "notes.merge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Merge a note"
+      }
+    }
+  }
+}

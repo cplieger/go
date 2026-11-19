@@ -1,0 +1,32 @@
+{
+  "info": {
+    "title": "spool fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/import": {
+      "post": {
+        "description": "Import an archive.",
+        "operationId": "archive.import",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Import an archive",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    }
+  }
+}

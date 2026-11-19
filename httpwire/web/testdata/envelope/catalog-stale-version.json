@@ -1,0 +1,4 @@
+{
+  "body": "{\"code\":\"stale_version\",\"message\":\"Another tab saved this row first.\",\"remediation\":\"Read the row again, reapply the change, and resend with the new tag.\",\"reason\":\"row_changed\",\"request_id\":\"req-1\"}\n",
+  "valid": true
+}

@@ -1,0 +1,53 @@
+{
+  "pages": {
+    "about": "/about",
+    "app": "/"
+  },
+  "apiPrefix": "/api/v1",
+  "cases": [
+    {
+      "params": {},
+      "path": "/",
+      "name": "app"
+    },
+    {
+      "params": {},
+      "path": "/about",
+      "name": "about"
+    },
+    {
+      "params": {},
+      "path": "/about/",
+      "name": "app"
+    },
+    {
+      "params": {},
+      "path": "/anything/at/all",
+      "name": "app"
+    },
+    {
+      "path": "/x/../about",
+      "redirect": "/about",
+      "serverOnly": true
+    },
+    {
+      "params": {},
+      "path": "/api",
+      "name": "app"
+    },
+    {
+      "path": "/api/v1"
+    },
+    {
+      "path": "/api/v1/"
+    },
+    {
+      "path": "/api/v1/x"
+    },
+    {
+      "params": {},
+      "path": "/api/v1x",
+      "name": "app"
+    }
+  ]
+}
