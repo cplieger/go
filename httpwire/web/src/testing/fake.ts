@@ -15,6 +15,7 @@ export interface GeneratedEndpoint<T> {
   readonly statuses: readonly number[];
 }
 
+/** A generated client's `ENDPOINTS`, keyed by row name. */
 export type GeneratedEndpoints = Readonly<Record<string, GeneratedEndpoint<unknown>>>;
 
 /** A catalog row as the document's `x-error-codes` publishes it. */
@@ -23,6 +24,7 @@ export interface ErrorCodeSpec {
   readonly remediation: string;
 }
 
+/** The rows a fake server answers for, and the wire version every answer carries. */
 export interface FakeServerOptions {
   readonly endpoints: GeneratedEndpoints;
   readonly wireVersion: string;
@@ -30,6 +32,7 @@ export interface FakeServerOptions {
   readonly errorCodes?: Readonly<Record<string, ErrorCodeSpec>>;
 }
 
+/** One request the fake routed to a row. */
 export interface FakeCall {
   readonly name: string;
   readonly url: string;
@@ -50,6 +53,7 @@ export interface FakeStream {
   readonly open: number;
 }
 
+/** An answer's status (the row's primary when absent) and extra headers. */
 export interface AnswerOptions {
   readonly status?: number;
   readonly headers?: Readonly<Record<string, string>>;
@@ -57,6 +61,10 @@ export interface AnswerOptions {
   readonly params?: Readonly<Record<string, string>>;
 }
 
+/**
+ * A refusal's status (the catalog's when absent), its envelope's `reason` and `fields`, and the
+ * path parameters it is limited to.
+ */
 export interface RefuseOptions {
   readonly status?: number;
   readonly reason?: string;
@@ -64,6 +72,10 @@ export interface RefuseOptions {
   readonly params?: Readonly<Record<string, string>>;
 }
 
+/**
+ * A fake of the server a generated client calls. Among a row's answers and refusals whose `params`
+ * hold, the newest registered answers; `calls` lists each routed request in order.
+ */
 export interface FakeServer {
   readonly fetch: typeof fetch;
   answer<T>(ep: GeneratedEndpoint<T>, data: T, o?: AnswerOptions): void;

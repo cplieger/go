@@ -15,4 +15,8 @@ describe("WireCode", () => {
     const own: WireCode = "seadex_unreachable";
     expect([...codes, own].every((c) => typeof c === "string")).toBe(true);
   });
+
+  it("is frozen", () => {
+    expect(Object.isFrozen(WIRE_CODES)).toBe(true);
+  });
 });

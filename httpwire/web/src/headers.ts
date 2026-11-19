@@ -1,5 +1,8 @@
+/** The header every answer carries the API's wire version in; a write naming another answers `wire_mismatch`. */
 export const WIRE_VERSION_HEADER = "Wire-Version";
+/** The header a keyed write sends its key in, written by `idempotencyKeyHeader`. */
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
+/** The header every answer carries the request's id in, the id a refusal's `request_id` holds. */
 export const REQUEST_ID_HEADER = "X-Request-Id";
 
 const MAX_KEY = 255;
