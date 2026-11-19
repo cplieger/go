@@ -1,19 +1,18 @@
 import { code, decodeUpstream, type ErrorEnvelope, isObject, MAX_STRING } from "./envelope.js";
 
-const answers = ["same", "updated", "gone", "error"] as const;
-const reasons = ["superseded", "store_unwritable"] as const;
-
 /** The answers one source gives to an open check, a keyed re-read of one item. */
-export const CHECK_ANSWERS: typeof answers = Object.freeze(answers);
+export const CHECK_ANSWERS = ["same", "updated", "gone", "error"] as const;
+Object.freeze(CHECK_ANSWERS);
 
 /** One source's answer to an open check. */
-export type CheckAnswer = (typeof answers)[number];
+export type CheckAnswer = (typeof CHECK_ANSWERS)[number];
 
 /** Why an `updated` or `gone` answer was not stored. */
-export const NOT_STORED: typeof reasons = Object.freeze(reasons);
+export const NOT_STORED = ["superseded", "store_unwritable"] as const;
+Object.freeze(NOT_STORED);
 
 /** One of NOT_STORED. */
-export type NotStored = (typeof reasons)[number];
+export type NotStored = (typeof NOT_STORED)[number];
 
 /**
  * One source's answer. Which members are present follows `answer`: `same` carries none of `row`,
@@ -24,18 +23,23 @@ export type NotStored = (typeof reasons)[number];
 export interface SourceCheck<T> {
   /** The app's name for the source, unique in its Checked. */
   readonly source: string;
+  /** What the source said about the item. */
   readonly answer: CheckAnswer;
   /** The item as stored when `stored`, else as the source answered it. */
   readonly row?: T;
+  /** Whether the server wrote the answer into its store. */
   readonly stored: boolean;
+  /** Why an `updated` or `gone` answer was not stored. */
   readonly not_stored?: NotStored;
   /** The failure's code, in the code grammar. */
   readonly code?: string;
+  /** What the source said when it answered with a failure. Untrusted, as the envelope's is. */
   readonly upstream?: NonNullable<ErrorEnvelope["upstream"]>;
 }
 
 /** An open check's answer: one entry per source the item came from. */
 export interface Checked<T> {
+  /** One answer per source, each source named once. */
   readonly sources: readonly SourceCheck<T>[];
 }
 
@@ -51,13 +55,13 @@ function problem(s: Members): string {
   if (typeof s["source"] !== "string" || s["source"] === "") {
     return "source is not a non-empty string";
   }
-  if (!oneOf(answers, s["answer"])) {
+  if (!oneOf(CHECK_ANSWERS, s["answer"])) {
     return "answer is not same, updated, gone or error";
   }
   if (typeof s["stored"] !== "boolean") {
     return "stored is not a boolean";
   }
-  if (has("not_stored") && !oneOf(reasons, s["not_stored"])) {
+  if (has("not_stored") && !oneOf(NOT_STORED, s["not_stored"])) {
     return "not_stored is not superseded or store_unwritable";
   }
   if (has("row") && s["row"] === null) {
