@@ -654,6 +654,27 @@ func TestQuietWaitsForRecordWrites(t *testing.T) {
 		})
 	})
 
+	t.Run("a hold waits for a shutdown's queued-job end", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := newGatedStore()
+			r, stop := (&rig{store: s.Store, log: &runLog{}}).openUntil(t, scheduler.Config[payload]{
+				Kinds:   []scheduler.KindSpec[payload]{spec("scan", "heavy")},
+				Records: s,
+			})
+			r.start(t, api("scan", "source:a", "alice", payload{Gate: make(chan struct{})}))
+			synctest.Wait()
+			q := r.start(t, api("scan", "source:b", "alice", payload{}))
+			g := s.gateEnd(q.Job)
+			_ = stopAsync(stop)
+			<-g.entered
+			if h := s.quietWhile(t, g, holdAsync(t.Context(), r.ex), "Hold(all)"); h.err != nil {
+				t.Fatalf("Hold(all) = %v, want nil", h.err)
+			}
+			r.wantEnd(t, q.Job, scheduler.ResultInterrupted)
+			s.wantNoWrite(t, "Hold(all)")
+		})
+	})
+
 	t.Run("a second hold waits for the first hold's queued-job end", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			s, r := gatedRig(t, 0)
