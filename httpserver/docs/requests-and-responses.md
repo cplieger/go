@@ -76,6 +76,7 @@ The remediation is empty here because `has_dependents` is the app's own code, ou
 | `timeout` | 503 | no | `RouteTimeout`, whose handler may still commit after the 503 |
 | `ui_unbuilt` | 503 | no | `SPA` with no bundle |
 | `cross_origin_refused` | 403 | yes | `CrossOrigin` |
+| `precondition_failed` | 412 | yes | `SPA`, `OutagePage`, for an `If-Match` the file does not hold |
 
 `invalid_error_code` is not in the map, because no writer in the package passes a malformed code.
 

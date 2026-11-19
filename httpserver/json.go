@@ -100,6 +100,7 @@ var codeSpecs = map[ErrorCode]CodeSpec{
 	"not_found":              {Status: http.StatusNotFound, Remediation: "Check the path; nothing is served at it."},
 	"ui_unbuilt":             {Status: http.StatusServiceUnavailable, Remediation: "Build the web UI with go generate ./..., then restart the server."},
 	"cross_origin_refused":   {Status: http.StatusForbidden, Remediation: "Send the request from a page served by this server's own origin.", NoEffect: true},
+	"precondition_failed":    {Status: http.StatusPreconditionFailed, Remediation: "Fetch the file again without If-Match; it has changed since its entity tag was read.", NoEffect: true},
 }
 
 // CodeSpecs returns every code a writer in this package answers, with its

@@ -49,7 +49,7 @@ type BundleEntry struct {
 // is nil or holds no BundlePath (unbuilt). A manifest that does not read,
 // decode or check is an error. Each listed path is a regular file in fsys with
 // no dot segment: a root .html shell, a stable entry's root .js file, or a
-// file under assets/ or licenses/ other than index.html. Each entry's logical
+// file under assets/ or licenses/. Each entry's logical
 // path is unique and its Path is a listed file, under assets/ unless Stable.
 func ReadBundle(fsys fs.FS) (Bundle, bool, error) {
 	if fsys == nil {
@@ -125,7 +125,7 @@ func checkBundlePath(p string, stable bool) error {
 	if hasDotSegment(p) {
 		return errors.New("a segment starts with a dot")
 	}
-	top, rest, nested := strings.Cut(p, "/")
+	top, _, nested := strings.Cut(p, "/")
 	switch {
 	case !nested:
 		if path.Ext(p) != htmlExt && (!stable || !stablePath(p)) {
@@ -133,9 +133,6 @@ func checkBundlePath(p string, stable bool) error {
 		}
 	case top != "assets" && top != "licenses":
 		return errors.New("a nested file is under assets/ or licenses/")
-	case path.Base(rest) == "index.html":
-		// http.FileServer redirects any path ending in /index.html.
-		return errors.New("a file under assets/ or licenses/ is never index.html")
 	}
 	return nil
 }

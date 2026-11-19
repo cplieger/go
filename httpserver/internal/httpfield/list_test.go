@@ -95,3 +95,42 @@ func TestIfNoneMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestIfMatchFails(t *testing.T) {
+	const etag = `"abc-gz"`
+	cases := []struct {
+		name  string
+		lines []string
+		want  bool
+	}{
+		{"no header", nil, false},
+		{"empty header", []string{""}, false},
+		{"only separators", []string{" , ,"}, false},
+		{"exact match", []string{`"abc-gz"`}, false},
+		{"wildcard", []string{"*"}, false},
+		{"present in comma list", []string{`"x", "abc-gz", "y"`}, false},
+		{"match on a later field line", []string{`"x"`, `"abc-gz"`}, false},
+		{"whitespace trimmed around match", []string{`  "abc-gz"  `}, false},
+		{"absent from list", []string{`"x", "y"`}, true},
+		{"identity etag does not match gz etag", []string{`"abc"`}, true},
+		{"a weak tag never matches by strong comparison", []string{`W/"abc-gz"`}, true},
+		{"unquoted tag does not match", []string{"abc-gz"}, true},
+		{"a quoted star is an opaque tag", []string{`"*"`}, true},
+		{"a star beside tags is malformed", []string{`*, "x"`}, true},
+		{"a star beside the matching tag still matches", []string{`*, "abc-gz"`}, false},
+		{"a star on each of two lines is malformed", []string{"*", "*"}, true},
+		{"a star inside an opaque tag is no wildcard", []string{`"other,*,tag"`}, true},
+		{"an unclosed tag swallows the rest of the list", []string{`"x, "abc-gz"`}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{}
+			for _, line := range tc.lines {
+				h.Add("If-Match", line)
+			}
+			if got := IfMatchFails(h, etag); got != tc.want {
+				t.Errorf("IfMatchFails(%q, %q) = %v, want %v", tc.lines, etag, got, tc.want)
+			}
+		})
+	}
+}

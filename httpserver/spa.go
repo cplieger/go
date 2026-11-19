@@ -27,13 +27,16 @@ type SPAConfig struct {
 const immutableCache = "public, max-age=31536000, immutable"
 
 // SPA serves a single-page app's bundle (BundlePath) for GET and HEAD. A
-// listed asset answers through StaticHandler (immutable; a BundleClassic or
-// stable entry no-cache), a notice text/plain, /favicon.ico 204, any other
-// path under assets/ or licenses/ a refusal, whatever the pages match; then a
-// page path answers its shell, any other the default shell with 404, no-cache.
-// A path at or under APIPrefix, a dot segment no page matches, another method
-// and, unbuilt, a page (ui_unbuilt) answer a refusal through Errors, no-store.
-// Every answer carries SPAPolicy's policy and every no-cache ETag binds it.
+// listed asset answers immutable (a BundleClassic or stable entry no-cache), a
+// notice text/plain, /favicon.ico 204, any other path under assets/ or
+// licenses/ a refusal, whatever the pages match; then a page path answers its
+// shell, any other the default shell with 404, no-cache. Each file answers
+// from memory under its ETag, with its gzip body when offered; Range is
+// ignored and no Last-Modified is sent, so If-Match is the one precondition
+// refused (precondition_failed). A path at or under APIPrefix, a dot segment
+// no page matches, another method and, unbuilt, a page (ui_unbuilt) answer a
+// refusal through Errors, no-store. Every answer carries SPAPolicy's policy
+// and every no-cache ETag binds it.
 func SPA(c SPAConfig) (http.Handler, error) { //nolint:gocritic // hugeParam: read once at construction, and a value keeps the caller's config unshared
 	policy, err := SPAPolicy(c.CSPAdd)
 	if err != nil {
@@ -71,28 +74,29 @@ type spaServer struct {
 	shells    map[string]*spaFile // by page name
 	notices   map[string]*spaFile // by tree path
 	notFound  *spaFile
-	static    http.Handler
-	served    map[string]bool // tree paths answered through static
-	refused   map[string]bool // root paths that are files, never paths
+	assets    map[string]*spaFile // by tree path: the listed assets and stable entries
+	refused   map[string]bool     // root paths that are files, never paths
 	policy    string
 	apiPrefix string
 	built     bool
 }
 
-// spaFile is a file SPA writes itself from memory: a shell or a notice.
+// spaFile is a file SPA and OutagePage write from memory: a shell, a notice,
+// an asset or a stable entry.
 type spaFile struct {
-	contentType string
-	body        []byte
-	etag        string
-	gz          gzAsset
+	contentType  string
+	cacheControl string
+	body         []byte
+	etag         string
+	gz           gzAsset
 }
 
-func readSPAFile(fsys fs.FS, name, contentType, etag string) (*spaFile, error) {
+func readSPAFile(fsys fs.FS, name, contentType, cacheControl, etag string) (*spaFile, error) {
 	body, err := fs.ReadFile(fsys, name)
 	if err != nil {
 		return nil, err
 	}
-	f := &spaFile{contentType: contentType, body: body, etag: etag}
+	f := &spaFile{contentType: contentType, cacheControl: cacheControl, body: body, etag: etag}
 	if gz, ok := gzipAsset(body, name); ok {
 		gz.contentType = contentType
 		f.gz = gz
@@ -110,7 +114,7 @@ func (s *spaServer) load(fsys fs.FS, b Bundle, pages []Page) error {
 		if !ok {
 			return nil, fmt.Errorf("httpserver: %s does not list the shell %q", BundlePath, name)
 		}
-		sh, err := readSPAFile(fsys, name, contentTypes[htmlExt], policyETag(hash, s.policy))
+		sh, err := readSPAFile(fsys, name, contentTypes[htmlExt], "no-cache", policyETag(hash, s.policy))
 		if err != nil {
 			return nil, err
 		}
@@ -137,18 +141,18 @@ func (s *spaServer) load(fsys fs.FS, b Bundle, pages []Page) error {
 	return nil
 }
 
-// loadFiles keeps the notices in memory and the listed assets' handler, every
-// other listed root file, a shell, being refused as a path.
+// loadFiles keeps the listed assets and the notices in memory, every other
+// listed root file, a shell, being refused as a path.
 func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
 	var err error
-	if s.static, s.served, err = bundleAssets(fsys, b, s.policy); err != nil {
+	if s.assets, err = bundleAssets(fsys, b, s.policy); err != nil {
 		return err
 	}
 	s.refused = map[string]bool{BundlePath: true}
 	s.notices = make(map[string]*spaFile)
 	for name, hash := range b.Files {
 		switch {
-		case s.served[name]:
+		case s.assets[name] != nil:
 		case !strings.Contains(name, "/"):
 			s.refused[name] = true
 		case strings.HasPrefix(name, "licenses/"):
@@ -160,12 +164,11 @@ func (s *spaServer) loadFiles(fsys fs.FS, b Bundle) error {
 	return nil
 }
 
-// bundleAssets is the StaticHandler for b's stable entries and the files b
-// lists under assets/ with a content-type table extension, and those files'
-// tree paths: the manifest hash and immutable for each, a BundleClassic or
-// stable entry no-cache under a tag bound to policy. SPA and OutagePage both
-// serve assets through it.
-func bundleAssets(fsys fs.FS, b Bundle, policy string) (http.Handler, map[string]bool, error) {
+// bundleAssets reads b's stable entries and the files b lists under assets/
+// with a content-type table extension, by tree path: each under the manifest
+// hash and immutable, a BundleClassic or stable entry no-cache under a tag
+// bound to policy. SPA and OutagePage both serve assets from it.
+func bundleAssets(fsys fs.FS, b Bundle, policy string) (map[string]*spaFile, error) {
 	stable := stablePaths(b.Entries)
 	noCache := maps.Clone(stable)
 	for _, e := range b.Entries {
@@ -173,28 +176,26 @@ func bundleAssets(fsys fs.FS, b Bundle, policy string) (http.Handler, map[string
 			noCache[e.Path] = true
 		}
 	}
-	tags := make(map[string]string)
-	served := make(map[string]bool)
+	assets := make(map[string]*spaFile)
 	for name, hash := range b.Files {
+		cacheControl, etag := immutableCache, `"`+hash+`"`
 		switch {
 		case !stable[name] && (!strings.HasPrefix(name, "assets/") || contentTypes[path.Ext(name)] == ""):
+			continue
 		case noCache[name]:
-			served[name], tags[name] = true, policyETag(hash, policy)
-		default:
-			served[name], tags[name] = true, `"`+hash+`"`
+			cacheControl, etag = "no-cache", policyETag(hash, policy)
 		}
+		f, err := readSPAFile(fsys, name, contentTypeOf(name), cacheControl, etag)
+		if err != nil {
+			return nil, err
+		}
+		assets[name] = f
 	}
-	h, err := StaticHandler(fsys, WithStaticETags(tags), WithStaticCacheControl(func(name string) string {
-		if noCache[name] {
-			return "no-cache"
-		}
-		return immutableCache
-	}))
-	return h, served, err
+	return assets, nil
 }
 
 func (s *spaServer) loadNotice(fsys fs.FS, name, hash string) error {
-	f, err := readSPAFile(fsys, name, contentTypes[".txt"], policyETag(hash, s.policy))
+	f, err := readSPAFile(fsys, name, contentTypes[".txt"], "no-cache", policyETag(hash, s.policy))
 	s.notices[name] = f
 	return err
 }
@@ -259,7 +260,7 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case !s.built:
 			refuse(s.errs, w, r, http.StatusServiceUnavailable, "ui_unbuilt", "the web UI is not built")
 		default:
-			s.shells[m.Name].serve(w, r, http.StatusOK)
+			s.shells[m.Name].serve(w, r, http.StatusOK, s.errs)
 		}
 		return
 	}
@@ -267,7 +268,7 @@ func (s *spaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(s.errs, w, r, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	s.notFound.serve(w, r, http.StatusNotFound)
+	s.notFound.serve(w, r, http.StatusNotFound, s.errs)
 }
 
 // serveTree answers r when its path is the bundle's own: a listed file, a
@@ -279,10 +280,10 @@ func (s *spaServer) serveTree(w http.ResponseWriter, r *http.Request) bool {
 	p := r.URL.Path
 	name := strings.TrimPrefix(p, "/")
 	switch {
-	case s.served[name]:
-		s.static.ServeHTTP(w, r)
+	case s.assets[name] != nil:
+		s.assets[name].serve(w, r, http.StatusOK, s.errs)
 	case s.notices[name] != nil:
-		s.notices[name].serve(w, r, http.StatusOK)
+		s.notices[name].serve(w, r, http.StatusOK, s.errs)
 	case p == "/favicon.ico":
 		w.WriteHeader(http.StatusNoContent)
 	case s.refused[name], underPrefix(path.Clean(p), "/assets"), underPrefix(path.Clean(p), "/licenses"):
@@ -301,26 +302,43 @@ func refuse(errs ErrorResponder, w http.ResponseWriter, r *http.Request, status 
 	errs(w, r, status, code, msg)
 }
 
-// serve writes f with status, no-cache. A 200 carries f's ETag and its gzip
-// body when offered; a 404 carries neither, so nothing revalidates it.
-func (sh *spaFile) serve(w http.ResponseWriter, r *http.Request, status int) {
-	h := w.Header()
-	h.Set("Content-Type", sh.contentType)
-	h.Set("Cache-Control", "no-cache")
+// serve writes f with status. A 200 selects the gzip body when it is kept and
+// offered, under f's ETag plus "-gz", and evaluates the preconditions against
+// that representation in RFC 9110 section 13.2.2's order: an If-Match it
+// fails (strong comparison, section 13.1.1) answers precondition_failed
+// through errs, no-store, and a matching If-None-Match answers 304. Range is
+// ignored (section 14.2) and no Last-Modified is sent, so If-Unmodified-Since,
+// If-Modified-Since and If-Range have nothing to act on. Any other status
+// carries no ETag and evaluates nothing (section 13.2.1), so nothing
+// revalidates it.
+func (f *spaFile) serve(w http.ResponseWriter, r *http.Request, status int, errs ErrorResponder) {
+	body, etag, gzipped := f.body, f.etag, false
 	if status == http.StatusOK {
-		h.Set("ETag", sh.etag)
-		h.Add("Vary", "Accept-Encoding")
-		if sh.gz.body != nil && serveGzip(w, r, sh.etag, sh.gz) {
-			return
+		if f.gz.body != nil && acceptsGzip(r) {
+			body, etag, gzipped = f.gz.body, gzipETag(f.etag), true
 		}
-		if httpfield.IfNoneMatch(r.Header, sh.etag) {
-			w.WriteHeader(http.StatusNotModified)
+		if httpfield.IfMatchFails(r.Header, etag) {
+			refuse(errs, w, r, http.StatusPreconditionFailed, "precondition_failed", "the file does not match If-Match")
 			return
 		}
 	}
-	h.Set("Content-Length", strconv.Itoa(len(sh.body)))
+	h := w.Header()
+	h.Set("Content-Type", f.contentType)
+	h.Set("Cache-Control", f.cacheControl)
+	if status == http.StatusOK {
+		h.Set("ETag", etag)
+		h.Add("Vary", "Accept-Encoding")
+		if httpfield.IfNoneMatch(r.Header, etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if gzipped {
+			h.Set("Content-Encoding", "gzip")
+		}
+	}
+	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	writeBody(w, r, sh.body)
+	writeBody(w, r, body)
 }
 
 // writeBody writes body, bytes held since construction, unless r is a HEAD
