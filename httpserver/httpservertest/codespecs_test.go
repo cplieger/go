@@ -54,13 +54,14 @@ func record(t *testing.T, check func(testing.TB)) *recordingTB {
 const fixtureDir = "testdata/codespecs/app"
 
 // fixtureCodes are the codes the app fixture writes. registered_code (passed
-// to another package's function), other_struct_code (another package's
-// struct), map_key_code and unwritten_code are not among them.
+// to another package's function), map_key_code, bare_list_code (a slice no
+// struct holds) and unwritten_code are not among them.
 var fixtureCodes = []httpserver.ErrorCode{
-	"concat_code", "const_code", "constructor_code", "converted_code",
-	"envelope_code", "field_code", "func_type_code", "literal_code",
-	"option_code", "other_value_code", "paren_code", "positional_code",
-	"responder_code", "second_variadic_code", "shared_code", "variadic_code",
+	"array_code", "concat_code", "const_code", "constructor_code",
+	"converted_code", "envelope_code", "field_code", "func_type_code",
+	"literal_code", "option_code", "other_struct_code", "other_value_code",
+	"paren_code", "positional_code", "responder_code", "row_list_code",
+	"second_variadic_code", "shared_code", "variadic_code",
 }
 
 func TestWrittenCodesFindsEachWriterShape(t *testing.T) {

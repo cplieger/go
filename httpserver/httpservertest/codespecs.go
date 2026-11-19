@@ -27,9 +27,8 @@ import (
 )
 
 const (
-	httpserverPath    = "github.com/cplieger/go/httpserver/v2"
-	errorCodeType     = "ErrorCode"
-	errorResponseType = "ErrorResponse"
+	httpserverPath = "github.com/cplieger/go/httpserver/v2"
+	errorCodeType  = "ErrorCode"
 )
 
 // rootWriters are the httpserver functions that write the codes they are
@@ -41,8 +40,9 @@ var rootWriters = map[string]bool{"WriteError": true, "NewErrorResponse": true}
 // type-checks dir's non-test files as go build selects them, so the package
 // must compile. A code is a string constant expression passed as an ErrorCode
 // argument to WriteError, NewErrorResponse, a function the package declares or
-// a func value, or set in an ErrorCode field of the package's struct or of
-// ErrorResponse; another package's functions do not write.
+// a func value, or set in an ErrorCode field of any struct literal, or
+// listed in an ErrorCode slice or array a struct field holds; another
+// package's functions do not write, and neither does a map key.
 func CheckCodeSpecs(t testing.TB, dir string, specs map[httpserver.ErrorCode]httpserver.CodeSpec) {
 	t.Helper()
 	written, err := writtenCodes(t.Context(), dir)
@@ -247,12 +247,14 @@ func (s *codeScan) writer(fun ast.Expr) bool {
 	return f.Pkg() != nil && f.Pkg().Path() == httpserverPath && rootWriters[f.Name()] && sig != nil && sig.Recv() == nil
 }
 
-// collectFields records the constants lit gives the ErrorCode fields of a
-// struct the package declares, or of ErrorResponse.
+// collectFields records the constants lit gives its ErrorCode fields, and
+// the elements of an ErrorCode slice or array literal given to a field, in a
+// struct of any package: a struct carries a code to the writer that answers
+// it. A map literal's keys and a slice outside a struct are never codes
+// written, since an app's spec map or code list would then hold itself.
 func (s *codeScan) collectFields(lit *ast.CompositeLit) {
-	t := types.Unalias(s.info.TypeOf(lit))
-	st, ok := t.Underlying().(*types.Struct)
-	if !ok || !s.ownStruct(t) {
+	st, ok := types.Unalias(s.info.TypeOf(lit)).Underlying().(*types.Struct)
+	if !ok {
 		return
 	}
 	for i, el := range lit.Elts {
@@ -266,21 +268,40 @@ func (s *codeScan) collectFields(lit *ast.CompositeLit) {
 		} else if i < st.NumFields() {
 			field = st.Field(i)
 		}
-		if field != nil && isErrorCode(field.Type()) {
+		switch {
+		case field == nil:
+		case isErrorCode(field.Type()):
 			s.record(value)
+		case isErrorCode(elemOf(field.Type())):
+			s.recordElements(value)
 		}
 	}
 }
 
-// ownStruct reports whether t is a struct type the package declares, an
-// unnamed struct, or httpserver's ErrorResponse.
-func (s *codeScan) ownStruct(t types.Type) bool {
-	named, ok := t.(*types.Named)
+// recordElements records each element of e when e is a slice or array
+// composite literal.
+func (s *codeScan) recordElements(e ast.Expr) {
+	lit, ok := ast.Unparen(e).(*ast.CompositeLit)
 	if !ok {
-		return true
+		return
 	}
-	obj := named.Origin().Obj()
-	return obj.Pkg() == s.pkg || isHTTPServerType(obj, errorResponseType)
+	for _, el := range lit.Elts {
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			el = kv.Value
+		}
+		s.record(el)
+	}
+}
+
+// elemOf is the element type of a slice or array type, else nil.
+func elemOf(t types.Type) types.Type {
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Slice:
+		return u.Elem()
+	case *types.Array:
+		return u.Elem()
+	}
+	return nil
 }
 
 func fieldNamed(st *types.Struct, name string) *types.Var {
@@ -294,6 +315,9 @@ func fieldNamed(st *types.Struct, name string) *types.Var {
 
 // isErrorCode reports whether t is httpserver's ErrorCode.
 func isErrorCode(t types.Type) bool {
+	if t == nil {
+		return false
+	}
 	named, ok := types.Unalias(t).(*types.Named)
 	return ok && isHTTPServerType(named.Obj(), errorCodeType)
 }
