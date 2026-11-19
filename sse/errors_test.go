@@ -176,10 +176,17 @@ func TestWithErrors_handlerRefusalsGoThroughTheResponder(t *testing.T) {
 	}
 }
 
-// Only the option and its default may name httpserver's envelope writers, so
-// every refusal a writer adds goes through the hub's responder.
+// Only the option and its default may name httpserver's envelope writers or
+// net/http's Error, so every refusal a writer adds goes through the hub's responder.
 func TestWithErrors_noWriterBypassesTheResponder(t *testing.T) {
-	writers := map[string]bool{"WriteError": true, "NewErrorResponse": true, "ErrorResponse": true}
+	type writerPkg struct {
+		name    string
+		writers map[string]bool
+	}
+	banned := map[string]writerPkg{
+		"github.com/cplieger/go/httpserver/v2": {name: "httpserver", writers: map[string]bool{"WriteError": true, "NewErrorResponse": true, "ErrorResponse": true}},
+		"net/http":                             {name: "http", writers: map[string]bool{"Error": true}},
+	}
 	allowed := map[string]bool{"errors.go": true, "config.go": true}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -194,22 +201,30 @@ func TestWithErrors_noWriterBypassesTheResponder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		qualifier := ""
+		qualifiers := map[string]writerPkg{}
 		for _, imp := range f.Imports {
-			if p, _ := strconv.Unquote(imp.Path.Value); p == "github.com/cplieger/go/httpserver/v2" {
-				qualifier = "httpserver"
-				if imp.Name != nil {
-					qualifier = imp.Name.Name
-				}
+			p, _ := strconv.Unquote(imp.Path.Value)
+			pkg, ok := banned[p]
+			if !ok {
+				continue
 			}
+			qualifier := pkg.name
+			if imp.Name != nil {
+				qualifier = imp.Name.Name
+			}
+			qualifiers[qualifier] = pkg
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
-			if x, ok := sel.X.(*ast.Ident); ok && qualifier != "" && x.Name == qualifier && writers[sel.Sel.Name] {
-				t.Errorf("%s: httpserver.%s bypasses the hub's responder; write through h.cfg.errs", fset.Position(sel.Pos()), sel.Sel.Name)
+			x, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if pkg, ok := qualifiers[x.Name]; ok && pkg.writers[sel.Sel.Name] {
+				t.Errorf("%s: %s.%s bypasses the hub's responder; write through h.cfg.errs", fset.Position(sel.Pos()), pkg.name, sel.Sel.Name)
 			}
 			return true
 		})
