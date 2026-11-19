@@ -440,6 +440,89 @@ func TestTimerJobUncountedEndWaitsFromTheEnd(t *testing.T) {
 	t.Run("joined a covering job whose end moves no base", func(t *testing.T) {
 		synctest.Test(t, wantJoinedCoverWait)
 	})
+	t.Run("cancelled while its record is written", func(t *testing.T) {
+		synctest.Test(t, wantCancelledInAdmissionWait)
+	})
+	t.Run("cadence changed while it runs, then cancelled", func(t *testing.T) {
+		synctest.Test(t, wantChangedThenCancelledWait)
+	})
+}
+
+// heldTimerInsert holds the first timer record's Insert, after sending its
+// ID on ids, until release closes.
+type heldTimerInsert struct {
+	*memrecords.Store
+	ids     chan scheduler.ID
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *heldTimerInsert) Insert(ctx context.Context, rec scheduler.Record, key *scheduler.Key) (scheduler.Record, bool, error) {
+	if rec.Trigger == scheduler.TriggerSchedule {
+		h.once.Do(func() {
+			h.ids <- rec.ID
+			<-h.release
+		})
+	}
+	return h.Store.Insert(ctx, rec, key)
+}
+
+// wantCancelledInAdmissionWait cancels scan's timer job while its record's
+// Insert is held, so the job ends before its wake retakes the lock, and
+// fails the test unless the next wake is the cancel plus Retry's d.
+func wantCancelledInAdmissionWait(t *testing.T) {
+	store := memrecords.New()
+	held := &heldTimerInsert{Store: store, ids: make(chan scheduler.ID, 1), release: make(chan struct{})}
+	r := (&rig{store: store, log: &runLog{}}).open(t, scheduler.Config[payload]{
+		Kinds:   []scheduler.KindSpec[payload]{spec("scan", "")},
+		Records: held,
+	})
+	synctest.Wait()
+	r.schedule(t, "scan", "a", scheduler.Scheduled(time.Hour).Retry(15*time.Minute))
+	var id scheduler.ID
+	select {
+	case id = <-held.ids:
+	case <-time.After(2 * time.Hour):
+		t.Fatal("no timer record written within 2h of the schedule")
+	}
+	synctest.Wait()
+	if stopping, err := r.ex.Cancel(t.Context(), id); stopping || err != nil {
+		t.Fatalf("Cancel(the timer job) while its record is written = %v, %v, want false, nil", stopping, err)
+	}
+	cancelledAt := time.Now()
+	close(held.release)
+	synctest.Wait()
+	r.wantEnd(t, id, scheduler.ResultCancelled)
+	r.nextWake(t, "scan", "a", cancelledAt, 15*time.Minute)
+}
+
+// wantChangedThenCancelledWait changes scan's cadence while its timer job
+// runs, then cancels that job, and fails the test unless the next wake is
+// the change plus the new interval: the change re-armed the timer, so the
+// cancel has no wake left to stand in for.
+func wantChangedThenCancelledWait(t *testing.T) {
+	scan := spec("scan", "")
+	scan.Run = func(ctx context.Context, run *scheduler.Run[payload]) scheduler.End {
+		if run.Job().Trigger == scheduler.TriggerSchedule {
+			<-ctx.Done()
+		}
+		return scheduler.End{Result: scheduler.ResultOK}
+	}
+	r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{scan}})
+	synctest.Wait()
+	scheduledAt := time.Now()
+	r.schedule(t, "scan", "a", scheduler.Scheduled(time.Hour).Retry(15*time.Minute))
+	wake := r.nextWake(t, "scan", "a", scheduledAt, time.Hour)
+	sleepUntil(wake.QueuedAt.Add(10 * time.Minute))
+	r.schedule(t, "scan", "a", scheduler.Scheduled(2*time.Hour).Retry(30*time.Minute))
+	changedAt := time.Now()
+	sleepUntil(changedAt.Add(20 * time.Minute))
+	if _, err := r.ex.Cancel(t.Context(), wake.ID); err != nil {
+		t.Fatalf("Cancel(the timer job) = %v", err)
+	}
+	synctest.Wait()
+	r.wantEnd(t, wake.ID, scheduler.ResultCancelled)
+	r.nextWake(t, "scan", "a", changedAt, 2*time.Hour)
 }
 
 // wantJoinedCoverWait has scan's timer join a queued full job that covers it
