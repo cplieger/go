@@ -157,14 +157,18 @@ type Executor[P any] struct {
 	ready     chan struct{} // closed by Run
 	stop      chan struct{} // closed once Run's context ended
 	kick      chan struct{} // a Live count changed; relayMoves drains it
-	observer  Observer
-	live      []*job[P] // admitting, queued and running jobs, in admission order
-	wg        sync.WaitGroup
-	mu        sync.Mutex
+	// idle closes once no record write writeLocked counted is in flight; a
+	// hold and a shutdown wait on it, since those writes run off any job's run.
+	idle     chan struct{}
+	observer Observer
+	live     []*job[P] // admitting, queued and running jobs, in admission order
+	wg       sync.WaitGroup
+	mu       sync.Mutex
 
 	maxQueued, maxPerOwner int
 	waiting                int
 	holds                  int    // Hold(all) calls not yet resumed
+	writing                int    // record writes counted by writeLocked, in flight
 	readGen                uint64 // moved by each hold, so a superseded resume read stops
 	started, closed        bool
 	endsRead               bool // Run has read Records.LastEnds, so timers may be armed
@@ -199,6 +203,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 		ready:       make(chan struct{}),
 		stop:        make(chan struct{}),
 		kick:        make(chan struct{}, 1),
+		idle:        make(chan struct{}),
 		observer:    cfg.Observer,
 		maxQueued:   maxQueued,
 		maxPerOwner: perOwner,
@@ -220,6 +225,7 @@ func NewExecutor[P any](cfg Config[P]) (*Executor[P], error) {
 			e.slots[k.Slot] = newSlot(e.moved)
 		}
 	}
+	close(e.idle)
 	return e, nil
 }
 
@@ -257,13 +263,13 @@ func checkPhases(phases []Phase) error {
 }
 
 // Run drives the timers, slots and dispatch until ctx ends, then cancels each
-// running job and returns once every one has returned. A job it cut short
-// ends interrupted, unless its end committed with its work or it was in its
-// commit step, and a queued job ends interrupted without running. It reads
-// Records.LastEnds first, retrying a failed read after 1, 2, 4 and 8 minutes
-// and then every 15; no scheduled scope wakes before a read answers, and
-// each deadline counts from Run's start meanwhile. A second call answers an
-// error at once.
+// running job and returns once every one has returned and each record write
+// in flight has landed. A job it cut short ends interrupted, unless its end
+// committed with its work or it was in its commit step; a queued job, or one
+// whose record was being written, ends interrupted without running. It reads
+// Records.LastEnds first, retrying a failed read after 1, 2, 4, 8 minutes and
+// then every 15; no scheduled scope wakes before a read answers, and each
+// deadline counts from Run's start meanwhile. A second call errors at once.
 func (e *Executor[P]) Run(ctx context.Context) error {
 	e.mu.Lock()
 	if e.started {
@@ -299,10 +305,12 @@ func (e *Executor[P]) Run(ctx context.Context) error {
 		case stateAdmitting, stateEnded:
 		}
 	}
+	idle := e.idle
 	e.mu.Unlock()
 	for _, en := range dequeued {
 		e.ended(ctx, en, *en.stopEnd)
 	}
+	<-idle
 	e.wg.Wait()
 	close(stopMoves)
 	relay.Wait()
@@ -567,6 +575,24 @@ func (e *Executor[P]) unwaitLocked(en *job[P]) {
 		if e.owners[o] == 0 {
 			delete(e.owners, o)
 		}
+	}
+}
+
+// writeLocked counts a record write made off a job's run (an admission, a
+// refusal, a dequeued job's end); wrote ends it.
+func (e *Executor[P]) writeLocked() {
+	if e.writing == 0 {
+		e.idle = make(chan struct{})
+	}
+	e.writing++
+}
+
+func (e *Executor[P]) wrote() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.writing--
+	if e.writing == 0 {
+		close(e.idle)
 	}
 }
 

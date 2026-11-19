@@ -30,7 +30,9 @@ func (e *Executor[P]) Cancel(ctx context.Context, id ID) (stopping bool, err err
 	case en.state == stateQueued:
 		end := End{Result: ResultCancelled}
 		e.dequeueLocked(en, end)
+		e.writeLocked()
 		e.mu.Unlock()
+		defer e.wrote()
 		e.ended(ctx, en, end)
 		return false, nil
 	}
@@ -94,7 +96,9 @@ func (e *Executor[P]) CredentialEnded(credential string) {
 	for _, en := range dequeued {
 		e.dequeueLocked(en, end)
 	}
+	e.writeLocked()
 	e.mu.Unlock()
+	defer e.wrote()
 	for _, en := range dequeued {
 		e.ended(context.Background(), en, end)
 	}

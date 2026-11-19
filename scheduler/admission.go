@@ -12,10 +12,10 @@ import (
 // before it is queued. A stored record holding j's Key, its owner's held
 // proposal of its scope, a queued job of its scope or one covering it, or a
 // running one of its scope inside Fresh, of a proposing kind or serving a
-// timer request, answers it instead (Joined), running nothing. Errors:
-// *RecentError; ErrQueueFull past a queue or proposal bound (the record ended
-// skipped, queue_full) or in a Hold(all) (no record); ErrStoreUnavailable, or
-// ctx's error, when the record write fails; ErrBatchSize, ErrUnknownKind, ErrScope.
+// timer request, answers it instead (Joined). A Hold(all) or shutdown opened
+// during the write ends the job interrupted. Errors: *RecentError; ErrQueueFull
+// past a bound (the record ended skipped, queue_full) or in a Hold(all) (no
+// record); ErrStoreUnavailable or ctx's error; ErrBatchSize, ErrUnknownKind, ErrScope.
 func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 	spec, ok := e.kinds[j.Kind]
 	switch {
@@ -42,13 +42,16 @@ func (e *Executor[P]) Start(ctx context.Context, j Job[P]) (Started, error) {
 		e.mu.Unlock()
 		return s, err
 	}
+	e.writeLocked()
 	if e.fullLocked(&en.j) || e.proposalsFullLocked(spec, &en.j) {
 		e.mu.Unlock()
+		defer e.wrote()
 		return e.refuse(ctx, en)
 	}
 	e.live = append(e.live, en)
 	e.waitLocked(en)
 	e.mu.Unlock()
+	defer e.wrote()
 	return e.admit(ctx, en)
 }
 
@@ -81,7 +84,8 @@ func (e *Executor[P]) matchLocked(ctx context.Context, spec *KindSpec[P], j *Job
 }
 
 // admit writes the record of en, which holds its place in the bounds, and
-// queues it. A CredentialEnded during the write ends it instead, cancelled.
+// queues it. A CredentialEnded, a covering start, a Hold(all) or a shutdown
+// during the write ends it instead.
 func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 	replay, err := e.insert(ctx, en)
 	e.mu.Lock()
@@ -93,10 +97,11 @@ func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 		e.mu.Unlock()
 		return Started{Job: replay, Joined: true}, nil
 	}
-	stopped := err == nil && en.stopEnd != nil
-	if err == nil && !stopped && (e.closed || e.holds > 0) {
-		err = errClosed
+	if err == nil && en.stopEnd == nil && (e.closed || e.holds > 0) {
+		stop := End{Result: ResultInterrupted} // as the hold or shutdown ends a queued job
+		en.stopEnd = &stop
 	}
+	stopped := err == nil && en.stopEnd != nil
 	if err != nil || stopped {
 		e.unwaitLocked(en)
 		en.state = stateEnded
@@ -107,17 +112,12 @@ func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 		}
 		close(en.admitted)
 		e.mu.Unlock()
-		switch {
-		case stopped:
-			e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
-			e.ended(ctx, en, *en.stopEnd)
-			return Started{Job: en.j.ID}, nil
-		case errors.Is(err, errClosed):
-			e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
-			e.ended(ctx, en, queueFull)
-			return Started{}, ErrQueueFull
+		if !stopped {
+			return Started{}, err
 		}
-		return Started{}, err
+		e.post(en, &Transition{Phase: PhaseQueued, At: en.rec.QueuedAt})
+		e.ended(ctx, en, *en.stopEnd)
+		return Started{Job: en.j.ID}, nil
 	}
 	en.state = stateQueued
 	en.inserted = true
@@ -133,10 +133,6 @@ func (e *Executor[P]) admit(ctx context.Context, en *job[P]) (Started, error) {
 	e.flush(en)
 	return s, nil
 }
-
-// errClosed is a Start that met the executor's end or a Hold(all); it
-// answers as a full queue.
-var errClosed = errors.New("scheduler: closed")
 
 // queueFull is the end of a request the queue refused after its record was
 // written.

@@ -6,17 +6,18 @@ import (
 	"time"
 )
 
-// holdWait is how long Hold(all) waits for the running jobs it cancelled.
+// holdWait is how long Hold(all) waits for the jobs it cancelled and the
+// record writes in flight.
 const holdWait = 10 * time.Second
 
 // Hold quiets the executor for maintenance. With all, it stops the timers,
-// ends each queued job interrupted, drops the held proposals and cancels each
+// ends queued jobs interrupted, drops the held proposals and cancels each
 // running or yielded job (interrupted unless committing), answering once they
-// ended or 10 seconds passed. Start answers ErrQueueFull, writing no record,
-// until resume re-reads Records.LastEnds (retried as at Run's start) and
-// counts each Fresh window and scheduled scope from it, or a later cadence
-// change; resume is safe to call twice. Without all nothing changes. A ctx
-// ended before or during the wait answers its error and holds nothing.
+// and each record write in flight ended, or 10 seconds passed. Until resume,
+// Start answers ErrQueueFull with no record; resume, safe to call twice,
+// re-reads Records.LastEnds (retried as at Run's start) and counts each Fresh
+// window and scheduled scope from it or a later cadence change. Without all
+// nothing changes; a ctx ending first or mid-wait answers its error, holding nothing.
 func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -26,7 +27,7 @@ func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err er
 	}
 	end := End{Result: ResultInterrupted}
 	e.mu.Lock()
-	dequeued, running := e.quietLocked(end)
+	dequeued, waits := e.quietLocked(end)
 	e.mu.Unlock()
 	for _, en := range dequeued {
 		e.ended(ctx, en, end)
@@ -36,9 +37,9 @@ func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err er
 	resume = func() { once.Do(func() { e.resume(context.WithoutCancel(ctx)) }) }
 	wait := time.NewTimer(holdWait)
 	defer wait.Stop()
-	for _, finished := range running {
+	for _, done := range waits {
 		select {
-		case <-finished:
+		case <-done:
 		case <-wait.C:
 			return resume, nil
 		case <-ctx.Done():
@@ -52,8 +53,9 @@ func (e *Executor[P]) Hold(ctx context.Context, all bool) (resume func(), err er
 // quietLocked opens a hold: it stops the timers, drops the proposals, stops
 // each running job not in its commit step with end and takes every queued
 // job out of the queue to end with end. It answers the dequeued jobs, whose
-// ends the caller writes, and each running job's finished channel.
-func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan struct{}) {
+// ends the caller writes, and what the hold waits on: each running job's
+// finished channel and idle.
+func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], waits []<-chan struct{}) {
 	e.holds++
 	e.readGen++ // ends an earlier resume's read and its retryResume
 	e.noted = nil
@@ -67,14 +69,14 @@ func (e *Executor[P]) quietLocked(end End) (dequeued []*job[P], running []<-chan
 			if !en.stopped && !en.committing && !en.returned {
 				e.stopLocked(en, end)
 			}
-			running = append(running, en.finished)
+			waits = append(waits, en.finished)
 		case stateAdmitting, stateEnded:
 		}
 	}
 	for _, en := range dequeued {
 		e.dequeueLocked(en, end)
 	}
-	return dequeued, running
+	return dequeued, append(waits, e.idle)
 }
 
 // resume ends one hold. The last one re-reads the last ends, since the file
