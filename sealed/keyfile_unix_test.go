@@ -390,11 +390,7 @@ func TestOpenKeyFileMissing(t *testing.T) {
 		})
 		f, err := open(t, t.Context(), path)
 		checkKeyless(t, f, err)
-		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-		defer cancel()
-		if err := openKeyless(t, path).Create(ctx); err != nil {
-			t.Errorf("a second KeyFile's Create = %v; want the lease free", err)
-		}
+		checkNoLease(t, path)
 	})
 	for _, tc := range []struct {
 		name        string

@@ -264,57 +264,55 @@ func TestCreateConcurrent(t *testing.T) {
 			}
 		})
 	})
-	path := filepath.Join(privateDir(t), "sealing.key")
-	files := make([]*KeyFile, 8)
-	for i := range files {
-		files[i] = openKeyless(t, path)
-	}
-	errs := make([]error, len(files))
-	var wg sync.WaitGroup
-	for i, f := range files {
-		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-			defer cancel()
-			errs[i] = f.Create(ctx)
-		})
-	}
-	wg.Wait()
-	winner := -1
-	for i, err := range errs {
-		switch {
-		case err == nil && winner >= 0:
-			t.Errorf("Creates %d and %d both answered nil", winner, i)
-		case err == nil:
-			winner = i
-		case !errors.Is(err, ErrKeyFileInUse) || !errors.Is(err, context.DeadlineExceeded):
-			t.Errorf("Create %d = %v, want ErrKeyFileInUse and context.DeadlineExceeded", i, err)
+	// The fake clock reaches the deadline only once every Create is blocked:
+	// the winner's writes are done and the losers wait on the lease.
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(privateDir(t), "sealing.key")
+		files := make([]*KeyFile, 8)
+		for i := range files {
+			files[i] = openKeyless(t, path)
 		}
-	}
-	if winner < 0 {
-		t.Fatal("no Create answered nil")
-	}
-	if got, want := lineIDs(readKeyLines(t, path)).Current, files[winner].Sealer().KeyIDs().Current; got != want {
-		t.Errorf("the key file's id = %s, want the winner's %s", got, want)
-	}
-	if err := files[winner].Close(); err != nil {
-		t.Fatalf("Close the winner: %v", err)
-	}
-	loser := files[(winner+1)%len(files)]
-	before := statePath(t, path)
-	if err := loser.Create(t.Context()); !errors.Is(err, ErrKeyExists) {
-		t.Errorf("a loser's Create after the winner's Close = %v, want ErrKeyExists", err)
-	}
-	checkUnchanged(t, path, before)
-	if loser.src.lease != nil {
-		t.Error("the loser holds the lease after ErrKeyExists")
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	f, err := OpenKeyFile(ctx, path)
-	if err != nil {
-		t.Fatalf("OpenKeyFile while the loser stays open: %v", err)
-	}
-	_ = f.Close()
+		errs := make([]error, len(files))
+		var wg sync.WaitGroup
+		for i, f := range files {
+			wg.Go(func() {
+				ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+				defer cancel()
+				errs[i] = f.Create(ctx)
+			})
+		}
+		wg.Wait()
+		winner := -1
+		for i, err := range errs {
+			switch {
+			case err == nil && winner >= 0:
+				t.Errorf("Creates %d and %d both answered nil", winner, i)
+			case err == nil:
+				winner = i
+			case !errors.Is(err, ErrKeyFileInUse) || !errors.Is(err, context.DeadlineExceeded):
+				t.Errorf("Create %d = %v, want ErrKeyFileInUse and context.DeadlineExceeded", i, err)
+			}
+		}
+		if winner < 0 {
+			t.Fatal("no Create answered nil")
+		}
+		if got, want := lineIDs(readKeyLines(t, path)).Current, files[winner].Sealer().KeyIDs().Current; got != want {
+			t.Errorf("the key file's id = %s, want the winner's %s", got, want)
+		}
+		if err := files[winner].Close(); err != nil {
+			t.Fatalf("Close the winner: %v", err)
+		}
+		loser := files[(winner+1)%len(files)]
+		before := statePath(t, path)
+		if err := loser.Create(t.Context()); !errors.Is(err, ErrKeyExists) {
+			t.Errorf("a loser's Create after the winner's Close = %v, want ErrKeyExists", err)
+		}
+		checkUnchanged(t, path, before)
+		if loser.src.lease != nil {
+			t.Error("the loser holds the lease after ErrKeyExists")
+		}
+		checkNoLease(t, path)
+	})
 }
 
 // TestRotateRetire checks the rotation rules of the Rotate and Retire godoc,
@@ -722,13 +720,7 @@ func TestCloseDuringWrite(t *testing.T) {
 		if got := lineIDs(readKeyLines(t, path)); got.Previous != old {
 			t.Errorf("the path holds %+v, want the rotated file over %s", got, old)
 		}
-		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-		defer cancel()
-		g, err := OpenKeyFile(ctx, path)
-		if err != nil {
-			t.Fatalf("OpenKeyFile after Close: %v", err)
-		}
-		_ = g.Close()
+		checkNoLease(t, path)
 		checkClosedWrites(t, f)
 	})
 	t.Run("a lease wait", func(t *testing.T) {
@@ -792,11 +784,7 @@ func TestCloseDuringWrite(t *testing.T) {
 		}
 		checkNoWrite(t, f, path)
 		_ = holder.Close()
-		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-		defer cancel()
-		if err := openKeyless(t, path).Create(ctx); err != nil {
-			t.Errorf("a second KeyFile's Create = %v, want the lease free", err)
-		}
+		checkNoLease(t, path)
 	})
 	t.Run("Create after the lease", func(t *testing.T) {
 		path := filepath.Join(privateDir(t), "sealing.key")
