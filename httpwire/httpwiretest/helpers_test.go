@@ -169,8 +169,10 @@ func fixtureScripts() map[string]script {
 		"HEAD /api/probe?missing":  {status: http.StatusNotFound},
 		"GET /api/probe?forbidden": {refuse: "auth_required"},
 		"POST /api/keyed/run":      {refuse: "probe_missing"},
-		// A replay as a mount writes one: the kept body, this request's header.
+		// Imitates a mount's replay: the body carries the inbound id, as a kept
+		// body would, and the header is this request's.
 		"POST /api/keyed/run?replay": {refuse: "probe_missing", header: map[string]string{"X-Request-Id": "second-id"}},
+		"GET /api/probe?replay":      {refuse: "probe_missing", header: map[string]string{"X-Request-Id": "second-id"}},
 	}
 }
 

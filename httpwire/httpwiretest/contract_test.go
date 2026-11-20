@@ -202,7 +202,16 @@ func TestContractPassesAReplayedRefusal(t *testing.T) {
 			t.Errorf("Contract failed a replayed refusal: %s", s)
 		}
 	})
-	t.Run("a mount's replay", func(t *testing.T) {
+	t.Run("the API's own replay under a key sent with a trailing space", func(t *testing.T) {
+		f := newFixture(t, false)
+		r := record(t, func(tb testing.TB) {
+			httpwiretest.Contract(tb, f.api, []httpwiretest.Case{runJob(t, `"k1"`, ""), runJob(t, `"k1" `, "")})
+		})
+		for _, s := range r.failures {
+			t.Errorf("Contract failed a replayed refusal: %s", s)
+		}
+	})
+	t.Run("a mount's imitated replay", func(t *testing.T) {
 		f := newFixture(t, false)
 		r := record(t, func(tb testing.TB) {
 			httpwiretest.Contract(tb, f.api, []httpwiretest.Case{
@@ -216,30 +225,57 @@ func TestContractPassesAReplayedRefusal(t *testing.T) {
 	})
 }
 
-// The replay rule admits only an id an earlier case of the same Keyed row
-// and Idempotency-Key value was answered with.
+// The replay rule admits only an id an earlier case with the same
+// credential, Keyed row and Idempotency-Key was answered with.
 func TestContractFailsARequestIDNoReplayKept(t *testing.T) {
 	first := func(t testing.TB, key string) httpwiretest.Case {
 		return keyedCase(t, "keyed.run", "/api/keyed/run", "", key, "first-id")
 	}
-	cases := map[string]func(testing.TB) []httpwiretest.Case{
-		"no earlier case": func(testing.TB) []httpwiretest.Case { return nil },
-		"an earlier case under another key": func(tb testing.TB) []httpwiretest.Case {
-			return []httpwiretest.Case{first(tb, `"k2"`)}
-		},
-		"an earlier case with no key": func(tb testing.TB) []httpwiretest.Case {
-			return []httpwiretest.Case{first(tb, "")}
-		},
-		"an earlier case of another row": func(tb testing.TB) []httpwiretest.Case {
-			return []httpwiretest.Case{runJob(tb, `"k1"`, "first-id")}
-		},
+	resend := func(t testing.TB, key string) httpwiretest.Case {
+		return keyedCase(t, "keyed.run", "/api/keyed/run?replay", "", key, "first-id")
 	}
-	for name, earlier := range cases {
+	probe := func(t testing.TB, target string) httpwiretest.Case {
+		r := request(t, http.MethodGet, target, "")
+		r.Header.Set("Idempotency-Key", `"k1"`)
+		r.Header.Set("X-Request-Id", "first-id")
+		return httpwiretest.Case{Row: "probe.get", Request: r}
+	}
+	const keyed, unkeyed = "nor an earlier case's with this credential and Idempotency-Key", "is not the X-Request-Id"
+	cases := map[string]struct {
+		cases func(testing.TB) []httpwiretest.Case
+		want  string
+	}{
+		"no earlier case": {func(tb testing.TB) []httpwiretest.Case { return []httpwiretest.Case{resend(tb, `"k1"`)} }, keyed},
+		"an earlier case under another key": {func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{first(tb, `"k2"`), resend(tb, `"k1"`)}
+		}, keyed},
+		"an earlier case under another key sent with a trailing space": {func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{first(tb, `"k2" `), resend(tb, `"k1"`)}
+		}, keyed},
+		"an earlier case with no key": {func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{first(tb, ""), resend(tb, `"k1"`)}
+		}, keyed},
+		"an earlier case of another row": {func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{runJob(tb, `"k1"`, "first-id"), resend(tb, `"k1"`)}
+		}, keyed},
+		"an earlier case of another credential": {func(tb testing.TB) []httpwiretest.Case {
+			earlier := first(tb, `"k1"`)
+			return []httpwiretest.Case{{Row: earlier.Row, Request: as(bob)(earlier.Request)}, resend(tb, `"k1"`)}
+		}, keyed},
+		"two cases with no key on a Keyed row": {func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{first(tb, ""), resend(tb, "")}
+		}, unkeyed},
+		"two cases with one key on a row that is not Keyed": {func(tb testing.TB) []httpwiretest.Case {
+			return []httpwiretest.Case{probe(tb, "/api/probe?missing"), probe(tb, "/api/probe?replay")}
+		}, unkeyed},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, false)
-			resend := keyedCase(t, "keyed.run", "/api/keyed/run?replay", "", `"k1"`, "first-id")
-			r := record(t, func(tb testing.TB) { httpwiretest.Contract(tb, f.api, append(earlier(t), resend)) })
-			if len(r.failures) != 1 || !r.failed(`row "keyed.run"`, "?replay", `request_id "first-id"`, `"second-id"`) {
+			cs := tc.cases(t)
+			row := cs[len(cs)-1].Row
+			r := record(t, func(tb testing.TB) { httpwiretest.Contract(tb, f.api, cs) })
+			if len(r.failures) != 1 || !r.failed(`row "`+row+`"`, "?replay", `request_id "first-id"`, `"second-id"`, tc.want) {
 				t.Errorf("failures %q; want only the resend's, naming its request_id", r.failures)
 			}
 		})
