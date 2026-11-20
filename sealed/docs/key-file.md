@@ -51,7 +51,7 @@ Every write goes through filesafe's atomic write, which syncs the new file and t
 | Error | When | What to do |
 | --- | --- | --- |
 | `ErrNoKey` | No key file exists yet, or the `KeyFile` is closed | Call `Create` at a first start, or show the missing-key state |
-| `ErrUnsafeKeyFile` | Another user could read or replace the key file, its directory or its lock file | Fix the owner and mode, or remove the symlink |
+| `ErrUnsafeKeyFile` | Another user could read or replace the key file, its directory or its lock file. A key directory another user owns and the app's user cannot enter is this error, and also matches `fs.ErrPermission` | Fix the owner and mode, or remove the symlink |
 | `ErrKeyFileFormat` | Not a key file this release reads, or over 512 bytes | Restore the key file from a backup, or run the release that wrote it |
 | `ErrKeyFileInUse` | Another `KeyFile` held the lease until the context ended | Stop the other holder, or wait longer |
 | `ErrKeyExists` | `Create` found a key in the `KeyFile` or a file at the path | Open the existing file instead |
