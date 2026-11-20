@@ -307,7 +307,7 @@ func runDiff(t *testing.T, seed uint64, bound bool) {
 	d.compare(t)
 }
 
-func (d *diffRun) config(records scheduler.Records, run func(context.Context, *scheduler.Run[payload]) scheduler.End, obs scheduler.Observer) scheduler.Config[payload] {
+func (*diffRun) config(records scheduler.Records, run func(context.Context, *scheduler.Run[payload]) scheduler.End, obs scheduler.Observer) scheduler.Config[payload] {
 	return scheduler.Config[payload]{Kinds: diffKinds(run), Records: records, Observer: obs, MaxQueued: 3, MaxQueuedPerOwner: 2}
 }
 

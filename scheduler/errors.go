@@ -44,7 +44,7 @@ type CoveredError struct{ By ID }
 func (e *CoveredError) Error() string { return ErrCovered.Error() + ": " + string(e.By) }
 
 // Is reports whether target is ErrCovered.
-func (e *CoveredError) Is(target error) bool { return target == ErrCovered }
+func (*CoveredError) Is(target error) bool { return target == ErrCovered }
 
 // RecentError refuses a request under its kind's Fresh window, which ends at
 // Until. errors.Is(err, ErrRecent) holds for it.
@@ -55,4 +55,4 @@ func (e *RecentError) Error() string {
 }
 
 // Is reports whether target is ErrRecent.
-func (e *RecentError) Is(target error) bool { return target == ErrRecent }
+func (*RecentError) Is(target error) bool { return target == ErrRecent }

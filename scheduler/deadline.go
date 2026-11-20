@@ -82,7 +82,7 @@ func (e *Executor[P]) unwatchLocked(key ScheduledScope, t *timed) {
 	}
 }
 
-func (e *Executor[P]) stopCheckLocked(t *timed) {
+func (*Executor[P]) stopCheckLocked(t *timed) {
 	if t.check != nil {
 		t.check.Stop()
 		t.check = nil

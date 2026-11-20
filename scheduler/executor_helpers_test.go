@@ -294,7 +294,7 @@ type logLines struct {
 	mu   sync.Mutex
 }
 
-func (l *logLines) Enabled(context.Context, slog.Level) bool { return true }
+func (*logLines) Enabled(context.Context, slog.Level) bool { return true }
 
 func (l *logLines) Handle(_ context.Context, r slog.Record) error {
 	l.mu.Lock()

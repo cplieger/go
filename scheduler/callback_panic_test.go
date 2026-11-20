@@ -17,7 +17,7 @@ import (
 )
 
 // injected is the panic faults raises, naming the call it raised it in.
-type injected struct{ site string }
+type injected string
 
 // faults panics in the nth call the executor makes into app code (Records,
 // Observer, a KindSpec func) on a stack the app recovers: a kind's Run, or a
@@ -48,7 +48,7 @@ func (f *faults) call(name string) {
 	fire := len(f.calls) == f.n
 	f.mu.Unlock()
 	if fire {
-		panic(injected{site})
+		panic(injected(site))
 	}
 }
 
@@ -72,7 +72,7 @@ func recovering() (string, bool) {
 }
 
 // try makes call, recovering the injected panic as an app's server would.
-func (f *faults) try(t *testing.T, call func()) {
+func (*faults) try(t *testing.T, call func()) {
 	t.Helper()
 	defer func() {
 		if v := recover(); v != nil {

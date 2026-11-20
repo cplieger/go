@@ -154,7 +154,7 @@ func (e *Executor[P]) unscheduleLocked(key ScheduledScope) {
 	}
 }
 
-func (e *Executor[P]) stopTimerLocked(t *timed) {
+func (*Executor[P]) stopTimerLocked(t *timed) {
 	t.gen++
 	t.standIn = ""
 	if t.timer != nil {

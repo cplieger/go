@@ -123,7 +123,7 @@ func ruleSame(q *ruleJob, j scheduler.Job[payload]) bool {
 	return q.j.Kind == j.Kind && q.j.Scope == j.Scope && (q.j.Kind != "prop" || q.j.Owner == j.Owner)
 }
 
-func (m *ruleModel) kept(p *ruleProposal) bool {
+func (*ruleModel) kept(p *ruleProposal) bool {
 	return !p.cleared && (p.until.IsZero() || time.Now().Before(p.until))
 }
 
