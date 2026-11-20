@@ -1,10 +1,15 @@
+/** One refused field: its path in the request, its code and a sentence for the user. */
 export interface FieldError {
   path: string;
   code: string;
   message: string;
 }
 
-const fieldCodes = [
+/**
+ * The codes the Go server's decode and schema check write into `FieldError.code`. A field's own
+ * refusal code and an app's validators write other codes into the same list, so `code` stays `string`.
+ */
+export const SCHEMA_FIELD_CODES = [
   "malformed",
   "required",
   "unknown",
@@ -13,13 +18,9 @@ const fieldCodes = [
   "range",
   "pattern",
 ] as const;
+Object.freeze(SCHEMA_FIELD_CODES);
 
-/**
- * The codes the Go server's decode and schema check write into `FieldError.code`. A field's own
- * refusal code and an app's validators write other codes into the same list, so `code` stays `string`.
- */
-export const SCHEMA_FIELD_CODES: typeof fieldCodes = Object.freeze(fieldCodes);
-
+/** A refusal's body, as `decodeEnvelope` answers it. */
 export interface ErrorEnvelope {
   code: string;
   message: string;

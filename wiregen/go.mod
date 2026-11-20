@@ -3,7 +3,7 @@ module github.com/cplieger/go/wiregen/v2
 go 1.27.4
 
 require (
-	github.com/cplieger/go/filesafe v1.2.0-dev.2
+	github.com/cplieger/go/filesafe v1.2.0-dev.3
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/tools v0.53.0
 )

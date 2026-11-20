@@ -23,7 +23,8 @@ import (
 
 const codeOutcomeUnknown = "outcome_unknown"
 
-// Case is one request Contract serves.
+// Case is one request Contract serves. A case naming no row, a Stream row,
+// or a request the API routes to another row fails.
 type Case struct {
 	// Request is built by the test, carrying its own principal.
 	Request *http.Request
@@ -56,11 +57,11 @@ func WithSameShape(s SameShape) Option {
 
 // Contract serves each case through api and fails t, naming the row, on any
 // answer outside the row's shapes in the document api was built with (a
-// status, body, media type, envelope, Wire-Version or X-Request-Id; a HEAD
-// answer's body is not read). A case naming no row, a Stream row, or a
-// request routed to another row fails, as does every write row, mount rows
-// included, whose union holds outcome_unknown and that is not Keyed.
-// docs/testing.md lists each check.
+// status, body, media type, envelope, Wire-Version or this request's
+// X-Request-Id; a refusal's request_id may name an earlier request, as a
+// replay's does, and a HEAD answer's body is not read), and fails every
+// write row, mount rows included, whose union holds outcome_unknown and that
+// is not Keyed. docs/testing.md lists each check.
 func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 	t.Helper()
 	if api == nil {
@@ -209,16 +210,29 @@ type answer struct {
 }
 
 func (c *checker) serve(ep *httpwire.Endpoint, r *http.Request) *httptest.ResponseRecorder {
+	r, id := withRequestID(r)
 	rec := httptest.NewRecorder()
 	c.api.ServeHTTP(rec, r)
 	a := answer{rec: rec, fail: func(format string, args ...any) {
 		c.t.Errorf("httpwiretest: row %q, %s %s answered %d: %s", ep.Name, r.Method, r.URL.RequestURI(), rec.Code, fmt.Sprintf(format, args...))
 	}}
-	c.check(ep, r, a)
+	c.check(ep, r, id, a)
 	return rec
 }
 
-func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
+// withRequestID gives r the id the wire says the API answers it under: its
+// context's, else its valid inbound X-Request-Id, else a new one.
+func withRequestID(r *http.Request) (out *http.Request, id string) {
+	if id = httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
+		return r, id
+	}
+	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
+		id = httpserver.NewRequestID()
+	}
+	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
+}
+
+func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, id string, a answer) {
 	h := a.rec.Header()
 	switch v := h.Get("Wire-Version"); {
 	case v == "":
@@ -226,11 +240,11 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
 	case v != c.version:
 		a.fail("Wire-Version %q; the API's is %q", v, c.version)
 	}
-	switch id := h.Get(httpserver.HeaderRequestID); {
-	case id == "":
+	switch got := h.Get(httpserver.HeaderRequestID); {
+	case got == "":
 		a.fail("no X-Request-Id header")
-	case !httpserver.ValidRequestID(id):
-		a.fail("X-Request-Id %q is not a valid request id", id)
+	case got != id:
+		a.fail("X-Request-Id %q is not this request's id %q", got, id)
 	}
 	st := a.rec.Code
 	if c.conditionalAnswer(ep, r, a) {
@@ -245,7 +259,7 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
 	case st >= 200 && st < 300, ep.Kind == httpwire.Redirect && st >= 300 && st < 400:
 		a.fail("success status %d is not declared; the row declares %v", st, sortedKeys(statuses))
 	case r.Method != http.MethodHead:
-		c.refusal(ep, h.Get(httpserver.HeaderRequestID), a)
+		c.refusal(ep, a)
 	}
 }
 
@@ -399,7 +413,7 @@ func strict(a answer, body []byte, rt reflect.Type) {
 	}
 }
 
-func (c *checker) refusal(ep *httpwire.Endpoint, id string, a answer) {
+func (c *checker) refusal(ep *httpwire.Endpoint, a answer) {
 	if !mediaIs(a, mediaJSON, "an error envelope is") {
 		return
 	}
@@ -414,8 +428,8 @@ func (c *checker) refusal(ep *httpwire.Endpoint, id string, a answer) {
 	if spec, ok := c.catalog.Lookup(env.Code); ok && spec.Status != a.rec.Code {
 		a.fail("code %q is answered at %d by the catalog", env.Code, spec.Status)
 	}
-	if env.RequestID != id {
-		a.fail("request_id %q is not the X-Request-Id %q", env.RequestID, id)
+	if !httpserver.ValidRequestID(env.RequestID) {
+		a.fail("request_id %q is not a valid request id", env.RequestID)
 	}
 }
 

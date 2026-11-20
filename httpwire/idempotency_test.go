@@ -562,6 +562,46 @@ func TestReplayWritesKeptHeadersAndFreshWireHeaders(t *testing.T) {
 	}
 }
 
+// A replayed refusal keeps the request_id of the run that wrote it, under
+// this request's X-Request-Id, and only for the credential, row and parsed
+// key it was kept under.
+func TestReplayedRefusalKeepsTheFirstRequestID(t *testing.T) {
+	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
+	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
+		return jobAnswer{}, &httpwire.Error{Code: "outcome_unknown", Message: "the queue did not answer"}
+	}
+	first := httpserver.NewRequestID()
+	if got := envelopeOf(t, kf.quickJob(`"r"`, httpserver.HeaderRequestID, first)).RequestID; got != first {
+		t.Fatalf("the first run's request_id %q, want its X-Request-Id %q", got, first)
+	}
+	for name, tc := range map[string]struct {
+		target, key string
+		header      []string
+		replayed    bool
+	}{
+		"the same key":                    {"/api/jobs/quick", `"r"`, nil, true},
+		"the same key with spaces around": {"/api/jobs/quick", ` "r" `, nil, true},
+		"another key":                     {"/api/jobs/quick", `"s"`, nil, false},
+		"another credential":              {"/api/jobs/quick", `"r"`, []string{"Credential", "k:2"}, false},
+		"another Keyed row":               {"/api/jobs", `"r"`, nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			id := httpserver.NewRequestID()
+			rec := kf.do(http.MethodPost, tc.target, `{"kind":"a","size":1}`, tc.key, append([]string{httpserver.HeaderRequestID, id}, tc.header...)...)
+			want := id
+			if tc.replayed {
+				want = first
+			}
+			if got := envelopeOf(t, rec).RequestID; got != want {
+				t.Errorf("request_id %q, want %q", got, want)
+			}
+			if got := rec.Header().Get(httpserver.HeaderRequestID); got != id {
+				t.Errorf("X-Request-Id %q, want this request's %q", got, id)
+			}
+		})
+	}
+}
+
 func TestWhatIsKept(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
 	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {

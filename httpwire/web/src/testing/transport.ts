@@ -32,6 +32,10 @@ export type TransportWant =
   | { readonly ok: false; readonly failure: "http"; readonly status: number; readonly code: string }
   | { readonly ok: false; readonly failure: "invalid" | "decode"; readonly status: number };
 
+/**
+ * One case: the row and arguments the client's generated function is called with, the request it
+ * must send, the server's answer and the result the client must give.
+ */
 export interface TransportCase {
   readonly name: string;
   readonly row: string;
@@ -47,6 +51,7 @@ export interface TransportCase {
   readonly want: TransportWant;
 }
 
+/** The rows, catalog and wire version a transport's cases run against, and the cases. */
 export interface TransportFixture {
   readonly wireVersion: string;
   readonly errorCodes: Readonly<Record<string, ErrorCodeSpec>>;

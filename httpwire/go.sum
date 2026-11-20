@@ -1,7 +1,7 @@
-github.com/cplieger/go/filesafe v1.2.0-dev.2 h1:KzGIp+fvRgpUCJc4ndztIKm56kzMAx5fYM7xeGbPAvA=
-github.com/cplieger/go/filesafe v1.2.0-dev.2/go.mod h1:ji4TnJD8S8kgKelJlCQxlHyX0UXQGTW1ylSBqH5xqhI=
-github.com/cplieger/go/httpserver/v2 v2.0.0-dev.11 h1:H5T6wcOxEleWVTe5yT1F4feCqCjR71zMFswMGBxM3WQ=
-github.com/cplieger/go/httpserver/v2 v2.0.0-dev.11/go.mod h1:IUzAOZzxsi24r2nK1aTp2uIMi3Y1+67hBcng8bcQj6w=
+github.com/cplieger/go/filesafe v1.2.0-dev.3 h1:lMbQouVJd4/q++z2ZCxmUZRtbgv77mPaDlCyhbKGPaw=
+github.com/cplieger/go/filesafe v1.2.0-dev.3/go.mod h1:ji4TnJD8S8kgKelJlCQxlHyX0UXQGTW1ylSBqH5xqhI=
+github.com/cplieger/go/httpserver/v2 v2.0.0-dev.12 h1:AkVlSx8x7nYGwHsg2hcdLEgM/OSJ6dY93/ktamHroWk=
+github.com/cplieger/go/httpserver/v2 v2.0.0-dev.12/go.mod h1:7RaYglupSd53mWuL1RQGPxmUhQ/sCS9y1XpJIrXKF+A=
 github.com/cplieger/go/masked v1.0.0-dev.1 h1:Do4+avpvVJP//Jm4LLH1y468Rxrz966dAgESVp/z7wU=
 github.com/cplieger/go/masked v1.0.0-dev.1/go.mod h1:jRx6ZGlfjrDaAQ5n8MTd023wl5rLuacKmtDbnJgrD+g=
 github.com/cplieger/go/sealed v1.0.0-dev.1 h1:jf/yXdWzSAKRcnbHMl5o3Icp0+qyTTY6E1lbVQCgLss=

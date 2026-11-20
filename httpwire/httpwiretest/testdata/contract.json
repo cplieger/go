@@ -88,6 +88,16 @@
         "required": ["name", "shape", "state", "tags"],
         "type": "object"
       },
+      "RunBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": ["kind"],
+        "type": "object"
+      },
       "Shape": {
         "discriminator": {
           "mapping": {
@@ -199,6 +209,41 @@
         "summary": "Export jobs"
       }
     },
+    "/api/jobs/run": {
+      "post": {
+        "description": "Run a job.",
+        "operationId": "jobs.run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Run a job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    },
     "/api/jobs/{id}": {
       "get": {
         "description": "Read a job.",
@@ -226,6 +271,24 @@
           }
         },
         "summary": "Read a job"
+      }
+    },
+    "/api/keyed/run": {
+      "post": {
+        "description": "Run a keyed probe.",
+        "operationId": "keyed.run",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Run a keyed probe",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
       }
     },
     "/api/my/jobs": {

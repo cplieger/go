@@ -7,7 +7,7 @@ This page describes what an httpwire API sends and accepts, for anyone writing a
 | Header | Direction | Rule |
 | --- | --- | --- |
 | `Wire-Version` | answer, and a write's request | Every answer carries it. A write that names another one answers `wire_mismatch` (409); a request naming none passes |
-| `X-Request-Id` | both | The context's id, else a valid inbound one, else a fresh one; every answer and envelope carries it |
+| `X-Request-Id` | both | The context's id, else a valid inbound one, else a fresh one. Every answer carries this request's id, and a refusal's `request_id` is the same id, except that a replayed answer keeps the first request's |
 | `Idempotency-Key` | request | One quoted string of 1 to 255 printable ASCII characters on a `Keyed` row, refused on any other |
 | `If-Match` | request | One quoted tag on an `IfMatch` row: missing is `if_match_required` (428), malformed `if_match_invalid`, another tag `stale_version` (412) |
 | `Feed-Position` | answer | Every 2xx of a row with `Changes`, from the change feed |
@@ -26,7 +26,7 @@ Every refusal is one JSON object, decoded by the same rules in Go (`DecodeEnvelo
 | `code` | required, one or more lowercase ASCII letters, digits and `_` |
 | `message` | required, at most 4 KiB |
 | `remediation` | required, at most 4 KiB |
-| `request_id` | required |
+| `request_id` | required: this request's id, except that a replayed answer keeps the first request's |
 | `reason` | optional, the same grammar as `code`, at most 64 bytes |
 | `fields` | optional, at most 100 entries of `path`, `code` and `message` |
 | `retry_after_ms` | optional, an integer from 0 to 2^53 - 1 |
