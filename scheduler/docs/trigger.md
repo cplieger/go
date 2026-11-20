@@ -61,6 +61,7 @@ Give the socket a private directory of its own, such as `/run/myapp` for `/run/m
 - The path is absolute and clean, and at most 107 bytes, the length a Linux unix socket path holds.
 - Its directory is owned by the server's user and grants no group or other access. `ownersock.Listen` creates a missing directory at mode 0700. It refuses an existing directory that grants group or other access, is owned by another user or is a symlink, and never changes its mode.
 - The directory is never `/tmp` itself, which every user can open.
+- Starts racing on one path take turns through the lock file `<socket path>.lock` beside the socket. `Listen` creates it at mode 0600 and never removes it. One that is a symlink, is not a regular file, is owned by another user or grants group or other access refuses start.
 
 ownersock runs on Linux. A trigger subcommand must run as the daemon's user: `docker exec` runs as the container's user (the image's `USER`, or the `--user` the container was started with) unless you pass `--user`.
 

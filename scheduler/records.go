@@ -1,0 +1,139 @@
+package scheduler
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+)
+
+// Records stores one record per job; every method is safe for concurrent use.
+// The store owns the record's times: it stamps each from its own clock in the
+// write that records it, and ignores the times r carries.
+type Records interface {
+	// Insert writes a new record holding key, stamping QueuedAt and the key's
+	// Until (QueuedAt plus its Window), and answers it. With a key it first
+	// looks the key up and, when a record holds it, answers that record and
+	// true without writing (a keyed resend). It answers ErrCapacity when no
+	// record may make room.
+	Insert(ctx context.Context, r Record, key *Key) (Record, bool, error)
+	// Put writes r over the stored record at the stored Rev plus one, whatever
+	// r.Rev says, unless the stored record has ended; then it writes nothing
+	// and answers nil. A stored skipped line that r holds in review stays
+	// skipped, so a Dismiss survives a running batch's writes. It stamps
+	// StartedAt as the record first runs and the At of each phase r newly
+	// reached, keeping QueuedAt and every earlier stamp.
+	Put(ctx context.Context, r Record) error
+	// End writes e unless the record already has an end (one written in the
+	// job's own commit) and answers the stored record either way.
+	End(ctx context.Context, id ID, e End) (Record, error)
+	// Get answers the record of id, false when there is none.
+	Get(ctx context.Context, id ID) (Record, bool, error)
+	// ByKey answers the record holding the idempotency key of credential on
+	// row.
+	ByKey(ctx context.Context, credential, row, key string) (Record, bool, error)
+	// Dismiss moves line of id from review to skipped, keeping its reason and
+	// facts, and moves Rev. A line in range that is not in review writes
+	// nothing and answers nil; ErrUnknownLine names a line outside the
+	// record's, ErrUnknownJob an unknown id.
+	Dismiss(ctx context.Context, id ID, line int) error
+	// Live answers the queued and running records and the live view's ended
+	// ones at now.
+	Live(ctx context.Context, now time.Time) ([]Record, error)
+	// History answers up to n ended records of kind ("" for every kind)
+	// newest first, after the cursor after, and the cursor of the next page
+	// ("" on the last); n below 1 answers an empty last page.
+	History(ctx context.Context, kind Kind, after string, n int) ([]Record, string, error)
+	// LastEnds answers each kind and scope's last moving end, scheduled or
+	// not: the end of a job that started and did not end cancelled or
+	// interrupted, the one LastEnd.Supersedes puts last among its ends. A
+	// store keeps it apart from the record it came from, so pruning and the
+	// record bound never delete it, for up to 10,000 scopes, the oldest
+	// going first.
+	LastEnds(ctx context.Context) (map[ScheduledScope]LastEnd, error)
+}
+
+// The record states.
+const (
+	StateQueued  = "queued"
+	StateRunning = "running"
+	StateEnded   = "ended"
+)
+
+// Record is one stored job: Job's fields with the payload as JSON, plus its
+// life.
+type Record struct {
+	QueuedAt, StartedAt, EndedAt time.Time
+
+	End *End
+	Key *Key // the start's idempotency slot, when it had one
+
+	ID      ID
+	Kind    Kind
+	Scope   string
+	Trigger Trigger
+	Owner   string
+	State   string // StateQueued, StateRunning or StateEnded
+	// Proposal is the id a Proposes kind's Run.Propose held; "" otherwise.
+	Proposal ProposalID
+	Phase    Phase
+
+	Payload json.RawMessage
+	Phases  []PhaseAt // each distinct phase reached with its first time, at most 32
+	Lines   []Line    // a batch's, one per item
+
+	Step struct{ N, Of int }
+	Rev  uint64 // Insert writes the one sent; each write of Put, End or Dismiss moves it by one
+}
+
+// PhaseAt is the first time a job reached a phase.
+type PhaseAt struct {
+	At    time.Time
+	Phase Phase
+}
+
+// LastEnd is a kind and scope's last moving end.
+type LastEnd struct {
+	At     time.Time
+	Result Result
+}
+
+// Supersedes reports whether l, an end of the same kind and scope as have,
+// is its last end over have: the later At, then at one instant the one whose
+// work was not done, failed before skipped and partial before ok, so the
+// order the ends were written or noted in never decides.
+func (l LastEnd) Supersedes(have LastEnd) bool {
+	if !l.At.Equal(have.At) {
+		return l.At.After(have.At)
+	}
+	return tieRank(l.Result) < tieRank(have.Result)
+}
+
+// tieRank orders the moving results of ends at one instant, the least last.
+func tieRank(r Result) int {
+	switch r {
+	case ResultFailed:
+		return 0
+	case ResultSkipped:
+		return 1
+	case ResultPartial:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// ScheduledScope names one kind and scope: the key of LastEnds.
+type ScheduledScope struct {
+	Kind  Kind
+	Scope string
+}
+
+// Key is a start's idempotency slot: the credential, the row's name, the key
+// the client sent, its request's fingerprint and the row's window. Until is
+// stamped by Records.Insert; the value a caller sets is ignored.
+type Key struct {
+	Until                time.Time
+	Credential, Row, Key string
+	Window               time.Duration
+	Fingerprint          [32]byte
+}

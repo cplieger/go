@@ -25,8 +25,7 @@ func stubEnforceMode(t *testing.T) func() []os.FileMode {
 	enforceMode = func(f *os.File, want os.FileMode) (os.FileMode, error) {
 		asked = append(asked, want)
 		stored := want | 0o070
-		return stored, fmt.Errorf("%w: %s: asked for %#o, filesystem stored %#o",
-			ErrModeNotStored, f.Name(), want, stored)
+		return stored, &ModeNotStoredError{Name: f.Name(), Requested: want, Stored: stored}
 	}
 	return func() []os.FileMode { return asked }
 }
@@ -205,7 +204,7 @@ func TestWriteFile_WithMode_RefusedFinalModeFailsAtPhaseTempChmod(t *testing.T) 
 		if want == 0o600 {
 			return orig(f, want)
 		}
-		return want | 0o070, fmt.Errorf("%w: %s: asked for %#o", ErrModeNotStored, f.Name(), want)
+		return want | 0o070, &ModeNotStoredError{Name: f.Name(), Requested: want, Stored: want | 0o070}
 	}
 	dir := t.TempDir()
 	path := seedTarget(t, dir)

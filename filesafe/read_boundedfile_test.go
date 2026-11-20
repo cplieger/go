@@ -42,9 +42,8 @@ func TestReadBoundedFile(t *testing.T) {
 			t.Fatalf("open: %v", err)
 		}
 		defer f.Close()
-		if _, err := ReadBoundedFile(t.Context(), f, 50); !errors.Is(err, ErrFileTooLarge) {
-			t.Fatalf("ReadBoundedFile(over) = %v, want ErrFileTooLarge", err)
-		}
+		_, err = ReadBoundedFile(t.Context(), f, 50)
+		assertTooLarge(t, err, 100, 50)
 	})
 
 	t.Run("honors_cancelled_context", func(t *testing.T) {

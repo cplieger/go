@@ -129,7 +129,7 @@ func checkPrivateDirInRoot(root *os.Root, clean string) error {
 	case before.Mode()&os.ModeSymlink != 0:
 		return fmt.Errorf("%w: %s", ErrSymlinkTarget, clean)
 	case !before.IsDir():
-		return fmt.Errorf("%w: %s (type %s)", ErrNotDirectory, clean, before.Mode().Type())
+		return notDirectory(clean, before.Mode())
 	}
 	if pinOpenHook != nil {
 		pinOpenHook(clean)
@@ -171,10 +171,11 @@ func checkPrivateDirHandle(f *os.File, dir string) (os.FileInfo, error) {
 	return fi, privateModeErr(fi, dir)
 }
 
-// privateModeErr is ErrModeTooOpen when fi grants group or other access.
+// privateModeErr is the one producer of *ModeTooOpenError, returned when fi
+// grants group or other access.
 func privateModeErr(fi os.FileInfo, dir string) error {
 	if m := chmodBits(fi.Mode()); m&0o077 != 0 {
-		return fmt.Errorf("%w: %s (mode %#o)", ErrModeTooOpen, dir, m)
+		return &ModeTooOpenError{Name: dir, Mode: m}
 	}
 	return nil
 }
@@ -243,7 +244,7 @@ func occupantRefusal(err error, dir string, lstat func() (os.FileInfo, error)) e
 	case fi.Mode()&os.ModeSymlink != 0:
 		return fmt.Errorf("%w: %s: %w", ErrSymlinkTarget, dir, err)
 	default:
-		return fmt.Errorf("%w: %s: %w", ErrNotDirectory, dir, err)
+		return fmt.Errorf("%w: %w", notDirectory(dir, fi.Mode()), err)
 	}
 }
 
@@ -288,7 +289,7 @@ func statOwnedDir(f *os.File, dir string) (os.FileInfo, error) {
 		return nil, err
 	}
 	if !fi.Mode().IsDir() {
-		return nil, fmt.Errorf("%w: %s (type %s)", ErrNotDirectory, dir, fi.Mode().Type())
+		return nil, notDirectory(dir, fi.Mode())
 	}
 	if err := ownerErr(fi, dir); err != nil {
 		return nil, err
@@ -296,15 +297,25 @@ func statOwnedDir(f *os.File, dir string) (os.FileInfo, error) {
 	return fi, nil
 }
 
-// ownerErr is ErrNotOwned unless fi is owned by the effective uid.
+// ownerErr is the one producer of *NotOwnedError, returned unless fi is
+// owned by the effective uid.
 func ownerErr(fi os.FileInfo, name string) error {
+	euid := uidOf(os.Geteuid())
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		return fmt.Errorf("%w: %s: ownership could not be determined", ErrNotOwned, name)
+		return &NotOwnedError{Name: name, Owner: -1, EUID: euid}
 	}
-	if euid := os.Geteuid(); int(st.Uid) != euid {
-		return fmt.Errorf("%w: %s: owned by uid %d, want the effective uid %d; its owner could replace the checked path",
-			ErrNotOwned, name, st.Uid, euid)
+	if int64(st.Uid) != euid {
+		return &NotOwnedError{Name: name, Owner: int64(st.Uid), EUID: euid}
 	}
 	return nil
+}
+
+// uidOf undoes the wrap os.Geteuid applies where int is 32 bits: uid_t is
+// an unsigned 32-bit value, so a uid of 2^31 or more arrives negative.
+func uidOf(id int) int64 {
+	if id < 0 {
+		return int64(id) + 1<<32
+	}
+	return int64(id)
 }

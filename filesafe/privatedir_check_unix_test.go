@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -252,6 +253,54 @@ func TestCheckPrivateDirInRoot_SwappedNameIsErrRaced(t *testing.T) {
 			if err := CheckPrivateDirInRoot(root, "sub"); !errors.Is(err, ErrRaced) {
 				t.Errorf("CheckPrivateDirInRoot(swapped) = %v, want ErrRaced", err)
 			}
+		})
+	}
+}
+
+// The mode each check refuses is the one it read, sticky bit included, and
+// stays that after the directory is widened further. The message renders it
+// in chmod(1) octal.
+func TestModeTooOpenError_CarriesTheModeEachPrivateDirCheckRead(t *testing.T) {
+	for _, tc := range []struct {
+		octal string
+		mode  os.FileMode
+	}{
+		{"0750", 0o750},
+		{"0705", 0o705},
+		{"01770", os.ModeSticky | 0o770},
+	} {
+		t.Run(tc.octal, func(t *testing.T) {
+			check := func(t *testing.T, err error, path, name string) {
+				t.Helper()
+				if want := "(mode " + tc.octal + ")"; err == nil || !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %v, want a message containing %q", err, want)
+				}
+				assertModeTooOpen(t, err, path, name, tc.mode)
+			}
+			t.Run("EnsurePrivateDir", func(t *testing.T) {
+				dir := filepath.Join(t.TempDir(), "wide")
+				mkdirExact(t, dir, tc.mode)
+				_, err := EnsurePrivateDir(dir)
+				check(t, err, dir, dir)
+			})
+			t.Run("CheckPrivateDir", func(t *testing.T) {
+				dir := filepath.Join(t.TempDir(), "wide")
+				mkdirExact(t, dir, tc.mode)
+				check(t, CheckPrivateDir(dir+"/"), dir, dir)
+			})
+			t.Run("CheckPrivateDirInRoot", func(t *testing.T) {
+				root, rootDir := openPrivateTestRoot(t)
+				dir := filepath.Join(rootDir, "wide")
+				mkdirExact(t, dir, tc.mode)
+				check(t, CheckPrivateDirInRoot(root, "./wide"), dir, "wide")
+			})
+			t.Run("CheckPrivateDirInRoot of the root itself", func(t *testing.T) {
+				root, rootDir := openPrivateTestRoot(t)
+				if err := os.Chmod(rootDir, tc.mode); err != nil {
+					t.Fatal(err)
+				}
+				check(t, CheckPrivateDirInRoot(root, "."), rootDir, ".")
+			})
 		})
 	}
 }

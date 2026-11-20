@@ -104,7 +104,7 @@ func openKeys(ctx context.Context, path string) (*ring, *filesafe.Lease, error) 
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, nil
 		}
-		return nil, nil, pathErr(path, err)
+		return nil, nil, lstatErr(path, err)
 	}
 	if err := checkPrivateDir(filepath.Dir(path)); err != nil {
 		return nil, nil, unlessGone(path, err, pathErr(path, err))
@@ -123,6 +123,19 @@ func openKeys(ctx context.Context, path string) (*ring, *filesafe.Lease, error) 
 		return nil, nil, err
 	}
 	return r, lease, nil
+}
+
+// lstatErr maps the error of the first Lstat of path, which is not
+// fs.ErrNotExist. A key directory another user closed hides the key file,
+// so the directory's check names that owner (filesafe.ErrNotOwned, wrapping
+// the EACCES); nil is a missing key file, as unlessGone answers.
+func lstatErr(path string, err error) error {
+	if errors.Is(err, fs.ErrPermission) {
+		if derr := checkPrivateDir(filepath.Dir(path)); derr != nil {
+			return unlessGone(path, derr, pathErr(path, derr))
+		}
+	}
+	return pathErr(path, err)
 }
 
 // unlessGone answers nil, a missing key file, when a step's err says a

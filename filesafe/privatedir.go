@@ -51,8 +51,7 @@ func EnforceMode(f *os.File, want os.FileMode) (os.FileMode, error) {
 	}
 	stored, asked := chmodBits(fi.Mode()), chmodBits(want)
 	if stored != asked {
-		return stored, fmt.Errorf("%w: %s: asked for %#o, filesystem stored %#o",
-			ErrModeNotStored, filepath.Clean(f.Name()), asked, stored)
+		return stored, &ModeNotStoredError{Name: filepath.Clean(f.Name()), Requested: asked, Stored: stored}
 	}
 	return stored, nil
 }
@@ -65,6 +64,23 @@ var enforceMode = EnforceMode
 // bits so a file and a directory compare.
 func chmodBits(m os.FileMode) os.FileMode {
 	return m.Perm() | m&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
+}
+
+// octalMode renders chmodBits(m) in chmod(1) octal. os.FileMode keeps setuid,
+// setgid and sticky above the low 12 bits, so %o alone would print a sticky
+// 0770 as 04000770.
+func octalMode(m os.FileMode) string {
+	o := uint32(m.Perm())
+	if m&os.ModeSetuid != 0 {
+		o |= 0o4000
+	}
+	if m&os.ModeSetgid != 0 {
+		o |= 0o2000
+	}
+	if m&os.ModeSticky != 0 {
+		o |= 0o1000
+	}
+	return fmt.Sprintf("%#o", o)
 }
 
 // EnsurePrivateDir creates the one absolute directory level dir at 0700 if

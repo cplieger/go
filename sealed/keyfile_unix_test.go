@@ -509,7 +509,7 @@ func TestUnsafeKeyFile(t *testing.T) {
 		stubGeteuid(t, os.Geteuid()+1)
 		f, err := OpenKeyFile(t.Context(), path)
 		checkRefusal(t, f, err, path, []error{ErrUnsafeKeyFile}, nil)
-		if want := fmt.Sprintf("owned by uid %d", os.Geteuid()); err != nil && !strings.Contains(err.Error(), want) {
+		if want := fmt.Sprintf("owned by uid %d", uint32(os.Geteuid())); err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("%q does not say %q", err, want)
 		}
 		checkNoLease(t, path)
@@ -520,6 +520,45 @@ func TestUnsafeKeyFile(t *testing.T) {
 			t.Errorf("KeyIDs().Current = %q, want K1's", got)
 		}
 	})
+}
+
+// statInfo is a FileInfo whose Sys is st, the fstat(2) answer ownerModeErr
+// reads.
+type statInfo struct {
+	fs.FileInfo
+	st *syscall.Stat_t
+}
+
+func (i statInfo) Sys() any { return i.st }
+
+// TestOwnerUIDs checks that the owner check compares and names uids as
+// uid_t, an unsigned 32-bit value (stat(2) st_uid, inode(7)), for uids of
+// 2^31 and over. The geteuid seam answers what os.Geteuid's int holds for
+// them on a 32-bit build, where they arrive negative, so the check holds on
+// every GOARCH.
+func TestOwnerUIDs(t *testing.T) {
+	const wrapped2p31, wrappedMax = -1 << 31, -2 // uids 2147483648 and 4294967294
+	for _, tc := range []struct {
+		name string
+		uid  uint32
+		euid int
+		says string
+	}{
+		{"same uid 2147483648", 1 << 31, wrapped2p31, ""},
+		{"owner 4294967294", 4294967294, wrapped2p31, "owned by uid 4294967294, not the effective uid 2147483648"},
+		{"effective uid 4294967294", 1 << 31, wrappedMax, "owned by uid 2147483648, not the effective uid 4294967294"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubGeteuid(t, tc.euid)
+			err := ownerModeErr("sealing.key", statInfo{st: &syscall.Stat_t{Uid: tc.uid, Mode: 0o600}})
+			switch {
+			case tc.says == "" && err != nil:
+				t.Errorf("ownerModeErr = %v, want nil for the effective uid's file", err)
+			case tc.says != "" && (!errors.Is(err, ErrUnsafeKeyFile) || !strings.Contains(fmt.Sprint(err), tc.says)):
+				t.Errorf("ownerModeErr = %v, want ErrUnsafeKeyFile saying %q", err, tc.says)
+			}
+		})
+	}
 }
 
 // TestKeyFileReadBound checks the ErrKeyFileFormat godoc's "or over 512

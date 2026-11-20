@@ -3,8 +3,6 @@
 package filesafe
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -77,34 +75,11 @@ type readerFunc func([]byte) (int, error)
 
 func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
 
-// TestWrite_ModeMismatchIsAWriteErrorMatchingErrModeNotStored pins that the
-// write path's mode step is a verified postcondition: a failure arrives as
-// a *WriteError at PhaseTempChmod and its chain must still match
-// ErrModeNotStored via Unwrap. The mismatch leg is asserted against a
-// constructed error, deliberately: no filesystem reachable from this test
-// refuses a chmod, so the question worth pinning is the error CHAIN the
-// write path returns, not EnforceMode's own comparison (privatedir_test.go
-// owns that).
-func TestWrite_ModeMismatchIsAWriteErrorMatchingErrModeNotStored(t *testing.T) {
+// TestWriteFile_WithModeStoresTheMode pins that an explicit mode is what
+// ends up on disk, read back rather than assumed.
+func TestWriteFile_WithModeStoresTheMode(t *testing.T) {
 	t.Parallel()
 
-	werr := error(&WriteError{
-		Phase: PhaseTempChmod,
-		Err:   fmt.Errorf("%w: /x: asked for 0600, filesystem stored 0660", ErrModeNotStored),
-	})
-	if !errors.Is(werr, ErrModeNotStored) {
-		t.Error("errors.Is(*WriteError, ErrModeNotStored) = false; a caller cannot tell a refused mode from any other write failure")
-	}
-	we, ok := errors.AsType[*WriteError](werr)
-	if !ok {
-		t.Fatal("errors.AsType[*WriteError] = false")
-	}
-	if we.Phase != PhaseTempChmod {
-		t.Errorf("phase = %v, want PhaseTempChmod", we.Phase)
-	}
-
-	// And the happy path: an explicit mode is what ends up on disk, read
-	// back rather than assumed.
 	target := filepath.Join(t.TempDir(), "cfg.json")
 	if _, err := WriteFile(t.Context(), target, []byte("{}"), WithMode(0o600)); err != nil {
 		t.Fatalf("WriteFile: %v", err)

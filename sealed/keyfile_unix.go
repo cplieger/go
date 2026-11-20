@@ -24,7 +24,10 @@ func ownerModeErr(path string, fi fs.FileInfo) error {
 	if !ok {
 		return fmt.Errorf("%w: %s: its owner could not be read", ErrUnsafeKeyFile, path)
 	}
-	if euid := geteuid(); int(st.Uid) != euid {
+	// uid_t is unsigned 32 bits (stat(2)), Stat_t.Uid's type on every system
+	// here; os.Geteuid's int holds a uid of 2^31 or more negative on a
+	// 32-bit build, which the conversion undoes.
+	if euid := uint32(geteuid()); st.Uid != euid { //nolint:gosec // G115: the wrap is the point, as above
 		return fmt.Errorf("%w: %s: owned by uid %d, not the effective uid %d", ErrUnsafeKeyFile, path, st.Uid, euid)
 	}
 	if perm := st.Mode & 0o7777; perm&^0o600 != 0 {

@@ -20,9 +20,9 @@ Before it locks, every form refuses, from the open descriptor:
 
 - a symlink at the path, with `ErrSymlinkTarget`, without touching the file it points to;
 - a directory, FIFO, socket or device, with `ErrNotRegular` (a `*NotRegularError`);
-- a file another user owns, with `ErrNotOwned`, since its owner could swap it;
-- a file with group or other access, with `ErrModeTooOpen`, since another user who can open it could hold the lease against you;
-- a created file whose 0600 the filesystem did not store, with `ErrModeNotStored`, which never reaches its path.
+- a file another user owns, with `ErrNotOwned` (a `*NotOwnedError`), since its owner could swap it;
+- a file with group or other access, with `ErrModeTooOpen` (a `*ModeTooOpenError`), since another user who can open it could hold the lease against you;
+- a created file whose 0600 the filesystem did not store, with `ErrModeNotStored` (a `*ModeNotStoredError`), which never reaches its path.
 
 Only the final component is checked. The lock file's directory should be one only its users can write, such as the directory the guarded file lives in.
 

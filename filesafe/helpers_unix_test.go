@@ -3,6 +3,7 @@
 package filesafe
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -139,4 +140,28 @@ func lstatOccupants(t *testing.T) occupants {
 // found is a stat func that reports fi.
 func found(fi os.FileInfo) func() (os.FileInfo, error) {
 	return func() (os.FileInfo, error) { return fi, nil }
+}
+
+// assertModeTooOpen requires err to be a *ModeTooOpenError naming name with
+// mode want, then widens path to 0777 and requires the error to still report
+// want: the refusal describes what was checked, not what is there now.
+func assertModeTooOpen(t *testing.T, err error, path, name string, want os.FileMode) {
+	t.Helper()
+	if !errors.Is(err, ErrModeTooOpen) {
+		t.Errorf("err = %v, want it to match ErrModeTooOpen", err)
+	}
+	mt, ok := errors.AsType[*ModeTooOpenError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *ModeTooOpenError", err)
+	}
+	if mt.Name != name || mt.Mode != want {
+		t.Errorf("ModeTooOpenError = {Name: %q, Mode: %#o}, want {Name: %q, Mode: %#o}", mt.Name, uint32(mt.Mode), name, uint32(want))
+	}
+	msg := err.Error()
+	if err := os.Chmod(path, 0o777); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	if mt.Mode != want || err.Error() != msg {
+		t.Errorf("after chmod 0777: Mode %#o, message %q; want Mode %#o and message %q unchanged", uint32(mt.Mode), err.Error(), uint32(want), msg)
+	}
 }
