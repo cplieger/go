@@ -90,7 +90,7 @@ To stream content, use `WriteReader`. To write a file piece by piece, call `NewP
 - Leases: `AcquireLease`, `TryLease`, `AcquireSharedLease`, `TrySharedLease`, and `Lease` with `Close` and `Covers`.
 - Temp files and checks: `CleanupStaleTemps`, `CleanupStaleTempsInRoot`, `TempName`, `IsPackageTemp`, `ProbeWritable`, `ProbeWritableInRoot`, `ValidatePath`, and `Identify` with `FileIdentity`.
 - Options: `WithMode`, `WithMkdirMode`, `WithMkdirAll` and `WithMaxBytes` for writes and probes (`WriteOption`), `WithRecursive` for sweeps (`SweepOption`), `WithRepairOwnedDir` for `EnsurePrivateDir` (`PrivateDirOption`), and `WithLogger`, which all of them take (`Option`).
-- Results and errors: `Result`, `SweepResult`, `ProbeResult` with its `ProbePhase`, `PrivateDirResult`, sentinel values for `errors.Is`, `ErrInvalidArgument`, `ErrFileBusy` and `ErrModeUnsupported` among them, and `*WriteError` with its `WritePhase` and `*NotRegularError` for `errors.As`.
+- Results and errors: `Result`, `SweepResult`, `ProbeResult` with its `ProbePhase`, `PrivateDirResult`, sentinel values for `errors.Is`, `ErrInvalidArgument`, `ErrFileBusy` and `ErrModeUnsupported` among them, and `*WriteError` with its `WritePhase` for `errors.As`, beside the typed refusals carrying what each check read: `*NotRegularError`, `*NotDirectoryError`, `*NotOwnedError`, `*ModeTooOpenError`, `*ModeNotStoredError` and `*FileTooLargeError`.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/filesafe). [Choosing a function](docs/choosing-a-function.md) says which call fits which job.
 

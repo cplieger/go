@@ -165,11 +165,9 @@ func closedForeign(t *testing.T, base string) (string, []string) {
 	return "/", []string{"root"}
 }
 
-func assertNotOwnedAtOpen(t *testing.T, call string, err error) {
+func assertNotOwnedAtOpen(t *testing.T, call string, err error, name string) {
 	t.Helper()
-	if !errors.Is(err, ErrNotOwned) {
-		t.Errorf("%s = %v, want ErrNotOwned", call, err)
-	}
+	assertNotOwned(t, call, err, name)
 	if !errors.Is(err, syscall.EACCES) || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("%s = %v, want it to wrap the open's EACCES", call, err)
 	}
@@ -266,7 +264,7 @@ func TestEnsurePrivateDir_RefusesAClosedForeignDirAsNotOwned(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(parent, name)
 			_, err := EnsurePrivateDir(dir)
-			assertNotOwnedAtOpen(t, "EnsurePrivateDir("+dir+")", err)
+			assertNotOwnedAtOpen(t, "EnsurePrivateDir("+dir+")", err, dir)
 		})
 	}
 }
@@ -280,7 +278,7 @@ func TestCheckPrivateDir_RefusesAClosedForeignDirAsNotOwned(t *testing.T) {
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(parent, name)
-			assertNotOwnedAtOpen(t, "CheckPrivateDir("+dir+")", CheckPrivateDir(dir))
+			assertNotOwnedAtOpen(t, "CheckPrivateDir("+dir+")", CheckPrivateDir(dir), dir)
 		})
 	}
 }
@@ -294,7 +292,7 @@ func TestCheckPrivateDirInRoot_RefusesAClosedForeignDirAsNotOwned(t *testing.T) 
 	root := openRootAt(t, parent)
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+parent+", "+name+")", CheckPrivateDirInRoot(root, name))
+			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+parent+", "+name+")", CheckPrivateDirInRoot(root, name), name)
 		})
 	}
 }
@@ -341,10 +339,13 @@ func TestCheckPrivateDirInRoot_RefusesItsOwnDirectoryOnceAnotherUidOwnsIt(t *tes
 			t.Fatalf("CheckPrivateDirInRoot(%s, .) while nobody owns it = %v, want nil", name, err)
 		}
 	}
+	// A refused lookup is named by the root's path; at 0711 the lookup
+	// passes and the open of "." is what is refused.
+	wantName := map[string]string{"mine": filepath.Join(base, "mine"), "mine-711": "."}
 	awaitParent(t)
 	for name, root := range roots {
 		t.Run(name, func(t *testing.T) {
-			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+name+", .)", CheckPrivateDirInRoot(root, "."))
+			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+name+", .)", CheckPrivateDirInRoot(root, "."), wantName[name])
 		})
 	}
 }
@@ -441,7 +442,7 @@ func TestCheckPrivateDirInRoot_ReadsAClosedRootsOwnerFromItsPath(t *testing.T) {
 	root, link := linkedRoot(t, dir)
 	closeDir(t, dir)
 	repoint(t, link, rootOwnedDir(base))
-	assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."))
+	assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."), link)
 }
 
 // A refused open is classified from a lookup taken after it, not from the
@@ -473,7 +474,7 @@ func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing
 			closeDir(t, dir)
 			repoint(t, link, rootOwnedDir(base))
 		})
-		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."))
+		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."), link)
 	})
 	if base == "" {
 		// Unprivileged, no directory can be handed to another uid.
@@ -482,7 +483,7 @@ func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing
 	t.Run("a child another uid took over", func(t *testing.T) {
 		root := openRootAt(t, own)
 		withPinOpenHook(t, func(string) { awaitParent(t) })
-		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+own+", turned)", CheckPrivateDirInRoot(root, "turned"))
+		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+own+", turned)", CheckPrivateDirInRoot(root, "turned"), "turned")
 	})
 }
 
@@ -543,5 +544,115 @@ func TestCheckPrivateDirInRoot_RefusesAClosedRootWhoseDirectoryMoved(t *testing.
 			refill(t, dir)
 			assertPlainPermission(t, "CheckPrivateDirInRoot(moved root, .)", CheckPrivateDirInRoot(root, "."))
 		})
+	}
+}
+
+// assertNotOwned requires err to be a *NotOwnedError naming name, owned by
+// root and compared with the effective uid.
+func assertNotOwned(t *testing.T, call string, err error, name string) {
+	t.Helper()
+	if !errors.Is(err, ErrNotOwned) {
+		t.Errorf("%s = %v, want it to match ErrNotOwned", call, err)
+	}
+	no, ok := errors.AsType[*NotOwnedError](err)
+	if !ok {
+		t.Fatalf("%s = %v, want a *NotOwnedError", call, err)
+	}
+	if no.Name != name || no.Owner != 0 || no.EUID != uidOf(os.Geteuid()) {
+		t.Errorf("%s: NotOwnedError = %+v, want {Name: %s, Owner: 0, EUID: %d}", call, *no, name, uidOf(os.Geteuid()))
+	}
+}
+
+// A root-owned 0755 directory opens for any uid, so each check reaches the
+// owner comparison on its open handle; the parent then hands the directory
+// to nobody, which must not change a refusal already returned.
+func TestNotOwnedError_CarriesBothUidsEachPrivateDirCheckCompared(t *testing.T) {
+	setup := func(t *testing.T, base string) { mkdirExact(t, filepath.Join(base, "foreign"), 0o755) }
+	between := func(base string) {
+		if err := os.Chown(filepath.Join(base, "foreign"), nobodyUID, nobodyUID); err != nil {
+			t.Errorf("chown foreign to nobody: %v", err)
+		}
+	}
+	base, ok := asNobody(t, setup, between)
+	if !ok {
+		return
+	}
+	dir, rootDir, name := "/", "/", "."
+	if base != "" {
+		dir, rootDir, name = filepath.Join(base, "foreign"), base, "foreign"
+	}
+	_, ensureErr := EnsurePrivateDir(dir)
+	got := []struct {
+		err        error
+		call, name string
+	}{
+		{ensureErr, "EnsurePrivateDir", dir},
+		{CheckPrivateDir(dir), "CheckPrivateDir", dir},
+		{CheckPrivateDirInRoot(openRootAt(t, rootDir), name), "CheckPrivateDirInRoot", name},
+	}
+	msgs := make([]string, len(got))
+	for i, g := range got {
+		assertNotOwned(t, g.call, g.err, g.name)
+		msgs[i] = g.err.Error()
+	}
+	if base == "" {
+		return
+	}
+	awaitParent(t)
+	for i, g := range got {
+		assertNotOwned(t, g.call+" after the chown", g.err, g.name)
+		if g.err.Error() != msgs[i] {
+			t.Errorf("%s message after the chown = %q, want %q unchanged", g.call, g.err.Error(), msgs[i])
+		}
+	}
+}
+
+// Without CAP_FSETID, fchmod drops setgid from a file whose group the caller
+// is not in (chmod(2)), so EnforceMode reads back less than it asked for.
+// Only root can make such a file for an unprivileged child.
+func TestModeNotStoredError_CarriesBothModesEnforceModeCompared(t *testing.T) {
+	setup := func(t *testing.T, base string) {
+		ownWorkspace(t, base)
+		path := filepath.Join(base, "own", "f")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chown(path, nobodyUID, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, ok := asNobody(t, setup, nil)
+	if !ok {
+		return
+	}
+	if base == "" {
+		t.Skip("needs a file whose group the process is not in, which only a root suite can make")
+	}
+	path := filepath.Join(base, "own", "f")
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	stored, err := EnforceMode(f, os.ModeSetgid|0o600)
+	if !errors.Is(err, ErrModeNotStored) {
+		t.Errorf("EnforceMode = %v, want it to match ErrModeNotStored", err)
+	}
+	mn, ok := errors.AsType[*ModeNotStoredError](err)
+	if !ok {
+		t.Fatalf("EnforceMode = %v, want a *ModeNotStoredError", err)
+	}
+	if mn.Name != path || mn.Requested != os.ModeSetgid|0o600 || mn.Stored != 0o600 || stored != 0o600 {
+		t.Errorf("ModeNotStoredError = %+v, stored %v; want {Name: %s, Requested: setgid 0600, Stored: 0600}", *mn, stored, path)
+	}
+	want := "filesafe: filesystem did not store the requested mode: " + path + ": asked for 02600, filesystem stored 0600"
+	if err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+	if err := f.Chmod(0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mn.Stored != 0o600 || mn.Requested != os.ModeSetgid|0o600 {
+		t.Errorf("after chmod 0644: ModeNotStoredError = %+v, want the modes EnforceMode compared", *mn)
 	}
 }

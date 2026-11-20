@@ -507,6 +507,20 @@ func TestAcquireLease_RefusesAWideMode(t *testing.T) {
 	}
 }
 
+func TestModeTooOpenError_CarriesTheModeEachLeaseFormRead(t *testing.T) {
+	for _, form := range allLeaseForms {
+		t.Run(form.name, func(t *testing.T) {
+			path := newLockFile(t)
+			if err := os.Chmod(path, 0o604); err != nil {
+				t.Fatalf("chmod: %v", err)
+			}
+			l, err := form.take(t.Context(), path)
+			closeIfLease(l)
+			assertModeTooOpen(t, err, path, path, 0o604)
+		})
+	}
+}
+
 func TestAcquireLease_ReportsAModeTheFilesystemDidNotStore(t *testing.T) {
 	for _, form := range exclusiveLeaseForms {
 		t.Run(form.name, func(t *testing.T) {
