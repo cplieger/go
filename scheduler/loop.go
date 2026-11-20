@@ -6,50 +6,34 @@ import (
 	"time"
 )
 
-// Job is one unit of scheduled work. It receives the loop's context, which is
-// cancelled when RunLoop is asked to stop; a job that must run to completion
-// past a shutdown signal should derive its own context (context.WithoutCancel)
-// internally. A Job reports its outcome through its own closure (setting a
-// health marker, logging); RunLoop does not inspect a return value.
-//
-// A panic in a Job is NOT recovered: it unwinds through RunLoop and terminates
-// the process, so record a cycle's outcome before the work that can panic.
-type Job func(ctx context.Context)
-
 // LoopOptions configures RunLoop. Interval must be positive; Jitter,
-// FirstDelay and FireOnStart are optional.
+// FirstDelay, FireOnStart and Scheduled are optional.
 type LoopOptions struct {
-	// Interval is the gap between ticks. It must be positive; RunLoop returns
-	// immediately otherwise (the built-in mode ParseInterval selects always
-	// carries a positive interval).
+	// Scheduled, when set, is called with the time the job will run each time
+	// RunLoop arms its timer, on RunLoop's goroutine after the arm, so a
+	// Scheduled still running at that time delays that run only.
+	Scheduled func(next time.Time)
+	// Interval is the gap between ticks; RunLoop returns at once unless positive.
 	Interval time.Duration
-	// Jitter spreads each tick uniformly across ±(Jitter × Interval) so
-	// restarts across many instances do not synchronize into a thundering herd on a
-	// shared upstream. 0 or less (or NaN) disables jitter, a value up to 1
-	// spreads across that fraction, and 1 or more uses the full ±Interval
-	// band. The startup fire is never jittered.
+	// Jitter spreads each tick uniformly across ±(Jitter × Interval), so
+	// instances restarted together do not reach a shared upstream at once.
+	// 0 or less (NaN included) disables it; 1 or more uses the full band.
 	Jitter float64
-	// FirstDelay overrides the delay before the first tick, so a schedule's
-	// phase survives a restart: pass Stamp.Remaining and the next run lands
-	// one interval after the recorded previous run instead of one interval
-	// after boot. Non-positive means Interval, the default; the value is
-	// never jittered. Ignored when FireOnStart is true.
+	// FirstDelay, when positive, replaces the first tick's delay, unjittered,
+	// so a schedule's phase survives a restart: pass Stamp.Remaining. Ignored
+	// when FireOnStart is true.
 	FirstDelay time.Duration
-	// FireOnStart runs the job immediately as the first iteration, before the
-	// first interval elapses, so a freshly-deployed container does work at once
-	// instead of waiting a full interval. Compute it from Stamp.Due to skip
-	// the startup fire when a recent run's record survived a restart.
+	// FireOnStart runs the job at once, unjittered, before the first interval;
+	// compute it from Stamp.Due to skip a startup run a recent run covers.
 	FireOnStart bool
 }
 
-// RunLoop runs job on a schedule until ctx is cancelled. The job runs
-// sequentially, so two invocations never overlap in-process; guard cross-process
-// overlap with TryLock inside the job. RunLoop blocks until ctx is cancelled and
-// the in-flight job returns, so a caller can treat its return as a completed
-// drain. It covers the built-in scheduling mode only — a ModeOnce job is run
-// directly by the caller and a ModeExternal container waits on ctx.Done — and
-// returns immediately if Interval is not positive.
-func RunLoop(ctx context.Context, job Job, opts LoopOptions) {
+// RunLoop runs job, passing it ctx, on a schedule until ctx is cancelled, and
+// returns once the running job has returned, so its return is a completed
+// drain. Runs never overlap in-process; guard cross-process overlap with
+// TryLock inside the job. A panic in job is not recovered. It covers
+// ModeBuiltin only and returns at once if Interval is not positive.
+func RunLoop(ctx context.Context, job func(ctx context.Context), opts LoopOptions) {
 	if opts.Interval <= 0 {
 		return
 	}
@@ -62,7 +46,11 @@ func RunLoop(ctx context.Context, job Job, opts LoopOptions) {
 		delay = 0
 	}
 	for {
+		next := time.Now().Add(delay)
 		timer := time.NewTimer(delay)
+		if opts.Scheduled != nil {
+			opts.Scheduled(next)
+		}
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -81,11 +69,9 @@ func RunLoop(ctx context.Context, job Job, opts LoopOptions) {
 }
 
 // JitteredDelay returns a delay drawn uniformly from
-// [interval−fraction×interval, interval+fraction×interval). It is the pure core
-// of RunLoop's jitter, exported so the ±band can be tested directly and reused.
+// [interval−fraction×interval, interval+fraction×interval), RunLoop's jitter.
 // A fraction that is not positive (NaN included) or a non-positive interval
-// returns interval unchanged, and a fraction of 1 or more uses the full band,
-// [0, 2×interval).
+// returns interval; a fraction of 1 or more uses [0, 2×interval).
 func JitteredDelay(interval time.Duration, fraction float64) time.Duration {
 	if !(fraction > 0) || interval <= 0 {
 		return interval

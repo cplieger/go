@@ -254,3 +254,73 @@ func TestRunLoopFireOnStartOverridesFirstDelay(t *testing.T) {
 		t.Errorf("fires = %d, want 1 (FireOnStart overrides FirstDelay)", got)
 	}
 }
+
+func TestRunLoopReportsEachArmedFire(t *testing.T) {
+	t.Parallel()
+	const interval = 10 * time.Millisecond
+	cases := []struct {
+		name     string
+		opts     LoopOptions
+		firstMin time.Duration
+		firstMax time.Duration // exclusive; firstMin+1 for an exact first delay
+		gapMin   time.Duration
+		gapMax   time.Duration // exclusive
+	}{
+		{
+			name:     "fire on start reports the start",
+			opts:     LoopOptions{Interval: interval, FireOnStart: true, FirstDelay: 3 * time.Millisecond},
+			firstMin: 0, firstMax: 1,
+			gapMin: interval, gapMax: interval + 1,
+		},
+		{
+			name:     "first delay reports the start plus the delay",
+			opts:     LoopOptions{Interval: interval, FirstDelay: 3 * time.Millisecond},
+			firstMin: 3 * time.Millisecond, firstMax: 3*time.Millisecond + 1,
+			gapMin: interval, gapMax: interval + 1,
+		},
+		{
+			name:     "a jittered interval reports each drawn fire",
+			opts:     LoopOptions{Interval: interval, Jitter: 0.5},
+			firstMin: interval / 2, firstMax: interval * 3 / 2,
+			gapMin: interval / 2, gapMax: interval * 3 / 2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+
+				const runs = 5
+				var armed, ran []time.Time
+				opts := tc.opts
+				opts.Scheduled = func(next time.Time) { armed = append(armed, next) }
+				start := time.Now()
+				RunLoop(ctx, func(context.Context) {
+					ran = append(ran, time.Now())
+					if len(ran) == runs {
+						cancel()
+					}
+				}, opts)
+
+				// The job cancels on its last run, so RunLoop arms one more
+				// timer, reports it and returns before it fires.
+				if len(ran) != runs || len(armed) != runs+1 {
+					t.Fatalf("runs = %d, armed = %d, want %d and %d", len(ran), len(armed), runs, runs+1)
+				}
+				if first := armed[0].Sub(start); first < tc.firstMin || first >= tc.firstMax {
+					t.Errorf("first armed fire = start + %s, want within [%s, %s)", first, tc.firstMin, tc.firstMax)
+				}
+				for i, at := range ran {
+					if !at.Equal(armed[i]) {
+						t.Errorf("run %d at start + %s, want the reported start + %s", i, at.Sub(start), armed[i].Sub(start))
+					}
+					if gap := armed[i+1].Sub(at); gap < tc.gapMin || gap >= tc.gapMax {
+						t.Errorf("armed fire %d = run %d + %s, want within [%s, %s)", i+1, i, gap, tc.gapMin, tc.gapMax)
+					}
+				}
+			})
+		})
+	}
+}

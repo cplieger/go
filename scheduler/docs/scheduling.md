@@ -31,14 +31,15 @@ When a bool option is passed more than once, the last one wins. Pass `WithRedact
 
 `RunLoop` covers `ModeBuiltin`. For `ModeOnce`, call the job directly. For `ModeExternal`, wait on `ctx.Done()` while runs come from outside.
 
-`RunLoop` runs one job at a time, so two runs never overlap in one process. It returns once the context is cancelled and the running job has returned, so its return means the drain is complete. It returns at once when `Interval` is not positive. A panic in a job is not recovered and ends the process. A `Job` returns nothing, so it reports its own result, for example by setting its health verdict or writing a log line.
+`RunLoop` runs one job at a time, so two runs never overlap in one process. It returns once the context is cancelled and the running job has returned, so its return means the drain is complete. It returns at once when `Interval` is not positive. A panic in a job is not recovered and ends the process. The job is a `func(context.Context)` and returns nothing, so it reports its own result, for example by setting its health verdict or writing a log line.
 
-`LoopOptions` has four fields:
+`LoopOptions` has five fields:
 
 - `Interval` is the gap between ticks.
 - `Jitter` spreads each tick across plus or minus that fraction of the interval, so instances that restart together do not all reach a shared upstream at once. `0.10` spreads ticks by 10 percent, and `0` turns jitter off.
 - `FireOnStart` runs the job at once, before the first interval passes. The startup run is never jittered.
 - `FirstDelay` replaces the first tick's delay. It is never jittered, and `FireOnStart` overrides it.
+- `Scheduled`, when set, is called each time the loop arms its timer, with the time the job will run, for example to export a "next run" gauge. It runs on the loop's goroutine after the timer is armed, so a `Scheduled` still running at the fire time delays that run but not the next fire time.
 
 `JitteredDelay(interval, fraction)` is the jitter calculation on its own, for code and tests that need the same spread.
 
