@@ -3,7 +3,7 @@ package httpserver_test
 import (
 	"testing"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // TestClassifyBind pins the classification table for configured "host:port"

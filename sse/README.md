@@ -4,7 +4,7 @@
 
 sse keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client.
 
-A native `EventSource` cannot tell a silent stream from a dead one, so a tab that slept can silently stop updating. The sse hub and client replace the cursors, heartbeats and resync code you would write around that. The Go module has two dependencies from the same repository, [httpserver](https://github.com/cplieger/go/tree/main/httpserver) and [textsafe](https://github.com/cplieger/go/tree/main/textsafe), which use only the standard library. The TypeScript package has no runtime dependencies. Both are Apache-2.0.
+A native `EventSource` cannot tell a silent stream from a dead one, so a tab that slept can silently stop updating. The sse hub and client replace the cursors, heartbeats and resync code you would write around that. The Go module depends on [httpserver](https://github.com/cplieger/go/tree/main/httpserver) and [textsafe](https://github.com/cplieger/go/tree/main/textsafe) from the same repository. httpserver brings that repository's [ssrf](https://github.com/cplieger/go/tree/main/ssrf) and [urlform](https://github.com/cplieger/go/tree/main/urlform), and all four otherwise use only the standard library. The TypeScript package has no runtime dependencies. Both are Apache-2.0.
 
 ## Why use it
 
@@ -78,20 +78,23 @@ Three compiled examples in `example_test.go` cover the next steps, and `go test`
 
 ## API
 
-- `New`, `MustNew` and twelve `With*` options build a hub. `ErrConfig` wraps every refusal.
+- `New`, `MustNew` and fourteen `With*` options build a hub. `ErrConfig` wraps every refusal. `WithErrors` sets the responder that writes every error the hub answers, and `CodeSpecs` lists those codes with their status and remediation, for your error catalog.
 - `Serve`, with `WithTopic`, `WithScope`, `WithRequestScope`, `WithOnConnect` and `WithClientTag`, streams one request. `Writer.Event` writes initial state from the hook. `Scope`, `All`, `Topics`, `ValidTopic`, `MaxScopeTopics` and `MaxScopeHeaderBytes` describe a connection's scope, and `ScopeHandler` lets a client replace it.
 - `Publish` sends a frame and returns its offset, `(0, nil)` once the hub is shut down, or `ErrEventName`, `ErrFrameTooLarge` or `ErrInvalidUTF8`.
 - `DigestHandler`, which takes a `Resolver` and two `WithDigest*` options and returns an error wrapping `ErrConfig` for a refused one, answers a client that reconciles. A resolver receives `Held` subjects and answers one `State` each, with a `Subject`, a `Version` and a `Status` (`StatusCurrent`, `StatusGone` or `StatusForbidden`).
 - `Position`, `Snapshot`, `ClientCount`, `QueuedFrames` and `Shutdown` inspect and stop the hub.
 - `Hello`, `Verdict`, `Cursor`, `ParseCursor`, `Wire`, `MaxOffset` and `MaxFrameBytes` describe the wire. `PresenceEvent`, with its `PresenceKind`, `PresenceCause` and `PresenceWrite` values, is what the presence hook receives.
+- `feedwire` encodes and decodes the change feed's `changed` and `listening` frames and its `Feed-Position` header, with `Version`, `MaxRev` and the name checks.
 - `ssetest` holds `Serve`, `ReadFrames`, `FrameReader`, `Recorder` and `RetryEvent` for your tests.
-- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, and the types they take and return. Its parser, reducer and tab fold are internal.
+- The TypeScript package exports `createStream`, `createVersionMap`, `createDigestClient`, `createWorkerHost`, `attachToWorker`, `createVisibilityManager` and `createOnlineManager`, the wire helpers, `connectionOf`, and the types they take and return. Its parser, reducer and tab fold are internal. The `./feed` entry exports `createFeed`, `retainListening`, `FEED_VERSION`, `FeedVersionMismatch` and their types, and `./feed/worker` is a ready `SharedWorker` script that shares one feed stream between tabs.
 
 The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/sse/v2) and [JSR](https://jsr.io/@cplieger/sse/doc). [Running the hub](docs/hub.md) covers every option and method.
 
 ## A client resumes exactly or reconciles
 
 Every connection opens with an `sse:hello` frame. Its `resumed` field is true only when the hub still holds every frame the client missed and their number is within the `WithReplyMaxEvents` cap. Those frames then follow the hello in order. Otherwise the hub replays nothing, and the client asks your server what changed. The hello's `verdict` says why, for logs and counters.
+
+With `WithBuild(id)`, the hello also carries `build`, the server's build. A page that reconnects to a redeployed server learns it from the hello, before its revalidation reads anything, and the TypeScript client hands it to `revalidate` as `ctx.build`.
 
 The hub runs inside one Go process and keeps its replay buffer in memory. Two processes never share a buffer. A client that falls too far behind gets an `sse:reset` frame and is dropped, so `Publish` never waits for it. The epoch is minted when the hub is created. A client that reconnects after a restart, or to another process, presents a cursor from another epoch and reconciles.
 
@@ -100,6 +103,10 @@ To reconcile, the client posts the versions it holds to `DigestHandler`. Your `R
 The TypeScript client treats a stream without a valid hello as a failed connection. A native `EventSource` can read the stream and send `Last-Event-ID`. Your code must then read the `sse:hello` frame and reconcile when `resumed` is false, and it gets none of the client's liveness checks.
 
 [The wire contract](docs/wire.md) lists the hello's fields, every verdict, the digest JSON and its refusals.
+
+## A change feed for stores
+
+For a server whose state lives in stores with a change log, the [feedwire](feedwire) package and the `@cplieger/sse/feed` entry add a change feed on the same stream. A commit announces only its kinds in a `changed` frame, each connection opens with a `listening` frame giving the revision from which it hears every kind, and every read carries its position in a `Feed-Position` header. The tab compares each read's position with those revisions, so after any reconnect, worker restart or file restore only the stores that missed a commit read again: through a catch-up from their own position when the source keeps a log, in full otherwise. [The change feed](docs/feed.md) describes the frames, the header and every rule the client applies.
 
 ## The browser client follows the tab
 
@@ -111,6 +118,8 @@ The client needs Chrome 98, Firefox 97 or Safari 15.4 or later. `SharedWorker` i
 
 - [Running the hub](docs/hub.md) covers every option, serving, publishing, presence and the test helpers, for anyone wiring the hub into a server.
 - [The wire contract](docs/wire.md) describes the cursor, the stream, the hello and the digest, for anyone writing a client or reading a stream by hand.
+- [The change feed](docs/feed.md) describes the `changed` and `listening` frames, the `Feed-Position` header and how the client applies them, for anyone emitting or reading the feed.
+- [feedwire](feedwire/README.md) lists the feed's bounds, its frozen members and the lockstep rule.
 - [web/README.md](web/README.md) documents the TypeScript client.
 
 ## Credits
@@ -119,7 +128,7 @@ The client needs Chrome 98, Firefox 97 or Safari 15.4 or later. `SharedWorker` i
 - The browser client's parse loop follows [eventsource-parser](https://github.com/rexxars/eventsource-parser).
 - The silence watchdog's `max(3 × keepalive, 15s)` follows [Yaffle/EventSource](https://github.com/Yaffle/EventSource).
 - The client's version map follows IMAP CONDSTORE, [RFC 7162](https://www.rfc-editor.org/rfc/rfc7162). A new epoch discards every cached version, as a `UIDVALIDITY` change does.
-- The Go module's JSON error responses come from [httpserver](https://github.com/cplieger/go/tree/main/httpserver), a module by the same author that uses only the standard library.
+- The Go module's JSON error responses come from [httpserver](https://github.com/cplieger/go/tree/main/httpserver), a module by the same author.
 
 ## Contributing
 
@@ -129,7 +138,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using [Claude](https://claude.com), [GPT](https://openai.com), and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+This project was built with AI assistance. The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 

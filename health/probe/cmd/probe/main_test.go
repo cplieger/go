@@ -34,7 +34,7 @@ func runMain(t *testing.T, args ...string) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
-	cmd.Env = append(os.Environ(), "PROBE_TEST_REEXEC_MAIN=1")
+	cmd.Env = append(os.Environ(), "PROBE_TEST_REEXEC_MAIN=1", childGORACE())
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
 	switch {
@@ -46,6 +46,14 @@ func runMain(t *testing.T, args ...string) (int, string) {
 		t.Fatalf("re-exec %v: %v", args, err)
 		return -1, ""
 	}
+}
+
+// childGORACE is the GORACE entry for a re-executed test binary: the inherited
+// options plus atexit_sleep_ms=0, since a race-enabled binary otherwise sleeps
+// 1 s before it exits (https://go.dev/doc/articles/race_detector#Options). It
+// goes after os.Environ() in cmd.Env, because os/exec keeps a key's last value.
+func childGORACE() string {
+	return "GORACE=" + strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0")
 }
 
 // The command's doc comment publishes three exit codes, and consumer images

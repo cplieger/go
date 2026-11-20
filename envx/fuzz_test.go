@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,37 +21,31 @@ func silenceWarns(f *testing.F) {
 }
 
 // assertParseErrorValue pins the *ParseError contract across the whole input
-// space: whenever a strict numeric variant rejects a value, the error must be a
-// *ParseError whose Value is exactly the TRIMMED input. That is the property
-// consumers rely on to quote the rejected value without a second environment
-// read, and trimming is the half a regression would silently drop.
-func assertParseErrorValue(t *testing.T, err error, raw string) {
+// space: whenever a strict numeric variant rejects key's value, the error must be
+// a *ParseError whose Value is exactly the TRIMMED value the environment holds.
+// That is the property consumers rely on to quote the rejected value without a
+// second environment read, and trimming is the half a regression would silently
+// drop.
+func assertParseErrorValue(t *testing.T, err error, key string) {
 	t.Helper()
 	if err == nil {
 		return
 	}
 	perr, ok := errors.AsType[*ParseError](err)
 	if !ok {
-		t.Fatalf("strict variant returned a non-*ParseError for %q: %v", raw, err)
+		t.Fatalf("strict variant returned a non-*ParseError for %s: %v", key, err)
 	}
-	if want := strings.TrimSpace(raw); perr.Value != want {
-		t.Fatalf("ParseError.Value = %q, want the trimmed input %q", perr.Value, want)
+	// Windows stores the environment as UTF-16, so Setenv replaces invalid UTF-8 with U+FFFD (syscall/wtf8_windows.go).
+	if want := strings.TrimSpace(os.Getenv(key)); perr.Value != want {
+		t.Fatalf("ParseError.Value = %q, want the trimmed value %q of %s", perr.Value, want, key)
 	}
 }
 
-// FuzzKeyValidation pins Key's name grammar against a regexp oracle across
-// the whole input space: a getter panics on exactly the strings the POSIX
-// name grammar ([A-Za-z_][A-Za-z0-9_]*) rejects, and never panics on a name
-// the grammar accepts. String carries the probe: it has no parse and no Warn,
-// so the validation is the only thing exercised.
-//
-// The panic MESSAGE is checked as properties rather than rebuilt, because it is
-// capped at keyEchoMax bytes and the earlier version of this target rebuilt it
-// with strconv.Quote alone — so every key whose quote exceeded the cap read as
-// a wording regression, which is what the weekly fuzz reported. Below the cap
-// the exact-naming contract still holds and is asserted exactly; above it, what
-// the message must guarantee is that the echo is bounded, is a well-formed Go
-// literal, is valid UTF-8, and names a genuine prefix of the offending key.
+// FuzzKeyValidation checks Key's grammar against a regexp oracle: a getter
+// panics on exactly the strings [A-Za-z_][A-Za-z0-9_]* rejects. String is the
+// probe because it has no parse and no Warn. The panic message is checked as
+// properties, since it is capped at keyEchoMax: exact below the cap, and above
+// it bounded, a well-formed Go literal, valid UTF-8 and a true prefix of the key.
 func FuzzKeyValidation(f *testing.F) {
 	for _, s := range []string{
 		"", "A", "_", "APP_PORT", "127.0.0.1:7681", "1PORT", "APP-KEY",
@@ -241,7 +236,7 @@ func FuzzSecretPath(f *testing.F) {
 		t.Setenv("ENVX_FUZZ_SEC_FILE", p)
 		v, src, err := SecretWithSource("ENVX_FUZZ_SEC")
 		if IsBlankSecretFilePath("ENVX_FUZZ_SEC") && src == SecretSourceFile && err == nil {
-			t.Errorf("blank pointer %q delivered a secret from the file channel (value length %d)", p, len(v))
+			t.Errorf("blank pointer %q delivered a secret from the file channel (value length %d)", p, len(v.Reveal()))
 		}
 	})
 }
@@ -267,7 +262,7 @@ func FuzzIntStrict(f *testing.F) {
 		if !ok && n != 0 {
 			t.Fatalf("!ok with non-zero value %d for %q", n, v)
 		}
-		assertParseErrorValue(t, err, v)
+		assertParseErrorValue(t, err, "ENVX_FUZZ_INTSTRICT")
 		const sentinel = -987654321
 		tolerant := Int("ENVX_FUZZ_INTSTRICT", sentinel)
 		switch {
@@ -305,7 +300,7 @@ func FuzzDurationStrict(f *testing.F) {
 		if !ok && d != 0 {
 			t.Fatalf("!ok with non-zero value %v for %q", d, v)
 		}
-		assertParseErrorValue(t, err, v)
+		assertParseErrorValue(t, err, "ENVX_FUZZ_DURSTRICT")
 		const sentinel = -987654321 * time.Second
 		tolerant := Duration("ENVX_FUZZ_DURSTRICT", sentinel)
 		if ok && tolerant != d {

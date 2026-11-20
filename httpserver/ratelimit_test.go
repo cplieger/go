@@ -104,7 +104,7 @@ func TestRateLimiter429Envelope(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("body is not the JSON error envelope: %v (body=%q)", err, rec.Body.String())
 	}
-	if env.Code != "session_rate" || env.Error != "too many sessions" {
+	if env.Code != "session_rate" || env.Message != "too many sessions" {
 		t.Errorf("envelope = %+v, want code=session_rate error=%q", env, "too many sessions")
 	}
 }
@@ -134,7 +134,7 @@ func TestRateLimiter429DefaultRenderingUnchanged(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("body is not the JSON error envelope: %v (body=%q)", err, rec.Body.String())
 	}
-	if env.Code != "rate_limited" || env.Error != "rate limit exceeded" {
+	if env.Code != "rate_limited" || env.Message != "rate limit exceeded" {
 		t.Errorf("envelope = %+v, want code=rate_limited error=%q", env, "rate limit exceeded")
 	}
 }
@@ -249,7 +249,7 @@ func TestRateLimiterNilResponderKeepsJSONDefault(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("body is not the JSON error envelope: %v (body=%q)", err, rec.Body.String())
 	}
-	if env.Code != "rate_limited" || env.Error != "rate limit exceeded" {
+	if env.Code != "rate_limited" || env.Message != "rate limit exceeded" {
 		t.Errorf("envelope = %+v, want the default rate_limited envelope", env)
 	}
 }
@@ -503,8 +503,8 @@ func TestFailedAuthRateLimitTuning(t *testing.T) {
 	if env.Code != "too_many_auth_failures" {
 		t.Errorf("envelope code = %q, want %q (the fixed cross-service code)", env.Code, "too_many_auth_failures")
 	}
-	if env.Error != "too many failed bearer attempts" {
-		t.Errorf("envelope message = %q, want the caller's msg verbatim", env.Error)
+	if env.Message != "too many failed bearer attempts" {
+		t.Errorf("envelope message = %q, want the caller's msg verbatim", env.Message)
 	}
 }
 
@@ -629,8 +629,8 @@ func TestFailedAuthRateLimitMessage(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 				t.Fatalf("429 body is not the JSON error envelope: %v (body=%q)", err, rec.Body.String())
 			}
-			if env.Error != tc.want {
-				t.Errorf("envelope message = %q, want %q", env.Error, tc.want)
+			if env.Message != tc.want {
+				t.Errorf("envelope message = %q, want %q", env.Message, tc.want)
 			}
 			if env.Code != "too_many_auth_failures" {
 				t.Errorf("envelope code = %q, want %q", env.Code, "too_many_auth_failures")
@@ -680,7 +680,7 @@ func TestFailedAuthRateLimitCallerErrorReplacesThePresets(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("429 body is not the JSON envelope: %v (body=%q)", err, rec.Body.String())
 	}
-	if rec.Code != http.StatusTooManyRequests || env.Code != "x_code" || env.Error != "x msg" {
+	if rec.Code != http.StatusTooManyRequests || env.Code != "x_code" || env.Message != "x msg" {
 		t.Errorf("refusal = %d %+v, want 429 with the caller's code and message", rec.Code, env)
 	}
 }

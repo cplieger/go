@@ -2,9 +2,9 @@ package trigger
 
 import (
 	"context"
-	"errors"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,51 +21,33 @@ type testPayload struct {
 // 108 bytes including the trailing NUL.
 const maxSunPath = 107
 
-// testSocketPath returns a unix-socket path short enough for sun_path:
-// t.TempDir() embeds the full test name, which overflows the limit under a
-// long TMPDIR and fails bind with EINVAL. The helper honors a configured
-// TMPDIR when the short random directory it yields still fits sun_path
-// (keeping test scratch inside a workspace-scoped root), and falls back to
-// /tmp — where the production sockets live — only when TMPDIR is too deep.
+// testSocketPath returns an unbound socket path in a fresh directory. Under a
+// deep TMPDIR, t.TempDir's path overflows sun_path and bind fails with EINVAL,
+// so the directory then moves to /tmp.
 func testSocketPath(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "trig-sock-")
+	if path := filepath.Join(t.TempDir(), "s.sock"); len(path) <= maxSunPath {
+		return path
+	}
+	dir, err := os.MkdirTemp("/tmp", "trig-sock-")
 	if err != nil {
 		t.Fatalf("mktemp for socket dir: %v", err)
 	}
-	path := filepath.Join(dir, "s.sock")
-	if len(path) > maxSunPath {
-		// TMPDIR is too deep for sun_path; fall back to /tmp.
-		_ = os.RemoveAll(dir)
-		if dir, err = os.MkdirTemp("/tmp", "trig-sock-"); err != nil {
-			t.Fatalf("mktemp for socket dir: %v", err)
-		}
-		path = filepath.Join(dir, "s.sock")
-	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return path
+	return filepath.Join(dir, "s.sock")
 }
 
-// absentSocketPath returns a socket path that does not exist, creating nothing.
-//
-// A test needing an ABSENT socket must not reach for t.TempDir(). Listen swaps
-// the process-wide umask to 0o177, and a directory born inside that window is
-// drw-------, so t.TempDir's numbered subdir then fails with EACCES. The window
-// is opened by TestSubmit_CancellationAbortsTheWait (parallel, and reaches
-// Listen through startTestServer); this test was the only other parallel one
-// creating a directory. Root bypasses the directory permission check, so it
-// reproduces unprivileged only — it reddened a sync PR while main was green.
-// Creating nothing leaves the window nothing to corrupt.
-func absentSocketPath(t *testing.T) string {
+// listenTestSocket binds a unix socket at a fresh testSocketPath and closes it
+// at cleanup; closing it earlier is harmless.
+func listenTestSocket(t *testing.T) (net.Listener, string) {
 	t.Helper()
-	path := filepath.Join(os.TempDir(), "trig-absent", t.Name()+".sock")
-	if len(path) > maxSunPath {
-		t.Fatalf("absent socket path %q is %d bytes, over sun_path %d", path, len(path), maxSunPath)
+	sock := testSocketPath(t)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("net.Listen(unix, %q) = %v", sock, err)
 	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("absent socket path %q must not exist: Lstat = %v", path, err)
-	}
-	return path
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln, sock
 }
 
 // startExecutor drains q on a background goroutine, running fn per job (fn

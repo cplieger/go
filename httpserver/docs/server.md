@@ -1,6 +1,6 @@
 # Server and shutdown
 
-This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog`, the shutdown sequence `Run` follows and the metrics listener of an app that opens no port of its own.
+This page is for a developer starting and stopping a httpserver server. It covers the server defaults, routing `net/http`'s own errors into `slog`, the shutdown sequence `Run` follows and the ops listener that serves `/healthz` and `/metrics`.
 
 ## New
 
@@ -29,11 +29,11 @@ Only header reading is bounded by time, so a slow request body is not. A handler
 
 The level is your choice. An accept failure is fatal for a service whose only job is answering probes, and a recoverable problem for one that retries.
 
-The option reads `slog.Default()` when `New` applies it. Install your process logger first, because a later `slog.SetDefault` does not change a server already built. Any other `*log.Logger` is an assignment to `srv.ErrorLog`. With neither, `net/http`'s standard logger is used.
+The option reads `slog.Default()` as each line is logged, so a server built before you install your process logger still logs through it. Any other `*log.Logger` is an assignment to `srv.ErrorLog`. With neither, `net/http`'s standard logger is used.
 
 ## Run
 
-`Run(ctx, srv, ln, opts...)` serves `srv` on `ln` until `ctx` is cancelled, then shuts down. Bind `ln` before you call it, for example with `net.ListenConfig.Listen`, so a port already in use fails at once. `srv` and `ln` must not be nil.
+`Run(ctx, srv, ln, opts...)` serves `srv` on `ln` until `ctx` is cancelled, then shuts down. Bind `ln` before you call it, for example with `Listen`, so a port still in use fails before serving starts. `srv` and `ln` must not be nil.
 
 When `ctx` is cancelled, `Run` sets one deadline, now plus the grace, and runs three steps against it:
 
@@ -75,32 +75,70 @@ After `ctx` fires, it checks `done` once more. A drain that used the whole grace
 
 What to log, at which level, and what exit code to use stay your decisions for all three helpers.
 
-## The metrics listener
+## The ops listener
 
-An app that opens no port of its own can still offer an opt-in page for Prometheus and a health endpoint. `ListenMetrics(ctx, addr, MetricsHandlers{Metrics: ..., Healthz: ...}, opts...)` builds that listener in one call:
+`/healthz` and `/metrics` live on a listener of their own, the ops listener, so they never share a port with the app's product routes or its API. An app with no product port uses the same listener alone.
 
 ```go
-ms, err := httpserver.ListenMetrics(ctx, cfg.MetricsListenAddr, httpserver.MetricsHandlers{
-	Metrics: reg.Handler(),
-	Healthz: health.CheckHandler(checks...),
+listenAddr := httpserver.ListenAddr(envx.String("LISTEN_ADDR"), ":9737")
+opsAddr := httpserver.ListenAddr(envx.String("OPS_LISTEN_ADDR"), ":9738")
+if err := httpserver.CheckListenAddrs(
+	httpserver.ListenSetting{Name: "LISTEN_ADDR", Addr: listenAddr},
+	httpserver.ListenSetting{Name: "OPS_LISTEN_ADDR", Addr: opsAddr},
+); err != nil {
+	return err
+}
+ops, err := httpserver.ListenOps(ctx, httpserver.OpsConfig{
+	Setting:      "OPS_LISTEN_ADDR",
+	Addr:         opsAddr,
+	Metrics:      reg.Handler(),
+	Healthz:      health.CheckHandler(checks...),
+	Hosts:        []string{"app.example.com", "prometheus.lan"},
+	HostsSetting: "ALLOWED_HOSTS",
+	Errors:       catalog.Responder(),
 })
 if err != nil {
-	slog.Error("cannot listen on METRICS_LISTEN_ADDR; refusing to start", "error", err)
-	os.Exit(1)
+	return err
 }
-done := make(chan error, 1)
-go func() { done <- ms.Serve(ctx) }()
-// ... the app's work; cancel ctx on the way out ...
-if err := <-done; err != nil {
-	slog.Error("metrics listener stopped", "error", err)
+ln, err := httpserver.Listen(ctx, httpserver.ListenSetting{Name: "LISTEN_ADDR", Addr: listenAddr})
+if err != nil {
+	return err
 }
+return httpserver.RunWithOps(ctx, ops, httpserver.Served{
+	Server:   httpserver.New(handler),
+	Listener: ln,
+	Options:  []httpserver.RunOption{httpserver.WithPreDrain(release)},
+})
 ```
 
-- It binds `addr` before it returns, so a port in use fails there, naming the address, before the app starts any work. A startup that gives up after that, before it calls `Serve`, calls `Close` to release the port.
-- An empty `addr` opens nothing. `Serve` then returns nil at once, without running `Run` or its options, and `Addr` is nil, so the app needs no branch for a listener that is off.
-- It routes only `/metrics` and `/healthz`, for `GET` and the `HEAD` a `GET` pattern also matches. Any other path is 404, after an unclean path is first redirected to its clean form, and any other method 405, so the listener never serves the app's own routes.
-- Both paths log under `WithProbeLogLevel`, and `Recoverer` turns a panicking handler into a 500.
-- `ReadTimeout` is 10s and `WriteTimeout` 30s, because both routes answer in one short response. `New`'s other defaults apply.
-- `opts` reach `New`, so `WithSlogErrorLog` routes net/http's own error lines into `slog`.
-- It reads no environment. The app owns its setting's name, parsing and edge trimming.
-- `Serve(ctx, opts...)` runs `Run` until `ctx` ends and takes the same options. A second `Serve`, or a `Serve` after `Close`, on a listener that is on returns an error. Once `Serve` runs, stop it by cancelling `ctx`: `Close` then returns an error and leaves it serving.
+- `ListenAddr(value, def)` reads every listener setting, `LISTEN_ADDR` and `OPS_LISTEN_ADDR` alike. It cuts edge spaces and invisible runes (a zero-width space, a byte-order mark, a pasted line ending) from the raw value and answers `def` for a blank one. The app documents each `def`, such as `:9737` for `LISTEN_ADDR` and `:9738` for `OPS_LISTEN_ADDR`. With `def` `""`, a blank value turns that listener off: for `OPS_LISTEN_ADDR`, `ListenOps` binds nothing, `Addr` is nil and `RunWithOps` serves the product listeners alone. `Listen`, `CheckListenAddrs` and `ListenOps` read each address through the same trim, so a raw value passed straight to them is read as `ListenAddr` would read it. httpserver reads no environment.
+- `CheckListenAddrs` takes every TCP listener the app opens, once, and refuses any two that would bind one socket, naming both settings and the port. Ports compare as `net.Listen` resolves them (`09737` is `9737`, `http` is `80`). Two addresses on one port clash when their hosts are equal after unmapping (`[::ffff:127.0.0.1]` is `127.0.0.1`), when either host is unspecified (empty, `0.0.0.0` or `[::]`), or when either is a host name, which may resolve to the other's address. On Linux Go's `tcp` listener on `[::]` also takes IPv4, so `[::]:9737` beside `0.0.0.0:9737` is refused. A blank value, port 0 and a value with no resolvable port pass, and `net.Listen` reports the last.
+- `Listen(ctx, setting)` binds one TCP listener. A blank address is an error. A port in use (`EADDRINUSE`) is retried every 250 ms for up to 5 s, for a restarted container whose previous process still holds it. Any other error, or `ctx` ending, fails at once. The error names the setting and the address, with control characters cleaned, and wraps the cause, so `errors.Is(err, syscall.EADDRINUSE)` and `CausedByCancellation` see through it. Bind each product listener with it.
+- `ListenOps` binds through `Listen` before it returns, `Setting` naming `Addr` in its error. A nil `Metrics` or `Healthz` is an error even with the listener off. When `ctx` ends before `RunWithOps` takes the listener, the listener closes.
+- It answers `GET` and `HEAD` on `/healthz` and `/metrics` only. Another path answers `not_found` and another method `method_not_allowed` with `Allow: GET, HEAD`, both as the error envelope through `Errors` (nil is `WriteError`).
+- The listener checks `Host` in one of three forms, described below.
+- Both routes log at Debug (`WithProbeLogLevel`) to `Logger`, and `Recoverer` answers a panic with `internal_error`. `ReadTimeout` is 10 s and `WriteTimeout` 30 s, since each route answers in one short response.
+- `RunWithOps` serves each `Served` with `Run` and its `Options`, and the ops listener beside them, until `ctx` ends or one fails. A product listener's return, or an ops failure, stops the rest, and every error is returned, joined. The ops listener stops only after every product `Run` has returned, so `/healthz` answers through the drain (its draining 503 included). Its own grace is then 1 s, and a request still running at its end is cut and logged at Warn, never returned. With no `Served`, it serves the ops listener alone. One `Ops` serves once.
+
+### The ops listener's host check
+
+A DNS rebinding page on the network can point its own name at the ops port and read what `/healthz` and `/metrics` answer. Pick the form that matches what those routes hold:
+
+- **No check.** With no `Hosts` (nil, empty or all blank) and no `HostPolicy`, the listener answers every `Host`. This fits most apps: `/metrics` labels carry no secret and `/healthz` reasons are fixed sentences. Bind `Addr` to `127.0.0.1` to keep the port private.
+- **A fixed `Hosts` list.** A `Host` outside the list answers 403 `host_not_allowed`, as on every listener. An entry is a host name or an IP literal (`192.0.2.10`, `2001:db8::1` or `[2001:db8::1]`), compared exactly after `CanonicalHost`. An entry no `Host` can match fails `ListenOps`, naming `HostsSetting`, the setting the entries came from, so the operator sees the one to fix (`OpsConfig.Hosts` when it is blank).
+- **A live `HostPolicy`.** Use it when your `/metrics` or `/healthz` names something a page on the network must not read, such as private repository names, and the names the port answers change at run time or include any IP literal. `HostPolicy` is called on each request, from many goroutines at once, and the `Host` is checked against the `*HostPolicy` it returns, so a policy the app swaps in (for a public URL saved in its settings) applies from the next request with no restart. Build the policy with `ParseHostList`, adding `WithIPLiteralHosts(true)` to admit any address. A refusal answers `host_not_allowed` through `Errors`, not the policy's `WithHostResponder`, and logs through the policy's `WithHostAllowlistLogger`. The returned policy always checks, even one parsed from no non-blank entry: before a public URL is saved, `ParseHostList` over the blank setting with `WithIPLiteralHosts(true)` admits only IP literals. A nil return refuses every `Host` that `LoopbackRequest` does not pass, logged to `Logger`, so a live source with nothing to say keeps the port closed. Setting `HostPolicy` beside a non-blank `Hosts` fails `ListenOps`, naming both fields.
+
+```go
+var live atomic.Pointer[httpserver.HostPolicy]
+live.Store(publicPolicy(settings.PublicURL())) // and again whenever the setting is saved
+ops, err := httpserver.ListenOps(ctx, httpserver.OpsConfig{
+	Setting:    "OPS_LISTEN_ADDR",
+	Addr:       opsAddr,
+	Metrics:    reg.Handler(),
+	Healthz:    health.CheckHandler(checks...),
+	HostPolicy: live.Load,
+	Errors:     catalog.Responder(),
+})
+```
+
+Under the fixed list and the live policy alike, a request passes whatever the list or policy says only when `LoopbackRequest` holds: the socket peer and the `Host` both name this host, either a loopback peer with `localhost` or a loopback address as its `Host`, or a peer at the listener's own address with that address as its `Host`. So the image's healthcheck on `127.0.0.1` works, while a page that resolves its own name to `127.0.0.1` is still refused.

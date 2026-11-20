@@ -156,8 +156,15 @@ export function initialState(): ClientState {
   return { kind: "stopped", generation: 0 };
 }
 
-/** Full-jitter backoff delay for `attempt`; `rand` is drawn in [0, 1) by the runtime. */
-function jitter(attempt: number, rand: number, cfg: TimingConfig): number {
+/**
+ * Full-jitter backoff delay for `attempt`; `rand` is drawn in [0, 1) by the runtime.
+ * @internal
+ */
+export function jitter(
+  attempt: number,
+  rand: number,
+  cfg: Pick<TimingConfig, "baseMs" | "capMs">,
+): number {
   return rand * Math.min(cfg.capMs, cfg.baseMs * 2 ** attempt);
 }
 

@@ -50,14 +50,10 @@ func (r *recorder) count(sub string) int {
 }
 
 // installDefaultLogger swaps slog's default handler for the duration of tb.
-//
-// slog.SetDefault also points the standard log package at the installed
-// handler, and it skips that redirect when the logger being installed carries
-// slog's own default handler. Reinstalling the previous logger therefore does
-// not undo the redirect, so the writer and flags are saved and restored
-// explicitly. slog goes back first: reinstalling a previous handler that is
-// not slog's default re-runs the redirect and would overwrite a log restore
-// done before it.
+// slog.SetDefault also redirects the standard log package, and reinstalling
+// slog's own default does not undo that, so the log writer and flags are
+// restored explicitly, after slog, whose reinstall would otherwise overwrite
+// them.
 func installDefaultLogger(tb testing.TB, h slog.Handler) {
 	tb.Helper()
 	prev, prevWriter, prevFlags := slog.Default(), log.Writer(), log.Flags()

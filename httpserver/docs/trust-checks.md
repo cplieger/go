@@ -1,6 +1,6 @@
 # Client IP, hosts and credentials
 
-This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, loopback-only endpoints, forwarders in front of the host, classifying a listen address, checking configured credentials and the values they travel in, writing a `WWW-Authenticate` challenge and limiting failed authentication.
+This page is for a developer deciding what a request may claim about itself. It covers the client IP behind a proxy, the Host allowlist, cross-origin writes, loopback-only endpoints, forwarders in front of the host, classifying a listen address, checking configured credentials and the values they travel in, writing a `WWW-Authenticate` challenge and limiting failed authentication.
 
 ## Client IP
 
@@ -29,7 +29,7 @@ The answer is a `ClientResolution`:
 | `PeerTrusted` | The peer is inside the trusted set, whether or not it forwarded a client. `Forwarded` implies it and `UntrustedForwarding` excludes it |
 | `Forwarded` | `IP` came from `X-Forwarded-For` sent by a trusted peer. When false, `IP` is the peer |
 | `UntrustedForwarding` | A peer outside the trusted set sent a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` holding at least one non-empty entry, which was ignored |
-| `IgnoredPublic` | One of those ignored headers named a public address, meaning global unicast and outside the private ranges |
+| `IgnoredPublic` | One of those ignored headers named a public address, as `go/ssrf`'s `IsPublicAddr` judges one: globally routable unicast, so private (RFC 1918, RFC 4193), shared (RFC 6598), loopback, link-local and documentation addresses are not public |
 | `ForwardedHTTPS` | A trusted peer sent exactly one `X-Forwarded-Proto` field holding the one token `https`, any case. A list such as `https, http`, a repeated field, an empty value or an untrusted peer reads as plain, and `Forwarded: proto=` is not read. A listed proxy must overwrite the client's field, as Caddy does, not append to it |
 
 Use it to decide whether a request is local. A trusted proxy that forwarded nothing answers its own address with `Forwarded` false, so a check on `IP` alone would take the proxy for a local client. `PeerTrusted` tells that proxy apart from a direct client, so read another header a proxy sets, such as `X-Forwarded-Proto`, only when it is true. `UntrustedForwarding` points to a proxy you have not listed, and `IgnoredPublic` to a public client behind it.
@@ -54,18 +54,21 @@ A DNS rebinding attack starts on a page the attacker controls. The page's own ho
 - `ParseHostList(entries, opts...)` parses an operator allowlist, such as a config array or a comma-split environment variable, into an immutable `*HostPolicy`. Malformed entries come back separately, as with `ParseCIDRs`.
 - `(*HostPolicy).Middleware()` answers 403 with the code `host_not_allowed` for a request whose `Host` is not listed, and logs one Warn line, `httpserver: host not allowed`. An inactive policy returns the handler unwrapped.
 - `(*HostPolicy).Allows(r)` is the same decision for one request. `Active()` and `Size()` describe the policy, for startup logs.
-- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger and hint. A nil or zero-value policy logs through `slog.Default` with the default hint, `host not allowed`.
-- `WithHostAllowlistError(code, msg)` changes the 403's code and message, for example to name your configuration setting.
+- `(*HostPolicy).LogRefusal(r)` writes the same Warn line for a caller that admits by its own rule and writes its own refusal, so the refusal is logged once in one shape. It uses the policy's logger. A policy with none, a zero-value policy and a nil policy log through `slog.Default` as it is at that moment.
+- `WithHostResponder(fn)` writes the refusal through your `ErrorResponder` instead of `WriteError`, so your app's catalog can add its own remediation. It receives 403, `host_not_allowed` and `host not allowed`, and the status and code are the same on every listener.
 - `WithLoopbackExempt(true)` admits a request from this host's own network stack, described below.
-- `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when `ParseHostList` runs. Pass a logger with a discarding handler to silence it.
+- `WithIPLiteralHosts(true)` admits a request whose `Host` is an IP address, described below.
+- `WithHostAllowlistLogger(logger)` sends the refusal line to `logger`. Nil, the default, means `slog.Default()` as it is when the refusal is logged, so a policy parsed before the app installs its logger still logs through it. Pass a logger with a discarding handler to silence it.
 
-The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy), `hint` (the policy's 403 message, set with `WithHostAllowlistError`; a caller using `LogRefusal` sets it to match its own refusal) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
+The refusal line carries `reason` (`missing host`, `malformed host` or `host not in allowlist`), `host` cut at 128 bytes, `remote` (the socket peer, which behind a reverse proxy is the proxy) and `request_id` when `Logging` set one. It carries no path, because a path can hold a token. The access line with the same `request_id` has the routed path, and with `WithClientIP` the client's address.
 
 Place the middleware before any cross-origin or CSRF check. A rebinding request makes `Origin` and `Host` agree, so a same-origin check alone admits it.
 
 ### How matching works
 
 `CanonicalHost(hostport)` is the strict canonicalizer that both the entries and each request's `Host` go through. It lowercases ASCII only, drops the port and the brackets, allows at most one trailing FQDN dot and normalizes IP literals so different spellings of one address compare equal. It returns `""` for anything malformed.
+
+A name is ASCII labels of letters, digits, hyphens and underscores (Docker Compose service names carry underscores), each at most 63 bytes, with an optional `:port` up to 65535. An IPv6 literal takes a port only in brackets, and brackets hold only IPv6. Refused shapes include a second port, an empty label, an all-numeric dotted value that is not an IPv4 address (`127.0.0.001`, `0177.0.0.1`, which HTTP clients read differently) and a zoned IPv6 address.
 
 The lowercasing stops at ASCII on purpose. `strings.ToLower` maps U+212A and U+0130 to `k` and `i`, which would let a non-ASCII name canonicalize onto an allowlisted ASCII one. Configure a non-ASCII name as its Punycode A-label, because matching is byte-exact.
 
@@ -78,9 +81,27 @@ Activation fails closed. A nil or all-blank entry list leaves the policy inactiv
 `WithLoopbackExempt(true)` keeps a container healthcheck or an in-container client working under an allowlist meant for browsers. It admits a request in two cases:
 
 - The socket peer and the `Host` are both loopback.
-- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist. A zoned IPv6 link-local bind and a listener that is not TCP are not covered; list such an address in the allowlist.
+- The socket peer is the connection's own local address, and the `Host` is that address as an IP literal. A service bound to one non-loopback address, such as `192.0.2.10:9190`, is probed this way, so its own probe passes without the address in the allowlist. A zoned IPv6 link-local bind and a listener that is not TCP are not covered. `CanonicalHost` refuses a zoned address, so no allowlist entry can name one: use `WithIPLiteralHosts` for such a bind.
 
 A rebinding attack cannot reach it, because the attack's `Host` is the attacker's name. A remote client cannot forge it: a remote peer is not loopback, and it cannot connect from the server's own address, because the reply to that address never leaves the host. That holds for a listener that receives only traffic addressed to this host. A transparent (`IP_TRANSPARENT`) listener, or a PROXY-protocol wrapper that reports the header's addresses, makes the local address a value the client or proxy chose, so do not use the exemption or `LoopbackOnly` behind one. `false` means the same as leaving the option out, and options resolve last-wins, so you can pass a computed flag without branching.
+
+### IP-literal hosts
+
+`WithIPLiteralHosts(true)` admits any request whose `Host`, with the port cut, is an IP address, beside the names you list. That keeps a service reachable by address, such as `http://192.0.2.10:8080` from the LAN, without an entry per address. It reads:
+
+- an IPv4 address, in any form `CanonicalHost` accepts, such as `192.0.2.10:8080` or `192.0.2.10.`
+- an IPv6 address in brackets, such as `[2001:db8::10]:8080`, or a bare one as `CanonicalHost` accepts it
+- an IPv6 address in brackets with a zone, such as `[fe80::1%eth0]:8080`, as Go's `net/netip` parses one. The zone is any non-empty text after `%`, so `%25eth0` reads as the zone `25eth0`.
+
+Brackets around an IPv4 address, a zone outside brackets, a bad port and an IPv4 address with leading zeros are refused, as is every name. It is safe because a DNS rebinding attack needs the attacker's name in `Host`: the victim's browser sends the name of the page it loaded, and an address names no domain the attacker controls. The option admits every IP literal, not only the addresses this process listens on, and the unspecified `0.0.0.0` and `[::]` too, so an app that builds a URL from `Host`, such as a link in a reset email, must not take the host from `Host` with the option on. A page on another site can still make the browser send a simple request, such as a form `POST`, to the service by address, and the option admits it, so keep `CrossOrigin` or the app's own CSRF check on every write. `false` means the same as leaving the option out, and options resolve last-wins.
+
+## Cross-origin writes
+
+`CrossOrigin(next, errs)` serves `next` behind the standard library's `http.CrossOriginProtection`, and answers a refused request 403 with the code `cross_origin_refused` through `errs`, nil being `WriteError`. The standard library's own refusal is a plain-text 403, so a client would get no envelope.
+
+It refuses a request with an unsafe method, such as `POST`, `PUT`, `PATCH` or `DELETE`, when its `Sec-Fetch-Site` is anything but `same-origin` or `none`, so `same-site` is refused as well as `cross-site`. A request with no `Sec-Fetch-Site` is refused when its `Origin` names another host than the request's. `GET`, `HEAD` and `OPTIONS` pass, and so does a request with neither header, such as one from a script or a command-line client.
+
+Wrap every route that changes state in it. An `SPA` handler answers only `GET` and `HEAD`, and refuses any other method itself, so it needs no guard. Wrapping a whole app root that includes `SPA` would answer a cross-site `POST` there with no Content-Security-Policy, which `httpservertest.CheckSPA` fails. Put the Host allowlist outside it.
 
 ## Loopback-only endpoints
 
@@ -104,15 +125,15 @@ A container runtime, a tunnel or a router can relay a remote client under its ow
 
 `NewForwarderCheck(opts...)` returns a check, and `IsForwarder(peer)` reports that the peer is one of these forwarders when it is:
 
-- a gateway of any route;
-- an address of a non-loopback interface;
+- a gateway of any route
+- an address of a non-loopback interface
 - inside the connected subnet of an interface that carries no default route of the peer's family.
 
 The check reads Linux's `/proc/net/route` and `/proc/net/ipv6_route` and the host's interfaces on every call, so a network connected after start counts. A missing IPv6 route file reads as no IPv6 routes. Any other failed read, as on a host without these files, answers true, so the caller fails closed and logs one Warn line per source, `httpserver: forwarder check could not read the host's network`. An invalid address and a nil check also answer true. The peer's zone is dropped, and an IPv4-mapped address compares as IPv4.
 
 - `WithRouteFiles(ipv4, ipv6)` reads the route tables from other paths, in the same formats.
 - `WithInterfaceAddrs(read)` replaces the read of the interfaces, each an `InterfaceAddrs` of name, prefixes and loopback flag.
-- `WithForwarderLogger(logger)` sends the Warn line to `logger`. Nil, the default, means `slog.Default()` as it is when `NewForwarderCheck` runs.
+- `WithForwarderLogger(logger)` sends the Warn line to `logger`. Nil, the default, means `slog.Default()` as it is when the warning is logged.
 
 ## Bind classification
 
@@ -150,9 +171,9 @@ Each secret is hashed with SHA-256 once, at construction. `Match` hashes the pre
 
 `CheckFieldValue(v)` reports whether `v` can be sent as an HTTP field value (RFC 9110 section 5.5) and arrive unchanged and unambiguous. Use it at startup on a configured credential that a client sends in a header, so a value that could never match is refused there rather than on every request. It refuses:
 
-- an ASCII control byte other than HTAB, or DEL, which the grammar forbids and `net/http` refuses to send;
-- a space or tab at either edge, which a recipient strips, so the value read back is not the one sent;
-- invalid UTF-8;
+- an ASCII control byte other than HTAB, or DEL, which the grammar forbids and `net/http` refuses to send
+- a space or tab at either edge, which a recipient strips, so the value read back is not the one sent
+- invalid UTF-8
 - an invisible rune: a C1 control, a Unicode format character (bidi controls, zero-width characters, the byte order mark) or a line or paragraph separator. Each is legal on the wire but invisible where a person reads or pastes the value.
 
 The refusal is a `*FieldValueError`. Its `Err` is `ErrFieldControl`, `ErrFieldEdgeSpace`, `ErrFieldInvalidUTF8` or `ErrFieldInvisible`, which `errors.Is` matches, and `Offset` is the byte offset of the first refused byte. The error never quotes the value, so it can name a secret's problem without leaking it. Length limits, blank values and the message the operator reads stay your app's policy. The empty string passes.
@@ -172,7 +193,7 @@ That writes `Bearer realm="myapp"`. Each parameter's value is written as a quote
 
 ## Failed-authentication limits
 
-`FailureLimiter` throttles clients that keep failing to authenticate. Use it in a handler that must check a credential before it can answer anything, such as a webhook endpoint. `RateLimiter`'s `FailedAuthRateLimit` preset is a single bucket for the whole process; `FailureLimiter` counts per client and across clients, and a request it throttles never moves its counts.
+`FailureLimiter` throttles clients that keep failing to authenticate. Use it in a handler that must check a credential before it can answer anything, such as a webhook endpoint. `RateLimiter`'s `FailedAuthRateLimit` preset is a single bucket for the whole process. `FailureLimiter` counts per client and across clients, and a request it throttles never moves its counts.
 
 `NewFailureLimiter(limits)` checks a `FailureLimits` and returns a limiter, or an error naming the first field out of range:
 
@@ -183,7 +204,7 @@ That writes `Bearer realm="myapp"`. Each parameter's value is written as a quote
 | `MaxKeys` | How many keys' failures are held. Charging a new key past it forgets the least recently charged one |
 | `TrustPerGroup`, `TrustWindow` | How many keys one group trusts at once, and how long a mark lasts |
 | `IPv6Prefix` | Leading bits of an IPv6 address that make its key, 1 to 128. Zero means 64, RFC 6177's end-site `/64` |
-| `Now` | The clock. Nil means `time.Now`; a test passes a fake one |
+| `Now` | The clock. Nil means `time.Now`, and a test passes a fake one |
 
 Call `Decide(client, failure)` once per request, before you write anything. It answers whether the client is throttled, and for how long, from the state before this request. A throttled answer changes nothing, so a flood of throttled requests can neither fill a window nor push a key out of the held set. Answer a throttled request the same way whatever it presented. When the answer is not throttled and `failure` is true, the failure is charged to the client's key and to the global window. Asking once per request under the limiter's lock is what keeps concurrent requests from passing a full window together.
 

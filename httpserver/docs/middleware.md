@@ -1,20 +1,17 @@
 # Middleware
 
-This page is for a developer assembling a httpserver middleware stack. It covers how `Chain` orders middleware, panic recovery, security headers, response compression, per-route timeouts, rate limiting and `NoStore`.
+This page is for a developer assembling a httpserver middleware stack. It covers how `Chain` orders middleware, panic recovery, security headers, response compression, per-route timeouts, rate limiting, per-key rate limiting and `NoStore`.
 
 ## Chain and ordering
 
-Every middleware has the standard `func(http.Handler) http.Handler` shape, which the `Middleware` type alias names. A standard-library middleware therefore drops into the same chain with no adapter. The method value `cop.Handler` of an `http.NewCrossOriginProtection()` is one:
+Every middleware has the standard `func(http.Handler) http.Handler` shape, which the `Middleware` type alias names. A standard-library middleware therefore drops into the same chain with no adapter. `CrossOrigin` takes the handler it guards and an `ErrorResponder`, so it wraps the routes it guards before the chain:
 
 ```go
-cop := http.NewCrossOriginProtection()
-cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	httpserver.WriteError(w, r, http.StatusForbidden, "cross_origin_denied", "cross-origin request denied")
-}))
-h := httpserver.Chain(mux, httpserver.Logging(), httpserver.Recoverer(), hostPolicy.Middleware(), cop.Handler, httpserver.SecurityHeaders())
+writes := httpserver.CrossOrigin(apiMux, nil)
+h := httpserver.Chain(writes, httpserver.Logging(), httpserver.Recoverer(), hostPolicy.Middleware(), httpserver.SecurityHeaders())
 ```
 
-The deny handler runs inside the chain, so the refusal uses the httpserver error envelope with its request id. Keep the Host allowlist outside it, for the reason [Client IP, hosts and credentials](trust-checks.md#host-allowlist) gives.
+`CrossOrigin` runs inside the chain, so its refusal uses the httpserver error envelope with its request id. Keep the Host allowlist outside it, for the reason [Client IP, hosts and credentials](trust-checks.md#host-allowlist) gives.
 
 `Chain(h, mw...)` wraps `h`, and the first middleware listed is the outermost wrapper. So `Chain(h, A, B, C)` is `A(B(C(h)))`. A nil entry is skipped.
 
@@ -24,7 +21,7 @@ The usual stack is `Chain(mux, Logging(), Recoverer(), SecurityHeaders())`. Logg
 
 `Recoverer(opts...)` recovers a panic from a downstream handler. It logs the panic at `Error` with the stack and the request id, calls any `WithPanicHook` callback, then writes a 500.
 
-The 500 goes through the configured `ErrorResponder`. The default is `WriteError`, which sends `{"error":"internal server error","code":"internal_error"}`. Pass `WithRecoverResponder` to render the 500 on another content type, and `WithRecoverLogger` to log somewhere other than `slog.Default()`.
+The 500 goes through the configured `ErrorResponder`. The default is `WriteError`, which sends the code `internal_error` with the message `internal error`. Pass `WithRecoverResponder` to render the 500 on another content type, and `WithRecoverLogger` to log somewhere other than `slog.Default()`.
 
 If the handler already wrote headers or body before it panicked, the status is on the wire. `Recoverer` then skips the 500 body, but it still logs the panic and calls the hook.
 
@@ -87,7 +84,7 @@ The max-age rule also catches a common unit mistake. A bare `31536000` assigned 
 
 ## RouteTimeout
 
-`RouteTimeout(h, d, msg)` wraps `h` with `http.TimeoutHandler`, so `h` gets at most `d` before the client is answered. If `h` is still running when `d` passes, the client gets a 503 with a JSON `ErrorResponse` whose code is `timeout`. An empty `msg` becomes `request timed out`. The body carries the request id when the context has one.
+`RouteTimeout(h, d, msg)` wraps `h` with `http.TimeoutHandler`, so `h` gets at most `d` before the client is answered. If `h` is still running when `d` passes, the client gets a 503 with a JSON `ErrorResponse` whose code is `timeout`. An empty `msg` becomes `request timed out`. The body carries the request's id, made fresh when the context has none, and the `X-Request-ID` header carries the same one.
 
 `RouteTimeout` does not stop the handler. `http.TimeoutHandler` runs the handler on a goroutine of its own and answers 503 when `d` passes, while the handler keeps running with its request context cancelled, and the handler's later writes fail with `http.ErrHandlerTimeout`. So a 503 does not mean nothing happened: a handler that writes to a store can commit after the client got its 503. Use `RouteTimeout` only on handlers that change no state. For a handler that does, use `RouteDeadline`. A client that gets a 503 or loses the connection on a write still cannot know the outcome, so it should resend under the same `Idempotency-Key`, and the server must dedup that key.
 
@@ -111,7 +108,7 @@ A call `h` makes with `r.Context()` returns at the deadline only if it watches t
 
 An empty bucket answers 429 with the code `rate_limited`, the message `rate limit exceeded` and a `Retry-After` header. The hint is the whole seconds until the missing fraction of a token refills, rounded up and never below 1.
 
-The bucket is shared by every client. It bounds the total rate of an expensive shared route, not fairness between clients. A caller that needs per-client limits keys its own buckets on `ClientIP`. The bucket lives in process memory, so replicas do not share it.
+The bucket is shared by every client. It bounds the total rate of an expensive shared route, not fairness between clients. For a limit per client or per API key, use `KeyedRateLimiter`. The bucket lives in process memory, so replicas do not share it.
 
 A non-positive `burst` or `interval` returns the handler unwrapped, so a configured zero means no limit.
 
@@ -130,6 +127,26 @@ A valid credential never takes a token, so the tuning does not need to leave roo
 The failed-auth preset caps how many failed attempts reach the guarded handler. The `when` predicate runs on every request before the bucket check, so a credential check inside it is not capped. Access lines are capped only when the limiter sits outside `Logging`. Without the preset, a guessing run at wire speed gets a 401 and an access line for every attempt.
 
 For other numbers, compose `RateLimiter` directly.
+
+## KeyedRateLimiter
+
+`NewKeyedRateLimiter(KeyedRate{...})` gives each key its own token bucket, so one busy client or API key cannot spend another's budget. A zero field takes its default:
+
+| Field | Meaning | Default | Range |
+| --- | --- | --- | --- |
+| `Burst` | Tokens a key may spend at once, and a new bucket's fill | 40 | 1 to 10,000 |
+| `Interval` | The time to gain one token | 50 ms, 20 a second | 1 ms to 1 hour |
+| `MaxKeys` | Buckets held at once | 10,000 | 16 to 1,000,000 |
+
+A field outside its range is an error naming it, and every such field is named in the one error.
+
+`Take(key)` spends one token of the key's bucket and answers true, or answers false with the time until a token is back. A refused take spends nothing. Use it where the key is known only inside a handler, after authentication.
+
+`Middleware(key, errs)` takes one token for each request. `key` answers the request's key, or false to let the request pass without taking one. A refused request answers 429 with the code `rate_limited` through `errs`, nil being `WriteError`, and a `Retry-After` of the wait in whole seconds, rounded up and never below 1. It never reaches the handler. A nil `key` panics when the middleware is built.
+
+A bucket that has refilled to `Burst` is forgotten wherever it sits, since a new one would be identical, and past `MaxKeys` the least recently used bucket is dropped. Memory therefore stays bounded by `MaxKeys` under any key churn, and a key set far below it never loses its state. The buckets live in process memory, so replicas do not share them. It is safe for concurrent use.
+
+`KeyedRateLimiter` throttles requests that were admitted. To throttle failed authentication by client address, use `FailureLimiter` ([Client IP, hosts and credentials](trust-checks.md#failed-authentication-limits)).
 
 ## NoStore
 

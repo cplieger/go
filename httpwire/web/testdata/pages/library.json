@@ -1,0 +1,204 @@
+{
+  "pages": {
+    "docs": "/docs/",
+    "home": "/{$}",
+    "item": "/library/{id}",
+    "library": "/library",
+    "settings": "/settings/{part...}"
+  },
+  "apiPrefix": "/api",
+  "cases": [
+    {
+      "params": {},
+      "path": "/",
+      "name": "home"
+    },
+    {
+      "params": {},
+      "path": "/?q=1",
+      "name": "home"
+    },
+    {
+      "params": {},
+      "path": "/library",
+      "name": "library"
+    },
+    {
+      "path": "/library/"
+    },
+    {
+      "params": {},
+      "path": "/library?q=1",
+      "name": "library"
+    },
+    {
+      "params": {
+        "id": "a"
+      },
+      "path": "/library/a",
+      "name": "item"
+    },
+    {
+      "path": "/library/a/"
+    },
+    {
+      "params": {
+        "id": "a"
+      },
+      "path": "/library/a?q=1",
+      "name": "item"
+    },
+    {
+      "params": {
+        "id": "a/b"
+      },
+      "path": "/library/a%2Fb",
+      "name": "item"
+    },
+    {
+      "params": {
+        "id": "é"
+      },
+      "path": "/library/%C3%A9",
+      "name": "item"
+    },
+    {
+      "params": {
+        "id": "a b"
+      },
+      "path": "/library/a%20b",
+      "name": "item"
+    },
+    {
+      "path": "/library/x/../a",
+      "redirect": "/library/a",
+      "serverOnly": true
+    },
+    {
+      "path": "/library/x/../a?q=1",
+      "redirect": "/library/a?q=1",
+      "serverOnly": true
+    },
+    {
+      "path": "/library/./a",
+      "redirect": "/library/a",
+      "serverOnly": true
+    },
+    {
+      "path": "/library/.",
+      "redirect": "/library",
+      "serverOnly": true
+    },
+    {
+      "params": {
+        "id": ".."
+      },
+      "path": "/library/%2e%2e",
+      "name": "item",
+      "serverOnly": true
+    },
+    {
+      "params": {
+        "id": ".."
+      },
+      "path": "/library/%2E%2e",
+      "name": "item",
+      "serverOnly": true
+    },
+    {
+      "params": {
+        "id": ".."
+      },
+      "path": "/library/.%2e",
+      "name": "item",
+      "serverOnly": true
+    },
+    {
+      "path": "//library",
+      "redirect": "/library"
+    },
+    {
+      "path": "//library?q=1",
+      "redirect": "/library?q=1"
+    },
+    {
+      "path": "/library//a",
+      "redirect": "/library/a"
+    },
+    {
+      "path": "/docs",
+      "redirect": "/docs/"
+    },
+    {
+      "path": "/docs?q=1",
+      "redirect": "/docs/?q=1"
+    },
+    {
+      "params": {},
+      "path": "/docs/",
+      "name": "docs"
+    },
+    {
+      "params": {},
+      "path": "/docs/x",
+      "name": "docs"
+    },
+    {
+      "path": "/settings",
+      "redirect": "/settings/"
+    },
+    {
+      "path": "/settings?q=1",
+      "redirect": "/settings/?q=1"
+    },
+    {
+      "params": {
+        "part": ""
+      },
+      "path": "/settings/",
+      "name": "settings"
+    },
+    {
+      "params": {
+        "part": "a/b"
+      },
+      "path": "/settings/a/b",
+      "name": "settings"
+    },
+    {
+      "params": {
+        "part": "a/b/c"
+      },
+      "path": "/settings/a%2Fb/c",
+      "name": "settings"
+    },
+    {
+      "path": "/settings/a//b",
+      "redirect": "/settings/a/b"
+    },
+    {
+      "path": "/settings/a/../b",
+      "redirect": "/settings/b",
+      "serverOnly": true
+    },
+    {
+      "path": "/nope"
+    },
+    {
+      "path": "/api"
+    },
+    {
+      "path": "/api/"
+    },
+    {
+      "path": "/api/x"
+    },
+    {
+      "path": "/api/../library",
+      "serverOnly": true
+    },
+    {
+      "path": "/apix"
+    }
+  ]
+}

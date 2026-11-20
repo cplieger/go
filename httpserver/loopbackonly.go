@@ -45,10 +45,8 @@ type loopbackConfig struct {
 	msg       string
 }
 
-// WithLoopbackError sets the code and message of LoopbackOnly's 403. code is
-// the machine token and msg the sentence; they are separately typed (see
-// ErrorCode) so the pair cannot be supplied transposed. An empty code omits the
-// field.
+// WithLoopbackError sets the code and message of LoopbackOnly's 403. A code
+// outside CodeSpecs carries an empty remediation.
 func WithLoopbackError(code ErrorCode, msg string) LoopbackOption {
 	return func(c *loopbackConfig) { c.code, c.msg = code, msg }
 }

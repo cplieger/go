@@ -3,6 +3,7 @@ package filesafe
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -235,4 +236,20 @@ func (o *occupyOnRead) Read(p []byte) (int, error) {
 		o.occupy()
 	}
 	return o.r.Read(p)
+}
+
+// assertTooLarge requires err to be a *FileTooLargeError reporting size over
+// limit.
+func assertTooLarge(t *testing.T, err error, size, limit int64) {
+	t.Helper()
+	if !errors.Is(err, ErrFileTooLarge) {
+		t.Errorf("err = %v, want it to match ErrFileTooLarge", err)
+	}
+	tl, ok := errors.AsType[*FileTooLargeError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *FileTooLargeError", err)
+	}
+	if tl.Size != size || tl.Limit != limit {
+		t.Errorf("FileTooLargeError = {Size: %d, Limit: %d}, want {Size: %d, Limit: %d}", tl.Size, tl.Limit, size, limit)
+	}
 }

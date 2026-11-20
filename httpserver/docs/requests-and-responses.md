@@ -11,19 +11,76 @@ This page is for a developer writing handlers on httpserver. It covers the JSON 
 
 ## Errors
 
-`WriteError(w, r, status, code, msg)` writes an `ErrorResponse`. It is safe to call with a nil `r`.
+`WriteError(w, r, status, code, msg)` writes an `ErrorResponse`. It is safe to call with a nil `r`. It is `WriteErrorBody(w, status, NewErrorResponse(r, code, msg))`, the two pieces [an envelope of your own](#an-envelope-of-your-own) builds on.
 
-`ErrorResponse` has three fields, `Error`, `Code` and `RequestID`, and the last two are left out when empty. The request id comes from the request context, so a client can match a failure to the access log. Every error body the library writes follows that rule.
+`ErrorResponse` has four fields, `Code`, `Message`, `Remediation` and `RequestID`, and every one is always present:
 
 ```json
-{"error":"invalid payload","code":"bad_request","request_id":"0f6c..."}
+{"code":"bad_request","message":"invalid payload","remediation":"Fix the request as the message describes, then resend it.","request_id":"0f6c..."}
 ```
 
-`ErrorCode` is the machine-readable token in the `code` field. It is a separate type from the human message, so the two cannot be passed in the wrong order. A code uses only lowercase letters, digits and `_`, as in `host_not_allowed`. The empty code leaves the field out.
+- `code` is the machine-readable token a client branches on.
+- `message` is the human sentence the caller passed.
+- `remediation` is the code's default from `CodeSpecs()`, or the empty string for a code outside it, such as your app's own.
+- `request_id` is the id `Logging` gave the request, so a client can match a failure to the access log. When the context has none, `WriteError` makes a fresh one, so the field is never empty. It also sets the `X-Request-ID` response header to the same id when the response has none.
 
-A code that breaks that grammar is neither sent nor repaired, and it never panics. The encoder sends `InvalidErrorCode`, `invalid_error_code`, in its place and logs the bad code once per process, because this runs on an error path for every request.
+`WriteError` sets `Content-Type` and keeps every other header the caller set, such as `Allow` or `Retry-After`. Every error body the library writes goes through it, or through an `ErrorResponder` you pass in its place.
 
-`ErrorResponder` is the signature of `WriteError`: `func(w, r, status, code, msg)`. `WriteError` is its default. Middleware that writes an error body takes one, so an endpoint that does not speak JSON can render its error on its own content type.
+`ErrorCode` is the type of the `code` field. It is a separate type from the human message, so the two cannot be passed in the wrong order. A code uses only lowercase letters, digits and `_`, as in `host_not_allowed`, and has at least one of them.
+
+A code that breaks that grammar, the empty code included, is neither sent nor repaired, and it never panics. The encoder sends `InvalidErrorCode`, `invalid_error_code`, in its place and logs the bad code once per process, because this runs on an error path for every request.
+
+`ErrorResponder` is the signature of `WriteError`: `func(w, r, status, code, msg)`. `WriteError` is its default. Every middleware that writes an error body takes one through an option or an argument, and so do `SPA`, `OutagePage`, `NotFound`, `CrossOrigin` and `ListenOps`. Your app's catalog can then write its own remediation, and an endpoint that does not speak JSON can render its error on its own content type. `DecodeBody`, `RequireMethod` and `MethodNotAllowed` write through `WriteError` itself.
+
+### An envelope of your own
+
+`NewErrorResponse(r, code, msg)` returns the envelope `WriteError` would write: the code checked against the grammar, its `CodeSpecs()` remediation, and the request id from `r`'s context, else a fresh one. `WriteErrorBody(w, status, body)` writes it, sets `Content-Type`, and sets `X-Request-ID` to the body's own `request_id` when the response has none, so the header and the body never carry two different ids. Replace `Remediation` between the two calls to answer with your own advice:
+
+```go
+resp := httpserver.NewErrorResponse(r, "host_not_allowed", "this host name is not served")
+resp.Remediation = "Open the app at its configured address."
+httpserver.WriteErrorBody(w, http.StatusForbidden, resp)
+```
+
+Build the envelope with `NewErrorResponse` and change at most its `Message` or `Remediation`. `WriteErrorBody` writes the body it is given as it is, so an `ErrorResponse{…}` literal goes out with its code unchecked and no request id filled.
+
+`body` is an `ErrorBody`: an `ErrorResponse`, or a struct of yours that embeds one by value as its first field. The embedder's own fields are written after the four standard keys, in one flat object:
+
+```go
+httpserver.WriteErrorBody(w, http.StatusConflict, struct {
+	httpserver.ErrorResponse
+	Dependents []string `json:"dependents"`
+}{httpserver.NewErrorResponse(r, "has_dependents", "the item is still in use"), []string{"a", "b"}})
+```
+
+```json
+{"code":"has_dependents","message":"the item is still in use","remediation":"","request_id":"0f6c...","dependents":["a","b"]}
+```
+
+The remediation is empty here because `has_dependents` is the app's own code, outside `CodeSpecs()`; set it as above.
+
+### The package's codes
+
+`CodeSpecs()` returns every code a writer in this package answers, each as a `CodeSpec`: the `Status` it is answered with, the default `Remediation`, and `NoEffect`, which is true when the refused request changed nothing, so resending it is safe. The map is a copy, so a caller can add its own codes to it.
+
+| Code | Status | `NoEffect` | Answered by |
+| --- | --- | --- | --- |
+| `internal_error` | 500 | no | `Recoverer`, with the message `internal error` |
+| `not_found` | 404 | no | `NotFound`, `SPA`, `OutagePage`, the ops listener |
+| `method_not_allowed` | 405 | no | `MethodNotAllowed`, `RequireMethod`, `SPA`, `OutagePage`, the ops listener |
+| `bad_request` | 400 | no | `DecodeBody` |
+| `loopback_only` | 403 | no | `LoopbackOnly` |
+| `too_many_auth_failures` | 429 | yes | `FailedAuthRateLimit` |
+| `rate_limited` | 429 | yes | `RateLimiter`, `KeyedRateLimiter` |
+| `host_not_allowed` | 403 | no | `HostPolicy` |
+| `timeout` | 503 | no | `RouteTimeout`, whose handler may still commit after the 503 |
+| `ui_unbuilt` | 503 | no | `SPA` with no bundle |
+| `cross_origin_refused` | 403 | yes | `CrossOrigin` |
+| `precondition_failed` | 412 | yes | `SPA`, `OutagePage`, for an `If-Match` the file does not hold |
+
+`invalid_error_code` is not in the map, because no writer in the package passes a malformed code.
+
+`httpservertest.CheckCodeSpecs(t, dir, specs)` holds a package's spec map to its source. It type-checks the package in `dir`, reading the non-test files `go build` selects for the running platform and its imports through `go list -export`, so the package must compile and the `go` command must be on `PATH`, as it is under `go test`. It fails naming each code written but missing from `specs` and each key nothing writes. A code is any constant expression of string value: a literal, a constant of this package or another, a concatenation or a conversion. It is written when it is passed as an `ErrorCode` argument of `WriteError` or `NewErrorResponse`, of a function or method the package declares, or of a func value such as an `ErrorResponder`, or when it fills an `ErrorCode` field of any struct literal, such as `httpserver.ErrorResponse` or another library's error type, or is listed in an `ErrorCode` slice or array that a struct field holds. Another package's functions do not count, so registering a code in a catalog is not answering it, and neither does a map key or a slice no struct holds, since an app's own spec map or code list would otherwise count as writing every code it holds. A code held in a variable is counted where its constant enters. httpserver's own test runs it over the package with `CodeSpecs()`, and a library with its own codes runs it over its own directory.
 
 ## Request bodies
 

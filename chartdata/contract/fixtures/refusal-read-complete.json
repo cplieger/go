@@ -1,0 +1,24 @@
+{
+  "frame": {
+    "name": "depth",
+    "read": {
+      "as_of": "2026-11-18T14:05:00.123456789Z",
+      "state": "complete"
+    },
+    "series": [
+      {
+        "key": "depth",
+        "values": [
+          1
+        ]
+      }
+    ],
+    "type": "series",
+    "unit": "count",
+    "x": [
+      1
+    ]
+  },
+  "rule": "read",
+  "field": "read.state"
+}

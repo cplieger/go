@@ -167,7 +167,7 @@ function listenable<T>(): { readonly listeners: Set<Listener<T>>; emit(value: T)
 }
 
 /** A VisibilitySource over attached tabs, fed by the worker host. */
-export interface ProfileVisibilitySource extends VisibilitySource {
+interface ProfileVisibilitySource extends VisibilitySource {
   attach(tabId: string, visible: boolean): void;
   detach(tabId: string): void;
   report(tabId: string, ev: VisibilityInput): void;
@@ -214,7 +214,7 @@ export function createProfileVisibilitySource(): ProfileVisibilitySource {
 }
 
 /** An OnlineSource over the tabs' forwarded network events, seeded from the worker's own reading. */
-export interface ProfileOnlineSource extends OnlineSource {
+interface ProfileOnlineSource extends OnlineSource {
   attach(tabId: string, online: boolean): void;
   detach(tabId: string): void;
   report(tabId: string, online: boolean): void;

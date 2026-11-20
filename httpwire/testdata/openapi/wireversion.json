@@ -1,0 +1,100 @@
+{
+  "components": {
+    "schemas": {
+      "Entry": {
+        "description": "One entry.",
+        "properties": {
+          "description": { "description": "The entry's text.", "type": "string" },
+          "info": { "description": "Where the entry came from.", "type": "string" },
+          "limit": { "maximum": 9007199254740993, "minimum": 0, "type": "integer" },
+          "summary": { "description": "The entry's one line.", "type": "string" }
+        },
+        "required": ["description", "summary", "info"],
+        "type": "object"
+      },
+      "ErrorEnvelope": {
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "request_id": { "type": "string" }
+        },
+        "required": ["code", "message", "request_id"],
+        "type": "object"
+      },
+      "description": { "description": "A component named description.", "type": "string" }
+    },
+    "securitySchemes": {
+      "session": { "description": "The session cookie.", "in": "cookie", "name": "sid", "type": "apiKey" }
+    }
+  },
+  "info": { "description": "The wire version fixture.", "title": "Fixture", "version": "1.0.0" },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/entries/{id}": {
+      "get": {
+        "description": "Reads one entry by its id.",
+        "operationId": "getEntry",
+        "parameters": [
+          { "description": "The entry id.", "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Entry" } } },
+            "description": "OK",
+            "headers": {
+              "description": { "description": "A header named description.", "schema": { "type": "string" } }
+            }
+          },
+          "404": {
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } },
+            "description": "Not Found: not_found",
+            "x-error-codes": { "not_found": { "no_effect": true, "remediation": "Check the entry id.", "status": 404 } }
+          }
+        },
+        "summary": "Read one entry."
+      },
+      "put": {
+        "operationId": "putEntry",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Entry" } } },
+          "description": "The new entry.",
+          "required": true
+        },
+        "responses": { "204": { "description": "No Content" } },
+        "summary": "Replace one entry.",
+        "x-idempotency": { "concurrent": "join", "kept": "success_and_effectful_refusals", "scope": "credential,operation", "window_s": 600 }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string" },
+                "x-events": {
+                  "changed": {
+                    "description": "A change.",
+                    "properties": { "kind": { "type": "string" } },
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "x-feed": { "description": "The feed format.", "version": 1 }
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "The app.",
+      "url": "https://{description}/",
+      "variables": { "description": { "default": "localhost", "description": "The host name.", "enum": ["localhost"] } }
+    }
+  ]
+}

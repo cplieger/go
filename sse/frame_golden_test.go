@@ -2,9 +2,13 @@ package sse
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,5 +94,55 @@ func TestFramingCorpus_golden(t *testing.T) {
 	if !bytes.Equal(gotJSON, want) {
 		t.Errorf("framing corpus differs from %s; regenerate with %s and re-run web/src/parser.fuzz.node.test.ts\n--- want\n%s\n+++ got\n%s",
 			path, goldenRegen, strings.TrimSpace(string(want)), strings.TrimSpace(string(gotJSON)))
+	}
+}
+
+const helloRegen = "UPDATE_GOLDEN=1 go test . -run TestHello_golden"
+
+// TestHello_golden pins the handshake bytes per hub configuration.
+// hello.golden is what a hub without WithBuild writes and every released
+// client reads: a diff to it is a wire change, never a re-record.
+func TestHello_golden(t *testing.T) {
+	cases := []struct {
+		name  string
+		file  string
+		build string
+		opts  []Option
+	}{
+		{name: "no build", file: "hello.golden"},
+		{name: "empty build", file: "hello.golden", opts: []Option{WithBuild("")}},
+		{name: "build", file: "hello_build.golden", build: "2026.11.19-a1b2c3", opts: []Option{WithBuild("2026.11.19-a1b2c3")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := append([]Option{withEpoch(testEpoch), WithLogger(slog.New(slog.DiscardHandler))}, tc.opts...)
+			h := mustNew(t, opts...)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			rec := httptest.NewRecorder()
+			h.Serve(rec, httptest.NewRequest(http.MethodGet, "/events", http.NoBody).WithContext(ctx))
+			got := rec.Body.Bytes()
+			_, data, _ := bytes.Cut(got, []byte("data: "))
+			var hello Hello
+			if err := json.Unmarshal(bytes.TrimSpace(data), &hello); err != nil {
+				t.Fatalf("decode hello data %q: %v", data, err)
+			}
+			if hello.Build != tc.build {
+				t.Errorf("hello.build = %q, want %q", hello.Build, tc.build)
+			}
+			path := filepath.Join("testdata", tc.file)
+			if os.Getenv("UPDATE_GOLDEN") == "1" {
+				if err := os.WriteFile(path, got, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read golden %s (run %s): %v", path, helloRegen, err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("handshake differs from %s; regenerate with %s\n--- want\n%q\n+++ got\n%q", path, helloRegen, want, got)
+			}
+		})
 	}
 }

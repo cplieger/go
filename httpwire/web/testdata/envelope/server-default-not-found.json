@@ -1,0 +1,4 @@
+{
+  "body": "{\"code\":\"not_found\",\"message\":\"Nothing is served at this path.\",\"remediation\":\"Check the path; nothing is served at it.\",\"request_id\":\"req-1\"}\n",
+  "valid": true
+}

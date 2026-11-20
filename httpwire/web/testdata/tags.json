@@ -1,0 +1,130 @@
+[
+  {
+    "tag": "0123456789abcdef.7",
+    "valid": true
+  },
+  {
+    "tag": "0000000000000000.0",
+    "valid": true
+  },
+  {
+    "tag": "ffffffffffffffff.18446744073709551615",
+    "valid": true
+  },
+  {
+    "tag": "0123456789abcdef.1234567890",
+    "valid": true
+  },
+  {
+    "tag": "fedcba9876543210.10000000000000000000",
+    "valid": true
+  },
+  {
+    "tag": "7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789ABCDEF.7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcDef.7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcde.7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef0.7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.07",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.00",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.18446744073709551616",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.99999999999999999999",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.184467440737095516150",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.000000000000000000001",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef",
+    "valid": false
+  },
+  {
+    "tag": ".7",
+    "valid": false
+  },
+  {
+    "tag": "",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.+7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.-7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.7.1",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdeg.7",
+    "valid": false
+  },
+  {
+    "tag": " 0123456789abcdef.7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.7 ",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.1_0",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.\u0663",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.7\"",
+    "valid": false
+  },
+  {
+    "tag": "W/0123456789abcdef.7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.0x7",
+    "valid": false
+  },
+  {
+    "tag": "0123456789abcdef.1e3",
+    "valid": false
+  }
+]

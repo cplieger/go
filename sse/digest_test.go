@@ -158,7 +158,7 @@ func TestDigest_validationTable(t *testing.T) {
 			if rec.Code != http.StatusBadRequest || got["code"] != "digest_invalid" {
 				t.Fatalf("body %q: status %d response %v, want 400 digest_invalid", tc.body, rec.Code, got)
 			}
-			msg, _ := got["error"].(string)
+			msg, _ := got["message"].(string)
 			if !strings.Contains(msg, tc.wantRule) {
 				t.Errorf("body %q: message %q, want it to name %q", tc.body, msg, tc.wantRule)
 			}
@@ -449,7 +449,7 @@ func TestDigest_maxSubjectsOptionCaps(t *testing.T) {
 	h := mustNew(t, withEpoch(testEpoch))
 	handler := mustDigestHandler(t, h, staticResolver(nil), WithDigestMaxSubjects(1))
 	rec, got := postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, "1"}, Held{Subject{"chat", "c2"}, "1"}))
-	if msg, _ := got["error"].(string); rec.Code != http.StatusBadRequest || msg != "subjects holds 2 entries, max 1" {
+	if msg, _ := got["message"].(string); rec.Code != http.StatusBadRequest || msg != "subjects holds 2 entries, max 1" {
 		t.Errorf("two subjects under WithDigestMaxSubjects(1): status %d response %v, want 400 naming the cap of 1", rec.Code, got)
 	}
 	rec, got = postDigest(t, handler, digestBody(t, testEpoch, Held{Subject{"chat", "c1"}, "1"}))

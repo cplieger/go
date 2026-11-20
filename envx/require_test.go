@@ -44,8 +44,8 @@ func TestSecret(t *testing.T) {
 	t.Run("plain env value", func(t *testing.T) {
 		t.Setenv("ENVX_TEST_SEC", "s3cret")
 		got, err := Secret("ENVX_TEST_SEC")
-		if err != nil || got != "s3cret" {
-			t.Errorf("Secret() = (%q, %v), want (s3cret, nil)", got, err)
+		if err != nil || got.Reveal() != "s3cret" {
+			t.Errorf("Secret() = (%q, %v), want (s3cret, nil)", got.Reveal(), err)
 		}
 	})
 	t.Run("unset returns MissingError", func(t *testing.T) {
@@ -62,8 +62,8 @@ func TestSecret(t *testing.T) {
 		t.Setenv("ENVX_TEST_SEC", "from-env")
 		t.Setenv("ENVX_TEST_SEC_FILE", p)
 		got, err := Secret("ENVX_TEST_SEC")
-		if err != nil || got != "from-file" {
-			t.Errorf("Secret() = (%q, %v), want the file content minus its line ending", got, err)
+		if err != nil || got.Reveal() != "from-file" {
+			t.Errorf("Secret() = (%q, %v), want the file content minus its line ending", got.Reveal(), err)
 		}
 	})
 	t.Run("missing file is an error naming key and path, not the value", func(t *testing.T) {
@@ -143,11 +143,11 @@ func TestSecret_file_exactly_at_the_size_limit_is_read_whole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Secret() for a %d byte file = %v, want the content: the limit is a ceiling, not an exclusive bound", maxSecretFileSize, err)
 	}
-	if len(got) != maxSecretFileSize {
-		t.Errorf("Secret() returned %d bytes, want %d", len(got), maxSecretFileSize)
+	if len(got.Reveal()) != maxSecretFileSize {
+		t.Errorf("Secret() returned %d bytes, want %d", len(got.Reveal()), maxSecretFileSize)
 	}
-	if got != secret {
-		t.Errorf("Secret() returned %d bytes differing from the file content, want it read whole and unaltered", len(got))
+	if got.Reveal() != secret {
+		t.Errorf("Secret() returned %d bytes differing from the file content, want it read whole and unaltered", len(got.Reveal()))
 	}
 }
 
@@ -224,21 +224,12 @@ func TestSecret_failure_classes_are_nameable(t *testing.T) {
 	}
 }
 
-// TestSecret_secret_file_path_rule pins the KEY_FILE path rule at full precision, both
-// halves of it.
-//
-// The rule is the OR of pathinside's two hygiene predicates — !IsCanonical(path) ||
-// HasDotDot(path) — and it judges the path AS WRITTEN. It replaced a substring ".." test,
-// which loosens exactly one class and no other: a path that is ALREADY in Clean form and
-// whose ".." occurrences all sit inside a component NAME. Such a path traverses nowhere
-// (every component is an ordinary name, and Clean form means the string opened is the
-// string validated), so refusing it bought nothing. The accepted half is asserted by
-// actually reading the secret rather than by the absence of a rejection: the point is
-// that these operators get their credential, not merely a different error.
-//
-// The refused half is asserted exhaustively by shape, because that is the half a
-// loosening could have damaged: any ".." component, and any unclean spelling whether or
-// not it traverses.
+// TestSecret_secret_file_path_rule pins both halves of the KEY_FILE path rule,
+// !IsCanonical(path) || HasDotDot(path), judged as written. A Clean path whose dots
+// all sit inside component names traverses nowhere, so it is accepted; that half is
+// asserted by reading the secret, not by the absence of a rejection. The refused half
+// is asserted by shape: any ".." component, and any unclean spelling whether or not
+// it traverses.
 func TestSecret_secret_file_path_rule(t *testing.T) {
 	dir := t.TempDir()
 	// The canonical spelling of a real, readable secret file whose NAME carries two
@@ -253,21 +244,7 @@ func TestSecret_secret_file_path_rule(t *testing.T) {
 	}
 
 	t.Run("two dots inside a name is an ordinary file and is read", func(t *testing.T) {
-		for _, name := range []string{"key..v2", "...", "....", "token..", "..v2"} {
-			p := filepath.Join(dir, name)
-			if err := os.WriteFile(p, []byte("s3cret\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("ENVX_TEST_PATHRULE_FILE", p)
-			got, err := Secret("ENVX_TEST_PATHRULE")
-			if err != nil {
-				t.Errorf("Secret() for %q = %v; %q is an ordinary filename, not a traversal", name, err, name)
-				continue
-			}
-			if got != "s3cret" {
-				t.Errorf("Secret() for %q = %q, want s3cret", name, got)
-			}
-		}
+		assertDottedNamesAreRead(t, dir, "key..v2", "..v2", "...v2", "a...b")
 	})
 
 	t.Run("a directory whose name begins with two dots is traversed into normally", func(t *testing.T) {
@@ -284,8 +261,8 @@ func TestSecret_secret_file_path_rule(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Secret() = %v, want the file read: %q is a directory name, not a traversal", err, "..extras")
 		}
-		if got != "s3cret" {
-			t.Errorf("Secret() = %q, want s3cret", got)
+		if got.Reveal() != "s3cret" {
+			t.Errorf("Secret() = %q, want s3cret", got.Reveal())
 		}
 	})
 
@@ -315,10 +292,31 @@ func TestSecret_secret_file_path_rule(t *testing.T) {
 			if !errors.Is(err, ErrSecretFilePathRejected) {
 				t.Errorf("Secret() = %v for %q, want errors.Is ErrSecretFilePathRejected (refused by the rule, not by the filesystem)", err, path)
 			}
-			if v != "" {
+			if !v.IsZero() {
 				t.Errorf("value = %q for a refused path, want empty: a broken pointer never falls through to KEY", v)
 			}
 		})
+	}
+}
+
+// assertDottedNamesAreRead writes each name under dir as a secret file and
+// requires Secret to accept its path and return the content.
+func assertDottedNamesAreRead(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("ENVX_TEST_PATHRULE_FILE", p)
+		got, err := Secret("ENVX_TEST_PATHRULE")
+		if err != nil {
+			t.Errorf("Secret() for %q = %v; %q is an ordinary filename, not a traversal", name, err, name)
+			continue
+		}
+		if got.Reveal() != "s3cret" {
+			t.Errorf("Secret() for %q = %q, want s3cret", name, got.Reveal())
+		}
 	}
 }
 
@@ -378,7 +376,7 @@ func TestSecret_stream_longer_than_its_stat_size(t *testing.T) {
 	if !errors.Is(err, ErrSecretFileGrew) {
 		t.Errorf("Secret() = %v, want errors.Is ErrSecretFileGrew", err)
 	}
-	if v != "" {
+	if !v.IsZero() {
 		t.Errorf("value = %q, want empty", v)
 	}
 	if want := fmt.Sprintf("secret file grew past the %d byte limit during read", maxSecretFileSize); !strings.Contains(err.Error(), want) {

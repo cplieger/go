@@ -1,0 +1,13 @@
+export { createFeed } from "./feed.js";
+export { retainListening } from "./retain.js";
+export type {
+  CatchUp,
+  CatchUpFailure,
+  ChangesAnswer,
+  Feed,
+  FeedOptions,
+  FeedSink,
+  FeedStream,
+  Subscription,
+} from "./types.js";
+export { FEED_VERSION, FeedVersionMismatch } from "./version.js";

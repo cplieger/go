@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // gzipServe runs one GET through mw in front of h, offering the given

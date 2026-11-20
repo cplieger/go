@@ -27,7 +27,10 @@ import {
 } from "./visibility.js";
 
 /** What a host-routed run hands this tab: the port context plus the tab's own signal. */
-export type TabRevalidateContext = PortRevalidateContext & { readonly signal: AbortSignal };
+export type TabRevalidateContext = Omit<PortRevalidateContext, "build"> & {
+  readonly build: string | null;
+  readonly signal: AbortSignal;
+};
 
 /** What `spawn()` returns: a SharedWorker, or anything with its port and error event. */
 export interface SharedWorkerLike {
@@ -45,13 +48,11 @@ export interface TabFallback {
 }
 
 /**
- * How this tab attaches. `spawn` is called for every attempt at the worker — the first one, each respawn
- * after a silent window, the re-spawn on `pageshow` when the page came back with no live port, and each
- * recovery probe from fallback mode — so it must build a fresh worker each time rather than return a
- * held one; a throw from it is read as the worker being unavailable. `fallback` is called when the
- * ladder gives up, and immediately where `SharedWorker` is absent. `revalidate` is optional, and a tab
- * without one reports every routed run as done, which is correct only when the host's own body did the
- * reconciliation.
+ * How this tab attaches. `spawn` is called for every attempt at the worker (the first, each respawn
+ * after a silent window or on a `pageshow` with no live port, each probe from fallback mode), so it
+ * must build a fresh worker each time; a throw from it reads as the worker being unavailable.
+ * `fallback` is called when the ladder gives up, and at once where `SharedWorker` is absent. A tab
+ * with no `revalidate` reports every routed run as done, correct only when the host's body reconciled.
  */
 export interface AttachOptions {
   /** Constructs the worker with the fixed URL, name and options; called on every spawn. */
@@ -119,8 +120,16 @@ interface Link {
   readonly port: MessagePort;
 }
 
-function randomId(): string {
-  return crypto.randomUUID();
+/**
+ * @internal A v4 UUID (RFC 9562 section 5.4) from 16 `crypto.getRandomValues` bytes, never
+ * `crypto.randomUUID`, which is `[SecureContext]` and so undefined on a plain-HTTP page.
+ */
+export function randomId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = ((b[6] ?? 0) & 0x0f) | 0x40;
+  b[8] = ((b[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function hasSharedWorker(): boolean {
@@ -345,7 +354,9 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
     }, runTimeoutMs);
     let promise: Promise<void>;
     try {
-      promise = Promise.resolve(opts.revalidate({ ...ctx, signal: controller.signal }));
+      promise = Promise.resolve(
+        opts.revalidate({ ...ctx, build: ctx.build ?? null, signal: controller.signal }),
+      );
     } catch (e: unknown) {
       promise = Promise.reject(e instanceof Error ? e : new Error(String(e)));
     }

@@ -3,7 +3,9 @@
 package filesafe
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"syscall"
@@ -13,10 +15,6 @@ import (
 // msgPrivateDirRepaired is the line EnsurePrivateDir logs after repairing a
 // created directory's mode.
 const msgPrivateDirRepaired = "filesafe: created directory did not keep the requested mode; repaired"
-
-// MkfifoForTest creates a FIFO at path. It is exported for the external test
-// package; on Windows it returns an error, so callers skip the case.
-func MkfifoForTest(path string) error { return syscall.Mkfifo(path, 0o600) }
 
 // stubFsyncRootDir replaces the package fsyncRootDir seam with one that
 // returns err, restoring the original on test end. Every write entry point
@@ -51,6 +49,38 @@ func recordFsyncRootDir(t *testing.T) func() []string {
 	}
 }
 
+// stubFsyncDir replaces the package fsyncDir seam with fn, restoring the
+// original on test end. Callers must not use t.Parallel: package state.
+func stubFsyncDir(t *testing.T, fn func(dir string) error) {
+	t.Helper()
+	orig := fsyncDir
+	t.Cleanup(func() { fsyncDir = orig })
+	fsyncDir = fn
+}
+
+// recordFsyncDir replaces the package fsyncDir seam with one that records
+// every dir it is asked to sync and then runs the original, restoring it on
+// test end. Returns a function reporting the recorded dirs in call order.
+// Callers must not use t.Parallel: package state.
+func recordFsyncDir(t *testing.T) func() []string {
+	t.Helper()
+	orig := fsyncDir
+	t.Cleanup(func() { fsyncDir = orig })
+	var mu sync.Mutex
+	var seen []string
+	fsyncDir = func(dir string) error {
+		mu.Lock()
+		seen = append(seen, dir)
+		mu.Unlock()
+		return orig(dir)
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
 // withUmask sets the process umask for the test's duration and restores it
 // after. Process-global, so callers must not use t.Parallel. Needed because a
 // mode passed to mkdir(2) is only a REQUEST that umask narrows, and a test
@@ -74,5 +104,64 @@ func assertDirMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := chmodBits(fi.Mode()); got != want {
 		t.Errorf("mode of %q = %#o, want %#o", path, got, want)
+	}
+}
+
+// occupants is the Lstat of each kind of entry a refused open can meet.
+type occupants struct {
+	regular, dir, symlink, socket os.FileInfo
+}
+
+// lstatOccupants creates a regular file, a directory, a symlink and a Unix
+// socket in a short directory and returns each one's Lstat.
+func lstatOccupants(t *testing.T) occupants {
+	t.Helper()
+	_, dir := shortTestRoot(t)
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("f", filepath.Join(dir, "l")); err != nil {
+		t.Fatal(err)
+	}
+	listenUnixForTest(t, filepath.Join(dir, "s"))
+	lstat := func(name string) os.FileInfo {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi
+	}
+	return occupants{regular: lstat("f"), dir: lstat("d"), symlink: lstat("l"), socket: lstat("s")}
+}
+
+// found is a stat func that reports fi.
+func found(fi os.FileInfo) func() (os.FileInfo, error) {
+	return func() (os.FileInfo, error) { return fi, nil }
+}
+
+// assertModeTooOpen requires err to be a *ModeTooOpenError naming name with
+// mode want, then widens path to 0777 and requires the error to still report
+// want: the refusal describes what was checked, not what is there now.
+func assertModeTooOpen(t *testing.T, err error, path, name string, want os.FileMode) {
+	t.Helper()
+	if !errors.Is(err, ErrModeTooOpen) {
+		t.Errorf("err = %v, want it to match ErrModeTooOpen", err)
+	}
+	mt, ok := errors.AsType[*ModeTooOpenError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *ModeTooOpenError", err)
+	}
+	if mt.Name != name || mt.Mode != want {
+		t.Errorf("ModeTooOpenError = {Name: %q, Mode: %#o}, want {Name: %q, Mode: %#o}", mt.Name, uint32(mt.Mode), name, uint32(want))
+	}
+	msg := err.Error()
+	if err := os.Chmod(path, 0o777); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	if mt.Mode != want || err.Error() != msg {
+		t.Errorf("after chmod 0777: Mode %#o, message %q; want Mode %#o and message %q unchanged", uint32(mt.Mode), err.Error(), uint32(want), msg)
 	}
 }

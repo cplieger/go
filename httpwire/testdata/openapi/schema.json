@@ -1,0 +1,261 @@
+{
+  "components": {
+    "schemas": {
+      "Color": {
+        "enum": ["red", "green"],
+        "type": "string"
+      },
+      "ErrorEnvelope": {
+        "properties": {
+          "code": { "type": "string" },
+          "fields": {
+            "items": { "$ref": "#/components/schemas/FieldError" },
+            "type": "array"
+          },
+          "message": { "type": "string" },
+          "request_id": { "type": "string" }
+        },
+        "required": ["code", "message", "request_id"],
+        "type": "object"
+      },
+      "FieldError": {
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "path": { "type": "string" }
+        },
+        "required": ["path", "code", "message"],
+        "type": "object"
+      },
+      "Item": {
+        "description": "One item.",
+        "properties": {
+          "at": { "format": "date-time", "type": "string" },
+          "big": { "minimum": 0, "type": "integer" },
+          "blob": { "contentEncoding": "base64", "type": ["string", "null"] },
+          "color": { "$ref": "#/components/schemas/Color" },
+          "count": { "maximum": 9007199254740992, "minimum": 1, "type": "integer" },
+          "flag": { "default": false, "type": "boolean" },
+          "kind": { "const": "item", "type": "string" },
+          "labels": {
+            "additionalProperties": { "type": "integer" },
+            "propertyNames": { "pattern": "^-?(?:0|[1-9][0-9]*)$" },
+            "type": ["object", "null"]
+          },
+          "name": { "maxLength": 8, "minLength": 1, "type": "string", "x-max-bytes": 8 },
+          "next": { "anyOf": [{ "$ref": "#/components/schemas/Item" }, { "type": "null" }] },
+          "note": { "anyOf": [{ "$ref": "#/components/schemas/Color" }, { "type": "null" }] },
+          "quoted": { "pattern": "^-?(?:0|[1-9][0-9]*)$", "type": "string" },
+          "ratio": { "type": "number" },
+          "raw": {},
+          "shape": { "$ref": "#/components/schemas/Shape" },
+          "tags": {
+            "items": { "type": "string" },
+            "maxItems": 3,
+            "minItems": 0,
+            "type": ["array", "null"]
+          }
+        },
+        "required": ["name", "count"],
+        "type": "object"
+      },
+      "Shape": {
+        "discriminator": {
+          "mapping": {
+            "circle": "#/components/schemas/Shape.circle",
+            "square": "#/components/schemas/Shape.square"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          { "$ref": "#/components/schemas/Shape.circle" },
+          { "$ref": "#/components/schemas/Shape.square" }
+        ]
+      },
+      "Shape.circle": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "const": "circle" },
+          "radius": { "type": "integer" }
+        },
+        "required": ["kind", "radius"],
+        "type": "object"
+      },
+      "Shape.square": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "const": "square" },
+          "side": { "type": "integer" }
+        },
+        "required": ["kind", "side"],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "session": { "in": "cookie", "name": "sid", "type": "apiKey" }
+    }
+  },
+  "info": {
+    "description": "A fixture API.",
+    "title": "fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/download": {
+      "get": {
+        "description": "Download the archive.",
+        "operationId": "download",
+        "responses": {
+          "200": { "content": { "application/octet-stream": {} }, "description": "OK" }
+        },
+        "security": [],
+        "summary": "Download"
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "description": "Stream the events.",
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string" },
+                "x-events": { "item": { "$ref": "#/components/schemas/Item" } }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [{ "session": [] }],
+        "summary": "Events"
+      }
+    },
+    "/v1/items": {
+      "post": {
+        "description": "Create an item.",
+        "operationId": "createItem",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "color",
+            "required": false,
+            "schema": { "$ref": "#/components/schemas/Color" }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": { "maximum": 200, "minimum": 1, "type": "integer" }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": { "maxLength": 4, "type": "string", "x-max-bytes": 4 }
+          },
+          { "in": "query", "name": "on", "required": false, "schema": { "type": "boolean" } },
+          {
+            "in": "query",
+            "name": "n",
+            "required": false,
+            "schema": { "minimum": 0, "type": "integer" }
+          },
+          {
+            "description": "A declared header.",
+            "in": "header",
+            "name": "X-Thing",
+            "required": false,
+            "schema": {
+              "maxLength": 16,
+              "minLength": 0,
+              "pattern": "^[\\x20-\\x7E]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Item" } } },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Item" } }
+            },
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "required": true,
+                "schema": { "format": "uri-reference", "type": "string" }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } }
+            },
+            "description": "Bad Request: bad_body",
+            "x-error-codes": { "bad_body": { "x-remediation": "Fix the body." } }
+          }
+        },
+        "security": [{ "session": [] }],
+        "summary": "Create item",
+        "x-owner": "items"
+      }
+    },
+    "/v1/items/{id}": {
+      "get": {
+        "description": "Read one item.",
+        "operationId": "getItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": { "minimum": 0, "type": "integer" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Item" } }
+            },
+            "description": "OK"
+          },
+          "204": { "description": "No Content" }
+        },
+        "security": [],
+        "summary": "Get item"
+      }
+    },
+    "/v1/shapes": {
+      "put": {
+        "description": "Replace the shape.",
+        "operationId": "putShape",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Shape" } } },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    { "items": { "$ref": "#/components/schemas/Shape" }, "type": "array" },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [],
+        "summary": "Put shape"
+      }
+    }
+  }
+}

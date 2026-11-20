@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // FuzzClientIP_spoofProofAndCleanOutput holds three invariants over a raw
@@ -95,10 +95,10 @@ func FuzzResolveClient_ipFromPeerOrHeader(f *testing.F) {
 	}
 	// Each header is non-blank, but "\xc2" and "\xa0" join into U+00A0.
 	f.Add("0", "\xc2", "\xa0", " ")
-	f.Add("192.168.1.50:4000", "\"192.168.1.20\n203.0.113.9\"", "\n198.51.100.7", "for=10.0.0.9\nfor=\"[2001:db8::1]:_p\"")
-	f.Add("10.0.0.1:4000", "8.8.8.8\n\n10.0.0.2", "203.0.113.9\n", "by=\"x\nfor=198.51.100.7;\"")
-	f.Add("192.168.1.50:4000", "", "", "for=198.51.100.7;FOR=10.0.0.1\nfor=\"198.51.100.7:80\";by=_x")
-	f.Add("10.0.0.1:4000", strings.Repeat("203.0.113.9,", 40)+"\n"+strings.Repeat("10.0.0.2,", 25), strings.Repeat("203.0.113.9,", 65), "for=203.0.113.9;a=1;b=1;c=1;d=1;e=1;f=1;g=1;h=1;i=1;j=1;k=1;l=1;m=1;n=1;o=1;p=1")
+	f.Add("192.168.1.50:4000", "\"192.168.1.20\n9.9.9.9\"", "\n8.8.4.4", "for=10.0.0.9\nfor=\"[2620:fe::9]:_p\"")
+	f.Add("10.0.0.1:4000", "8.8.8.8\n\n10.0.0.2", "9.9.9.9\n", "by=\"x\nfor=8.8.4.4;\"")
+	f.Add("192.168.1.50:4000", "", "", "for=8.8.4.4;FOR=10.0.0.1\nfor=\"8.8.4.4:80\";by=_x")
+	f.Add("10.0.0.1:4000", strings.Repeat("9.9.9.9,", 40)+"\n"+strings.Repeat("10.0.0.2,", 25), strings.Repeat("9.9.9.9,", 65), "for=9.9.9.9;a=1;b=1;c=1;d=1;e=1;f=1;g=1;h=1;i=1;j=1;k=1;l=1;m=1;n=1;o=1;p=1")
 	f.Fuzz(func(t *testing.T, remote, xff, realIP, forwarded string) {
 		headers := map[string]string{"X-Forwarded-For": xff, "X-Real-IP": realIP, "Forwarded": forwarded}
 		r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)

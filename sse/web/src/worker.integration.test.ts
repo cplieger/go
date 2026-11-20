@@ -16,7 +16,8 @@ import {
 import workerUrl from "./test-helpers/worker-entry.ts?sharedworker&url";
 import { type VersionMap, createVersionMap } from "./versions.js";
 
-const SKIP_REASON = "ssetest fixture not started: set SSE_FIXTURE to the built ssetest/cmd binary";
+const SKIP_REASON =
+  "sse fixture not started: set SSE_FIXTURE to the binary built from internal/ssefixture";
 const fixture = import.meta.env["SSE_FIXTURE"];
 if (!fixture) {
   console.warn(`[vitest] ${SKIP_REASON}`);
@@ -151,7 +152,7 @@ function setHidden(hidden: boolean): void {
 
 const sharedWorkerAvailable = Boolean(fixture) && typeof SharedWorker !== "undefined";
 
-describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the ssetest fixture", () => {
+describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the sse fixture", () => {
   let client: FixtureClient;
   let fixtureUrl: string;
   let pages: Page[] = [];
@@ -213,12 +214,10 @@ describe.skipIf(!sharedWorkerAvailable)("worker host and tabs against the ssetes
     await sleep(HIDDEN + 300);
     expect(a.attachment.state()?.kind).toBe("open");
     setHidden(true);
-    await waitFor(
-      "hidden_closed",
-      () => a.attachment.state()?.kind === "hidden_closed",
-      HIDDEN + 3000,
-    );
+    // The state message reaches the tab before the hidden_closed record.
+    await waitFor("hidden_closed", () => a.ofKind("hidden_closed").length > 0, HIDDEN + 3000);
     expect(a.ofKind("hidden_closed")).toHaveLength(1);
+    expect(a.attachment.state()?.kind).toBe("hidden_closed");
     await waitFor("server saw close", async () => (await client.state()).clients === 0);
     const revalidates = a.ofKind("revalidate").length;
     setHidden(false);

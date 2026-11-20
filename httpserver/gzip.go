@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/cplieger/go/httpserver/v2/internal/httpfield"
 )
 
 // defaultGzipMinBytes is where gzip starts to pay: under about 1 KiB its
@@ -162,7 +164,7 @@ func Gzip(opts ...GzipOption) Middleware {
 // client named the coding.
 func acceptsGzip(r *http.Request) bool {
 	wildcard := false
-	for elem := range fieldList(r.Header, "Accept-Encoding", tokenList) {
+	for elem := range httpfield.List(r.Header, "Accept-Encoding", httpfield.Tokens) {
 		coding, offered := encodingOffer(elem)
 		switch {
 		case equalASCIIFold(coding, "gzip"), equalASCIIFold(coding, "x-gzip"):
@@ -205,7 +207,7 @@ func zeroQValue(v string) bool {
 // addVaryAcceptEncoding adds Accept-Encoding to Vary unless it is listed or
 // Vary is "*", which already varies on every field (RFC 9110 section 12.5.5).
 func addVaryAcceptEncoding(h http.Header) {
-	for elem := range fieldList(h, "Vary", tokenList) {
+	for elem := range httpfield.List(h, "Vary", httpfield.Tokens) {
 		if elem == "*" || equalASCIIFold(elem, "Accept-Encoding") {
 			return
 		}
@@ -346,7 +348,7 @@ func (g *gzipWriter) sendHeld(compressed bool) {
 // http.TrailerPrefix is never a header line, so it stays as set; the values
 // h holds for the trailers held declares are returned.
 func restoreHeader(h, held http.Header) (trailers http.Header) {
-	for name := range fieldList(held, "Trailer", tokenList) {
+	for name := range httpfield.List(held, "Trailer", httpfield.Tokens) {
 		name = http.CanonicalHeaderKey(name)
 		if v, ok := h[name]; ok {
 			if trailers == nil {

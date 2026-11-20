@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ func TestSubmit_FinalEventOverRealSocket(t *testing.T) {
 // ErrUnreachable (the trigger reports a failed job), never a hang.
 func TestSubmit_DaemonUnreachable(t *testing.T) {
 	t.Parallel()
-	sock := absentSocketPath(t)
+	sock := testSocketPath(t)
 	_, err := Submit(t.Context(), sock, struct{}{}, nil)
 	if !errors.Is(err, ErrUnreachable) {
 		t.Errorf("Submit() error = %v, want ErrUnreachable", err)
@@ -169,9 +168,6 @@ func TestSubmit_CancellationAbortsTheWait(t *testing.T) {
 // in, diagnosed an operator's Ctrl-C as an unreachable daemon. The daemon here
 // is up and listening, so ErrUnreachable would be false as well as unhelpful.
 func TestSubmit_CancelledDialReportsTheCancellation(t *testing.T) {
-	// Not parallel: Listen swaps the process-wide umask, so this test's own
-	// socket directory must not be created while a sibling holds that window.
-	// See TestSubmit_CancelledSendReportsTheCancellation for the measurement.
 	sock := startTestServer(t, runOK)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -196,23 +192,7 @@ func TestSubmit_CancelledDialReportsTheCancellation(t *testing.T) {
 // The listener accepts and never reads, so a payload larger than the socket
 // send buffer leaves Submit blocked inside Encode when the cancellation lands.
 func TestSubmit_CancelledSendReportsTheCancellation(t *testing.T) {
-	// Deliberately NOT parallel, and the reason is a process-wide side effect
-	// rather than anything about this test: Listen narrows the umask to 0o177
-	// around its bind, so a directory another goroutine creates inside that
-	// window is born drw------- and its unprivileged owner can then neither
-	// bind in it nor unlink from it. Running here, in the sequential phase, is
-	// what keeps this test's own MkdirTemp out of a sibling's window.
-	//
-	// Measured: as a parallel test this reddened the coverage job on a real
-	// runner, taking a pre-existing example down with it, while passing every
-	// local run — because a root container bypasses the directory permission
-	// check that an unprivileged CI user does not.
-	sock := testSocketPath(t)
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("Listen(%q) = %v", sock, err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
+	ln, sock := listenTestSocket(t)
 
 	accepted := make(chan struct{})
 	release := make(chan struct{})
@@ -239,7 +219,7 @@ func TestSubmit_CancelledSendReportsTheCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	_, err = Submit(ctx, sock, big, nil)
+	_, err := Submit(ctx, sock, big, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Submit() error = %v, want context.Canceled", err)
 	}

@@ -1,6 +1,6 @@
 // Package fixture is the controllable SSE server the TypeScript integration
-// suites drive through the ssetest/cmd binary. It is internal: its /control
-// routes are a test-harness protocol, not part of the module's API.
+// suites drive through the internal/ssefixture binary. It is internal: its
+// /control routes are a test-harness protocol, not part of the module's API.
 package fixture
 
 import (
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/sse/v2"
 )
 
@@ -47,10 +47,11 @@ type presenceRow struct {
 // Fixture is the controllable SSE server the integration suites drive: a hub
 // that /control/restart replaces, an in-memory subject store with one version
 // counter per key, a presence table keyed by client tag, a stamped REST stub,
-// and flags that stall, delay, fail or close a stream on demand. Every method
-// is safe for concurrent use.
+// flags that stall, delay, fail or close a stream on demand, and the change
+// feed's sessions (feed.go). Every method is safe for concurrent use.
 type Fixture struct {
 	hub            *sse.Hub
+	feeds          *feedRegistry
 	store          map[sse.Subject]*storeEntry
 	presence       map[string]*presenceRow
 	hubOpts        []sse.Option
@@ -74,13 +75,16 @@ type Fixture struct {
 
 // NewFixture builds a fixture whose hub carries WithReplay(1024),
 // WithReplayTTL(10m), WithReplyMaxEvents(256), WithClientBuffer(4096) and the
-// fixture's own presence hook, then the caller's options. It panics on an
-// incoherent option set, which is a fixture bug rather than a runtime condition.
+// fixture's own presence hook, then the caller's options; each feed session's
+// hub carries WithReplay(64), WithReplayTTL(10m), WithClientBuffer(4096) and
+// the caller's options. It panics on an incoherent option set, which is a
+// fixture bug rather than a runtime condition.
 func NewFixture(opts ...sse.Option) *Fixture {
 	f := &Fixture{
 		store:       make(map[sse.Subject]*storeEntry),
 		presence:    make(map[string]*presenceRow),
 		aliveWindow: defaultAliveWindow,
+		feeds:       newFeedRegistry(opts),
 	}
 	f.hubOpts = append([]sse.Option{
 		sse.WithReplay(fixtureReplay),
@@ -100,9 +104,10 @@ func (f *Fixture) currentHub() *sse.Hub {
 	return f.hub
 }
 
-// Shutdown shuts the current hub down, ending every stream with sse:reset.
+// Shutdown shuts the current hub and every feed session's hub down, ending
+// every stream with sse:reset.
 func (f *Fixture) Shutdown(ctx context.Context) error {
-	return f.currentHub().Shutdown(ctx)
+	return errors.Join(f.currentHub().Shutdown(ctx), f.feeds.shutdown(ctx))
 }
 
 // Handler mounts the fixture's routes on a fresh ServeMux.
@@ -123,6 +128,7 @@ func (f *Fixture) Handler() http.Handler {
 	mux.HandleFunc("POST /control/close-after", f.handleCloseAfter)
 	mux.HandleFunc("POST /control/alive-window", f.durationSetter(&f.aliveWindow))
 	mux.HandleFunc("GET /control/state", f.handleState)
+	f.feeds.mount(mux)
 	return mux
 }
 

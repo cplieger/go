@@ -80,7 +80,7 @@ func ReadBoundedFile(ctx context.Context, f *os.File, maxBytes int64) ([]byte, e
 		return nil, err
 	}
 	if fi.Size() > maxBytes {
-		return nil, fmt.Errorf("%w: %d bytes (max %d)", ErrFileTooLarge, fi.Size(), maxBytes)
+		return nil, &FileTooLargeError{Size: fi.Size(), Limit: maxBytes}
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, fmt.Errorf("filesafe: %w", ctxErr)
@@ -90,7 +90,7 @@ func ReadBoundedFile(ctx context.Context, f *os.File, maxBytes int64) ([]byte, e
 		return nil, err
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("%w: file grew past %d byte limit during read", ErrFileTooLarge, maxBytes)
+		return nil, fmt.Errorf("%w; the file grew during the read", &FileTooLargeError{Size: int64(len(data)), Limit: maxBytes})
 	}
 	return data, nil
 }

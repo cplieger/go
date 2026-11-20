@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "license": "Apache-2.0",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./feed": "./src/feed/index.ts",
+    "./feed/worker": "./src/feed/worker.ts"
   },
   "publish": {
     "include": [

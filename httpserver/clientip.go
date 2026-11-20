@@ -6,6 +6,9 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/cplieger/go/httpserver/v2/internal/httpfield"
+	"github.com/cplieger/go/ssrf"
 )
 
 // ClientResolution is ResolveClient's answer: the client address and how it
@@ -30,7 +33,7 @@ type ClientResolution struct {
 	// element, which was ignored.
 	UntrustedForwarding bool
 	// IgnoredPublic reports that such an ignored header named a public
-	// address: global unicast and outside RFC 1918 and RFC 4193.
+	// address, as ssrf.IsPublicAddr judges one.
 	IgnoredPublic bool
 	// ForwardedHTTPS reports that a trusted peer said the client reached it
 	// over TLS: exactly one X-Forwarded-Proto field holding the one token
@@ -144,9 +147,9 @@ type forwardedElement struct {
 
 func parseForwarding(h http.Header) forwarding {
 	return forwarding{
-		xff:       parseBounded(h, "X-Forwarded-For", tokenList, parseListEntry),
-		realIP:    parseBounded(h, "X-Real-Ip", tokenList, parseListEntry),
-		forwarded: parseBounded(h, "Forwarded", quotedStringList, parseForwardedElement),
+		xff:       parseBounded(h, "X-Forwarded-For", httpfield.Tokens, parseListEntry),
+		realIP:    parseBounded(h, "X-Real-Ip", httpfield.Tokens, parseListEntry),
+		forwarded: parseBounded(h, "Forwarded", httpfield.QuotedStrings, parseForwardedElement),
 	}
 }
 
@@ -169,23 +172,19 @@ func (f forwarding) present() bool {
 }
 
 func (f forwarding) public() bool {
-	entryPublic := func(e listEntry) bool { return isPublic(e.addr) }
+	entryPublic := func(e listEntry) bool { return ssrf.IsPublicAddr(e.addr) }
 	return slices.ContainsFunc(f.xff, entryPublic) ||
 		slices.ContainsFunc(f.realIP, entryPublic) ||
 		slices.ContainsFunc(f.forwarded, func(e forwardedElement) bool {
-			return e.valid && isPublic(e.forNode)
+			return e.valid && ssrf.IsPublicAddr(e.forNode)
 		})
-}
-
-func isPublic(ip netip.Addr) bool {
-	return ip.IsGlobalUnicast() && !ip.IsPrivate()
 }
 
 // parseBounded parses each element of h's name list with parse, or returns
 // one zero element once the list holds more than maxForwardingHops.
-func parseBounded[T any](h http.Header, name string, syntax listSyntax, parse func(string) T) []T {
+func parseBounded[T any](h http.Header, name string, syntax httpfield.Syntax, parse func(string) T) []T {
 	var elems []T
-	for elem := range fieldList(h, name, syntax) {
+	for elem := range httpfield.List(h, name, syntax) {
 		if len(elems) == maxForwardingHops {
 			var zero T
 			return []T{zero}

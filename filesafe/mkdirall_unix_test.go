@@ -4,7 +4,6 @@ package filesafe
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -173,7 +172,7 @@ func TestMkdirMode_AFilledRefusedLevelStaysAndIsReported(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(f.Name(), "other"), []byte("theirs"), 0o600); err != nil {
 			t.Fatalf("plant the racing entry: %v", err)
 		}
-		return want | 0o070, fmt.Errorf("%w: %s", ErrModeNotStored, f.Name())
+		return want | 0o070, &ModeNotStoredError{Name: f.Name(), Requested: want, Stored: want | 0o070}
 	}
 	dir := t.TempDir()
 	_, err := WriteFile(t.Context(), filepath.Join(dir, "a", "f.txt"), []byte("x"), WithMkdirMode(0o750))
@@ -199,7 +198,7 @@ func TestMkdirMode_ASwappedRefusedLevelIsLeftAlone(t *testing.T) {
 		if err := os.WriteFile(f.Name(), []byte("theirs"), 0o600); err != nil {
 			t.Fatalf("plant a file at the level: %v", err)
 		}
-		return want | 0o070, fmt.Errorf("%w: %s", ErrModeNotStored, f.Name())
+		return want | 0o070, &ModeNotStoredError{Name: f.Name(), Requested: want, Stored: want | 0o070}
 	}
 	dir := t.TempDir()
 	_, err := WriteFile(t.Context(), filepath.Join(dir, "a", "f.txt"), []byte("x"), WithMkdirMode(0o750))

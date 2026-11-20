@@ -1,7 +1,9 @@
 package health
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,9 +125,10 @@ func TestMarkerFollowsEverySequenceOfSets(t *testing.T) {
 func TestMirrorFailureWarnsOncePerStreak(t *testing.T) {
 	t.Parallel()
 	l, buf := jsonLog()
-	p := markerIn(t)
+	p := filepath.Join(t.TempDir(), "app.healthy")
 	st := NewStatus(WithLogger(l), WithMarker(p))
-	blockFolder(t, p)
+	blockMarker(t, p)
+	wantErr := map[string]string{msgCreateFailed: openErr(t, p).Error(), msgRemoveFailed: removeErr(t, p).Error()}
 	for _, ok := range []bool{true, true, false, true, false, false} {
 		st.Set(ok)
 		if st.Healthy() != ok {
@@ -139,8 +142,8 @@ func TestMirrorFailureWarnsOncePerStreak(t *testing.T) {
 			continue
 		}
 		r := got[0]
-		if r["level"] != "WARN" || r["path"] != p || r["effect"] != wantWriteEffect || !strings.Contains(fmt.Sprint(r["error"]), "not a directory") {
-			t.Errorf("%q line = %v, want WARN with path, the ENOTDIR error and effect %q", msg, r, wantWriteEffect)
+		if r["level"] != "WARN" || r["path"] != p || r["effect"] != wantWriteEffect || r["error"] != wantErr[msg] {
+			t.Errorf("%q line = %v, want WARN with path, error %q and effect %q", msg, r, wantErr[msg], wantWriteEffect)
 		}
 	}
 }
@@ -150,11 +153,11 @@ func TestMirrorFailureRecoveryLogsInfo(t *testing.T) {
 	t.Run("on Set(true)", func(t *testing.T) {
 		t.Parallel()
 		l, buf := jsonLog()
-		p := markerIn(t)
+		p := filepath.Join(t.TempDir(), "app.healthy")
 		st := NewStatus(WithLogger(l), WithMarker(p))
-		blockFolder(t, p)
+		blockMarker(t, p)
 		st.Set(true)
-		unblockFolder(t, p)
+		unblockMarker(t, p)
 		buf.Reset()
 		st.Set(true)
 		if !exists(t, p) {
@@ -168,12 +171,12 @@ func TestMirrorFailureRecoveryLogsInfo(t *testing.T) {
 	t.Run("on Set(false)", func(t *testing.T) {
 		t.Parallel()
 		l, buf := jsonLog()
-		p := markerIn(t)
+		p := filepath.Join(t.TempDir(), "app.healthy")
 		st := NewStatus(WithLogger(l), WithMarker(p))
 		st.Set(false)
-		blockFolder(t, p)
+		blockMarker(t, p)
 		st.Set(false)
-		unblockFolder(t, p)
+		unblockMarker(t, p)
 		buf.Reset()
 		st.Set(false)
 		got := records(t, buf)
@@ -244,7 +247,7 @@ func TestDegradedStartOnADirectoryAtTheMarkerPath(t *testing.T) {
 func TestDegradedModeRecoversOnTheFirstWritableSet(t *testing.T) {
 	c := useClock(t)
 	l, buf := jsonLog()
-	p := markerIn(t)
+	p := filepath.Join(t.TempDir(), "app.healthy")
 	if err := os.Mkdir(p, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -272,10 +275,10 @@ func TestDegradedModeRecoversOnTheFirstWritableSet(t *testing.T) {
 	if exists(t, p) || probeCode(p) != 1 {
 		t.Errorf("after Set(false): marker present = %v, probe = %d; want absent and 1", exists(t, p), probeCode(p))
 	}
-	blockFolder(t, p)
+	blockMarker(t, p)
 	st.Set(true)
 	if n := len(withMsg(t, buf, msgCreateFailed)); n != 1 {
-		t.Errorf("%q lines once the folder is a file = %d, want 1", msgCreateFailed, n)
+		t.Errorf("%q lines once a directory holds the marker path = %d, want 1", msgCreateFailed, n)
 	}
 	if n := len(withMsg(t, buf, msgDirDegraded)) + len(withMsg(t, buf, msgMarkerDegraded)); n != 1 {
 		t.Errorf("degraded warnings = %d, want the one from NewStatus: leaving is one-way", n)
@@ -370,15 +373,19 @@ func TestDegradedStartOnAMarkerThisUserCannotOpen(t *testing.T) {
 	if err := os.WriteFile(p, nil, 0o444); err != nil {
 		t.Fatal(err)
 	}
-	if f, err := os.OpenFile(p, os.O_WRONLY, 0); err == nil {
+	f, denied := os.OpenFile(p, os.O_WRONLY, 0)
+	if denied == nil {
 		_ = f.Close()
 		t.Skip("this user opens a 0444 file for writing (root); the directory tests cover degraded mode")
+	}
+	if !errors.Is(denied, fs.ErrPermission) {
+		t.Fatalf("fixture: open 0444 marker for writing = %v, want a permission error", denied)
 	}
 	l, buf := jsonLog()
 	st := NewStatus(WithLogger(l), WithMarker(p))
 	got := withMsg(t, buf, msgMarkerDegraded)
-	if !st.mirror.degraded || len(got) != 1 || !strings.Contains(fmt.Sprint(got[0]["error"]), "permission denied") {
-		t.Fatalf("degraded = %v, lines %v; want one %q naming permission denied", st.mirror.degraded, got, msgMarkerDegraded)
+	if !st.mirror.degraded || len(got) != 1 || got[0]["error"] != denied.Error() {
+		t.Fatalf("degraded = %v, lines %v; want one %q with error %q", st.mirror.degraded, got, msgMarkerDegraded, denied)
 	}
 	old := time.Now().Add(-2 * time.Hour)
 	if err := os.Chtimes(p, old, old); err != nil {

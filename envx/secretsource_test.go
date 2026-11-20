@@ -25,8 +25,8 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SecretWithSource = %v, want nil", err)
 		}
-		if v != "from-file" {
-			t.Errorf("value = %q, want %q (file content minus its line ending, file wins)", v, "from-file")
+		if v.Reveal() != "from-file" {
+			t.Errorf("value = %q, want %q (file content minus its line ending, file wins)", v.Reveal(), "from-file")
 		}
 		if src != SecretSourceFile {
 			t.Errorf("source = %q, want %q", src, SecretSourceFile)
@@ -41,8 +41,8 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SecretWithSource = %v, want nil", err)
 		}
-		if v != "from-env" || src != SecretSourceEnv {
-			t.Errorf("SecretWithSource = (%q, %q), want (%q, %q)", v, src, "from-env", SecretSourceEnv)
+		if v.Reveal() != "from-env" || src != SecretSourceEnv {
+			t.Errorf("SecretWithSource = (%q, %q), want (%q, %q)", v.Reveal(), src, "from-env", SecretSourceEnv)
 		}
 	})
 
@@ -60,12 +60,7 @@ func TestSecretWithSource_reports_the_channel(t *testing.T) {
 	})
 }
 
-// TestSecretWithSource_file_channel_returns_the_value_as_written pins the asymmetry this
-// package used to carry: the env channel returns os.Getenv verbatim while the file
-// channel ran strings.TrimSpace, so one credential resolved to two different secrets
-// depending on how it was delivered. A consumer that validates a credential verbatim was
-// handed a silently rewritten value. Only a single trailing line ending — the artifact of
-// storing a value in a file at all — is removed now.
+// The file channel answers the value as written, minus one trailing line ending, so it agrees with KEY.
 func TestSecretWithSource_file_channel_returns_the_value_as_written(t *testing.T) {
 	for name, tc := range map[string]struct {
 		content string
@@ -96,8 +91,8 @@ func TestSecretWithSource_file_channel_returns_the_value_as_written(t *testing.T
 			if err != nil {
 				t.Fatalf("SecretWithSource(%q) = %v, want nil", tc.content, err)
 			}
-			if v != tc.want {
-				t.Errorf("SecretWithSource(%q) = %q, want %q", tc.content, v, tc.want)
+			if v.Reveal() != tc.want {
+				t.Errorf("SecretWithSource(%q) = %q, want %q", tc.content, v.Reveal(), tc.want)
 			}
 			if src != SecretSourceFile {
 				t.Errorf("source = %q, want %q", src, SecretSourceFile)
@@ -139,8 +134,8 @@ func TestSecretWithSource_channels_agree_on_the_value(t *testing.T) {
 				t.Fatalf("env channel = (%q, %q, %v), want (_, %q, nil)", fromEnv, src, err, SecretSourceEnv)
 			}
 
-			if fromFile != fromEnv {
-				t.Errorf("file channel = %q, env channel = %q; the same secret must resolve identically", fromFile, fromEnv)
+			if !fromFile.Equal(fromEnv) {
+				t.Errorf("file channel = %q, env channel = %q; the same secret must resolve identically", fromFile.Reveal(), fromEnv.Reveal())
 			}
 		})
 	}
@@ -183,7 +178,7 @@ func TestSecretWithSource_unreadable_file_keeps_the_channel(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SecretWithSource(missing file) = %q, nil; want an error rather than the env fallback", v)
 	}
-	if v != "" {
+	if !v.IsZero() {
 		t.Errorf("value = %q, want empty: an unusable file must never fall back to the env value", v)
 	}
 	if src != SecretSourceFile {
@@ -234,8 +229,8 @@ func TestSecret_delegates_to_SecretWithSource(t *testing.T) {
 			wantV, _, wantErr := SecretWithSource("ENVX_SWS")
 			gotV, gotErr := Secret("ENVX_SWS")
 
-			if gotV != wantV {
-				t.Errorf("Secret = %q, SecretWithSource = %q; they must agree", gotV, wantV)
+			if gotV.Reveal() != wantV.Reveal() {
+				t.Errorf("Secret = %q, SecretWithSource = %q; they must agree", gotV.Reveal(), wantV.Reveal())
 			}
 			if (gotErr == nil) != (wantErr == nil) {
 				t.Errorf("Secret err = %v, SecretWithSource err = %v; they must agree", gotErr, wantErr)
@@ -293,9 +288,9 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		t.Setenv("ENVX_SWS_FILE", "")
 
 		v, src, err := SecretWithSource("ENVX_SWS")
-		if v != "from-env" || src != SecretSourceEnv || err != nil {
+		if v.Reveal() != "from-env" || src != SecretSourceEnv || err != nil {
 			t.Errorf("SecretWithSource = (%q, %q, %v), want (%q, %q, nil): precedence must be unchanged",
-				v, src, err, "from-env", SecretSourceEnv)
+				v.Reveal(), src, err, "from-env", SecretSourceEnv)
 		}
 		if !IsBlankSecretFilePath("ENVX_SWS") {
 			t.Error("IsBlankSecretFilePath = false, want true: the operator did set an empty _FILE")
@@ -323,7 +318,7 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		if err == nil {
 			t.Fatalf("SecretWithSource = %q, nil; want the unchanged failure for an unopenable path", v)
 		}
-		if v != "" || src != SecretSourceFile {
+		if !v.IsZero() || src != SecretSourceFile {
 			t.Errorf("SecretWithSource = (%q, %q), want (%q, %q): a set _FILE is never a fallback to the env value",
 				v, src, "", SecretSourceFile)
 		}
@@ -341,8 +336,8 @@ func TestIsBlankSecretFilePath_reports_without_changing_resolution(t *testing.T)
 		t.Setenv("ENVX_SWS_FILE", p)
 
 		v, src, err := SecretWithSource("ENVX_SWS")
-		if v != "from-file" || src != SecretSourceFile || err != nil {
-			t.Errorf("SecretWithSource = (%q, %q, %v), want (%q, %q, nil)", v, src, err, "from-file", SecretSourceFile)
+		if v.Reveal() != "from-file" || src != SecretSourceFile || err != nil {
+			t.Errorf("SecretWithSource = (%q, %q, %v), want (%q, %q, nil)", v.Reveal(), src, err, "from-file", SecretSourceFile)
 		}
 		if IsBlankSecretFilePath("ENVX_SWS") {
 			t.Error("IsBlankSecretFilePath = true, want false for a real path")

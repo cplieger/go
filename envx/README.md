@@ -1,10 +1,10 @@
 # envx
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/envx.svg)](https://pkg.go.dev/github.com/cplieger/go/envx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=envx%2Fgo.mod)](https://github.com/cplieger/go/blob/main/envx/go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/go/envx/v2.svg)](https://pkg.go.dev/github.com/cplieger/go/envx/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/go?filename=envx%2Fgo.mod)](https://github.com/cplieger/go/blob/main/envx/go.mod)
 
 envx configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it.
 
-It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside), which uses only the standard library. It is licensed under Apache-2.0.
+It replaces the `os.Getenv`, `strconv` and `KEY_FILE` code a service otherwise writes at startup. envx depends only on [pathinside](https://github.com/cplieger/go/tree/main/pathinside) and [masked](https://github.com/cplieger/go/tree/main/masked), which use only the standard library. It is licensed under Apache-2.0.
 
 ## Why use it
 
@@ -13,14 +13,14 @@ envx is built for Go services in containers, configured by compose or Kubernetes
 - `Bool`, `Int` and `Duration` return your default for an unset, empty or malformed value. A malformed one also logs a warning through `slog.Default()` naming the variable.
 - A key name no variable can have, such as `APP LISTEN`, panics on first read. Otherwise the getter would return its default forever.
 - `Require` returns a typed error, so startup can report every missing variable at once.
-- `Secret` reads `KEY_FILE` before `KEY`, caps the file at 1 MB and keeps the secret out of every error and log line.
+- `Secret` reads `KEY_FILE` before `KEY`, caps the file at 1 MiB and returns the value as a `masked.Secret`, which no error, log line, JSON body or debug dump shows.
 
 Consider [caarlos0/env](https://github.com/caarlos0/env) if you want your whole config parsed into a tagged struct, with float, slice, map and custom-type parsers.
 
 ## Install
 
 ```sh
-go get github.com/cplieger/go/envx@latest
+go get github.com/cplieger/go/envx/v2@latest
 ```
 
 ## Usage
@@ -50,7 +50,12 @@ if envx.IsBlankSecretFilePath("APP_API_KEY") {
 	os.Exit(1)
 }
 
-apiKey, err := envx.Secret("APP_API_KEY")
+apiKey, err := envx.Secret("APP_API_KEY") // a masked.Secret
+if err != nil {
+	slog.Error("startup", "error", err)
+	os.Exit(1)
+}
+req.Header.Set("X-Api-Key", apiKey.Reveal()) // reveal it only where it is sent
 ```
 
 Keep a `run(os.Args, os.Getenv)` test seam and still get the typed getters:
@@ -72,10 +77,10 @@ The runnable examples on pkg.go.dev show more cases, and `go test` keeps them tr
 
 - Getters: `String`, `Bool`, `Int` and `Duration`, which take the variable name as a `Key`.
 - Strict getters that return a malformed value as an error and never log: `BoolStrict`, `IntStrict`, `DurationStrict` and `ParseError`.
-- Required values and secrets: `Require`, `Secret`, `SecretWithSource`, `IsBlankSecretFilePath`, `MissingError` and one error value for each way a secret file can fail.
+- Required values and secrets: `Require`, `Secret` and `SecretWithSource` (which return a `masked.Secret`), `IsBlankSecretFilePath`, `MissingError` and one error value for each way a secret file can fail.
 - An injected environment: `Source`, which carries the getters, the strict getters and `Require` as methods.
 
-The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/envx).
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/envx/v2).
 
 ## Behavior contract
 
@@ -100,6 +105,13 @@ These are deliberate non-goals:
 - Accepting a malformed key name with a warning.
 
 [Non-goals](docs/non-goals.md) gives the reason for each.
+
+## Moving from v1
+
+- Change every import of `github.com/cplieger/go/envx` to `github.com/cplieger/go/envx/v2`.
+- `Secret` and `SecretWithSource` return a `masked.Secret` from [masked](https://github.com/cplieger/go/tree/main/masked) where they returned a `string`. Hold the `masked.Secret` in your config and call `Reveal()` where the value is sent, such as in a header or a hash. Test for an absent secret with `IsZero()`, and compare two with `Equal`, since `==` on a `masked.Secret` does not compile.
+
+Everything else carries over from v1.1.0 unchanged.
 
 ## Documentation
 

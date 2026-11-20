@@ -34,7 +34,7 @@ Event names that start with `sse:` are reserved for these frames. `Wire` is the 
 
 ## The hello and its verdicts
 
-The hello's data is a JSON object with eight fields, and a ninth, `conn`, on a connection served with `WithRequestScope`:
+The hello's data is a JSON object with eight fields, a ninth, `conn`, on a connection served with `WithRequestScope`, and a tenth, `build`, from a hub built with `WithBuild`:
 
 | Field | Meaning |
 | --- | --- |
@@ -47,6 +47,9 @@ The hello's data is a JSON object with eight fields, and a ninth, `conn`, on a c
 | `keepalive_ms` | the keepalive interval in milliseconds |
 | `keepalive_event` | the keepalive frame's name, empty for the comment form |
 | `conn` | the 22-character id that names this connection to the scope endpoint, absent unless the connection can be rescoped; it is a capability, so never log it |
+| `build` | the server's build, a string set once per process by `WithBuild`, absent when none is set |
+
+A client ignores a hello field it does not know, so a field added that way leaves `Wire` unchanged.
 
 A client branches on `resumed` only. The verdict is one of seven values:
 
@@ -118,12 +121,12 @@ For a non-empty `subjects` list, `must_refetch` is true when the request epoch i
 
 ## Digest refusals
 
-The handler refuses a request with a JSON error body:
+The handler refuses a request through the hub's `WithErrors` responder, by default httpserver's `WriteError`, which writes the [JSON error envelope](https://github.com/cplieger/go/blob/main/httpserver/docs/requests-and-responses.md#errors). Its `code` is one of these:
 
 - 405 `digest_method`, with `Allow: POST`, for any method other than `POST`.
 - 415 `digest_content_type` when `Content-Type` is not `application/json`.
 - 413 `digest_too_large` for a body over the cap.
-- 400 `digest_invalid` for malformed JSON or for the first broken rule, which the message names.
+- 400 `digest_invalid` for malformed JSON or for the first broken rule, which the `message` names.
 
 The rules, checked in field order:
 

@@ -1,0 +1,401 @@
+{
+  "components": {
+    "schemas": {
+      "ArchivedPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "offset": {
+            "maximum": 999999999999999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prev_cursor": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "total": {
+            "maximum": 999999999999999,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["items", "offset", "total", "state"],
+        "type": "object"
+      },
+      "Handle": {
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["value"],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "key": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["key"],
+        "type": "object"
+      },
+      "ItemPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "offset": {
+            "maximum": 999999999999999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prev_cursor": {
+            "type": "string"
+          },
+          "total": {
+            "maximum": 999999999999999,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["items", "offset", "total"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "page fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/groups/{group}/items": {
+      "get": {
+        "description": "List a group's items.",
+        "operationId": "groups.items",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List a group's items"
+      }
+    },
+    "/api/handles": {
+      "get": {
+        "description": "Seal a handle.",
+        "operationId": "handles.seal",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handle"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Seal a handle"
+      }
+    },
+    "/api/items": {
+      "get": {
+        "description": "List items.",
+        "operationId": "items.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List items"
+      }
+    },
+    "/api/items/archived": {
+      "get": {
+        "description": "List archived items.",
+        "operationId": "items.archived",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List archived items"
+      }
+    },
+    "/api/items/scoped": {
+      "get": {
+        "description": "List a scope's items.",
+        "operationId": "items.scoped",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Scope",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Zone",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List a scope's items"
+      }
+    },
+    "/api/public/handles": {
+      "get": {
+        "description": "Seal a public handle.",
+        "operationId": "handles.public",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handle"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Seal a public handle"
+      }
+    },
+    "/api/public/items": {
+      "get": {
+        "description": "List public items.",
+        "operationId": "items.public",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List public items"
+      }
+    }
+  }
+}

@@ -21,11 +21,7 @@ type rateLimitConfig struct {
 
 // WithRateLimitError sets the error code and message written in the 429 JSON
 // envelope (via WriteError). Defaults to "rate_limited" / "rate limit
-// exceeded".
-//
-// code is the machine token and msg the sentence; they are separately typed
-// (see ErrorCode) so the pair cannot be supplied transposed. An empty code
-// omits the field.
+// exceeded". A code outside CodeSpecs carries an empty remediation.
 func WithRateLimitError(code ErrorCode, msg string) RateLimitOption {
 	return func(c *rateLimitConfig) {
 		c.code, c.msg = code, msg
@@ -80,8 +76,7 @@ func WithRateLimitWhen(pred func(*http.Request) bool) RateLimitOption {
 // requests and all clients — so it bounds the AGGREGATE rate of the wrapped
 // route. That is the right tool for capping an expensive shared resource (for
 // example, spawning a heavy child process per request), not for per-client
-// fairness. Per-client limiting is intentionally out of scope; a caller behind
-// a trusted proxy that needs it can key its own buckets on ClientIP.
+// fairness. Per-client and per-key limits are KeyedRateLimiter.
 //
 // A non-positive burst or a non-positive interval disables limiting: the
 // middleware returns the next handler unwrapped (mirroring RouteTimeout's

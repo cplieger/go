@@ -1,0 +1,596 @@
+{
+  "PatternJSONString": {
+    "pattern": "^\"(?:[^\"\\\\\\x00-\\x1F]|\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4}))*\"$",
+    "cases": [
+      {
+        "input": "\"\"",
+        "match": true
+      },
+      {
+        "input": "\"abc\"",
+        "match": true
+      },
+      {
+        "input": "\"a b\"",
+        "match": true
+      },
+      {
+        "input": "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"",
+        "match": true
+      },
+      {
+        "input": "\"\\u00e9\\uD83D\\ude00\"",
+        "match": true
+      },
+      {
+        "input": "\"\u2028\"",
+        "match": true
+      },
+      {
+        "input": "\"\ud83d\ude00\"",
+        "match": true
+      },
+      {
+        "input": "\"\u00e9\"",
+        "match": true
+      },
+      {
+        "input": "\"\ud800\"",
+        "match": true
+      },
+      {
+        "input": "\"\u007f\"",
+        "match": true
+      },
+      {
+        "input": "\"\u0085\"",
+        "match": true
+      },
+      {
+        "input": "",
+        "match": false
+      },
+      {
+        "input": "\"",
+        "match": false
+      },
+      {
+        "input": "abc",
+        "match": false
+      },
+      {
+        "input": "\"abc",
+        "match": false
+      },
+      {
+        "input": "abc\"",
+        "match": false
+      },
+      {
+        "input": "\"a\"b\"",
+        "match": false
+      },
+      {
+        "input": "\"\\\"",
+        "match": false
+      },
+      {
+        "input": "\"\\x41\"",
+        "match": false
+      },
+      {
+        "input": "\"\\u00e\"",
+        "match": false
+      },
+      {
+        "input": "\"\\U00e9\"",
+        "match": false
+      },
+      {
+        "input": "\"\r\"",
+        "match": false
+      },
+      {
+        "input": "\"\n\"",
+        "match": false
+      },
+      {
+        "input": "\"\t\"",
+        "match": false
+      },
+      {
+        "input": "\"\u0000\"",
+        "match": false
+      },
+      {
+        "input": "\"\u001f\"",
+        "match": false
+      },
+      {
+        "input": "\"a\"\n",
+        "match": false
+      },
+      {
+        "input": "\n\"a\"",
+        "match": false
+      },
+      {
+        "input": "\"a\" ",
+        "match": false
+      },
+      {
+        "input": "'a'",
+        "match": false
+      }
+    ]
+  },
+  "PatternJSONNumber": {
+    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$",
+    "cases": [
+      {
+        "input": "0",
+        "match": true
+      },
+      {
+        "input": "-0",
+        "match": true
+      },
+      {
+        "input": "7",
+        "match": true
+      },
+      {
+        "input": "-12",
+        "match": true
+      },
+      {
+        "input": "1.5",
+        "match": true
+      },
+      {
+        "input": "0.25",
+        "match": true
+      },
+      {
+        "input": "1e5",
+        "match": true
+      },
+      {
+        "input": "1E5",
+        "match": true
+      },
+      {
+        "input": "1e+5",
+        "match": true
+      },
+      {
+        "input": "1e-5",
+        "match": true
+      },
+      {
+        "input": "-1.5e300",
+        "match": true
+      },
+      {
+        "input": "123456789012345678901234567890",
+        "match": true
+      },
+      {
+        "input": "",
+        "match": false
+      },
+      {
+        "input": "-",
+        "match": false
+      },
+      {
+        "input": "01",
+        "match": false
+      },
+      {
+        "input": "-01",
+        "match": false
+      },
+      {
+        "input": "00",
+        "match": false
+      },
+      {
+        "input": "+1",
+        "match": false
+      },
+      {
+        "input": "1.",
+        "match": false
+      },
+      {
+        "input": ".5",
+        "match": false
+      },
+      {
+        "input": "1.e5",
+        "match": false
+      },
+      {
+        "input": "1e",
+        "match": false
+      },
+      {
+        "input": "1e+",
+        "match": false
+      },
+      {
+        "input": "0x10",
+        "match": false
+      },
+      {
+        "input": "Infinity",
+        "match": false
+      },
+      {
+        "input": "NaN",
+        "match": false
+      },
+      {
+        "input": "1 ",
+        "match": false
+      },
+      {
+        "input": " 1",
+        "match": false
+      },
+      {
+        "input": "1\n",
+        "match": false
+      },
+      {
+        "input": "1\r",
+        "match": false
+      },
+      {
+        "input": "1\u2028",
+        "match": false
+      },
+      {
+        "input": "\uff11",
+        "match": false
+      },
+      {
+        "input": "\u0663",
+        "match": false
+      },
+      {
+        "input": "1,5",
+        "match": false
+      },
+      {
+        "input": "1_000",
+        "match": false
+      }
+    ]
+  },
+  "PatternJSONInt": {
+    "pattern": "^-?(?:0|[1-9][0-9]*)$",
+    "cases": [
+      {
+        "input": "0",
+        "match": true
+      },
+      {
+        "input": "-0",
+        "match": true
+      },
+      {
+        "input": "5",
+        "match": true
+      },
+      {
+        "input": "-5",
+        "match": true
+      },
+      {
+        "input": "9223372036854775807",
+        "match": true
+      },
+      {
+        "input": "-9223372036854775808",
+        "match": true
+      },
+      {
+        "input": "123456789012345678901234567890",
+        "match": true
+      },
+      {
+        "input": "",
+        "match": false
+      },
+      {
+        "input": "-",
+        "match": false
+      },
+      {
+        "input": "01",
+        "match": false
+      },
+      {
+        "input": "-01",
+        "match": false
+      },
+      {
+        "input": "+5",
+        "match": false
+      },
+      {
+        "input": "5x",
+        "match": false
+      },
+      {
+        "input": "x",
+        "match": false
+      },
+      {
+        "input": "1.0",
+        "match": false
+      },
+      {
+        "input": "1e3",
+        "match": false
+      },
+      {
+        "input": " 5",
+        "match": false
+      },
+      {
+        "input": "5 ",
+        "match": false
+      },
+      {
+        "input": "5\n",
+        "match": false
+      },
+      {
+        "input": "5\r",
+        "match": false
+      },
+      {
+        "input": "5\u2028",
+        "match": false
+      },
+      {
+        "input": "\uff15",
+        "match": false
+      },
+      {
+        "input": "\u0665",
+        "match": false
+      },
+      {
+        "input": "\ud835\udfd3",
+        "match": false
+      }
+    ]
+  },
+  "PatternJSONUint": {
+    "pattern": "^(?:0|[1-9][0-9]*)$",
+    "cases": [
+      {
+        "input": "0",
+        "match": true
+      },
+      {
+        "input": "5",
+        "match": true
+      },
+      {
+        "input": "18446744073709551615",
+        "match": true
+      },
+      {
+        "input": "123456789012345678901234567890",
+        "match": true
+      },
+      {
+        "input": "",
+        "match": false
+      },
+      {
+        "input": "-0",
+        "match": false
+      },
+      {
+        "input": "-5",
+        "match": false
+      },
+      {
+        "input": "007",
+        "match": false
+      },
+      {
+        "input": "00",
+        "match": false
+      },
+      {
+        "input": "+5",
+        "match": false
+      },
+      {
+        "input": "5x",
+        "match": false
+      },
+      {
+        "input": "1.0",
+        "match": false
+      },
+      {
+        "input": "1e3",
+        "match": false
+      },
+      {
+        "input": "5\n",
+        "match": false
+      },
+      {
+        "input": "\n5",
+        "match": false
+      },
+      {
+        "input": "5\r",
+        "match": false
+      },
+      {
+        "input": "5\u2028",
+        "match": false
+      },
+      {
+        "input": "\uff15",
+        "match": false
+      }
+    ]
+  },
+  "PatternJSONBool": {
+    "pattern": "^(?:true|false)$",
+    "cases": [
+      {
+        "input": "true",
+        "match": true
+      },
+      {
+        "input": "false",
+        "match": true
+      },
+      {
+        "input": "",
+        "match": false
+      },
+      {
+        "input": "True",
+        "match": false
+      },
+      {
+        "input": "FALSE",
+        "match": false
+      },
+      {
+        "input": "t",
+        "match": false
+      },
+      {
+        "input": "1",
+        "match": false
+      },
+      {
+        "input": "truefalse",
+        "match": false
+      },
+      {
+        "input": "true ",
+        "match": false
+      },
+      {
+        "input": " false",
+        "match": false
+      },
+      {
+        "input": "true\n",
+        "match": false
+      },
+      {
+        "input": "false\r",
+        "match": false
+      },
+      {
+        "input": "true\u2028",
+        "match": false
+      },
+      {
+        "input": "\"true\"",
+        "match": false
+      },
+      {
+        "input": "null",
+        "match": false
+      }
+    ]
+  },
+  "PatternHeader": {
+    "pattern": "^[\\x20-\\x7E]*$",
+    "cases": [
+      {
+        "input": "",
+        "match": true
+      },
+      {
+        "input": "abc",
+        "match": true
+      },
+      {
+        "input": " ",
+        "match": true
+      },
+      {
+        "input": "~",
+        "match": true
+      },
+      {
+        "input": "a \"quoted\" value; q=0.5",
+        "match": true
+      },
+      {
+        "input": "Bearer abc.def-ghi_jkl",
+        "match": true
+      },
+      {
+        "input": "\t",
+        "match": false
+      },
+      {
+        "input": "a\tb",
+        "match": false
+      },
+      {
+        "input": "\r",
+        "match": false
+      },
+      {
+        "input": "\n",
+        "match": false
+      },
+      {
+        "input": "a\r\nb",
+        "match": false
+      },
+      {
+        "input": "\u0000",
+        "match": false
+      },
+      {
+        "input": "\u001f",
+        "match": false
+      },
+      {
+        "input": "\u007f",
+        "match": false
+      },
+      {
+        "input": "\u0080",
+        "match": false
+      },
+      {
+        "input": "\u00e9",
+        "match": false
+      },
+      {
+        "input": "\u2028",
+        "match": false
+      },
+      {
+        "input": "\ud83d\ude00",
+        "match": false
+      },
+      {
+        "input": "\ud800",
+        "match": false
+      }
+    ]
+  }
+}

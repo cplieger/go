@@ -1,6 +1,6 @@
 # go
 
-These are the general-purpose Go libraries the cplieger projects build on, one Go module per directory. Each module has its own version, its own tags (`<module>/vX.Y.Z`) and its own README, and you import it by its directory:
+These are the general-purpose Go libraries the cplieger projects build on, one Go module per directory. Each module has its own version, its own tags (`<module>/vX.Y.Z`) and its own README, and you import it by its directory, with `/vN` added from major 2 (each module's README gives its exact `go get` line):
 
 ```sh
 go get github.com/cplieger/go/<module>@latest
@@ -30,7 +30,9 @@ Nothing here imports a cplieger repository outside this one.
 | --- | --- |
 | [`httpclient`](httpclient) | Makes your Go HTTP calls survive flaky servers, with retries, backoff and Retry-After built in. |
 | [`httpcache`](httpcache) | Makes your Go client's repeated GET requests cost less: when the server answers `304 Not Modified`, the answer comes from memory. |
-| [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown. |
+| [`httpserver`](httpserver) | Hardens your Go `net/http` server with access logging, security headers, a client IP that cannot be spoofed and graceful shutdown, and serves a single-page app under a strict Content-Security-Policy. |
+| [`httpwire`](httpwire) | Declares your Go app's JSON API once, as a table of rows that binds typed handlers, answers one error envelope and replays idempotent writes, with a matching TypeScript decoder for the browser. |
+| [`ownersock`](ownersock) | Gives your Go app an admin socket that only processes running as the app's own user can reach, serving HTTP over a unix socket with a client whose errors tell the command-line user what to do. |
 | [`sse`](sse) | Keeps browser tabs in step with your Go server's Server-Sent Events through sleep, reconnects and restarts, with a Go hub and a matching TypeScript browser client. |
 
 ### Service runtime
@@ -38,7 +40,9 @@ Nothing here imports a cplieger repository outside this one.
 | Module | What it does |
 | --- | --- |
 | [`slogx`](slogx) | Gives every Go service the same `log/slog` setup in one call, with text or JSON output, UTC timestamps, a level you can change at run time and `LOG_LEVEL` parsing. |
-| [`envx`](envx) | Configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it. |
+| [`masked`](masked) | Holds passwords, tokens and API keys in memory so that no log line, error message, JSON body or debug dump shows them, with test checks that find a field or printer that would. |
+| [`sealed`](sealed) | Keeps your Go app's key file and seals its cookies, cursors and stored secrets under it with AES-256-GCM, with key rotation that tells you which values to seal again. |
+| [`envx`](envx) | Configures your Go app from environment variables and Docker secrets, with typed getters that fall back to your defaults and log a typo instead of hiding it, and secrets that come back masked. |
 | [`yamlenv`](yamlenv) | Loads a YAML config file and fills `${VAR}` references from the environment after parsing, so a value cannot change the file's structure. |
 | [`health`](health) | Gives a Go service one health verdict, kept in memory, served at `GET /healthz` and checked by the same binary when Docker asks, with no shell, curl or wget. |
 | [`measure`](measure) | Gives your Go service a Prometheus `/metrics` endpoint with counters, gauges, histograms, state sets and process metrics, declaring each series' unit once for the page and your charts, using only the standard library. |
@@ -52,6 +56,7 @@ Nothing here imports a cplieger repository outside this one.
 | Module | What it does |
 | --- | --- |
 | [`wiregen`](wiregen) | Generates TypeScript types, validating JSON decoders, a typed HTTP client and an OpenAPI 3.1 document from your Go structs and endpoint table, so your TypeScript front end checks every payload your Go server sends. |
+| [`webbundle`](webbundle) | Builds your single-page app's web bundle at build time with esbuild: content-hashed scripts and stylesheets, shells that name them, licence notices, icons and the manifest `httpserver` serves. |
 
 ## Disclaimer
 

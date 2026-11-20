@@ -62,6 +62,13 @@ export interface WorkerHostOptions extends Omit<
    * and it must pass a frame the app published as a broadcast. A throw delivers the frame.
    */
   readonly deliver?: (frame: Frame, scope: ReadonlySet<string>) => boolean;
+  /**
+   * Folded over every frame the stream delivers, in order, into the host's retained frame, which
+   * each attaching tab receives before any later frame (the change feed passes `retainListening`).
+   * The retained frame is cleared when the connection ends; a throw drops it, is reported with
+   * `reportError`, and reconnects the stream.
+   */
+  readonly retain?: (retained: Frame | null, frame: Frame) => Frame | null;
 }
 
 /** The host's stream: the host owns its scope, the union of its tabs' scopes, so no setScope. */
@@ -145,6 +152,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
   let lastDeliverFailed = -1;
   let union: readonly string[] | null = null;
   let helloGeneration = -1;
+  let retained: Frame | null = null;
 
   const now = (): number => Date.now();
 
@@ -175,7 +183,13 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
   }
 
   function portContext(ctx: RevalidateContext, verdict?: DigestVerdict): PortRevalidateContext {
-    const base = { cause: ctx.cause, epoch: ctx.epoch, generation: ctx.generation, full: ctx.full };
+    const base = {
+      cause: ctx.cause,
+      epoch: ctx.epoch,
+      generation: ctx.generation,
+      full: ctx.full,
+      build: ctx.build,
+    };
     return verdict === undefined
       ? base
       : { ...base, changed: [...verdict.changed], removed: [...verdict.removed] };
@@ -267,9 +281,13 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         post(entry, message);
         entry.unacked++;
       }
+      retainFrame(frame);
     },
     onLifecycle(event) {
       if (event.kind === "state") {
+        if (event.from === "open") {
+          retained = null;
+        }
         broadcast({ type: "state", state: stream.state(), scope: true });
         if (event.to === "stopped") {
           failPendingScopes("stopped");
@@ -294,6 +312,19 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       }
     }
   });
+
+  function retainFrame(frame: Frame): void {
+    if (opts.retain === undefined) {
+      return;
+    }
+    try {
+      retained = opts.retain(retained, frame);
+    } catch (e: unknown) {
+      reportError(e);
+      // Leaving open clears the retained frame.
+      stream.reconnect();
+    }
+  }
 
   /** Whether the port's scope draws the frame; a throwing predicate fails open, recorded once. */
   function draws(entry: PortEntry, frame: Frame): boolean {
@@ -464,6 +495,7 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
         epoch: opts.versions.epoch(),
         generation: stream.state().generation,
         full: true,
+        build: controls.build(),
       },
     });
   }
@@ -528,6 +560,12 @@ export function createWorkerHost(opts: WorkerHostOptions): WorkerHost {
       perPortFull(entry);
     }
     const state = stream.state();
+    // The host is one thread and the stream fans only to registered ports, so the retained frame
+    // reaches this tab before any later frame.
+    if (retained !== null) {
+      post(entry, { type: "frame", frame: retained, generation: state.generation });
+      entry.unacked++;
+    }
     post(entry, { type: "state", state, scope: true });
     emit({ kind: "tab_attached", replaced, state: state.kind });
   }

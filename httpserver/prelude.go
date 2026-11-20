@@ -199,23 +199,11 @@ func RequireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return true
 }
 
-// DecodeJSONInto caps the request body at maxBytes (via LimitBody) and decodes
-// exactly one JSON value into v, rejecting trailing data (a second value or any
-// bytes past the first are an error). It returns the decode error and writes
-// NOTHING to w — so callers that layer their own error taxonomy or need a
-// non-default cap can map the result themselves. The returned error is:
-//
-//   - a *http.MaxBytesError (test with errors.As) when the body exceeded
-//     maxBytes — the caller decides 413 vs 400;
-//   - ErrTrailingData when a second JSON value follows the first;
-//   - otherwise the underlying *json.SyntaxError / *json.UnmarshalTypeError /
-//     io.EOF (empty body) for a malformed body — typically a 400.
-//
-// It is the shared mechanism behind DecodeBody: DecodeBody is DecodeJSONInto at
-// the MaxJSONBody cap plus a coded-400 WriteError on any error. Apps with a
-// bare {"error":…} envelope, a per-endpoint size cap, or a 413/400 split (see
-// the httpserver consumers) build their own one-liner on it instead of reproducing
-// the cap + decode + trailing-check by hand.
+// DecodeJSONInto caps the body at maxBytes (LimitBody) and decodes exactly one
+// JSON value into v, writing nothing to w. Its error is a *http.MaxBytesError
+// past the cap (the caller picks 413 or 400), ErrTrailingData when a second
+// value follows, or the decoder's own error for a malformed or empty body.
+// DecodeBody is this at MaxJSONBody plus a 400 bad_request.
 func DecodeJSONInto(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) error {
 	LimitBody(w, r, maxBytes)
 	dec := json.NewDecoder(r.Body)

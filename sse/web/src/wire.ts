@@ -31,6 +31,8 @@ export interface Hello {
    * stream treats as a scope refusal rather than a bad hello, so it cannot take the stream down.
    */
   readonly conn?: string | null;
+  /** The server's build stamp, absent when the server set none. */
+  readonly build?: string;
 }
 
 const CONN_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -155,6 +157,7 @@ export function validateHello(
     return BAD_HELLO;
   }
   const verdict = record["verdict"];
+  const build = record["build"];
   const hello: Hello = {
     wire,
     epoch,
@@ -164,6 +167,7 @@ export function validateHello(
     verdict: typeof verdict === "string" ? verdict : "",
     keepalive_ms: keepaliveMs,
     keepalive_event: keepaliveEvent,
+    ...(typeof build === "string" && build !== "" ? { build } : {}),
   };
   if (!("conn" in record)) {
     return { ok: true, hello };

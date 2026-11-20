@@ -1,0 +1,350 @@
+{
+  "components": {
+    "schemas": {
+      "Job": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pad": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "pad"],
+        "type": "object"
+      },
+      "JobBody": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": ["kind", "size"],
+        "type": "object"
+      },
+      "NoteBody": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": ["text"],
+        "type": "object"
+      },
+      "RegisterBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-max-bytes": 32
+          }
+        },
+        "required": ["name"],
+        "type": "object"
+      },
+      "User": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "created"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "keyed fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/files": {
+      "get": {
+        "description": "Read a file.",
+        "operationId": "files.get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read a file"
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "description": "Read the jobs.",
+        "operationId": "jobs.read",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the jobs"
+      },
+      "post": {
+        "description": "Start a job.",
+        "operationId": "jobs.start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Accepted"
+          }
+        },
+        "summary": "Start a job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600,
+          "result": "jobs.read"
+        }
+      }
+    },
+    "/api/jobs/quick": {
+      "post": {
+        "description": "Run a quick job.",
+        "operationId": "jobs.quick",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Run a quick job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    },
+    "/api/jobs/{id}/retry": {
+      "post": {
+        "description": "Retry a job.",
+        "operationId": "jobs.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 64
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Retry a job",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    },
+    "/api/notes": {
+      "put": {
+        "description": "Save the note.",
+        "operationId": "notes.save",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Save the note",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    },
+    "/api/notes/touch": {
+      "post": {
+        "description": "Touch the note.",
+        "operationId": "notes.touch",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Touch the note"
+      }
+    },
+    "/api/users": {
+      "get": {
+        "description": "Read the users.",
+        "operationId": "users.read",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the users"
+      },
+      "post": {
+        "description": "Register a user.",
+        "operationId": "users.register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "Created"
+          }
+        },
+        "summary": "Register a user",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600,
+          "result": "users.read"
+        }
+      }
+    }
+  }
+}

@@ -22,10 +22,10 @@ func TestEvent_OKIsExplicitOnTheWire(t *testing.T) {
 	}
 }
 
-// TestEvent_WireNamesAreTheFleetContract pins the frame field names and event
+// TestEvent_WireNamesAreTheShippedContract pins the frame field names and event
 // kinds the three shipped schedulers already speak: renaming any of them
 // would break a mixed-version client/daemon pair mid-image-update.
-func TestEvent_WireNamesAreTheFleetContract(t *testing.T) {
+func TestEvent_WireNamesAreTheShippedContract(t *testing.T) {
 	t.Parallel()
 	raw, err := json.Marshal(Event{Kind: EventDone, Reason: "r", DurationMs: 7, OK: true})
 	if err != nil {

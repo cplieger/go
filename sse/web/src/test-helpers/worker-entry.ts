@@ -1,13 +1,12 @@
 import { createDigestClient } from "../digest.js";
+import { feedHostOptions } from "../feed/host-options.js";
 import type { RevalidateContext } from "../stream.js";
 import { createVersionMap } from "../versions.js";
 import { type TabSet, createWorkerHost } from "../worker.js";
 
-/**
- * The SharedWorker script of the browser suite. The fixture URL and timing overrides ride the
- * worker URL's query (`fixture`, `heartbeat`, `hidden`); test-only messages on a port
- * (`test:close`, `test:block`, `test:pause`, `test:suppress-alive`) drive the failure cases.
- */
+// The browser suites' SharedWorker. Query: `fixture`, `heartbeat`, `hidden`, `silent=1` (posts
+// nothing), and `stream`, which runs the feed entry's host. Port messages `test:close`,
+// `test:block`, `test:pause`, `test:suppress-alive` and `test:silence` drive the failure cases.
 
 interface SharedScope {
   onconnect: ((event: MessageEvent) => void) | null;
@@ -16,7 +15,8 @@ interface SharedScope {
 }
 
 interface TestMessage {
-  readonly type: "test:close" | "test:block" | "test:pause" | "test:suppress-alive";
+  readonly type:
+    "test:close" | "test:block" | "test:pause" | "test:suppress-alive" | "test:silence";
   readonly ms?: number;
   readonly on?: boolean;
 }
@@ -29,6 +29,9 @@ const hiddenCloseAfterMs = Number(params.get("hidden") ?? "60000");
 
 let paused = false;
 let suppressAlive = false;
+// A silenced worker is alive but posts nothing, with no error event: the lost worker the
+// tab's watchdog must notice.
+let silenced = params.get("silent") === "1";
 
 // The heartbeat interval is the one timer the suite stalls; wrapping setInterval is how a
 // page can hold it without touching the host.
@@ -71,13 +74,12 @@ async function revalidate(ctx: RevalidateContext, tabs: TabSet): Promise<void> {
 }
 
 const host = createWorkerHost({
-  url: `${fixture}/events`,
+  ...(params.has("stream")
+    ? feedHostOptions(scope.location.href)
+    : { url: `${fixture}/events`, versions, alive: { url: `${fixture}/alive` }, revalidate }),
   fetch: gatedFetch,
-  versions,
   heartbeatMs,
   timing: { hiddenCloseAfterMs },
-  alive: { url: `${fixture}/alive` },
-  revalidate,
 });
 
 function isTestMessage(value: unknown): value is TestMessage {
@@ -101,6 +103,12 @@ scope.onconnect = (event: MessageEvent) => {
   if (port === undefined) {
     return;
   }
+  const post = port.postMessage.bind(port);
+  port.postMessage = ((...args: Parameters<typeof post>) => {
+    if (!silenced) {
+      post(...args);
+    }
+  }) as typeof port.postMessage;
   port.addEventListener("message", (message: MessageEvent) => {
     const data: unknown = message.data;
     if (!isTestMessage(data)) {
@@ -121,6 +129,9 @@ scope.onconnect = (event: MessageEvent) => {
         return;
       case "test:suppress-alive":
         suppressAlive = data.on ?? false;
+        return;
+      case "test:silence":
+        silenced = true;
         return;
     }
   });

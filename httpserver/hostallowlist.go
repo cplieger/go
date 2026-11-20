@@ -8,63 +8,14 @@ import (
 	"strings"
 )
 
-// CanonicalHost parses an HTTP Host header value (or a configured allowlist
-// entry) into its canonical host for exact comparison, returning "" when the
-// value is not a well-formed authority. Accepted shapes, per the RFC 3986
-// authority grammar:
-//
-//   - a DNS name of ASCII labels (letters, digits, hyphens, and underscores —
-//     Docker Compose service names carry underscores — 63 bytes max per
-//     label), optionally ending in one FQDN dot, optionally followed by one
-//     ":port" (digits, at most 65535)
-//   - an IPv4 literal, with the same optional trailing dot and :port
-//   - a bare IPv6 literal (no port: an unbracketed colon-bearing value can
-//     only be an address, never host:port)
-//   - a bracketed IPv6 literal "[...]", optionally followed by ":port"
-//
-// The canonical form is lowercase with no port, no brackets, and no trailing
-// dot; IP literals are rendered through net.ParseIP so textually different
-// spellings of one address (::1 vs 0:0:0:0:0:0:0:1, [::ffff:192.0.2.1] vs
-// 192.0.2.1) compare equal. The function is idempotent:
-// CanonicalHost(CanonicalHost(x)) == CanonicalHost(x).
-//
-// Lowercasing is ASCII-ONLY (lowerASCIIString), not strings.ToLower, and that
-// is load-bearing rather than an optimization. Unicode simple case mapping
-// lowercases two already-assigned runes INTO ASCII — U+0130 LATIN CAPITAL
-// LETTER I WITH DOT ABOVE to "i" and U+212A KELVIN SIGN to "k" — so under
-// strings.ToLower a Host of "\u212Aibana.example" canonicalized to
-// "kibana.example" and an allowlist holding the ASCII name admitted it, from
-// any peer. That is the same widening the reject-never-repair rule below
-// exists to prevent, arriving through the case fold instead of the grammar.
-// With an ASCII fold every non-ASCII byte survives the fold and validHostname
-// then refuses it, which is what makes the byte-exact claim above true.
-//
-// Everything else returns "": stray or unmatched brackets, a bracketed
-// non-IPv6 ("[allowed.example]" — brackets are IPv6-only syntax), a
-// non-numeric, out-of-range, or empty port, a second port, more than one
-// trailing dot, an empty label, a non-ASCII name (configure the Punycode
-// A-label, "xn--...", instead — matching is byte-exact and no IDN mapping is
-// performed), and an all-numeric dotted name that net.ParseIP rejects
-// ("127.0.0.001", "0177.0.0.1" — HTTP clients disagree on leading-zero and
-// octal IPv4 forms, so no single textual key can match them safely).
-//
-// The sibling ssrf library carries its own numeric-IPv4 heuristic
-// (looksLikeNumericIPv4) with a deliberately DIFFERENT reject set: ssrf feeds
-// a resolver, so it must also reject dotted-hex forms like "0x7f.0.0.1" that
-// this exact-match key safely accepts (the "x" makes the label a plain DNS
-// label, matchable only if explicitly allowlisted). The two must NOT be
-// unified — see that function's doc for the outbound rationale.
-//
-// Malformed input is REJECTED, never repaired. Deleting the offending syntax
-// instead (stripping stray brackets, truncating at a bad port) would let
-// distinct wire values collapse onto an allowlisted key — "[allowed.example]",
-// "allowed[.]example", and "allowed.example:garbage:443" would all admit as
-// "allowed.example" — silently widening an exact-match allowlist.
-//
-// No name resolution is performed. Resolving a hostname to compare against the
-// request would reopen the very DNS-rebinding race a host allowlist exists to
-// close (the attacker controls what the name resolves to), so matching is
-// purely textual on the canonicalized Host.
+// CanonicalHost parses a Host header value or an allowlist entry into the key
+// exact matching compares: lowercase, with no port, brackets or trailing dot,
+// and an IP literal in net.IP's spelling. It is idempotent, and returns "" for
+// anything that is not a well-formed RFC 3986 authority, never repairing one,
+// since a repair maps distinct wire values onto an allowed key. The fold is
+// ASCII-only: strings.ToLower maps U+212A and U+0130 to "k" and "i". ssrf's
+// numeric-IPv4 check refuses dotted hex, which this accepts as a name; the two
+// answer different questions and stay separate.
 func CanonicalHost(hostport string) string {
 	if ip := net.ParseIP(hostport); ip != nil {
 		return ip.String() // bare IPv4/IPv6 literal
@@ -93,22 +44,47 @@ func CanonicalHost(hostport string) string {
 // are IPv6-only syntax in RFC 3986, so a bracketed hostname or IPv4 literal is
 // rejected, as is anything after "]" that is not exactly one valid ":port".
 func canonicalBracketed(s string) string {
-	end := strings.IndexByte(s, ']')
-	if end < 0 {
+	inner, ok := bracketedHost(s)
+	if !ok {
 		return ""
 	}
-	if rest := s[end+1:]; rest != "" {
-		port, ok := strings.CutPrefix(rest, ":")
-		if !ok || !validPort(port) {
-			return ""
-		}
-	}
-	inner := s[1:end]
 	ip := net.ParseIP(inner)
 	if ip == nil || !strings.Contains(inner, ":") {
 		return ""
 	}
 	return ip.String()
+}
+
+// bracketedHost returns what sits between the brackets of a "[...]" or
+// "[...]:port" authority, false when "]" is missing or anything after it is
+// not exactly one valid ":port".
+func bracketedHost(s string) (string, bool) {
+	end := strings.IndexByte(s, ']')
+	if !strings.HasPrefix(s, "[") || end < 0 {
+		return "", false
+	}
+	if rest := s[end+1:]; rest != "" {
+		port, ok := strings.CutPrefix(rest, ":")
+		if !ok || !validPort(port) {
+			return "", false
+		}
+	}
+	return s[1:end], true
+}
+
+// ipLiteralHost reports whether hostport, canonicalized as canon, is an IP
+// address: canon parses as one, or hostport is a bracketed IPv6 address with a
+// zone, which CanonicalHost refuses so that no allowlist entry holds one.
+func ipLiteralHost(hostport, canon string) bool {
+	if _, err := netip.ParseAddr(canon); err == nil {
+		return true
+	}
+	inner, ok := bracketedHost(hostport)
+	if !ok {
+		return false
+	}
+	a, err := netip.ParseAddr(inner)
+	return err == nil && a.Is6()
 }
 
 // validPort reports whether a port string is all digits and at most 65535.
@@ -158,9 +134,9 @@ type HostAllowlistOption func(*hostPolicyConfig)
 // hostPolicyConfig holds resolved HostPolicy configuration.
 type hostPolicyConfig struct {
 	logger         *slog.Logger
-	code           ErrorCode
-	msg            string
+	responder      ErrorResponder
 	loopbackExempt bool
+	ipLiteralHosts bool
 }
 
 // maxLoggedHost bounds the Host a refusal line records. r.Host is
@@ -169,9 +145,12 @@ type hostPolicyConfig struct {
 // it.
 const maxLoggedHost = 128
 
-// defaultHostRefusalMsg is the 403 message and refusal hint of a policy
-// built with no WithHostAllowlistError.
-const defaultHostRefusalMsg = "host not allowed"
+// The refusal is the same on every listener of every app, so a probe or an
+// alert rule reads one answer.
+const (
+	hostRefusalCode ErrorCode = "host_not_allowed"
+	hostRefusalMsg  string    = "host not allowed"
+)
 
 // WithLoopbackExempt selects whether a request from this host's own network
 // stack bypasses the allowlist: a socket peer and Host that are both loopback,
@@ -185,24 +164,33 @@ func WithLoopbackExempt(exempt bool) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.loopbackExempt = exempt }
 }
 
-// WithHostAllowlistError sets the error code and message written in the 403
-// JSON envelope (via WriteError) when a request's Host is not allowed. Defaults
-// to "host_not_allowed" / "host not allowed". Override it to name the app's own
-// configuration knob, e.g. "host not allowed; add it to KWEB_ALLOWED_HOSTS".
-//
-// code is the machine token and msg the sentence; they are separately typed
-// (see ErrorCode) so the pair cannot be supplied transposed. An empty code
-// omits the field, which is how an app with a bare {"error":…} taxonomy keeps
-// its envelope shape.
-func WithHostAllowlistError(code ErrorCode, msg string) HostAllowlistOption {
+// WithIPLiteralHosts selects whether a Host that is an IP address passes
+// beside the allowlist: IPv4 or IPv6, bracketed IPv6 optionally with a zone as
+// netip.ParseAddr reads one, and a port wherever CanonicalHost takes one. A
+// deployment reached by address keeps working with no entry per address. It
+// is safe because DNS rebinding needs the attacker's name in Host, and an
+// address literal names no one's domain; a name stays under the exact-match
+// list. False, the default, is the same as leaving it out, and options are
+// last-wins.
+func WithIPLiteralHosts(admit bool) HostAllowlistOption {
+	return func(c *hostPolicyConfig) { c.ipLiteralHosts = admit }
+}
+
+// WithHostResponder sets the ErrorResponder that writes Middleware's refusal,
+// in place of WriteError: it receives 403, host_not_allowed and "host not
+// allowed", so an application's catalog writes its own remediation. A nil fn
+// keeps WriteError.
+func WithHostResponder(fn ErrorResponder) HostAllowlistOption {
 	return func(c *hostPolicyConfig) {
-		c.code, c.msg = code, msg
+		if fn != nil {
+			c.responder = fn
+		}
 	}
 }
 
 // WithHostAllowlistLogger sets the slog.Logger that Middleware and LogRefusal
 // report each refusal to. Nil, the default, means slog.Default() as it is when
-// ParseHostList runs. Pass a logger with a discarding handler to silence it.
+// the refusal is logged. Pass a logger with a discarding handler to silence it.
 func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 	return func(c *hostPolicyConfig) { c.logger = l }
 }
@@ -215,58 +203,32 @@ func WithHostAllowlistLogger(l *slog.Logger) HostAllowlistOption {
 type HostPolicy struct {
 	allowed        map[string]struct{}
 	logger         *slog.Logger
-	code           ErrorCode
-	msg            string
+	responder      ErrorResponder
 	loopbackExempt bool
+	ipLiteralHosts bool
 	active         bool
 }
 
-// ParseHostList parses operator-supplied allowlist entries (a config array or a
-// comma-split environment variable) into a HostPolicy, returning the entries it
-// could not use separately — a shape deliberately identical to ParseCIDRs so a
-// strict caller can reject bad input while a lenient caller logs it and
-// proceeds.
-//
-// Each entry is trimmed; a blank entry is skipped and does not engage the gate.
-// A usable entry is canonicalized via CanonicalHost and added to the allowlist.
-// An entry that is not a well-formed host[:port] under CanonicalHost's strict
-// grammar is reported as invalid (returned, never added): a pasted URL
-// ("http://example.com"), a lone port (":9848") that belongs in the bind
-// address, bracket or colon garbage, a non-ASCII name (configure the Punycode
-// A-label instead), or an IP-like numeric string that is not a valid address
-// ("127.0.0.001").
-//
-// Activation, and the fail-closed contract: the policy is INACTIVE only when no
-// non-blank entry was supplied at all (unset or all-whitespace configuration) —
-// then Middleware is a pass-through and Allows returns true, the
-// backward-compatible "accept every Host" default. As soon as ANY non-blank
-// entry is supplied the gate is ACTIVE, even if every entry was invalid: a
-// misconfigured allowlist (all entries malformed) then rejects every request
-// rather than silently disabling the protection. Because invalid entries are
-// returned rather than retained as unmatchable keys, a caller that wants to
-// fail loud can inspect the invalid slice at startup and refuse to boot; a
-// caller that wants to proceed logs it and runs with the valid subset (or, when
-// the subset is empty, a fail-closed deny-all).
-//
-// Pair it with WithLoopbackExempt for a containerized service whose own
-// loopback health check or in-container clients must keep working, and with
-// WithHostAllowlistError to name the app's configuration knob in the 403.
+// ParseHostList parses allowlist entries into a HostPolicy and returns the
+// entries it could not use, as ParseCIDRs does. Each entry is trimmed and
+// canonicalized by CanonicalHost; a blank one is skipped. The policy is
+// inactive (every Host passes) only when no entry is non-blank; any non-blank
+// entry makes it active, so a list of only malformed entries refuses every
+// request instead of switching the check off. A caller that must fail loud
+// refuses to start on a non-empty invalid slice.
 func ParseHostList(entries []string, opts ...HostAllowlistOption) (policy *HostPolicy, invalid []string) {
-	c := &hostPolicyConfig{code: "host_not_allowed", msg: defaultHostRefusalMsg}
+	c := &hostPolicyConfig{responder: WriteError}
 	for _, o := range opts {
 		if o != nil {
 			o(c)
 		}
 	}
-	if c.logger == nil {
-		c.logger = slog.Default()
-	}
 	p := &HostPolicy{
 		allowed:        make(map[string]struct{}),
 		logger:         c.logger,
-		code:           c.code,
-		msg:            c.msg,
+		responder:      c.responder,
 		loopbackExempt: c.loopbackExempt,
+		ipLiteralHosts: c.ipLiteralHosts,
 	}
 	for _, e := range entries {
 		s := strings.TrimSpace(e)
@@ -303,17 +265,26 @@ func (p *HostPolicy) Size() int {
 
 // Allows reports whether the request is admitted. An inactive (or nil) policy
 // admits every request. An active policy admits a request only when its
-// canonicalized Host is in the allowlist, or, when WithLoopbackExempt was set,
-// when the request is local by LoopbackRequest's rule. r.Host is the only
-// host value consulted; X-Forwarded-Host is deliberately ignored (it is
+// canonicalized Host is in the allowlist, when WithIPLiteralHosts was set and
+// the Host is an IP address, or, when WithLoopbackExempt was set, when the
+// request is local by LoopbackRequest's rule. r.Host is the only host value
+// consulted; X-Forwarded-Host is deliberately ignored (it is
 // client-controlled and this check must hold on the direct-exposure path). A
 // malformed Host canonicalizes to "" and can never match.
 func (p *HostPolicy) Allows(r *http.Request) bool {
 	if p == nil || !p.active {
 		return true
 	}
+	return p.admits(r)
+}
+
+// admits applies p's rule to r whether or not p is active.
+func (p *HostPolicy) admits(r *http.Request) bool {
 	host := CanonicalHost(r.Host)
 	if _, ok := p.allowed[host]; ok {
+		return true
+	}
+	if p.ipLiteralHosts && ipLiteralHost(r.Host, host) {
 		return true
 	}
 	if p.loopbackExempt && localRequest(r, host) {
@@ -324,10 +295,10 @@ func (p *HostPolicy) Allows(r *http.Request) bool {
 
 // Middleware returns the allowlist as httpserver middleware. An inactive or nil
 // policy returns the next handler unwrapped, the "off" contract RateLimiter and
-// RouteTimeout share. An active policy answers a disallowed Host with a 403 via
-// WriteError (see WithHostAllowlistError) before the next handler runs, and
-// logs one Warn with the reason, host, remote, hint and, when the context has
-// one, request_id (see WithHostAllowlistLogger). Put it outermost among
+// RouteTimeout share. An active policy answers a disallowed Host with 403
+// host_not_allowed through its responder (WithHostResponder) before the next
+// handler runs, and logs one Warn with the reason, host, remote and, when the
+// context has one, request_id (see WithHostAllowlistLogger). Put it outermost among
 // request-authorization middleware: a DNS-rebinding request makes Origin and
 // Host agree, so only the exact-Host check breaks it (CWE-346).
 func (p *HostPolicy) Middleware() Middleware {
@@ -341,7 +312,7 @@ func (p *HostPolicy) Middleware() Middleware {
 				return
 			}
 			p.LogRefusal(r)
-			WriteError(w, r, http.StatusForbidden, p.code, p.msg)
+			p.responder(w, r, http.StatusForbidden, hostRefusalCode, hostRefusalMsg)
 		})
 	}
 }
@@ -422,16 +393,15 @@ func listenerAddr(r *http.Request) netip.Addr {
 
 // LogRefusal writes the Warn line Middleware writes for a refused Host, for a
 // caller that admits by its own rule and writes its own refusal. It logs
-// through the policy's logger (WithHostAllowlistLogger) with its hint
-// (WithHostAllowlistError); a nil or zero-value policy uses slog.Default and
-// the default hint. The line carries no path, which can hold a token; the
-// access line with the same request_id has it. The Host is empty when the
-// request named none: HTTP/1.0 or HTTP/2 without one, or an empty Host header.
+// through the policy's logger (WithHostAllowlistLogger), or slog.Default as it
+// is at that moment when the policy has none or is nil. The line carries no
+// path, which can hold a token; the access line with the same request_id has
+// it. The Host is empty when the request named none: HTTP/1.0 or HTTP/2
+// without one, or an empty Host header.
 func (p *HostPolicy) LogRefusal(r *http.Request) {
-	if p == nil || p.logger == nil {
-		// ParseHostList always sets the logger, so none means a policy it did
-		// not build.
-		p = &HostPolicy{logger: slog.Default(), msg: defaultHostRefusalMsg}
+	var logger *slog.Logger
+	if p != nil {
+		logger = p.logger
 	}
 	reason := "host not in allowlist"
 	switch {
@@ -444,10 +414,9 @@ func (p *HostPolicy) LogRefusal(r *http.Request) {
 		slog.String("reason", reason),
 		slog.String("host", boundLoggedPath(r.Host, maxLoggedHost)),
 		slog.String("remote", r.RemoteAddr),
-		slog.String("hint", p.msg),
 	}
 	if id := RequestIDFromContext(r.Context()); id != "" {
 		attrs = append(attrs, slog.String("request_id", id))
 	}
-	p.logger.LogAttrs(r.Context(), slog.LevelWarn, "httpserver: host not allowed", attrs...)
+	orDefault(logger).LogAttrs(r.Context(), slog.LevelWarn, "httpserver: host not allowed", attrs...)
 }

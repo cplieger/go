@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -17,7 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/cplieger/go/httpserver"
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 func TestNew_defaults(t *testing.T) {
@@ -892,6 +894,35 @@ func TestWithSlogErrorLog_bridgesNetHTTPLinesIntoSlog(t *testing.T) {
 	}
 	if !strings.Contains(records[0].Message, "Accept error") {
 		t.Errorf("message = %q, want it to carry net/http's line", records[0].Message)
+	}
+}
+
+// A server built before the app installs its logger still bridges into it.
+func TestWithSlogErrorLog_followsALaterDefault(t *testing.T) {
+	srv := httpserver.New(nil, httpserver.WithSlogErrorLog(slog.LevelWarn))
+	capture := &captureHandler{}
+	swapDefaultLogger(t, slog.New(capture))
+	_, file, line, _ := runtime.Caller(0)
+	srv.ErrorLog.Print("http: Accept error: too many open files; retrying")
+	records := capture.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("captured %d records, want 1", len(records))
+	}
+	if records[0].Level != slog.LevelWarn || records[0].Message != "http: Accept error: too many open files; retrying" {
+		t.Errorf("record = %v %q, want Warn with net/http's line", records[0].Level, records[0].Message)
+	}
+	if src := records[0].Source(); src == nil || src.File != file || src.Line != line+1 {
+		t.Errorf("source = %+v, want %s:%d (the log.Logger caller)", src, file, line+1)
+	}
+}
+
+func TestWithSlogErrorLog_dropsALevelTheDefaultDisables(t *testing.T) {
+	var out bytes.Buffer
+	swapDefaultLogger(t, slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelError})))
+	srv := httpserver.New(nil, httpserver.WithSlogErrorLog(slog.LevelWarn))
+	srv.ErrorLog.Print("http: Accept error: too many open files; retrying")
+	if out.Len() != 0 {
+		t.Errorf("an Error-level default wrote a Warn line: %q", out.String())
 	}
 }
 

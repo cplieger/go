@@ -1,4 +1,4 @@
-/** Typed client for the ssetest fixture's control routes. */
+/** Typed client for the sse fixture's control routes. */
 
 /** Same-origin path the vitest dev server forwards to the fixture for the browser projects. */
 export const FIXTURE_PROXY_PREFIX = "/__fixture";

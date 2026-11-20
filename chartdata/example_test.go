@@ -125,3 +125,33 @@ func ExampleNewSampler() {
 	}
 	_ = f
 }
+
+// A read cut short after a whole one keeps the whole read's value and time,
+// so the page shows 412, marked partial as of 14:05, and never 0.
+func ExampleCountOf() {
+	whole := measure.Whole(time.Date(2026, 11, 18, 14, 5, 0, 0, time.UTC))
+	open := 412.0
+	c, err := chartdata.CountOf(&open, whole.Cut(measure.ReadPartial, "rate_limited"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	b, _ := json.Marshal(c)
+	fmt.Println(string(b))
+	// Output:
+	// {"value":412,"state":"partial","as_of":"2026-11-18T14:05:00Z","reason":"rate_limited"}
+}
+
+func ExampleReadOf() {
+	whole := measure.Whole(time.Date(2026, 11, 18, 14, 5, 0, 0, time.UTC))
+	for _, r := range []measure.Read{whole, whole.Cut(measure.ReadBlind, "root_unavailable")} {
+		state, err := chartdata.ReadOf(r)
+		if err != nil {
+			log.Fatal(err)
+		}
+		b, _ := json.Marshal(state)
+		fmt.Println(string(b))
+	}
+	// Output:
+	// {"state":"complete","as_of":"2026-11-18T14:05:00Z"}
+	// {"state":"blind","as_of":"2026-11-18T14:05:00Z","reason":"root_unavailable"}
+}

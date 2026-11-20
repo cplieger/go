@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -118,11 +119,26 @@ func TestEnforceModeNilFile(t *testing.T) {
 	}
 }
 
-// Two error paths are deliberately untested: a failing fchmod/fstat needs
-// the descriptor's ownership or mount taken away mid-call, and
-// ErrModeNotStored is a property of the MOUNT itself. Neither is
-// stageable in a temp directory without an injection seam whose only
-// consumer would be this test.
+// A closed descriptor fails fchmod first, so EnforceMode returns that error
+// and stores nothing. An fstat failing after a successful fchmod on the same
+// descriptor is not stageable without an injection seam.
+func TestEnforceModeClosedFileReturnsItsError(t *testing.T) {
+	t.Parallel()
+	f, err := os.Create(filepath.Join(t.TempDir(), "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := EnforceMode(f, 0o600)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("EnforceMode(closed file, 0600) error = %v, want os.ErrClosed", err)
+	}
+	if got != 0 {
+		t.Errorf("EnforceMode(closed file, 0600) = %#o, want 0", got)
+	}
+}
 
 // TestEnsurePrivateDirCreatesWhenAbsent pins the ordinary path: the level
 // did not exist, this call made it, and what is on disk afterwards is
@@ -226,7 +242,7 @@ func TestEnsurePrivateDirRefusesPlantedOccupant(t *testing.T) {
 			name: "fifo",
 			plant: func(t *testing.T, path string) {
 				t.Helper()
-				if err := syscall.Mkfifo(path, 0o600); err != nil {
+				if err := MkfifoForTest(path); err != nil {
 					t.Fatalf("mkfifo: %v", err)
 				}
 			},
@@ -295,41 +311,31 @@ func TestEnsurePrivateDirRefusesForeignOwner(t *testing.T) {
 	}
 }
 
-// TestEnsurePrivateDirRepairsWidenedCreate pins that a directory this
-// call created, whose mode came back WIDER than 0700, is repaired and
-// re-verified rather than returned as compliant.
-//
-// The widening is real: a setgid parent makes Linux propagate S_ISGID to
-// a new subdirectory. The fixture is verified before the assertion, so a
-// kernel that stops widening fails the test as INVALID rather than
-// passing vacuously.
-func TestEnsurePrivateDirRepairsWidenedCreate(t *testing.T) {
-	t.Parallel()
-	parent := filepath.Join(t.TempDir(), "parent")
-	mkdirExact(t, parent, os.ModeSetgid|privateDirMode)
-
-	// Confirm the fixture still produces a mode mkdir did not ask for.
-	witness := filepath.Join(parent, "witness")
-	if err := os.Mkdir(witness, privateDirMode); err != nil {
-		t.Fatalf("mkdir witness: %v", err)
+// TestEnsurePrivateDirRepairsACreateTheFilesystemWidened pins the same
+// repair on every Unix: the hook stores 0770 between the mkdir and the open,
+// the mode a 0700 mkdir stores on ZFS with nfs4acl, so the created directory
+// must come back repaired, re-verified and logged. Serial: the hook is
+// package state.
+func TestEnsurePrivateDirRepairsACreateTheFilesystemWidened(t *testing.T) {
+	const widened os.FileMode = 0o770
+	privateDirCreatedHook = func(dir string) {
+		if err := os.Chmod(dir, widened); err != nil {
+			t.Errorf("widen %s: %v", dir, err)
+		}
 	}
-	widened := permOf(t, witness)
-	if widened == privateDirMode {
-		t.Fatalf("fixture no longer widens: a 0700 mkdir under a %v parent stored %#o, so this test cannot exercise the repair",
-			os.ModeSetgid|privateDirMode, widened)
-	}
+	t.Cleanup(func() { privateDirCreatedHook = nil })
 
 	h := &captureHandler{}
-	dir := filepath.Join(parent, "state")
+	dir := filepath.Join(t.TempDir(), "state")
 	pd, err := EnsurePrivateDir(dir, WithLogger(slog.New(h)))
 	if err != nil {
 		t.Fatalf("EnsurePrivateDir(%s) = %v, want nil", dir, err)
 	}
 	if !pd.Created {
-		t.Fatal("Created = false, want true")
+		t.Error("Created = false, want true: the directory did not exist before the call")
 	}
 	if !pd.Repaired {
-		t.Errorf("Repaired = false, want true: mkdir stored %#o instead of %#o", widened, privateDirMode)
+		t.Errorf("Repaired = false, want true: the filesystem stored %#o instead of %#o", widened, privateDirMode)
 	}
 	if pd.Mode != privateDirMode {
 		t.Errorf("Mode = %#o, want %#o: the repair must re-stat, not report what was asked for", pd.Mode, privateDirMode)
@@ -503,5 +509,218 @@ func TestEnsurePrivateDir_RepairOwnedDirLeavesAnAlreadyPrivateDirAlone(t *testin
 	}
 	if pd.Mode != privateDirMode {
 		t.Errorf("Mode = %#o, want %#o", pd.Mode, privateDirMode)
+	}
+}
+
+// TestEnsurePrivateDirRefusesAPlantedSocket pins ErrNotDirectory for a Unix
+// socket at the name (docs/durability.md), the occupant whose O_DIRECTORY
+// open answers ENOTDIR on Linux and macOS but EOPNOTSUPP on OpenBSD, NetBSD
+// and DragonFly, which test the socket type first.
+func TestEnsurePrivateDirRefusesAPlantedSocket(t *testing.T) {
+	t.Parallel()
+	_, parent := shortTestRoot(t)
+	dir := filepath.Join(parent, "s")
+	listenUnixForTest(t, dir)
+
+	pd, err := EnsurePrivateDir(dir)
+	if !errors.Is(err, ErrNotDirectory) {
+		t.Errorf("EnsurePrivateDir(socket planted) = %v, want ErrNotDirectory", err)
+	}
+	if pd != (PrivateDirResult{}) {
+		t.Errorf("PrivateDirResult = %+v, want the zero value: a refusal reaches no verdict", pd)
+	}
+}
+
+// TestOccupantRefusal_TheOccupantDecides pins that a refused open is named
+// by what lstat finds at the name, whatever errno the kernel picked: a final
+// symlink under O_NOFOLLOW is ELOOP on Linux and macOS, EMLINK on FreeBSD
+// and DragonFly (open(2)), and a socket under O_DIRECTORY is ENOTDIR on
+// Linux but EOPNOTSUPP on OpenBSD and NetBSD (their vfs_vnops.c). A
+// directory at the name, or a failed lstat, leaves the open's error as it is.
+func TestOccupantRefusal_TheOccupantDecides(t *testing.T) {
+	t.Parallel()
+	occ := lstatOccupants(t)
+	gone := func() (os.FileInfo, error) { return nil, fs.ErrNotExist }
+	for name, tc := range map[string]struct {
+		errno syscall.Errno
+		lstat func() (os.FileInfo, error)
+		want  error
+	}{
+		"ENOTDIR on a file":       {syscall.ENOTDIR, found(occ.regular), ErrNotDirectory},
+		"ENOTDIR on a symlink":    {syscall.ENOTDIR, found(occ.symlink), ErrSymlinkTarget},
+		"ELOOP on a symlink":      {syscall.ELOOP, found(occ.symlink), ErrSymlinkTarget},
+		"EMLINK on a symlink":     {syscall.EMLINK, found(occ.symlink), ErrSymlinkTarget},
+		"EOPNOTSUPP on a socket":  {syscall.EOPNOTSUPP, found(occ.socket), ErrNotDirectory},
+		"ENOTDIR on a socket":     {syscall.ENOTDIR, found(occ.socket), ErrNotDirectory},
+		"EACCES on a directory":   {syscall.EACCES, found(occ.dir), nil},
+		"ENOENT, name gone":       {syscall.ENOENT, gone, nil},
+		"EOPNOTSUPP, lstat fails": {syscall.EOPNOTSUPP, gone, nil},
+		"ENOTDIR, lstat fails":    {syscall.ENOTDIR, gone, nil},
+	} {
+		openErr := &fs.PathError{Op: "open", Path: "x", Err: tc.errno}
+		got := occupantRefusal(openErr, "x", tc.lstat)
+		if tc.want == nil {
+			if got != openErr { //nolint:errorlint // identity: the same error comes back
+				t.Errorf("%s: occupantRefusal = %v, want the open's error unchanged", name, got)
+			}
+			continue
+		}
+		if !errors.Is(got, tc.want) || !errors.Is(got, tc.errno) {
+			t.Errorf("%s: occupantRefusal = %v, want %v wrapping %v", name, got, tc.want, tc.errno)
+		}
+	}
+}
+
+// assertNotDirectory requires err to be a *NotDirectoryError naming name with
+// a mode of kind wantType.
+func assertNotDirectory(t *testing.T, err error, name string, wantType os.FileMode) {
+	t.Helper()
+	if !errors.Is(err, ErrNotDirectory) {
+		t.Errorf("err = %v, want it to match ErrNotDirectory", err)
+	}
+	nd, ok := errors.AsType[*NotDirectoryError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *NotDirectoryError", err)
+	}
+	if nd.Name != name || nd.Mode.Type() != wantType {
+		t.Errorf("NotDirectoryError = {Name: %q, Mode: %v}, want {Name: %q, type %v}", nd.Name, nd.Mode, name, wantType)
+	}
+}
+
+// Each producer reports the kind of file it found, and keeps reporting it
+// after a directory takes the name.
+func TestNotDirectoryError_CarriesTheModeEachProducerRead(t *testing.T) {
+	refuse := map[string]func(t *testing.T, path string) (string, error){
+		"EnsurePrivateDir": func(_ *testing.T, path string) (string, error) {
+			_, err := EnsurePrivateDir(path)
+			return path, err
+		},
+		"CheckPrivateDir": func(_ *testing.T, path string) (string, error) {
+			return path, CheckPrivateDir(path)
+		},
+		"CheckPrivateDirInRoot": func(t *testing.T, path string) (string, error) {
+			root, err := os.OpenRoot(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			return filepath.Base(path), CheckPrivateDirInRoot(root, filepath.Base(path))
+		},
+		"RemoveFileInRoot of a name under it": func(t *testing.T, path string) (string, error) {
+			root, err := os.OpenRoot(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			return filepath.Base(path), RemoveFileInRoot(root, filepath.Base(path)+"/x")
+		},
+	}
+	context := map[string]string{"RemoveFileInRoot of a name under it": `filesafe: path component "f": `}
+	for call, refuse := range refuse {
+		t.Run(call, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "f")
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			name, err := refuse(t, path)
+			assertNotDirectory(t, err, name, 0)
+			msg := err.Error()
+			if want := context[call] + "filesafe: not a directory: " + name + " (type regular file)"; !strings.HasPrefix(msg, want) {
+				t.Errorf("message = %q, want it to start %q", msg, want)
+			}
+			if rerr := os.Remove(path); rerr != nil {
+				t.Fatal(rerr)
+			}
+			mkdirExact(t, path, 0o700)
+			assertNotDirectory(t, err, name, 0)
+			if err.Error() != msg {
+				t.Errorf("message after a directory took the name = %q, want %q unchanged", err.Error(), msg)
+			}
+		})
+	}
+	t.Run("statOwnedDir on an open file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "f")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		_, err = statOwnedDir(f, "f")
+		assertNotDirectory(t, err, "f", 0)
+	})
+	t.Run("occupantRefusal of a socket", func(t *testing.T) {
+		occ := lstatOccupants(t)
+		openErr := &fs.PathError{Op: "open", Path: "s", Err: syscall.EOPNOTSUPP}
+		err := occupantRefusal(openErr, "s", found(occ.socket))
+		assertNotDirectory(t, err, "s", os.ModeSocket)
+		if !errors.Is(err, syscall.EOPNOTSUPP) {
+			t.Errorf("occupantRefusal = %v, want it to wrap the open's EOPNOTSUPP", err)
+		}
+	})
+}
+
+// sysless hides a FileInfo's Sys, the case where ownership cannot be read.
+type sysless struct{ os.FileInfo }
+
+func (sysless) Sys() any { return nil }
+
+func TestNotOwnedError_UndeterminedOwnerIsMinusOne(t *testing.T) {
+	fi, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ownerErr(sysless{fi}, "d")
+	if !errors.Is(err, ErrNotOwned) {
+		t.Errorf("ownerErr = %v, want it to match ErrNotOwned", err)
+	}
+	no, ok := errors.AsType[*NotOwnedError](err)
+	if !ok {
+		t.Fatalf("ownerErr = %v, want a *NotOwnedError", err)
+	}
+	if no.Name != "d" || no.Owner != -1 || no.EUID != uidOf(os.Geteuid()) {
+		t.Errorf("NotOwnedError = %+v, want {Name: d, Owner: -1, EUID: %d}", *no, uidOf(os.Geteuid()))
+	}
+	if want := "filesafe: not owned by the effective uid: d: ownership could not be determined"; err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+}
+
+// ownedBy's Sys returns a *syscall.Stat_t with only Uid set, the one field
+// ownerErr reads.
+type ownedBy struct {
+	os.FileInfo
+	uid uint32
+}
+
+func (o ownedBy) Sys() any { return &syscall.Stat_t{Uid: o.uid} }
+
+// A uid at or above 2^31 stays positive on 32-bit platforms, where int is
+// 32 bits and -1 means undetermined.
+func TestNotOwnedError_AUidPastInt32StaysPositive(t *testing.T) {
+	fi, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ownerErr(ownedBy{fi, 1 << 31}, "d")
+	no, ok := errors.AsType[*NotOwnedError](err)
+	if !ok {
+		t.Fatalf("ownerErr = %v, want a *NotOwnedError", err)
+	}
+	if no.Owner != 1<<31 || no.EUID < 0 {
+		t.Errorf("NotOwnedError = %+v, want Owner 2147483648 and a non-negative EUID", *no)
+	}
+	if want := "filesafe: not owned by the effective uid: d: owned by uid 2147483648, want the effective uid "; !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("message = %q, want it to start %q", err.Error(), want)
+	}
+}
+
+func TestUidOf_UndoesTheInt32Wrap(t *testing.T) {
+	for in, want := range map[int]int64{0: 0, 65534: 65534, -2: 4294967294, -1 << 31: 1 << 31} {
+		if got := uidOf(in); got != want {
+			t.Errorf("uidOf(%d) = %d, want %d", in, got, want)
+		}
 	}
 }

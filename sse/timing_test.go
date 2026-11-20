@@ -88,8 +88,9 @@ func TestTiming_goConstantsMatchContract(t *testing.T) {
 	}
 }
 
-// TestTiming_goModRequires pins the module's dependency footprint: httpserver and
-// textsafe at runtime, both stdlib-only, and rapid for the property tests.
+// TestTiming_goModRequires pins the module's direct requires: httpserver and
+// textsafe at runtime and rapid for the property tests. Indirect requires are
+// left out, since they follow httpserver's own and are not sse's to choose.
 func TestTiming_goModRequires(t *testing.T) {
 	raw, err := os.ReadFile("go.mod")
 	if err != nil {
@@ -106,11 +107,16 @@ func TestTiming_goModRequires(t *testing.T) {
 			inBlock = false
 		case strings.HasPrefix(line, "require "):
 			got = append(got, strings.Fields(line)[1])
-		case inBlock && line != "":
+		case inBlock && line != "" && !strings.HasSuffix(line, "// indirect"):
 			got = append(got, strings.Fields(line)[0])
 		}
 	}
-	want := []string{"github.com/cplieger/go/httpserver", "github.com/cplieger/go/textsafe", "pgregory.net/rapid"}
+	slices.Sort(got)
+	want := []string{
+		"github.com/cplieger/go/httpserver/v2",
+		"github.com/cplieger/go/textsafe",
+		"pgregory.net/rapid",
+	}
 	if !slices.Equal(got, want) {
 		t.Errorf("go.mod requires = %q, want exactly %q", got, want)
 	}

@@ -1,0 +1,4 @@
+{
+  "body": "{\"code\":\"bad_body\",\"message\":\"Fix the marked fields.\",\"remediation\":\"Fix the request body as the fields describe, then resend it.\",\"fields\":[{\"path\":\"retention.days\",\"code\":\"range\",\"message\":\"Use 1 to 400.\"},{\"path\":\"items[1].key\",\"code\":\"required\",\"message\":\"Name the key.\"}],\"request_id\":\"req-1\"}\n",
+  "valid": true
+}

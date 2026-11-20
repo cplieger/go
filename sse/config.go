@@ -1,11 +1,17 @@
 package sse
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // ErrConfig is wrapped by every construction-time refusal New returns; the
@@ -33,8 +39,10 @@ type config struct {
 	logger          *slog.Logger
 	now             func() time.Time
 	presence        func(PresenceEvent)
+	errs            httpserver.ErrorResponder
 	keepaliveEvent  string
 	epoch           string
+	build           string
 	keepalive       time.Duration
 	ttl             time.Duration
 	writeTimeout    time.Duration
@@ -52,6 +60,7 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		logger:         slog.Default(),
+		errs:           httpserver.WriteError,
 		now:            time.Now,
 		keepaliveEvent: defaultKeepaliveEvent,
 		keepalive:      defaultKeepalive,
@@ -166,6 +175,20 @@ func WithKeepaliveEvent(name string) Option {
 	}
 }
 
+// WithBuild sets the server build the hello announces as build, so a client
+// can tell it reconnected to another deployment before it reads anything. The
+// empty string, the default, leaves the field out. A string that is not valid
+// UTF-8 is refused, since JSON would deliver it altered.
+func WithBuild(id string) Option {
+	return func(c *config) error {
+		if !utf8.ValidString(id) {
+			return fmt.Errorf("%w: WithBuild id is not valid UTF-8", ErrConfig)
+		}
+		c.build = id
+		return nil
+	}
+}
+
 // WithReconnectDelay sets the stream's retry: field (default 1500ms), the
 // wait a client observes before reconnecting. Refused below one millisecond,
 // since 0 on the wire means reconnect at once.
@@ -240,6 +263,29 @@ func validate(c *config) error {
 	}
 	if !c.clientBufferSet {
 		c.clientBuffer = max(c.ringSize, clientBufferFloor)
+	}
+	return checkHelloSize(c)
+}
+
+// checkHelloSize refuses a configuration whose hello could exceed
+// MaxFrameBytes, which the client enforces on every frame: the build and the
+// keepalive name are the hello's only unbounded fields. It encodes the widest
+// hello, a scoped connection with both offsets at their largest.
+func checkHelloSize(c *config) error {
+	widest := Hello{
+		Epoch:          strings.Repeat("f", max(len(c.epoch), epochLen)),
+		Conn:           strings.Repeat("A", base64.RawURLEncoding.EncodedLen(connBytes)),
+		Verdict:        VerdictCursorInvalid, // the longest verdict
+		KeepaliveEvent: c.keepaliveEvent,
+		Build:          c.build,
+		Floor:          math.MaxUint64,
+		Head:           math.MaxUint64,
+		Wire:           Wire,
+		KeepaliveMS:    int(c.keepalive.Milliseconds()),
+	}
+	data, _ := json.Marshal(widest) // a Hello holds only strings, numbers and a bool, which always encode
+	if size := frameSize(len(helloEvent), [][]byte{data}, 0); size > MaxFrameBytes {
+		return fmt.Errorf("%w: the hello can reach %d bytes with WithBuild and WithKeepaliveEvent as set, above MaxFrameBytes (%d)", ErrConfig, size, MaxFrameBytes)
 	}
 	return nil
 }

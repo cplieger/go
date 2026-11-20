@@ -23,7 +23,7 @@ type State struct {
 
 // NewEventsFrame builds an EventsFrame of d's events in rows, at most
 // MaxRows, each with a key no other row has and its instants never
-// decreasing. It takes WithRefs and WithNotes.
+// decreasing. It takes WithRefs, WithNotes and WithRead.
 func NewEventsFrame(d measure.Declared, rows []Times, opts ...Option) (EventsFrame, error) {
 	if err := checkMost("rows", len(rows), MaxRows, "rows"); err != nil {
 		return EventsFrame{}, err
@@ -50,12 +50,12 @@ func NewEventsFrame(d measure.Declared, rows []Times, opts ...Option) (EventsFra
 		}
 		out[i] = FrameTimes{Key: r.Key, At: at}
 	}
-	return EventsFrame{Type: TypeEvents, Name: decl.Name, Rows: out, Refs: o.refs, Notes: o.notes}, nil
+	return EventsFrame{Type: TypeEvents, Name: decl.Name, Rows: out, Refs: o.refs, Notes: o.notes, Read: o.frameRead}, nil
 }
 
 // NewStatesFrame builds a StatesFrame of d's observations, oldest first, with
 // instants that strictly increase. When d is a state set, every key names one
-// of its states. It takes WithRefs and WithNotes.
+// of its states. It takes WithRefs, WithNotes and WithRead.
 func NewStatesFrame(d measure.Declared, states []State, opts ...Option) (StatesFrame, error) {
 	decl, o, err := begin(d, opts, optMarks, len(states))
 	if err != nil {
@@ -78,13 +78,13 @@ func NewStatesFrame(d measure.Declared, states []State, opts ...Option) (StatesF
 		key := s.Key
 		keys[i] = &key
 	}
-	return StatesFrame{Type: TypeStates, Name: decl.Name, Keys: keys, At: at, Refs: o.refs, Notes: o.notes}, nil
+	return StatesFrame{Type: TypeStates, Name: decl.Name, Keys: keys, At: at, Refs: o.refs, Notes: o.notes, Read: o.frameRead}, nil
 }
 
 // NewValueFrame builds a ValueFrame of d's meters, each with a key no other
 // meter has, Min below Max, and its value and any of Low, High and Optimum
-// finite and between them, Low at or below High. It takes WithRefs and
-// WithNotes.
+// finite and between them, Low at or below High. It takes WithRefs,
+// WithNotes and WithRead.
 func NewValueFrame(d measure.Declared, meters []FrameMeter, opts ...Option) (ValueFrame, error) {
 	decl, o, err := begin(d, opts, optMarks, len(meters),
 		func() error { return checkKeys("meters", func(i int) string { return meters[i].Key }, len(meters)) })
@@ -97,7 +97,7 @@ func NewValueFrame(d measure.Declared, meters []FrameMeter, opts ...Option) (Val
 			return ValueFrame{}, err
 		}
 	}
-	return ValueFrame{Type: TypeValue, Name: decl.Name, Unit: string(decl.Unit), Meters: out, Refs: o.refs, Notes: o.notes}, nil
+	return ValueFrame{Type: TypeValue, Name: decl.Name, Unit: string(decl.Unit), Meters: out, Refs: o.refs, Notes: o.notes, Read: o.frameRead}, nil
 }
 
 func buildMeter(field string, m FrameMeter) (FrameMeter, error) {

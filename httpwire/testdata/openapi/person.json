@@ -1,0 +1,50 @@
+{
+  "info": {
+    "title": "person fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/archive": {
+      "post": {
+        "description": "Export an archive.",
+        "operationId": "archive.export",
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Export an archive"
+      }
+    },
+    "/api/keys/rotate": {
+      "post": {
+        "description": "Rotate a key.",
+        "operationId": "keys.rotate",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Rotate a key"
+      }
+    },
+    "/api/settings": {
+      "post": {
+        "description": "Save settings.",
+        "operationId": "settings.save",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Save settings"
+      }
+    }
+  }
+}

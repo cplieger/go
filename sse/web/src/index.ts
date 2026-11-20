@@ -30,6 +30,8 @@ export type { Cursor, Hello, HelloRefusal, HelloResult, ResetReason } from "./wi
 export type { ConnectFailure, StreamEnd } from "./reducer.js";
 export type { HeldDiscardCause, LifecycleEvent, RevalidateCause } from "./lifecycle.js";
 export type { StreamState, StreamStateKind } from "./state.js";
+export { connectionOf } from "./connection.js";
+export type { Connection } from "./connection.js";
 export {
   adaptVisibility,
   createDOMVisibilitySource,
