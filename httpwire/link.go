@@ -21,4 +21,5 @@ func init() {
 		ep, _ := v.(*Endpoint)
 		return stubBinding(ep)
 	}
+	wirelink.RequestID = requestIDOf
 }

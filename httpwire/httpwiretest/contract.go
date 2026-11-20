@@ -210,7 +210,7 @@ type answer struct {
 }
 
 func (c *checker) serve(ep *httpwire.Endpoint, r *http.Request) *httptest.ResponseRecorder {
-	r, id := withRequestID(r)
+	r, id := wirelink.RequestID(r)
 	rec := httptest.NewRecorder()
 	c.api.ServeHTTP(rec, r)
 	a := answer{rec: rec, fail: func(format string, args ...any) {
@@ -218,18 +218,6 @@ func (c *checker) serve(ep *httpwire.Endpoint, r *http.Request) *httptest.Respon
 	}}
 	c.check(ep, r, id, a)
 	return rec
-}
-
-// withRequestID gives r the id the wire says the API answers it under: its
-// context's, else its valid inbound X-Request-Id, else a new one.
-func withRequestID(r *http.Request) (out *http.Request, id string) {
-	if id = httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
-		return r, id
-	}
-	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
-		id = httpserver.NewRequestID()
-	}
-	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
 }
 
 func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, id string, a answer) {

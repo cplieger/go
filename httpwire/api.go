@@ -112,19 +112,24 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.table.Catalog.WriteError(w, r, &Error{Code: codeNotFound, Message: "no route matches the path"})
 }
 
-// withRequestID gives the answer and r's context one request id: the
-// context's, else a valid inbound X-Request-Id, else a fresh one.
+// withRequestID gives the answer and r's context r's request id.
 func withRequestID(w http.ResponseWriter, r *http.Request) *http.Request {
-	id := httpserver.RequestIDFromContext(r.Context())
-	if httpserver.ValidRequestID(id) {
-		w.Header().Set(httpserver.HeaderRequestID, id)
-		return r
+	r, id := requestIDOf(r)
+	w.Header().Set(httpserver.HeaderRequestID, id)
+	return r
+}
+
+// requestIDOf answers r's request id, the context's, else a valid inbound
+// X-Request-Id, else a fresh one, and r carrying it in its context.
+func requestIDOf(r *http.Request) (*http.Request, string) {
+	if id := httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
+		return r, id
 	}
-	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
+	id := r.Header.Get(httpserver.HeaderRequestID)
+	if !httpserver.ValidRequestID(id) {
 		id = httpserver.NewRequestID()
 	}
-	w.Header().Set(httpserver.HeaderRequestID, id)
-	return r.WithContext(httpserver.WithRequestID(r.Context(), id))
+	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
 }
 
 func isRoute(h http.Handler) bool {

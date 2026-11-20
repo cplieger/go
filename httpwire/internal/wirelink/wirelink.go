@@ -4,6 +4,8 @@
 // package cannot import httpwire.
 package wirelink
 
+import "net/http"
+
 // Built is what New was given: the parsed document (*httpwire.Schema), the
 // guard (httpwire.Guard, nil when none) and the wire version.
 type Built struct {
@@ -23,4 +25,7 @@ var (
 	// Stub answers an httpwire.Binding New accepts for any *httpwire.Endpoint
 	// of its table, whose handler answers internal_error.
 	Stub func(ep any) any
+	// RequestID answers the request id an *httpwire.API answers r under, and
+	// r carrying it, so serving the returned request answers that id.
+	RequestID func(r *http.Request) (*http.Request, string)
 )
