@@ -19,8 +19,8 @@ import (
 
 // Cursor is a page cursor as the query carries it: opaque, at most 1,416
 // bytes, absent on the first page. Any cursor that does not open for this
-// row, its path values, its query, its headers and its owner answers
-// cursor_invalid.
+// row, its path values, its query, the headers the row declares and its
+// owner answers cursor_invalid.
 type Cursor string
 
 // MaxBytes is the length go/sealed gives a direction byte and the longest
@@ -262,8 +262,8 @@ func (l *listCursor) seal(dir direction, pos []byte) (string, error) {
 
 // SealNext answers the next_cursor resuming after pos, the page's last
 // item: a request with it has Position pos and Backward false. It is bound
-// to this row, its path values, its query (Page aside), its headers and
-// WithCursorOwner's owner, each as the request sent it, and answers
+// to this row, WithCursorOwner's owner, and the path values, query (Page
+// aside) and declared headers as the request sent them, and answers
 // ErrPositionTooLong for a pos over 1,024 bytes.
 func (c Call[P, Q, B, H]) SealNext(pos []byte) (string, error) { return c.list.seal(forward, pos) }
 

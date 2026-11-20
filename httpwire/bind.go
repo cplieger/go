@@ -119,9 +119,10 @@ type decoded struct {
 // sent is what a request carried for its declared text parts, as the
 // binder parsed them: the path wildcards' values in path order, and each
 // declared query parameter and header it was given, by name, with its
-// values in request order. The cursor purpose and the fingerprint bind
-// these and never the decoded values, whose json.Marshal can drop a field
-// or miss what a type's own decoder read.
+// values in request order. The cursor purpose binds these, and the
+// fingerprint binds them beside the decoded body, never the decoded query
+// or headers, whose json.Marshal can drop a field or miss what a type's
+// own decoder read.
 type sent struct {
 	query, headers map[string][]string
 	path           []string

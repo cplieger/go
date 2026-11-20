@@ -235,10 +235,11 @@ func parseSFString(v string) (string, bool) {
 }
 
 // fingerprint is SHA-256 over the row name and the request: its path
-// values, query and headers as sent, its If-Match tag, a Raw body's digest,
-// and the json.Marshal of its decoded body, so a body's spelling changes
-// nothing. Each part is length-prefixed. The body is marshalled through a
-// pointer, so a pointer-receiver MarshalJSON or MarshalText is used.
+// values, query and declared headers as sent, its If-Match tag, a Raw
+// body's digest, and the json.Marshal of its decoded body, so a body's
+// spelling changes nothing. Each part is length-prefixed. The body is
+// marshalled through a pointer, so a pointer-receiver MarshalJSON or
+// MarshalText is used.
 func fingerprint(row string, d *decoded) ([32]byte, error) {
 	body, err := json.Marshal(addressed(d.body))
 	if err != nil {

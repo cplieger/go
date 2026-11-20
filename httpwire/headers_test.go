@@ -371,8 +371,9 @@ func TestHeadersDecodeOrder(t *testing.T) {
 	})
 }
 
-// A Keyed row's fingerprint covers the decoded headers, so a resend that
-// acts for another delegate is not the request that ran.
+// A Keyed row's fingerprint covers each declared header as the request
+// sent it, so a resend that acts for another delegate is not the request
+// that ran.
 func TestHeadersInTheFingerprint(t *testing.T) {
 	h := newHeaderAPI(t)
 	act := func(header ...string) *httptest.ResponseRecorder {

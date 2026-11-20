@@ -117,6 +117,7 @@ type keyedFixture struct {
 	catalog *httpwire.Catalog
 	log     *logSink
 	quick   func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error)
+	retry   *httpwire.Binding // serves jobs.retry when set
 	runs    map[string]int
 	users   map[string]bool
 	keys    []httpwire.IdempotencyKey
@@ -191,6 +192,13 @@ func (kf *keyedFixture) jobs(row string) httpwire.Binding {
 }
 
 func (kf *keyedFixture) bindings() []httpwire.Binding {
+	retry := httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody, noH]) (jobAnswer, error) {
+		kf.ran("jobs.retry")
+		return jobAnswer{ID: string(c.Params.ID) + "-" + string(c.Query.Mode)}, nil
+	})
+	if kf.retry != nil {
+		retry = *kf.retry
+	}
 	return []httpwire.Binding{
 		httpwire.Bind("users.read", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) ([]account, error) { return nil, nil }),
 		httpwire.Bind("users.register", func(_ context.Context, c httpwire.Call[noP, noQ, regBody, noH]) (httpwire.Status[account], error) {
@@ -206,10 +214,7 @@ func (kf *keyedFixture) bindings() []httpwire.Binding {
 		httpwire.Bind("jobs.read", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) ([]jobAnswer, error) { return nil, nil }),
 		kf.jobs("jobs.start"),
 		kf.jobs("jobs.quick"),
-		httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody, noH]) (jobAnswer, error) {
-			kf.ran("jobs.retry")
-			return jobAnswer{ID: string(c.Params.ID) + "-" + string(c.Query.Mode)}, nil
-		}),
+		retry,
 		httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noP, noQ, noteText, noH]) (httpwire.None, error) {
 			kf.ran("notes.save")
 			return httpwire.None{}, nil
@@ -745,6 +750,61 @@ func TestFingerprint(t *testing.T) {
 			t.Errorf("the first tag again answered %d %q, want the replayed 204", rec.Code, rec.Body)
 		}
 	})
+}
+
+// retryWith serves keyedTable with jobs.retry taking Q.
+func retryWith[Q any](t *testing.T) *keyedFixture {
+	t.Helper()
+	doc, err := os.ReadFile("testdata/openapi/keyed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb := keyedTable(t)
+	row(tb, "jobs.retry").Query = reflect.TypeFor[Q]()
+	kf := &keyedFixture{catalog: tb.Catalog, log: &logSink{}, runs: map[string]int{}, users: map[string]bool{}}
+	retry := httpwire.Bind("jobs.retry", func(context.Context, httpwire.Call[retryParams, Q, jobBody, noH]) (jobAnswer, error) {
+		kf.ran("jobs.retry")
+		return jobAnswer{ID: strconv.Itoa(kf.runsOf("jobs.retry"))}, nil
+	})
+	kf.retry = &retry
+	kf.api, err = httpwire.New(tb, kf.bindings(), httpwire.WithSchema(doc),
+		httpwire.WithGuard(fixtureGuard{}), httpwire.WithCredential(func(*http.Request) string { return "s:a" }),
+		httpwire.WithCursorOwner(func(*http.Request) string { return "u:a" }), httpwire.WithHold(kf.hold))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return kf
+}
+
+// A Keyed row's fingerprint holds each query value as the request sent it,
+// whatever the field's type, so a resend under another value is not the
+// request that ran and one under the same value replays.
+func TestFingerprintHoldsEachQueryValueAsSent(t *testing.T) {
+	for name, build := range map[string]func(*testing.T) *keyedFixture{
+		"a type whose marshaler needs its address": retryWith[struct {
+			Mode heldKind `json:"mode,omitzero"`
+		}],
+		"a type that decodes itself with no marshaler": retryWith[struct {
+			Mode oneWayKind `json:"mode,omitzero"`
+		}],
+	} {
+		t.Run(name, func(t *testing.T) {
+			kf := build(t)
+			retry := func(mode string) *httptest.ResponseRecorder {
+				return kf.do(http.MethodPost, "/api/jobs/ab/retry?mode="+mode, `{"kind":"a","size":1}`, `"r"`)
+			}
+			first := retry("a")
+			if first.Code != http.StatusOK || kf.runsOf("jobs.retry") != 1 {
+				t.Fatalf("first retry %d %s", first.Code, first.Body)
+			}
+			if rec := retry("a"); rec.Code != http.StatusOK || rec.Body.String() != first.Body.String() || kf.runsOf("jobs.retry") != 1 {
+				t.Errorf("the same value answered %d %s after %d runs, want the replay", rec.Code, rec.Body, kf.runsOf("jobs.retry"))
+			}
+			if rec := retry("b"); codeOf(t, rec) != "idempotency_key_reused" || kf.runsOf("jobs.retry") != 1 {
+				t.Errorf("another value answered %d %s after %d runs, want idempotency_key_reused and one run", rec.Code, rec.Body, kf.runsOf("jobs.retry"))
+			}
+		})
+	}
 }
 
 func TestOversizeAnswerIsACompletion(t *testing.T) {
