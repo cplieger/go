@@ -443,6 +443,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
   ] satisfies readonly TransportCase[],
 };
 
+/** The `fetch` that serves one case, and the requests the client sent through it. */
 export interface ServedCase {
   readonly fetch: typeof fetch;
   /** Each request the client sent, unread. */

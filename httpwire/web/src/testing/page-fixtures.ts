@@ -2,6 +2,7 @@
 
 import type { PageFixture } from "./pages.js";
 
+/** Page tables with the answer `httpserver.PageMatcher` gives for each path. */
 export const PAGE_FIXTURES: readonly PageFixture[] = [
   {
     name: "catchall",
