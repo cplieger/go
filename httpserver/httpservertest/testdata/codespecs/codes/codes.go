@@ -22,3 +22,8 @@ type Responder struct {
 type Spec struct {
 	Code hs.ErrorCode
 }
+
+// Row is another package's struct listing the codes it answers.
+type Row struct {
+	Codes []hs.ErrorCode
+}

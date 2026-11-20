@@ -27,7 +27,10 @@ import {
 } from "./visibility.js";
 
 /** What a host-routed run hands this tab: the port context plus the tab's own signal. */
-export type TabRevalidateContext = PortRevalidateContext & { readonly signal: AbortSignal };
+export type TabRevalidateContext = Omit<PortRevalidateContext, "build"> & {
+  readonly build: string | null;
+  readonly signal: AbortSignal;
+};
 
 /** What `spawn()` returns: a SharedWorker, or anything with its port and error event. */
 export interface SharedWorkerLike {
@@ -351,7 +354,9 @@ export function attachToWorker(opts: AttachOptions): TabAttachment {
     }, runTimeoutMs);
     let promise: Promise<void>;
     try {
-      promise = Promise.resolve(opts.revalidate({ ...ctx, signal: controller.signal }));
+      promise = Promise.resolve(
+        opts.revalidate({ ...ctx, build: ctx.build ?? null, signal: controller.signal }),
+      );
     } catch (e: unknown) {
       promise = Promise.reject(e instanceof Error ? e : new Error(String(e)));
     }

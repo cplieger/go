@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // FieldCodes is the field-code map's codes in the order the TS half's
@@ -12,7 +14,7 @@ import (
 var FieldCodes = []string{codeMalformed, codeRequired, codeUnknown, codeEnum, codeUnion, codeRange, codePattern}
 
 // CatalogCodes answers every code c holds, sorted.
-func CatalogCodes(c *Catalog) []string {
+func CatalogCodes(c *Catalog) []httpserver.ErrorCode {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return slices.Sorted(maps.Keys(c.specs))

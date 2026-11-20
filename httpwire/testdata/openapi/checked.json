@@ -1,0 +1,63 @@
+{
+  "info": {
+    "title": "checked fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/items/check": {
+      "get": {
+        "description": "Check an item.",
+        "operationId": "items.check",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "case",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Check an item"
+      }
+    },
+    "/api/items/checkplus": {
+      "get": {
+        "description": "Check an item with its read time.",
+        "operationId": "items.checkplus",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "case",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Check an item with its read time"
+      }
+    }
+  }
+}

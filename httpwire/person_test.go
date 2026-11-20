@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -47,15 +48,15 @@ func personTable(t *testing.T) *httpwire.Table {
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "archive.export", Method: http.MethodPost, Path: "/api/archive", Summary: "Export an archive", Description: "Export an archive.",
-				Kind: httpwire.Raw, ContentType: "application/zip", Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
+				Name: "archive.export", Method: http.MethodPost, Path: "/archive", Summary: "Export an archive", Description: "Export an archive.",
+				Kind: httpwire.Raw, ContentTypes: []string{"application/zip"}, Access: session, PersonActions: []string{httpwire.PersonAccountsArchive},
 			},
 			{
-				Name: "settings.save", Method: http.MethodPost, Path: "/api/settings", Summary: "Save settings", Description: "Save settings.",
+				Name: "settings.save", Method: http.MethodPost, Path: "/settings", Summary: "Save settings", Description: "Save settings.",
 				Access: session, PersonActions: []string{httpwire.PersonSecretRetarget},
 			},
 			{
-				Name: "keys.rotate", Method: http.MethodPost, Path: "/api/keys/rotate", Summary: "Rotate a key", Description: "Rotate a key.",
+				Name: "keys.rotate", Method: http.MethodPost, Path: "/keys/rotate", Summary: "Rotate a key", Description: "Rotate a key.",
 				Access: httpwire.Access{Class: httpwire.Session, PersonOnly: true, RecentAuth: true}, PersonActions: []string{httpwire.PersonKeyRotate},
 			},
 		},
@@ -76,7 +77,7 @@ func newPersonCase(t *testing.T, opts ...httpwire.Option) *personCase {
 	}
 	pc := &personCase{}
 	tb := personTable(t)
-	inRow := func(ctx context.Context, _ httpwire.Call[noP, noQ, noB]) (httpwire.None, error) {
+	inRow := func(ctx context.Context, _ httpwire.Call[noP, noQ, noB, noH]) (httpwire.None, error) {
 		err := httpwire.RequirePerson(ctx, pc.action)
 		pc.got = append(pc.got, err)
 		return httpwire.None{}, err
@@ -109,7 +110,8 @@ func TestRequirePersonRefusals(t *testing.T) {
 	for name, tc := range map[string]struct {
 		principal, path, action string
 		status                  int
-		code, reason            string
+		code                    httpserver.ErrorCode
+		reason                  string
 		logged                  bool
 	}{
 		"a key":                         {"key", "/api/settings", httpwire.PersonSecretRetarget, 403, "person_required", "secret_retarget", false},

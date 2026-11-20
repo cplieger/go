@@ -78,7 +78,7 @@ Three compiled examples in `example_test.go` cover the next steps, and `go test`
 
 ## API
 
-- `New`, `MustNew` and thirteen `With*` options build a hub. `ErrConfig` wraps every refusal. `WithErrors` sets the responder that writes every error the hub answers, and `CodeSpecs` lists those codes with their status and remediation, for your error catalog.
+- `New`, `MustNew` and fourteen `With*` options build a hub. `ErrConfig` wraps every refusal. `WithErrors` sets the responder that writes every error the hub answers, and `CodeSpecs` lists those codes with their status and remediation, for your error catalog.
 - `Serve`, with `WithTopic`, `WithScope`, `WithRequestScope`, `WithOnConnect` and `WithClientTag`, streams one request. `Writer.Event` writes initial state from the hook. `Scope`, `All`, `Topics`, `ValidTopic`, `MaxScopeTopics` and `MaxScopeHeaderBytes` describe a connection's scope, and `ScopeHandler` lets a client replace it.
 - `Publish` sends a frame and returns its offset, `(0, nil)` once the hub is shut down, or `ErrEventName`, `ErrFrameTooLarge` or `ErrInvalidUTF8`.
 - `DigestHandler`, which takes a `Resolver` and two `WithDigest*` options and returns an error wrapping `ErrConfig` for a refused one, answers a client that reconciles. A resolver receives `Held` subjects and answers one `State` each, with a `Subject`, a `Version` and a `Status` (`StatusCurrent`, `StatusGone` or `StatusForbidden`).
@@ -93,6 +93,8 @@ The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/go/
 ## A client resumes exactly or reconciles
 
 Every connection opens with an `sse:hello` frame. Its `resumed` field is true only when the hub still holds every frame the client missed and their number is within the `WithReplyMaxEvents` cap. Those frames then follow the hello in order. Otherwise the hub replays nothing, and the client asks your server what changed. The hello's `verdict` says why, for logs and counters.
+
+With `WithBuild(id)`, the hello also carries `build`, the server's build. A page that reconnects to a redeployed server learns it from the hello, before its revalidation reads anything, and the TypeScript client hands it to `revalidate` as `ctx.build`.
 
 The hub runs inside one Go process and keeps its replay buffer in memory. Two processes never share a buffer. A client that falls too far behind gets an `sse:reset` frame and is dropped, so `Publish` never waits for it. The epoch is minted when the hub is created. A client that reconnects after a restart, or to another process, presents a cursor from another epoch and reconciles.
 

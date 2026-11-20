@@ -48,8 +48,8 @@ func (w *answerWriter) WriteHeader(code int) {
 	if w.position != "" && code/100 == 2 {
 		w.Header().Set(headerFeedPosition, w.position)
 	}
-	if w.own && w.undeclared(code) {
-		w.a.log().ErrorContext(w.r.Context(), "httpwire: a handler wrote a success status its row does not declare", "row", w.ep.Name, "status", code)
+	if w.own {
+		w.checkStatus(code)
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
@@ -86,6 +86,34 @@ func (w *answerWriter) finish() {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+// checkStatus logs a status a Raw, Stream or Redirect handler writes off
+// its row: off the conditional rule, else undeclared.
+func (w *answerWriter) checkStatus(code int) {
+	ctx := w.r.Context()
+	if p := w.conditionalProblem(code); p != "" {
+		w.a.log().ErrorContext(ctx, "httpwire: a handler's answer breaks its row's conditional rule", "row", w.ep.Name, "status", code, "problem", p)
+		return
+	}
+	if w.undeclared(code) {
+		w.a.log().ErrorContext(ctx, "httpwire: a handler wrote a success status its row does not declare", "row", w.ep.Name, "status", code)
+	}
+}
+
+// conditionalProblem says why code breaks the conditional rule: a 304 only
+// on a Conditional row and only to a request carrying If-None-Match, and an
+// ETag on each of its 200s (RFC 9110 section 13.1.2).
+func (w *answerWriter) conditionalProblem(code int) string {
+	switch {
+	case code == http.StatusNotModified && !w.ep.Conditional:
+		return "a 304 on a row that is not Conditional"
+	case code == http.StatusNotModified && w.r.Header.Get(headerIfNoneMatch) == "":
+		return "a 304 to a request with no If-None-Match"
+	case code == http.StatusOK && w.ep.Conditional && w.Header().Get("ETag") == "":
+		return "a 200 with no ETag"
+	}
+	return ""
 }
 
 // undeclared reports a success status (a 2xx, and a 3xx on a Redirect

@@ -2,17 +2,19 @@ package httpwire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
 )
 
 // Call is what a bound handler receives: the request's decoded parts.
-type Call[P, Q, B any] struct {
-	Params P
-	Query  Q
-	Body   B
-	list   *listCursor
+type Call[P, Q, B, H any] struct {
+	Params  P
+	Query   Q
+	Body    B
+	Headers H
+	list    *listCursor
 	// Position is the position a List row's cursor sealed; nil on the first
 	// page. See SealNext and SealPrev.
 	Position []byte
@@ -29,10 +31,10 @@ type Call[P, Q, B any] struct {
 // Handler is a JSON row's handler. Its error is answered through the row's
 // union: an *Error whose code the union holds, else the first owner
 // sentinel it wraps, else internal_error.
-type Handler[P, Q, B, R any] func(context.Context, Call[P, Q, B]) (R, error)
+type Handler[P, Q, B, H, R any] func(context.Context, Call[P, Q, B, H]) (R, error)
 
-// None is a row's type where it declares none: a P, Q or B the row has no
-// Params, Query or Request for, and the R of a row with no Response (a 204).
+// None is a row's type where it declares none: a P, Q, B or H the row has
+// no Params, Query, Request or Headers for, and the R of a row with no Response (a 204).
 type None struct{}
 
 // Status is the answer of a JSON row that declares Successes: one of the
@@ -89,40 +91,55 @@ var bindNames = map[bindKind]string{bindJSON: "Bind", bindRaw: "BindRaw", bindSt
 // Binding pairs a row, by name, with its handler. New checks it against
 // the row.
 type Binding struct {
-	params, query, body, result reflect.Type
-	handler                     http.Handler
+	params, query, body, headers, result reflect.Type
+	handler                              http.Handler
 	// run answers the handler's status, zero for the row's primary one,
 	// its body and its error.
 	run        func(context.Context, *decoded) (int, any, error)
 	name       string
 	kind       bindKind
 	nilHandler bool
+	stub       bool // serves any row of its kind, its types unchecked
 }
 
 // decoded is a request's decoded parts, each a value of the binding's type
-// or nil for its zero value.
+// or nil for its zero value, and sent, what the request carried for them.
 type decoded struct {
-	params, query, body any
-	list                *listCursor
-	key                 string
-	position            []byte
-	rawBody             []byte // a Keyed Raw row's body digest
-	ifMatch             Tag
-	limit               int
-	backward            bool
+	params, query, body, headers any
+	list                         *listCursor
+	sent                         sent
+	key                          string
+	position                     []byte
+	rawBody                      []byte // a Keyed Raw row's body digest
+	ifMatch                      Tag
+	limit                        int
+	backward                     bool
 }
 
-// Bind binds a JSON row: P, Q and B are its Params, Query and Request types
-// (None where it has none), and R its Response type, None when it has none,
-// or Status[T] when it declares Successes.
-func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
+// sent is what a request carried for its declared text parts, as the
+// binder parsed them: the path wildcards' values in path order, and each
+// declared query parameter and header it was given, by name, with its
+// values in request order. The cursor purpose binds these, and the
+// fingerprint binds them beside the decoded body, never the decoded query
+// or headers, whose json.Marshal can drop a field or miss what a type's
+// own decoder read.
+type sent struct {
+	query, headers map[string][]string
+	path           []string
+}
+
+// Bind binds a JSON row: P, Q, B and H are its Params, Query, Request and
+// Headers types (None where it has none), and R its Response type, None
+// when it has none, or Status[T] when it declares Successes.
+func Bind[P, Q, B, H, R any](name string, h Handler[P, Q, B, H, R]) Binding {
 	b := Binding{
 		name: name, kind: bindJSON, nilHandler: h == nil,
-		params: reflect.TypeFor[P](), query: reflect.TypeFor[Q](), body: reflect.TypeFor[B](), result: reflect.TypeFor[R](),
+		params: reflect.TypeFor[P](), query: reflect.TypeFor[Q](), body: reflect.TypeFor[B](), headers: reflect.TypeFor[H](),
+		result: reflect.TypeFor[R](),
 	}
 	_, isStatus := statusBody(b.result)
 	b.run = func(ctx context.Context, d *decoded) (code int, body any, err error) {
-		var c Call[P, Q, B]
+		var c Call[P, Q, B, H]
 		if v, ok := d.params.(P); ok {
 			c.Params = v
 		}
@@ -131,6 +148,9 @@ func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
 		}
 		if v, ok := d.body.(B); ok {
 			c.Body = v
+		}
+		if v, ok := d.headers.(H); ok {
+			c.Headers = v
 		}
 		c.IfMatch = d.ifMatch
 		c.Position, c.Backward, c.Limit, c.list = d.position, d.backward, d.limit, d.list
@@ -142,6 +162,18 @@ func Bind[P, Q, B, R any](name string, h Handler[P, Q, B, R]) Binding {
 		return 0, r, err
 	}
 	return b
+}
+
+var errStub = errors.New("httpwire: a stub binding ran")
+
+// stubBinding binds ep to a handler that answers internal_error, for a
+// test that never runs the row past its guard.
+func stubBinding(ep *Endpoint) Binding {
+	return Binding{
+		name: ep.Name, kind: kindBinding(ep.Kind), stub: true,
+		run:     func(context.Context, *decoded) (int, any, error) { return 0, nil, errStub },
+		handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(errStub) }),
+	}
 }
 
 // BindRaw binds a Raw or Redirect row to a handler that writes its own
@@ -191,7 +223,7 @@ func bindingProblems(ep *Endpoint, b *Binding) []string {
 	if want := kindBinding(ep.Kind); b.kind != want {
 		return []string{fmt.Sprintf("%s is a %s row, bound with %s; bind it with %s", at, kindNames[ep.Kind], bindNames[b.kind], bindNames[want])}
 	}
-	if b.kind != bindJSON {
+	if b.kind != bindJSON || b.stub {
 		return nil
 	}
 	var p []string
@@ -202,6 +234,7 @@ func bindingProblems(ep *Endpoint, b *Binding) []string {
 		{b.params, ep.Params, "P", partParams},
 		{b.query, ep.Query, "Q", partQuery},
 		{b.body, ep.Request, "B", "Request"},
+		{b.headers, ep.Headers, "H", partHeaders},
 	} {
 		if !declares(part.got, part.want) {
 			p = append(p, fmt.Sprintf("%s: the binding's %s is %s, but the row's %s is %s", at, part.letter, part.got, part.field, typeName(part.want)))

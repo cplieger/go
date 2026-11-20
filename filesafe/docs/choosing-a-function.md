@@ -18,6 +18,10 @@ This page maps each job to the filesafe call that does it and lists every option
 | Act twice on one name and know it is the same file both times | `OpenParentInRoot` |
 | Set a mode and prove the filesystem stored it (not on Windows) | `EnforceMode` |
 | Create a directory only your user can enter (not on Windows) | `EnsurePrivateDir` |
+| Prove a directory is private without creating it (not on Windows) | `CheckPrivateDir` |
+| Re-check a directory you hold open as an `os.Root` (not on Windows) | `CheckPrivateDirInRoot` |
+| Let one process at a time work on a file (not on Windows) | `AcquireLease`, or `TryLease` to give up at once |
+| Let many readers in while no writer holds the file (not on Windows) | `AcquireSharedLease`, or `TrySharedLease` to give up at once |
 | Check that a directory takes writes before relying on it | `ProbeWritable`, `ProbeWritableInRoot` |
 | Reclaim temp files left by a crash | `CleanupStaleTemps`, `CleanupStaleTempsInRoot` |
 | Name your own file so the sweeps reclaim it | `TempName`, `IsPackageTemp` |
@@ -39,6 +43,25 @@ Every write returns `(Result, error)`. [Durability and errors](durability.md) ex
 A `WithMaxBytes` cap is enforced as you write. `BytesWritten()` reports the count, `Truncate` re-syncs it, and a call that would cross the cap is rejected whole. `Commit` checks the cap again against the staged file's real size. Bytes written outside that stream, through `WriteAt`, `Write` after `Seek` or a reopen of the temp by path, cannot publish an over-cap file either.
 
 `NewPendingFileInRoot` runs the temp, the rename and the sync after it through your `*os.Root`, which you keep open until `Commit` or `Cleanup`. A `PendingFile` is not safe for concurrent use, so keep each one on one goroutine.
+
+## Updating a file one process at a time
+
+A lease guards a file, and holds no data itself. Take it on a lock file named after the data file, read the data file with `ReadBounded`, and replace it with `WriteFile` before you release the lease. Never write the lock file, which a power loss could leave torn, and never remove it. [Leases](leases.md) explains the lock file's rules and where a lease holds.
+
+```go
+lease, err := filesafe.AcquireLease(ctx, statePath+".lock")
+if err != nil {
+	return err
+}
+defer lease.Close()
+
+data, err := filesafe.ReadBounded(ctx, statePath, 1<<20)
+if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	return err
+}
+_, err = filesafe.WriteFile(ctx, statePath, update(data), filesafe.WithMode(0o600))
+return err
+```
 
 ## Checking a path before writing
 

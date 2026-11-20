@@ -22,7 +22,7 @@ const (
 
 // padded makes jobs.quick answer a body of about n bytes.
 func padded(kf *keyedFixture, n int) {
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{ID: c.Body.Kind, Pad: strings.Repeat("p", n)}, nil
 	}
 }
@@ -138,7 +138,7 @@ func TestStoreWideCeilingWithManyCredentials(t *testing.T) {
 	hold := func(kf *keyedFixture, n int32) (release func()) {
 		ch := make(chan struct{})
 		var started atomic.Int32
-		kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+		kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 			if started.Add(1) <= n {
 				<-ch
 			}
@@ -395,7 +395,7 @@ func TestFailedSaveKeepsTheAnswerInMemory(t *testing.T) {
 			kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{save: errors.New("disk full")}}, nil)
 			release := make(chan struct{})
 			var n atomic.Int64
-			kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+			kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 				<-release
 				return jobAnswer{ID: strconv.FormatInt(n.Add(1), 10)}, nil
 			}
@@ -443,7 +443,7 @@ func TestFailedSaveKeepsTheAnswerInMemory(t *testing.T) {
 			// MaxAnswer 1 MiB makes the default byte share 8 MiB, eight runs in flight.
 			kf := newKeyed(t, httpwire.IdempotencyOptions{Store: failingStore{}, MaxAnswer: mib}, nil)
 			release := make(chan struct{})
-			kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+			kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 				<-release
 				return jobAnswer{ID: "one"}, nil
 			}

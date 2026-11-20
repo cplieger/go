@@ -119,7 +119,7 @@ func TestNewRefusesBindings(t *testing.T) {
 			c.extra = append(c.extra, httpwire.BindRaw("auth.keys", rawHandler()))
 		}, []string{`binding "auth.keys" names a mount row, which its mount's Handler serves`}},
 		"nil handler": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.list"] = httpwire.Bind[noP, jobQuery, noB, []job]("jobs.list", nil)
+			c.binds["jobs.list"] = httpwire.Bind[noP, jobQuery, noB, noH, []job]("jobs.list", nil)
 		}, []string{`binding "jobs.list" has a nil handler`}},
 		"nil raw handler": {func(_ *testing.T, c *apiCase) {
 			c.binds["auth.sso"] = httpwire.BindRaw("auth.sso", nil)
@@ -134,7 +134,7 @@ func TestNewRefusesBindings(t *testing.T) {
 			c.binds["jobs.list"] = httpwire.BindStream("jobs.list", rawHandler())
 		}, []string{`row "jobs.list" is a JSON row, bound with BindStream; bind it with Bind`}},
 		"JSON binding on a Raw row": {func(_ *testing.T, c *apiCase) {
-			c.binds["archive.export"] = httpwire.Bind("archive.export", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.None, error) {
+			c.binds["archive.export"] = httpwire.Bind("archive.export", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.None, error) {
 				return httpwire.None{}, nil
 			})
 		}, []string{`row "archive.export" is a Raw row, bound with Bind; bind it with BindRaw`}},
@@ -150,42 +150,42 @@ func TestNewRefusesBindings(t *testing.T) {
 func TestNewRefusesBindingTypes(t *testing.T) {
 	runNewRefusals(t, map[string]newRefusal{
 		"wrong P": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[otherBody, noQ, noB]) (job, error) { return job{}, nil })
+			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[otherBody, noQ, noB, noH]) (job, error) { return job{}, nil })
 		}, []string{`row "jobs.get": the binding's P is httpwire_test.otherBody, but the row's Params is httpwire_test.jobParams`}},
 		"P where the row has no Params": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[jobParams, jobQuery, noB]) ([]job, error) { return nil, nil })
+			c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[jobParams, jobQuery, noB, noH]) ([]job, error) { return nil, nil })
 		}, []string{`row "jobs.list": the binding's P is httpwire_test.jobParams, but the row's Params is none (httpwire.None)`}},
 		"None where the row has Params": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[noP, noQ, noB]) (job, error) { return job{}, nil })
+			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (job, error) { return job{}, nil })
 		}, []string{`row "jobs.get": the binding's P is httpwire.None, but the row's Params is httpwire_test.jobParams`}},
 		"wrong Q": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[noP, jobParams, noB]) ([]job, error) { return nil, nil })
+			c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[noP, jobParams, noB, noH]) ([]job, error) { return nil, nil })
 		}, []string{`row "jobs.list": the binding's Q is httpwire_test.jobParams, but the row's Query is httpwire_test.jobQuery`}},
 		"wrong B": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.start"] = httpwire.Bind("jobs.start", func(context.Context, httpwire.Call[noP, noQ, otherBody]) (job, error) { return job{}, nil })
+			c.binds["jobs.start"] = httpwire.Bind("jobs.start", func(context.Context, httpwire.Call[noP, noQ, otherBody, noH]) (job, error) { return job{}, nil })
 		}, []string{`row "jobs.start": the binding's B is httpwire_test.otherBody, but the row's Request is httpwire_test.startRequest`}},
 		"wrong R": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (*job, error) { return nil, nil })
+			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (*job, error) { return nil, nil })
 		}, []string{`row "jobs.get": the binding's R is *httpwire_test.job, but the row's Response is httpwire_test.job`}},
 		"a body on a 204 row": {func(_ *testing.T, c *apiCase) {
-			c.binds["settings.save"] = httpwire.Bind("settings.save", func(context.Context, httpwire.Call[noP, noQ, otherBody]) (job, error) { return job{}, nil })
+			c.binds["settings.save"] = httpwire.Bind("settings.save", func(context.Context, httpwire.Call[noP, noQ, otherBody, noH]) (job, error) { return job{}, nil })
 		}, []string{`row "settings.save": the binding's R is httpwire_test.job, but the row's Response is none (httpwire.None)`}},
 		"plain R on a row with Successes": {func(_ *testing.T, c *apiCase) {
-			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (nudge, error) { return nudge{}, nil })
+			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (nudge, error) { return nudge{}, nil })
 		}, []string{`row "events.wait": the row declares Successes, so the binding's R is httpwire.Status[T] with T the row's body httpwire_test.nudge, not httpwire_test.nudge`}},
 		"Status on a one-status row": {func(_ *testing.T, c *apiCase) {
-			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (httpwire.Status[job], error) {
+			c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (httpwire.Status[job], error) {
 				return httpwire.Answer(http.StatusOK, job{}), nil
 			})
 		}, []string{`row "jobs.get": the row declares no Successes, so the binding's R is its Response httpwire_test.job, not a Status`}},
 		"Status of another body": {func(_ *testing.T, c *apiCase) {
-			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[job], error) {
+			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[job], error) {
 				return httpwire.Answer(http.StatusOK, job{}), nil
 			})
 		}, []string{`row "events.wait": the binding's Status body is httpwire_test.job, but the row's body is httpwire_test.nudge`}},
 		"a type embedding Status is not a Status": {func(_ *testing.T, c *apiCase) {
 			type wrapped struct{ httpwire.Status[nudge] }
-			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (wrapped, error) {
+			c.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (wrapped, error) {
 				return wrapped{}, nil
 			})
 		}, []string{`row "events.wait": the row declares Successes, so the binding's R is httpwire.Status[T]`}},
@@ -391,7 +391,7 @@ func TestNewIncludesDeriveRefusals(t *testing.T) {
 			dup := *row(c.tb, "jobs.get")
 			dup.Name = "jobs.again"
 			c.tb.Endpoints = append(c.tb.Endpoints, dup)
-			c.binds["jobs.again"] = httpwire.Bind("jobs.again", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) { return job{}, nil })
+			c.binds["jobs.again"] = httpwire.Bind("jobs.again", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) { return job{}, nil })
 		}, []string{`rows "jobs.get" and "jobs.again"`}},
 	})
 }

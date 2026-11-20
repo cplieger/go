@@ -29,6 +29,7 @@ type Hello struct {
 	Conn           string  `json:"conn,omitempty"`
 	Verdict        Verdict `json:"verdict"`
 	KeepaliveEvent string  `json:"keepalive_event"`
+	Build          string  `json:"build,omitempty"`
 	Floor          uint64  `json:"floor,string"`
 	Head           uint64  `json:"head,string"`
 	Wire           int     `json:"wire"`

@@ -50,17 +50,17 @@ func ifMatchTable() *httpwire.Table {
 		Prefix: "/api", Catalog: httpwire.NewCatalog(),
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "notes.read", Method: http.MethodGet, Path: "/api/notes/{id}", Summary: "Read a note",
+				Name: "notes.read", Method: http.MethodGet, Path: "/notes/{id}", Summary: "Read a note",
 				Description: "Reads one note and its tag.", Params: reflect.TypeFor[noteParams](), Response: reflect.TypeFor[note](),
 				Access: public,
 			},
 			{
-				Name: "notes.save", Method: http.MethodPut, Path: "/api/notes/{id}", Summary: "Save a note",
+				Name: "notes.save", Method: http.MethodPut, Path: "/notes/{id}", Summary: "Save a note",
 				Description: "Saves a note read at its tag.", Params: reflect.TypeFor[noteParams](), Request: reflect.TypeFor[noteBody](),
 				Access: public, IfMatch: true,
 			},
 			{
-				Name: "notes.merge", Method: http.MethodPost, Path: "/api/notes/{id}/merge", Summary: "Merge a note",
+				Name: "notes.merge", Method: http.MethodPost, Path: "/notes/{id}/merge", Summary: "Merge a note",
 				Description: "Merges a note from a base tag.", Params: reflect.TypeFor[noteParams](), Request: reflect.TypeFor[mergeBody](),
 				Access: public,
 			},
@@ -86,10 +86,10 @@ func newNoteStore(t *testing.T, doc []byte) *noteStore {
 	t.Helper()
 	s := &noteStore{current: httpwire.Tag{Open: thisOpen, Rev: 7}}
 	api, err := httpwire.New(ifMatchTable(), []httpwire.Binding{
-		httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB]) (note, error) {
+		httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB, noH]) (note, error) {
 			return note{Text: "hello", Tag: s.current}, nil
 		}),
-		httpwire.Bind("notes.save", func(_ context.Context, c httpwire.Call[noteParams, noQ, noteBody]) (httpwire.None, error) {
+		httpwire.Bind("notes.save", func(_ context.Context, c httpwire.Call[noteParams, noQ, noteBody, noH]) (httpwire.None, error) {
 			s.got = append(s.got, c.IfMatch)
 			if c.IfMatch != s.current {
 				return httpwire.None{}, &httpwire.Error{Code: "stale_version", Message: "the note changed since it was read"}
@@ -98,7 +98,7 @@ func newNoteStore(t *testing.T, doc []byte) *noteStore {
 			s.current.Rev++
 			return httpwire.None{}, nil
 		}),
-		httpwire.Bind("notes.merge", func(_ context.Context, c httpwire.Call[noteParams, noQ, mergeBody]) (httpwire.None, error) {
+		httpwire.Bind("notes.merge", func(_ context.Context, c httpwire.Call[noteParams, noQ, mergeBody, noH]) (httpwire.None, error) {
 			s.got = append(s.got, c.IfMatch, c.Body.Base)
 			return httpwire.None{}, nil
 		}),
@@ -289,11 +289,11 @@ func TestNewMatchesTheIfMatchHeader(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := httpwire.New(ifMatchTable(), []httpwire.Binding{
-				httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB]) (note, error) { return note{}, nil }),
-				httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noteParams, noQ, noteBody]) (httpwire.None, error) {
+				httpwire.Bind("notes.read", func(context.Context, httpwire.Call[noteParams, noQ, noB, noH]) (note, error) { return note{}, nil }),
+				httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noteParams, noQ, noteBody, noH]) (httpwire.None, error) {
 					return httpwire.None{}, nil
 				}),
-				httpwire.Bind("notes.merge", func(context.Context, httpwire.Call[noteParams, noQ, mergeBody]) (httpwire.None, error) {
+				httpwire.Bind("notes.merge", func(context.Context, httpwire.Call[noteParams, noQ, mergeBody, noH]) (httpwire.None, error) {
 					return httpwire.None{}, nil
 				}),
 			}, httpwire.WithSchema(edit(t, tc.edit)))

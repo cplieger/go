@@ -1,10 +1,18 @@
+/** One refused field: its path in the request, its code and a sentence for the user. */
 export interface FieldError {
+  /** The field's path: a body's dotted members and `[i]` items (empty for the whole body), or a query key or header name. */
   path: string;
+  /** Why the field was refused: a `SCHEMA_FIELD_CODES` code or one the app's validators write. */
   code: string;
+  /** A sentence for the user, in the server's words. */
   message: string;
 }
 
-const fieldCodes = [
+/**
+ * The codes the Go server's decode and schema check write into `FieldError.code`. A field's own
+ * refusal code and an app's validators write other codes into the same list, so `code` stays `string`.
+ */
+export const SCHEMA_FIELD_CODES = [
   "malformed",
   "required",
   "unknown",
@@ -13,27 +21,31 @@ const fieldCodes = [
   "range",
   "pattern",
 ] as const;
+Object.freeze(SCHEMA_FIELD_CODES);
 
-/**
- * The codes the Go server's decode and schema check write into `FieldError.code`. A field's own
- * refusal code and an app's validators write other codes into the same list, so `code` stays `string`.
- */
-export const SCHEMA_FIELD_CODES: typeof fieldCodes = Object.freeze(fieldCodes);
-
+/** A refusal's body, as `decodeEnvelope` answers it. */
 export interface ErrorEnvelope {
+  /** The refusal's code, one of the row's error union. */
   code: string;
+  /** A sentence for the user, in the server's words. */
   message: string;
+  /** What the user can do next, the catalog's text for `code`. */
   remediation: string;
+  /** The id of the request that wrote this refusal, which a replay keeps from the first run. */
   request_id: string;
+  /** A finer machine reason under `code`, in the code grammar. */
   reason?: string;
+  /** Each refused field, when the refusal names fields. */
   fields?: readonly FieldError[];
+  /** How long to wait before a retry, in milliseconds. */
   retry_after_ms?: number;
   /** What another service said. Untrusted: show it only as quoted text under the app's own sentence. */
   upstream?: { service: string; status?: number; message: string };
 }
 
 // The bounds the Go writer and DecodeEnvelope hold too; string lengths are UTF-8 bytes.
-const MAX_STRING = 4096;
+/** @internal The UTF-8 byte bound on every string member but reason and upstream.message, which have their own. */
+export const MAX_STRING = 4096;
 const MAX_REASON = 64;
 const MAX_FIELDS = 100;
 const MAX_UPSTREAM_MESSAGE = 512;
@@ -43,7 +55,8 @@ const utf8 = new TextEncoder();
 
 type Members = Readonly<Record<string, unknown>>;
 
-function isObject(v: unknown): v is Members {
+/** @internal Reports whether v is a JSON object, not null or an array. */
+export function isObject(v: unknown): v is Members {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -56,7 +69,8 @@ function str(o: Members, name: string, limit: number): string | undefined {
   return typeof v === "string" && utf8.encode(v).length <= limit ? v : undefined;
 }
 
-function code(o: Members, name: string, limit: number): string | undefined {
+/** @internal Answers the value of o's member name when it is a code of at most limit bytes, else undefined. */
+export function code(o: Members, name: string, limit: number): string | undefined {
   const v = str(o, name, limit);
   return v !== undefined && CODE.test(v) ? v : undefined;
 }
@@ -89,7 +103,8 @@ function decodeFields(v: unknown): FieldError[] | undefined {
   return out;
 }
 
-function decodeUpstream(v: unknown): ErrorEnvelope["upstream"] {
+/** @internal Answers v as an envelope's upstream member, or undefined when it breaks the member's rules. */
+export function decodeUpstream(v: unknown): ErrorEnvelope["upstream"] {
   if (!isObject(v)) {
     return undefined;
   }

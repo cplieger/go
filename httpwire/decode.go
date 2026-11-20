@@ -131,23 +131,28 @@ func (a *API) decodePath(r *http.Request, ep *Endpoint) (any, bool) {
 	return pv.Interface(), true
 }
 
-// decodeQuery parses ep's Query from r's query string, answering one entry
-// per refused key: a key missing when required, given twice, unknown, or
-// whose value does not parse or fails its schema.
-func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
+// decodeQuery parses ep's Query from r's query string, and answers the
+// values given for its fields, or one entry per refused key: a key missing
+// when required, given twice, unknown, or whose value does not parse or
+// fails its schema.
+func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (value any, given map[string][]string, refused []FieldError) {
 	vals, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		return nil, []FieldError{{Path: "", Code: codeMalformed, Message: "the query string does not parse"}}
+		return nil, nil, []FieldError{{Path: "", Code: codeMalformed, Message: "the query string does not parse"}}
 	}
 	qv := reflect.New(ep.Query).Elem()
 	fields, _ := textFields(ep.Query)
 	var c checker
+	given = map[string][]string{}
 	for _, f := range fields {
+		if vs, ok := vals[f.name]; ok {
+			given[f.name] = vs
+		}
 		if f.list {
 			c.out = append(c.out, a.queryList(qv, ep, &f, vals[f.name])...)
 			continue
 		}
-		code, message := a.queryField(qv, ep, &f, vals[f.name])
+		code, message := a.textValue(qv, ep, inQuery, &f, vals[f.name])
 		if code != "" {
 			c.add(f.name, refusalCode(f.typ, code), message)
 		}
@@ -157,10 +162,12 @@ func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
 			c.add(k, codeUnknown, "not a parameter of this request")
 		}
 	}
-	return qv.Interface(), c.out
+	return qv.Interface(), given, c.out
 }
 
-func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []string) (code, message string) {
+// textValue sets f in v from the values given for it in a query or the
+// header, answering the field code of a refusal or "".
+func (a *API) textValue(v reflect.Value, ep *Endpoint, in string, f *textField, given []string) (code, message string) {
 	switch {
 	case len(given) == 0 && f.optional:
 		return "", ""
@@ -169,7 +176,7 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 	case len(given) > 1:
 		return codeMalformed, "given more than once"
 	}
-	fv := qv.FieldByIndex(f.index)
+	fv := v.FieldByIndex(f.index)
 	if f.cursor {
 		fv.SetString(given[0])
 		return "", ""
@@ -181,7 +188,7 @@ func (a *API) queryField(qv reflect.Value, ep *Endpoint, f *textField, given []s
 	if code, message := parseText(fv, given[0]); code != "" {
 		return code, message
 	}
-	if e := a.schema.CheckParam(ep.Name, inQuery, f.name, paramValue(fv, given[0])); e != nil {
+	if e := a.schema.CheckParam(ep.Name, in, f.name, paramValue(fv, given[0])); e != nil {
 		return e.Code, e.Message
 	}
 	return "", ""
@@ -407,8 +414,8 @@ func (w *boundWalk) list(t reflect.Type, v any, path string) {
 }
 
 // object walks a map's members, or struct t's by their exact JSON name, an
-// embedded struct's as t's own; a member the type lacks is the schema's to
-// refuse.
+// embedded struct's as t's own, refusing a member the struct lacks even
+// where the schema admits it, since encoding/json would match it without case.
 func (w *boundWalk) object(t reflect.Type, m map[string]any, path string) {
 	if t.Kind() == reflect.Map {
 		for _, k := range sortedKeys(m) {

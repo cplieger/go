@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -52,7 +53,7 @@ const fixtureIfMatch = `"0000000000000000.0"`
 type fixtureGuard struct{}
 
 func (fixtureGuard) Wrap(_ *httpwire.Endpoint, next http.Handler) http.Handler { return next }
-func (fixtureGuard) Codes(a httpwire.Access) []string                          { return guardCodes(a) }
+func (fixtureGuard) Codes(a httpwire.Access) []httpserver.ErrorCode            { return guardCodes(a) }
 
 func (fixtureGuard) Shape(*http.Request) httpwire.Shape {
 	return httpwire.Shape{Principal: httpwire.ShapeAnonymous}
@@ -72,28 +73,29 @@ type (
 	noP = httpwire.None
 	noQ = httpwire.None
 	noB = httpwire.None
+	noH = httpwire.None
 )
 
 // fixtureBindings binds every row of fixtureTable, by name.
 func fixtureBindings() map[string]httpwire.Binding {
 	return map[string]httpwire.Binding{
-		"jobs.list": httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[noP, jobQuery, noB]) ([]job, error) {
+		"jobs.list": httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[noP, jobQuery, noB, noH]) ([]job, error) {
 			return []job{{ID: "a"}}, nil
 		}),
-		"jobs.get": httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+		"jobs.get": httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 			return job{ID: "one"}, nil
 		}),
-		"jobs.start": httpwire.Bind("jobs.start", func(context.Context, httpwire.Call[noP, noQ, startRequest]) (job, error) {
+		"jobs.start": httpwire.Bind("jobs.start", func(context.Context, httpwire.Call[noP, noQ, startRequest, noH]) (job, error) {
 			return job{ID: "new"}, nil
 		}),
-		"settings.save": httpwire.Bind("settings.save", func(context.Context, httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+		"settings.save": httpwire.Bind("settings.save", func(context.Context, httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 			return httpwire.None{}, nil
 		}),
 		"archive.export": httpwire.BindRaw("archive.export", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/zip")
 			_, _ = w.Write([]byte("PK"))
 		})),
-		"events.wait": httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+		"events.wait": httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 			return httpwire.Answer(http.StatusOK, nudge{At: 7}), nil
 		}),
 		"live.stream": httpwire.BindStream("live.stream", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

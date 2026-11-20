@@ -24,11 +24,12 @@ type (
 
 // The parameter places the binder decodes, and the Endpoint fields they fill.
 const (
-	inPath     = "path"
-	inQuery    = "query"
-	inHeader   = "header"
-	partParams = "Params"
-	partQuery  = "Query"
+	inPath      = "path"
+	inQuery     = "query"
+	inHeader    = "header"
+	partParams  = "Params"
+	partQuery   = "Query"
+	partHeaders = "Headers"
 )
 
 var (

@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"mime"
 	"net/http"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 const (
@@ -25,13 +28,13 @@ const (
 
 // The codes the union adds for a row's features.
 var (
-	keyedUnion = []string{
+	keyedUnion = []httpserver.ErrorCode{
 		codeKeyInvalid, codeKeyRequired, codeKeyReused, codeInFlight,
 		codeStoreFull, codeTooLarge, "held_limit",
 	}
-	ifMatchUnion  = []string{codeIfMatchReq, codeIfMatchBad, "stale_version"}
-	writeUnion    = []string{codeWire, "cross_origin_refused"}
-	everyRowUnion = []string{codeAccounts, codeMaintenance, "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
+	ifMatchUnion  = []httpserver.ErrorCode{codeIfMatchReq, codeIfMatchBad, "stale_version"}
+	writeUnion    = []httpserver.ErrorCode{codeWire, "cross_origin_refused"}
+	everyRowUnion = []httpserver.ErrorCode{codeAccounts, codeMaintenance, "host_not_allowed", codeInternal, codeNotFound, "method_not_allowed"}
 )
 
 var (
@@ -43,7 +46,7 @@ var (
 // t with each row's Errors filled and MaxBody defaulted. Its error lists
 // every refusal at once, each naming its row, owner, source or kind.
 // guardCodes answers the guard's codes for an Access; nil is no guard.
-func Derive(t *Table, guardCodes func(Access) []string) (*Table, error) {
+func Derive(t *Table, guardCodes func(Access) []httpserver.ErrorCode) (*Table, error) {
 	if t == nil {
 		return nil, errors.New("httpwire: Derive of a nil table")
 	}
@@ -56,7 +59,7 @@ func Derive(t *Table, guardCodes func(Access) []string) (*Table, error) {
 
 // derive answers the derived copy beside every refusal, so New can go on
 // checking the bindings and the document against it.
-func derive(t *Table, guardCodes func(Access) []string) (*Table, []error) {
+func derive(t *Table, guardCodes func(Access) []httpserver.ErrorCode) (*Table, []error) {
 	d := cloneTable(t)
 	if d.MaxBody == 0 {
 		d.MaxBody = defaultMaxBody
@@ -85,7 +88,7 @@ func derive(t *Table, guardCodes func(Access) []string) (*Table, []error) {
 // name, carries its own codes and the binder's wrap's instead. Derive fills
 // Errors with it, so the binder and the client generator read one
 // derivation.
-func Union(t *Table, ep *Endpoint, guardCodes func(Access) []string) []string {
+func Union(t *Table, ep *Endpoint, guardCodes func(Access) []httpserver.ErrorCode) []httpserver.ErrorCode {
 	return unionOf(t, ep, guardCodes, isMountRow(t, ep.Name))
 }
 
@@ -101,11 +104,11 @@ func isMountRow(t *Table, name string) bool {
 }
 
 type codeSet struct {
-	seen map[string]bool
-	list []string
+	seen map[httpserver.ErrorCode]bool
+	list []httpserver.ErrorCode
 }
 
-func (s *codeSet) add(codes ...string) {
+func (s *codeSet) add(codes ...httpserver.ErrorCode) {
 	for _, c := range codes {
 		if c != "" && !s.seen[c] {
 			s.seen[c] = true
@@ -114,7 +117,7 @@ func (s *codeSet) add(codes ...string) {
 	}
 }
 
-func (s *codeSet) addIf(cond bool, codes ...string) {
+func (s *codeSet) addIf(cond bool, codes ...httpserver.ErrorCode) {
 	if cond {
 		s.add(codes...)
 	}
@@ -124,8 +127,8 @@ func isWrite(method string) bool { return method != http.MethodGet && method != 
 
 func admitsKey(c Class) bool { return c == Key || c == Scoped }
 
-func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount bool) []string {
-	u := &codeSet{seen: map[string]bool{}}
+func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []httpserver.ErrorCode, mount bool) []httpserver.ErrorCode {
+	u := &codeSet{seen: map[httpserver.ErrorCode]bool{}}
 	u.add(ep.Codes...)
 	write := isWrite(ep.Method)
 	if mount {
@@ -145,6 +148,7 @@ func unionOf(t *Table, ep *Endpoint, guardCodes func(Access) []string, mount boo
 	u.addIf(ep.Request != nil, codeMediaType, codeBadBody, "body_too_large")
 	u.addIf(ep.Kind == Raw && write, "body_too_large")
 	u.addIf(ep.Query != nil, "bad_query")
+	u.addIf(ep.Headers != nil, codeBadHeader)
 	u.addIf(ep.IfMatch, ifMatchUnion...)
 	u.addIf(ep.List, codeCursor)
 	u.addIf(ep.Keyed, keyedUnion...)
@@ -193,7 +197,7 @@ func cloneRows(rows []Endpoint) []Endpoint {
 		ep.PersonActions = slices.Clone(ep.PersonActions)
 		ep.Errors = slices.Clone(ep.Errors)
 		if ep.Reasons != nil {
-			r := make(map[string]ReasonSet, len(ep.Reasons))
+			r := make(map[httpserver.ErrorCode]ReasonSet, len(ep.Reasons))
 			for code, set := range ep.Reasons {
 				r[code] = ReasonSet{Listed: slices.Clone(set.Listed), Open: set.Open}
 			}
@@ -210,7 +214,7 @@ type rowRef struct {
 
 type tableChecker struct {
 	t      *Table
-	guard  func(Access) []string
+	guard  func(Access) []httpserver.ErrorCode
 	owners map[*Owner]bool
 	kinds  map[string]bool
 	errs   []error
@@ -333,7 +337,7 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	if !isRowMethod(ep.Method) {
 		c.fail("%s: method %q is not GET, POST, PUT, PATCH or DELETE", at, ep.Method)
 	}
-	wildcards, err := pathWildcards(c.t.Prefix, ep.Path)
+	wildcards, err := pathWildcards(ep.Path)
 	if err != nil {
 		c.fail("%s: %v", at, err)
 	} else if (len(wildcards) > 0) != (ep.Params != nil) {
@@ -342,7 +346,7 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	for _, f := range []struct {
 		t    reflect.Type
 		name string
-	}{{ep.Params, partParams}, {ep.Query, partQuery}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
+	}{{ep.Params, partParams}, {ep.Query, partQuery}, {ep.Headers, partHeaders}, {ep.Request, "Request"}, {ep.Response, "Response"}} {
 		if f.t == noneType {
 			c.fail("%s: %s is httpwire.None; leave it nil to declare none", at, f.name)
 		}
@@ -361,12 +365,17 @@ func (c *tableChecker) shape(ep *Endpoint, at string) {
 	}
 }
 
-// textParts holds Params to the path's wildcards and, on a table row, every
-// Params and Query field to the types the binder parses from text. A mount
-// row's fields are its handler's to parse.
+// textParts holds Params to the path's wildcards, every Headers field to a
+// header no other layer owns and, on a table row, every Params, Query and
+// Headers field to the types the binder parses from text. A mount row's
+// values are its handler's to parse.
 func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 	if ep.Params != nil && ep.Params != noneType {
 		c.pathParams(ep, at, mount)
+	}
+	seen := map[reflect.Type]bool{}
+	if ep.Headers != nil && ep.Headers != noneType {
+		c.failEach(at+": ", headerProblems(ep.Headers, c.t.ClientHeader, !mount, seen))
 	}
 	if mount {
 		return
@@ -375,7 +384,6 @@ func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 		_, problems := textFields(ep.Query)
 		c.failEach(at+": Query ", problems)
 	}
-	seen := map[reflect.Type]bool{}
 	for _, t := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
 		if t != nil {
 			c.failEach(at+": ", refusalProblems(t, seen))
@@ -385,7 +393,7 @@ func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 
 // pathParams holds ep's Params fields to its path's wildcards, one each.
 func (c *tableChecker) pathParams(ep *Endpoint, at string, mount bool) {
-	wildcards, _ := pathWildcards(c.t.Prefix, ep.Path)
+	wildcards, _ := pathWildcards(ep.Path)
 	fields, problems := textFields(ep.Params)
 	for _, name := range wildcards {
 		if !slices.ContainsFunc(fields, func(f textField) bool { return f.name == name }) {
@@ -424,9 +432,7 @@ func (c *tableChecker) kindAndStatus(ep *Endpoint, at string) {
 	if ep.Kind != JSON && ep.Response != nil {
 		c.fail("%s: a %s row sets no Response", at, kind)
 	}
-	if (ep.Kind == Raw) != (ep.ContentType != "") {
-		c.fail("%s: ContentType is set exactly on a Raw row", at)
-	}
+	c.rawFields(ep, at)
 	if (ep.Kind == Stream || ep.Kind == Redirect) && ep.Method != http.MethodGet {
 		c.fail("%s: a %s row is a GET", at, kind)
 	}
@@ -448,6 +454,35 @@ func (c *tableChecker) kindAndStatus(ep *Endpoint, at string) {
 		seen[s.Status] = true
 	}
 	c.bodyTypes(ep, at)
+}
+
+// rawFields holds ContentTypes and Conditional to a Raw row, refusing an
+// entry that is no single media type and one named twice, since media types
+// compare case-insensitively (RFC 9110 section 8.3.1).
+func (c *tableChecker) rawFields(ep *Endpoint, at string) {
+	if (ep.Kind == Raw) != (len(ep.ContentTypes) > 0) {
+		c.fail("%s: ContentTypes is set exactly on a Raw row", at)
+	}
+	if ep.Conditional && (ep.Kind != Raw || ep.Method != http.MethodGet) {
+		c.fail("%s: Conditional is set only on a Raw GET row", at)
+	}
+	seen := map[string]bool{}
+	for _, t := range ep.ContentTypes {
+		media, _, err := mime.ParseMediaType(t)
+		switch {
+		case err != nil || !strings.Contains(media, "/") || strings.Contains(media, "*"):
+			c.fail("%s: ContentTypes entry %q is not one media type, type/subtype", at, t)
+		case seen[media]:
+			c.fail("%s: ContentTypes names %s twice", at, media)
+		}
+		seen[media] = true
+	}
+}
+
+// mediaOf is a media type's type/subtype, lower case, without parameters.
+func mediaOf(t string) string {
+	base, _, _ := strings.Cut(t, ";")
+	return strings.ToLower(strings.TrimSpace(base))
 }
 
 func primaryStatus(ep *Endpoint) int {
@@ -587,10 +622,8 @@ func (c *tableChecker) keyed(ep *Endpoint, at string, names map[string]*Endpoint
 }
 
 func (c *tableChecker) fingerprinted(ep *Endpoint, at string) {
-	for _, part := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
-		if t, method := oneWay(part, map[reflect.Type]bool{}); t != nil {
-			c.fail("%s: a Keyed row's fingerprint marshals the decoded request, but %s decodes itself with no %s", at, t, method)
-		}
+	if t, method := oneWay(ep.Request, map[reflect.Type]bool{}); t != nil {
+		c.fail("%s: a Keyed row's fingerprint marshals the decoded body, but %s decodes itself with no %s", at, t, method)
 	}
 }
 
@@ -618,8 +651,8 @@ var (
 
 // oneWay answers the first type reachable from t that decodes through its
 // own UnmarshalJSON or UnmarshalText with no marshaler to match, and the
-// method it lacks: the fingerprint's json.Marshal would not see what it
-// decoded, so two requests could share one fingerprint.
+// method it lacks: the json.Marshal of a body under a fingerprint would not
+// see what it decoded, so two requests could share one.
 func oneWay(t reflect.Type, seen map[reflect.Type]bool) (found reflect.Type, missing string) {
 	if t == nil || seen[t] {
 		return nil, ""
@@ -814,7 +847,7 @@ func (c *tableChecker) owner(o *Owner) {
 	}
 }
 
-func (c *tableChecker) ownerCode(at, sentinel, code string) {
+func (c *tableChecker) ownerCode(at, sentinel string, code httpserver.ErrorCode) {
 	if code == "" {
 		c.fail("%s: sentinel %s maps to an empty code", at, sentinel)
 		return
@@ -867,14 +900,17 @@ func (c *tableChecker) reasons(ep *Endpoint, at string) {
 // together (one method and pattern, or two patterns neither more specific)
 // are refused here, naming both.
 func (c *tableChecker) patterns(refs []rowRef) {
+	if !validPrefix(c.t.Prefix) {
+		return
+	}
 	mux := http.NewServeMux()
 	var done []*Endpoint
 	for _, r := range refs {
 		ep := r.ep
-		if _, err := pathWildcards(c.t.Prefix, ep.Path); err != nil || !isRowMethod(ep.Method) {
+		if _, err := pathWildcards(ep.Path); err != nil || !isRowMethod(ep.Method) {
 			continue
 		}
-		if err := register(mux, ep); err != nil {
+		if err := register(mux, c.t.Prefix, ep); err != nil {
 			c.overlap(done, ep, err)
 			continue
 		}
@@ -887,10 +923,10 @@ func (c *tableChecker) overlap(done []*Endpoint, ep *Endpoint, err error) {
 	found := false
 	for _, other := range done {
 		m := http.NewServeMux()
-		_ = register(m, other)
-		if register(m, ep) != nil {
+		_ = register(m, c.t.Prefix, other)
+		if register(m, c.t.Prefix, ep) != nil {
 			found = true
-			c.fail("rows %q and %q: %s %s and %s %s overlap, so one request would match both", other.Name, ep.Name, other.Method, other.Path, ep.Method, ep.Path)
+			c.fail("rows %q and %q: %s and %s overlap, so one request would match both", other.Name, ep.Name, pattern(c.t.Prefix, other), pattern(c.t.Prefix, ep))
 		}
 	}
 	if !found {
@@ -898,15 +934,19 @@ func (c *tableChecker) overlap(done []*Endpoint, ep *Endpoint, err error) {
 	}
 }
 
-func register(mux *http.ServeMux, ep *Endpoint) (err error) {
+func register(mux *http.ServeMux, prefix string, ep *Endpoint) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("%v", p)
 		}
 	}()
-	mux.Handle(ep.Method+" "+ep.Path, http.NotFoundHandler())
+	mux.Handle(pattern(prefix, ep), http.NotFoundHandler())
 	return nil
 }
+
+// pattern is ep's ServeMux pattern: its method and its full path, the
+// table's Prefix then the row's Path.
+func pattern(prefix string, ep *Endpoint) string { return ep.Method + " " + prefix + ep.Path }
 
 func isRowMethod(m string) bool {
 	switch m {
@@ -993,13 +1033,13 @@ func isLiteralSegment(seg string) bool {
 
 func isHex(b byte) bool { return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F' }
 
-// pathWildcards checks that path is the prefix then one or more segments,
-// each a literal or a whole {name}, names unique, and answers the wildcard
-// names in path order.
-func pathWildcards(prefix, path string) ([]string, error) {
-	rest, ok := strings.CutPrefix(path, prefix+"/")
-	if !ok || prefix == "" {
-		return nil, fmt.Errorf("path %q is not under Prefix %q", path, prefix)
+// pathWildcards checks that path is "/" then one or more segments, each a
+// literal or a whole {name}, names unique, and answers the wildcard names in
+// path order.
+func pathWildcards(path string) ([]string, error) {
+	rest, ok := strings.CutPrefix(path, "/")
+	if !ok {
+		return nil, fmt.Errorf("path %q does not start with \"/\"", path)
 	}
 	var names []string
 	for seg := range strings.SplitSeq(rest, "/") {

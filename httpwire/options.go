@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"github.com/cplieger/go/sealed"
 )
 
 // Option configures New. When an option is given twice, the last one wins.
@@ -20,13 +21,14 @@ type options struct {
 	outage      func() string
 	hold        func(http.Handler) http.Handler
 	floor       *ClientFloor
-	cursorKey   *[32]byte
+	sealer      *sealed.Sealer
 	logger      *slog.Logger
 	spoolDir    string
 	schema      []byte
 	idem        IdempotencyOptions
 	keyRateSet  bool
 	schemaSet   bool
+	sealerSet   bool
 }
 
 type feedPosition interface {

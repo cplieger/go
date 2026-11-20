@@ -336,15 +336,15 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
       },
       answer: {
         kind: "raw",
-        status: 404,
+        status: 412,
         headers: {
           "Content-Type": "application/json",
           "Wire-Version": "0123456789abcdef",
           "X-Request-Id": "req-1",
         },
-        body: '{"code":"not_found","message":"not found","remediation":"Check the path; nothing is served at it.","request_id":"req-1"}',
+        body: '{"code":"stale_version","message":"stale version","remediation":"Read the row again, reapply the change, and resend with the new tag.","request_id":"req-1"}',
       },
-      want: { ok: false, failure: "decode", status: 404 },
+      want: { ok: false, failure: "decode", status: 412 },
     },
     {
       name: "held wait answers 200 with a body",
@@ -443,7 +443,9 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
   ] satisfies readonly TransportCase[],
 };
 
+/** The `fetch` that serves one case, and the requests the client sent through it. */
 export interface ServedCase {
+  /** The `fetch` to hand the client under test. */
   readonly fetch: typeof fetch;
   /** Each request the client sent, unread. */
   readonly sent: readonly Request[];

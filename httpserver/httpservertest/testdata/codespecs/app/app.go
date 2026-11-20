@@ -47,9 +47,16 @@ func (c *config) serve(w http.ResponseWriter, r *http.Request) {
 	codes.Register("registered_code")
 	codes.Responder{}.Respond(w, r, http.StatusGone, "other_value_code", "m")
 	_ = codes.Spec{Code: "other_struct_code"}
+	_ = codes.Row{Codes: []hs.ErrorCode{"row_list_code", codes.Shared}}
+	_ = row{[2]hs.ErrorCode{"array_code"}}
 	_ = map[hs.ErrorCode]int{"map_key_code": 1}
+	_ = []hs.ErrorCode{"bare_list_code"}
 	_ = pair{"positional_code", 1}
 	c.warn(w, "variadic_code", "second_variadic_code")
+}
+
+type row struct {
+	codes [2]hs.ErrorCode
 }
 
 type pair struct {

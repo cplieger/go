@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // The envelope's bounds, shared by the writer and both decoders: string
@@ -23,11 +25,11 @@ const (
 //
 //nolint:govet // fieldalignment: the declaration order is the wire's member order.
 type Envelope struct {
-	Code        string       `json:"code"`
-	Message     string       `json:"message"`
-	Remediation string       `json:"remediation"`
-	Reason      string       `json:"reason,omitempty"`
-	Fields      []FieldError `json:"fields,omitempty"`
+	Code        httpserver.ErrorCode `json:"code"`
+	Message     string               `json:"message"`
+	Remediation string               `json:"remediation"`
+	Reason      string               `json:"reason,omitempty"`
+	Fields      []FieldError         `json:"fields,omitempty"`
 	// RetryAfterMS is the wait before a retry, in milliseconds; 0 is none.
 	RetryAfterMS int64     `json:"retry_after_ms,omitempty"`
 	Upstream     *Upstream `json:"upstream,omitempty"`
@@ -56,8 +58,8 @@ func DecodeEnvelope(body []byte) (Envelope, error) {
 			errs = append(errs, fmt.Errorf("httpwire: error envelope %s: %w", member, err))
 		}
 	}
-	var err error
-	env.Code, err = codeMember(top, "code", maxEnvelopeString)
+	code, err := codeMember(top, "code", maxEnvelopeString)
+	env.Code = httpserver.ErrorCode(code)
 	note("code", err)
 	env.Message, err = stringMember(top, "message", maxEnvelopeString)
 	note("message", err)

@@ -45,19 +45,19 @@ func newOrderCase(t *testing.T) *orderCase {
 	t.Helper()
 	o := &orderCase{apiCase: newCase(t)}
 	o.opts["guard"] = httpwire.WithGuard(orderGuard{catalog: o.tb.Catalog, ran: &o.guarded})
-	o.binds["jobs.list"] = httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[noP, jobQuery, noB]) ([]job, error) {
+	o.binds["jobs.list"] = httpwire.Bind("jobs.list", func(context.Context, httpwire.Call[noP, jobQuery, noB, noH]) ([]job, error) {
 		o.handled = append(o.handled, "jobs.list")
 		return nil, nil
 	})
-	o.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	o.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		o.handled = append(o.handled, "jobs.get")
 		return job{ID: "one"}, nil
 	})
-	o.binds["settings.save"] = httpwire.Bind("settings.save", func(context.Context, httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+	o.binds["settings.save"] = httpwire.Bind("settings.save", func(context.Context, httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 		o.handled = append(o.handled, "settings.save")
 		return httpwire.None{}, nil
 	})
-	o.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+	o.binds["events.wait"] = httpwire.Bind("events.wait", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 		o.handled = append(o.handled, "events.wait")
 		return httpwire.Answer(http.StatusNoContent, nudge{}), nil
 	})

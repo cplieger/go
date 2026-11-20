@@ -9,10 +9,19 @@ describe("WireCode", () => {
     expect([...WIRE_CODES].sort()).toEqual(JSON.parse(wireCodesFile) as string[]);
   });
 
+  it("holds the codes for a write that may have run and a refused request header", () => {
+    expect(WIRE_CODES).toContain("outcome_unknown");
+    expect(WIRE_CODES).toContain("bad_header");
+  });
+
   it("is the union of those codes", () => {
     const codes: readonly WireCode[] = ["internal_error", "not_found", "host_not_allowed"];
     // @ts-expect-error an app's own code is no library code
     const own: WireCode = "seadex_unreachable";
     expect([...codes, own].every((c) => typeof c === "string")).toBe(true);
+  });
+
+  it("is frozen", () => {
+    expect(Object.isFrozen(WIRE_CODES)).toBe(true);
   });
 });

@@ -1,0 +1,5 @@
+retry: 1500
+
+event: sse:hello
+data: {"epoch":"3f9a1c0e7b2d4a58","verdict":"fresh","keepalive_event":"sse:keepalive","floor":"0","head":"0","wire":1,"keepalive_ms":15000,"resumed":false}
+

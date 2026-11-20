@@ -1,0 +1,32 @@
+{
+  "info": { "title": "prefix fixture", "version": "1" },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/api/notes": {
+      "get": {
+        "description": "Reads the notes again.",
+        "operationId": "notes.again",
+        "responses": {
+          "200": {
+            "content": { "text/plain": { "schema": {} } },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the notes again"
+      }
+    },
+    "/api/notes": {
+      "get": {
+        "description": "Reads the notes.",
+        "operationId": "notes.read",
+        "responses": {
+          "200": {
+            "content": { "text/plain": { "schema": {} } },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the notes"
+      }
+    }
+  }
+}

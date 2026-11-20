@@ -338,6 +338,7 @@ func (h *Hub) subscribe(req subRequest, cur Cursor, present bool) (*subscription
 			Verdict:        verdict,
 			KeepaliveMS:    int(h.cfg.keepalive.Milliseconds()),
 			KeepaliveEvent: h.cfg.keepaliveEvent,
+			Build:          h.cfg.build,
 			Conn:           c.conn,
 		},
 	}

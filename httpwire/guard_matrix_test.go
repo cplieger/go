@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -26,7 +27,7 @@ var scopeRank = map[string]int{"read": 1, "operate": 2, "admin": 3}
 // refusal code with its headers, or "" to admit.
 type verdict struct {
 	header map[string]string
-	code   string
+	code   httpserver.ErrorCode
 	retry  time.Duration
 }
 
@@ -97,7 +98,7 @@ func TestGuardMatrix(t *testing.T) {
 	c := newCase(t)
 	g := matrixGuard{catalog: c.tb.Catalog, mu: &sync.Mutex{}, wrapped: map[string]httpwire.Access{}}
 	c.opts["guard"] = httpwire.WithGuard(g)
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		p, _ := ctx.Value(admittedAs{}).(string)
 		return job{ID: "as " + p}, nil
 	})

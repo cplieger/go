@@ -1,6 +1,11 @@
-const codes = [
+/**
+ * Every code httpwire's Go catalog holds at its start, at the httpserver/v2 version this release
+ * requires: httpwire's own and httpserver's.
+ */
+export const WIRE_CODES = [
   "accounts_unavailable",
   "bad_body",
+  "bad_header",
   "bad_query",
   "bad_request",
   "body_too_large",
@@ -22,6 +27,7 @@ const codes = [
   "maintenance",
   "method_not_allowed",
   "not_found",
+  "outcome_unknown",
   "person_required",
   "precondition_failed",
   "rate_limited",
@@ -34,9 +40,7 @@ const codes = [
   "upgrade_required",
   "wire_mismatch",
 ] as const;
-
-/** Every code httpwire's Go catalog holds at its start: httpwire's own and httpserver's. */
-export const WIRE_CODES: typeof codes = Object.freeze(codes);
+Object.freeze(WIRE_CODES);
 
 /** A library code. An app's own codes come from its generated client's unions. */
-export type WireCode = (typeof codes)[number];
+export type WireCode = (typeof WIRE_CODES)[number];

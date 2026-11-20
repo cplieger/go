@@ -210,6 +210,111 @@ describe("stream runtime", () => {
     expect(h.versions.epoch()).toBe(A);
   });
 
+  it("revalidate('hello') receives the hello's build on entry, null when the hello carries none", async () => {
+    const h = harness();
+    const first = await h.open({ head: "5" });
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", build: null });
+    h.runs[0]!.resolve();
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_TIMING.stableMs + 1);
+    first.end();
+    await flush();
+    h.last().push(helloFrame({ head: "6", build: "2026.11.19-a1b2c3" }));
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "2026.11.19-a1b2c3" });
+  });
+
+  it("a hello queued behind an in-flight run keeps its cause and build when a later wake queues", async () => {
+    const h = harness();
+    const first = await h.open({ head: "5", build: "b1" });
+    first.end();
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_RETRY_MS);
+    await flush();
+    expect(h.sf.connections).toHaveLength(2);
+    h.last().push(helloFrame({ head: "6", build: "b2" }));
+    await flush();
+    h.visibility.emit("hidden");
+    h.visibility.emit("visible");
+    await flush();
+    expect(h.runs).toHaveLength(1);
+    h.runs[0]!.resolve();
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
+  });
+
+  it("a hello still queued when its blocker times out keeps its cause and build when a wake in backoff runs it", async () => {
+    const h = harness();
+    const first = await h.open({ head: "5", build: "b1" });
+    first.end();
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_RETRY_MS);
+    await flush();
+    h.last().push(helloFrame({ head: "6", build: "b2" }));
+    await flush();
+    vi.advanceTimersByTime(DEFAULT_TIMING.revalidateTimeoutMs - DEFAULT_RETRY_MS);
+    await flush();
+    expect(h.ofKind("revalidate_timeout")).toHaveLength(1);
+    expect(h.stream.state().kind).toBe("backoff");
+    expect(h.runs).toHaveLength(1);
+    h.visibility.emit("hidden");
+    h.visibility.emit("visible");
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b2" });
+  });
+
+  it("a later hello joining a queued hello replaces its build", async () => {
+    const h = harness();
+    await h.open({ head: "5", build: "b1" });
+    for (const build of ["b2", "b3"]) {
+      h.last().end();
+      await flush();
+      vi.advanceTimersByTime(DEFAULT_RETRY_MS * 4);
+      await flush();
+      h.last().push(helloFrame({ head: "6", build }));
+      await flush();
+    }
+    expect(h.sf.connections).toHaveLength(3);
+    expect(h.ofKind("revalidate_timeout")).toEqual([]);
+    expect(h.runs).toHaveLength(1);
+    h.runs[0]!.resolve();
+    await flush();
+    expect(h.runs).toHaveLength(2);
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", build: "b3" });
+  });
+
+  it("a full run queued on a stopped stream runs with the build of the hello that starts it, resumed or not", async () => {
+    const h = harness();
+    streamInternals(h.stream).queueFull();
+    await h.open({ head: "3", build: "n1" });
+    expect(h.runs).toHaveLength(1);
+    expect(h.runs[0]!.ctx).toMatchObject({ cause: "hello", full: true, build: "n1" });
+
+    const resumed = harness();
+    streamInternals(resumed.stream).queueFull();
+    await resumed.open({ resumed: true, head: "3", build: "r1" });
+    expect(resumed.runs).toHaveLength(1);
+    expect(resumed.runs[0]!.ctx).toMatchObject({ cause: "hello", full: true, build: "r1" });
+  });
+
+  it("a run whose cause is not a hello receives build null", async () => {
+    const h = harness();
+    const conn = await h.open({ build: "b1" });
+    h.runs[0]!.resolve();
+    await flush();
+    h.visibility.emit("hidden");
+    h.visibility.emit("visible");
+    await flush();
+    expect(conn.request.aborted).toBe(false);
+    expect(h.runs.map((r) => [r.ctx.cause, r.ctx.build])).toEqual([
+      ["hello", "b1"],
+      ["visible", null],
+    ]);
+  });
+
   it("a resumed hello keeps the cursor and adopts head after the first non-replay frame", async () => {
     const h = harness();
     const first = await h.open({ head: "5" });
@@ -375,7 +480,7 @@ describe("stream runtime", () => {
     expect(h.ofKind("revalidate")).toHaveLength(2);
   });
 
-  it("a full run queued behind a later cause still runs as full", async () => {
+  it("a full hello queued behind a run keeps its cause and full when a later wake joins it", async () => {
     const versions = createVersionMap();
     versions.observe({ kind: "chat", ref: "c1" }, "3", A);
     const h = harness({ visible: false, versions });
@@ -394,7 +499,7 @@ describe("stream runtime", () => {
     h.runs[0]!.resolve();
     await flush();
     expect(h.runs).toHaveLength(2);
-    expect(h.runs[1]!.ctx).toMatchObject({ cause: "pageshow", full: true, epoch: B });
+    expect(h.runs[1]!.ctx).toMatchObject({ cause: "hello", full: true, epoch: B });
     expect(versions.snapshot().held).toEqual([]);
   });
 

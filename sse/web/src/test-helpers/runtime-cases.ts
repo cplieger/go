@@ -426,7 +426,7 @@ export function runtimeCases(get: () => CaseEnvironment): void {
     expect(app.digests.length).toBe(originalDigests + 2);
   });
 
-  it("a full queued behind visible runs as full", async () => {
+  it("a full hello queued behind visible keeps its cause and full when pageshow joins it", async () => {
     const app = build({ body: "manual", visible: false });
     await app.load({ kind: "chat", ref: uniq("queued") });
     await fixture.restart();
@@ -441,7 +441,7 @@ export function runtimeCases(get: () => CaseEnvironment): void {
     expect(app.runs).toHaveLength(1);
     await app.settle(0);
     await waitFor("queued run", () => app.runs.length === 2);
-    expect(app.runs[1]!.ctx).toMatchObject({ cause: "pageshow", full: true });
+    expect(app.runs[1]!.ctx).toMatchObject({ cause: "hello", full: true });
   });
 
   it("hold and drain order", async () => {

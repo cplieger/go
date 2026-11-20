@@ -3,6 +3,7 @@
 package filesafe
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,6 +41,38 @@ func recordFsyncRootDir(t *testing.T) func() []string {
 		seen = append(seen, dir)
 		mu.Unlock()
 		return orig(root, dir)
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
+// stubFsyncDir replaces the package fsyncDir seam with fn, restoring the
+// original on test end. Callers must not use t.Parallel: package state.
+func stubFsyncDir(t *testing.T, fn func(dir string) error) {
+	t.Helper()
+	orig := fsyncDir
+	t.Cleanup(func() { fsyncDir = orig })
+	fsyncDir = fn
+}
+
+// recordFsyncDir replaces the package fsyncDir seam with one that records
+// every dir it is asked to sync and then runs the original, restoring it on
+// test end. Returns a function reporting the recorded dirs in call order.
+// Callers must not use t.Parallel: package state.
+func recordFsyncDir(t *testing.T) func() []string {
+	t.Helper()
+	orig := fsyncDir
+	t.Cleanup(func() { fsyncDir = orig })
+	var mu sync.Mutex
+	var seen []string
+	fsyncDir = func(dir string) error {
+		mu.Lock()
+		seen = append(seen, dir)
+		mu.Unlock()
+		return orig(dir)
 	}
 	return func() []string {
 		mu.Lock()
@@ -107,4 +140,28 @@ func lstatOccupants(t *testing.T) occupants {
 // found is a stat func that reports fi.
 func found(fi os.FileInfo) func() (os.FileInfo, error) {
 	return func() (os.FileInfo, error) { return fi, nil }
+}
+
+// assertModeTooOpen requires err to be a *ModeTooOpenError naming name with
+// mode want, then widens path to 0777 and requires the error to still report
+// want: the refusal describes what was checked, not what is there now.
+func assertModeTooOpen(t *testing.T, err error, path, name string, want os.FileMode) {
+	t.Helper()
+	if !errors.Is(err, ErrModeTooOpen) {
+		t.Errorf("err = %v, want it to match ErrModeTooOpen", err)
+	}
+	mt, ok := errors.AsType[*ModeTooOpenError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *ModeTooOpenError", err)
+	}
+	if mt.Name != name || mt.Mode != want {
+		t.Errorf("ModeTooOpenError = {Name: %q, Mode: %#o}, want {Name: %q, Mode: %#o}", mt.Name, uint32(mt.Mode), name, uint32(want))
+	}
+	msg := err.Error()
+	if err := os.Chmod(path, 0o777); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	if mt.Mode != want || err.Error() != msg {
+		t.Errorf("after chmod 0777: Mode %#o, message %q; want Mode %#o and message %q unchanged", uint32(mt.Mode), err.Error(), uint32(want), msg)
+	}
 }

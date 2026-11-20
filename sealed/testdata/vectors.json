@@ -1,0 +1,51 @@
+{
+  "provenance": "Computed with Python 3.15.2's cryptography 50.0.2 over OpenSSL 4.0.3 (HKDF-SHA256, AES-256-GCM given the nonce, HMAC-SHA256) from the definitions in docs/format.md, never from this module's output. Byte strings are lowercase hex, values unpadded base64url, and texts UTF-8; an okm is RFC 5869's output keying material.",
+  "keys": [
+    {
+      "name": "K1",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "id": "70603bd36c8291d779397aa614e66b28"
+    },
+    {
+      "name": "K2",
+      "key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "id": "0681d8a548d4df142f5e9a3ab863e9ba"
+    }
+  ],
+  "keyFiles": [
+    {
+      "name": "two keys",
+      "current": "K2",
+      "previous": "K1",
+      "text": "sealed-key/v1\ncurrent 0681d8a548d4df142f5e9a3ab863e9ba 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f\nprevious 70603bd36c8291d779397aa614e66b28 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n"
+    },
+    {
+      "name": "one key",
+      "current": "K1",
+      "text": "sealed-key/v1\ncurrent 70603bd36c8291d779397aa614e66b28 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n"
+    }
+  ],
+  "values": {
+    "key": "K1",
+    "purpose": "example",
+    "nonce": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "payload": "hello",
+    "expiry": 4102444800,
+    "expiringOKM": "b28c9a34b25fc3e55a413239acef74ef998cb35e9d49acccbbbe3998e800097c",
+    "expiring": "AaChoqOkpaanqKmqq89Rc9CQ2lWXBo36gugw72WLmhj7BOGqgdRSRzsp",
+    "atRestOKM": "a3664333faa15ab2e4bb3a2acad133bf1b54feb5bf7948d9f1ad1c725b8fa194",
+    "atRest": "AaChoqOkpaanqKmqq_nCUFgeYVjJApnL6jlNSQwfJWtLNw"
+  },
+  "subkey": {
+    "key": "K1",
+    "label": "example/cursor",
+    "okm": "06a613c5bc49e3e6efd70c3b5f8bf403c9fb981197d71bfaca44446225db35f8"
+  },
+  "mac": {
+    "key": "K1",
+    "label": "example/manifest",
+    "message": "example manifest",
+    "keyId": "70603bd36c8291d779397aa614e66b28",
+    "tag": "90c989e51170bc63130b9888d84f37a7e962ede9ba867393c5b177351f10fa09"
+  }
+}

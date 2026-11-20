@@ -1,8 +1,15 @@
 package sse
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,6 +32,11 @@ func TestNew_refusalMatrix(t *testing.T) {
 		{name: "LineFeedKeepaliveName", opts: []Option{WithKeepaliveEvent("beat\nid: 9")}, wantErr: true},
 		{name: "CarriageReturnKeepaliveName", opts: []Option{WithKeepaliveEvent("beat\rid: 9")}, wantErr: true},
 		{name: "EmptyKeepaliveName", opts: []Option{WithKeepaliveEvent("")}},
+		{name: "InvalidUTF8Build", opts: []Option{WithBuild("v1\xff")}, wantErr: true},
+		{name: "EmptyBuild", opts: []Option{WithBuild("")}},
+		{name: "BuildOverflowsHello", opts: []Option{WithBuild(strings.Repeat("b", MaxFrameBytes))}, wantErr: true},
+		{name: "BuildWithinHello", opts: []Option{WithBuild(strings.Repeat("b", MaxFrameBytes-1024))}},
+		{name: "KeepaliveNameOverflowsHello", opts: []Option{WithKeepaliveEvent(strings.Repeat("k", MaxFrameBytes))}, wantErr: true},
 		{name: "NegativeRing", opts: []Option{WithReplay(-1)}, wantErr: true},
 		{name: "ByteCapBelowOneFrame", opts: []Option{WithReplayMaxBytes(MaxFrameBytes - 1)}, wantErr: true},
 		{name: "ByteCapOfOneFrame", opts: []Option{WithReplayMaxBytes(MaxFrameBytes)}},
@@ -76,6 +88,58 @@ func TestNew_crossFieldRulesInBothOrders(t *testing.T) {
 				t.Errorf("New(b, a) error = %v, want error %v", errBA, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestNew_largestAcceptedBuildServesHelloWithinFrameCap serves the longest
+// build New accepts on a scoped connection, whose hello also carries conn, and
+// requires both that served hello and the widest hello Serve can write
+// (cursor_invalid, both offsets at MaxOffset) to fit the frame cap the client
+// enforces.
+func TestNew_largestAcceptedBuildServesHelloWithinFrameCap(t *testing.T) {
+	refused := sort.Search(MaxFrameBytes+1, func(n int) bool {
+		_, err := New(WithBuild(strings.Repeat("b", n)))
+		return err != nil
+	})
+	if refused == 0 {
+		t.Fatal("New(WithBuild(\"\")) refused")
+	}
+	h := mustNew(t, WithBuild(strings.Repeat("b", refused-1)), WithLogger(slog.New(slog.DiscardHandler)))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	rec := httptest.NewRecorder()
+	h.Serve(rec, httptest.NewRequest(http.MethodGet, "/events", http.NoBody).WithContext(ctx), WithRequestScope("p"))
+	body := rec.Body.Bytes()
+	start := bytes.Index(body, []byte("event: sse:hello\n"))
+	if start < 0 {
+		t.Fatalf("no hello in %d-byte handshake", len(body))
+	}
+	end := bytes.Index(body[start:], []byte("\n\n"))
+	if end < 0 {
+		t.Fatal("hello frame has no terminating blank line")
+	}
+	if !bytes.Contains(body[start:start+end], []byte(`"conn":"`)) {
+		t.Error("hello on a scoped connection carries no conn")
+	}
+	if size := end + 2; size > MaxFrameBytes {
+		t.Errorf("served fresh hello with a %d-byte build is %d bytes, above MaxFrameBytes (%d)", refused-1, size, MaxFrameBytes)
+	}
+	widest, err := json.Marshal(Hello{
+		Epoch:          h.epoch,
+		Conn:           strings.Repeat("A", 22),
+		Verdict:        VerdictCursorInvalid,
+		KeepaliveEvent: h.cfg.keepaliveEvent,
+		Build:          h.cfg.build,
+		Floor:          MaxOffset,
+		Head:           MaxOffset,
+		Wire:           Wire,
+		KeepaliveMS:    int(h.cfg.keepalive.Milliseconds()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := frameSize(len(helloEvent), [][]byte{widest}, 0); size > MaxFrameBytes {
+		t.Errorf("widest hello with a %d-byte build is %d bytes, above MaxFrameBytes (%d)", refused-1, size, MaxFrameBytes)
 	}
 }
 

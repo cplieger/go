@@ -113,6 +113,21 @@ func TestFsyncRootDir_Production(t *testing.T) {
 	})
 }
 
+func TestFsyncDir_Production(t *testing.T) {
+	t.Run("valid_dir_returns_nil", func(t *testing.T) {
+		if err := fsyncDir(t.TempDir()); err != nil {
+			t.Errorf("fsyncDir(validDir) = %v, want nil", err)
+		}
+	})
+
+	t.Run("missing_dir_returns_open_error", func(t *testing.T) {
+		err := fsyncDir(filepath.Join(t.TempDir(), "does-not-exist"))
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("fsyncDir(missingDir) = %v, want errors.Is os.ErrNotExist", err)
+		}
+	})
+}
+
 // Commit is idempotent even when the first call hit a dir-fsync failure: the
 // recorded (not-durable, nil-error) Result is returned again, and the content
 // remains at the final path.

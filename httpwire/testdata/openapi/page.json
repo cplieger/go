@@ -87,6 +87,64 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/groups/{group}/items": {
+      "get": {
+        "description": "List a group's items.",
+        "operationId": "groups.items",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List a group's items"
+      }
+    },
     "/api/handles": {
       "get": {
         "description": "Seal a handle.",
@@ -202,6 +260,73 @@
           }
         },
         "summary": "List archived items"
+      }
+    },
+    "/api/items/scoped": {
+      "get": {
+        "description": "List a scope's items.",
+        "operationId": "items.scoped",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 1416
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Scope",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Zone",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List a scope's items"
       }
     },
     "/api/public/handles": {

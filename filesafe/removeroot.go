@@ -163,8 +163,7 @@ func pinChildInRoot(parent *os.Root, name string) (*os.Root, error) {
 			ErrSymlinkTarget, name, fi.Mode().String())
 	}
 	if !fi.IsDir() {
-		return nil, fmt.Errorf("%w: path component %q is not a directory (mode %s)",
-			ErrNotDirectory, name, fi.Mode().String())
+		return nil, fmt.Errorf("filesafe: path component %q: %w", name, notDirectory(name, fi.Mode()))
 	}
 	if pinOpenHook != nil {
 		pinOpenHook(name)

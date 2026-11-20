@@ -24,9 +24,10 @@ const (
 // Quiescer is quieted while a database file it reads is replaced. It
 // returns from Quiesce(ctx, QuietAll) only once it will commit nothing
 // derived from the old file after the reopen: its requests and its own
-// writers held, and a job runner's running jobs cancelled or finished,
-// each job writing only through the pin it took at its start. resume is
-// idempotent.
+// writers held. A job runner's running jobs, a yielded one included, are
+// cancelled or finished, each writing only through the pin it took at its
+// start, and its queued jobs end interrupted, its queue emptied and its
+// held proposals dropped. resume is idempotent.
 type Quiescer interface {
 	Quiesce(ctx context.Context, q Quiet) (resume func(), err error)
 }

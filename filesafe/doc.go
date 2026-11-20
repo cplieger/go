@@ -1,7 +1,8 @@
 // Package filesafe provides crash-safe atomic file writes (temp, fsync,
 // rename, then a directory fsync, or on Windows a flush of the published
 // file, all through an *os.Root), bounded reads, regular-file opens,
-// writability probes and stale-temp sweeps, using only the standard library.
+// writability probes, stale-temp sweeps and flock leases on lock files,
+// using only the standard library.
 // A nil error from a write means the data reached its final path.
 //
 // A write without [WithMode] creates the file like [os.Create] (0666 through
