@@ -445,6 +445,7 @@ export const TRANSPORT_FIXTURE: TransportFixture = {
 
 /** The `fetch` that serves one case, and the requests the client sent through it. */
 export interface ServedCase {
+  /** The `fetch` to hand the client under test. */
   readonly fetch: typeof fetch;
   /** Each request the client sent, unread. */
   readonly sent: readonly Request[];

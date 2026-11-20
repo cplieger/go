@@ -3,7 +3,9 @@ import { REQUEST_ID_HEADER, WIRE_VERSION_HEADER } from "../headers.js";
 
 /** One row of a generated client's `ENDPOINTS`. */
 export interface GeneratedEndpoint<T> {
+  /** The row's name, its key in `ENDPOINTS`. */
   readonly name: string;
+  /** The row's HTTP method. */
   readonly method: string;
   /** The row's pattern: literal segments, `{name}` for one segment, `{name...}` last for the rest. */
   readonly path: string;
@@ -20,13 +22,17 @@ export type GeneratedEndpoints = Readonly<Record<string, GeneratedEndpoint<unkno
 
 /** A catalog row as the document's `x-error-codes` publishes it. */
 export interface ErrorCodeSpec {
+  /** The status the catalog answers the code with. */
   readonly status: number;
+  /** The catalog's remediation for the code. */
   readonly remediation: string;
 }
 
 /** The rows a fake server answers for, and the wire version every answer carries. */
 export interface FakeServerOptions {
+  /** The rows the fake routes requests to. */
   readonly endpoints: GeneratedEndpoints;
+  /** The `Wire-Version` every answer carries. */
   readonly wireVersion: string;
   /** Each code's status and remediation; `refuse` of a code missing here needs its own status. */
   readonly errorCodes?: Readonly<Record<string, ErrorCodeSpec>>;
@@ -34,7 +40,9 @@ export interface FakeServerOptions {
 
 /** One request the fake routed to a row. */
 export interface FakeCall {
+  /** The row the request was routed to. */
   readonly name: string;
+  /** The request's URL. */
   readonly url: string;
   /** The request body, parsed as JSON when it is JSON; absent when the request sent none. */
   readonly body?: unknown;
@@ -50,12 +58,15 @@ export interface FakeStream {
   push(event: string, data: unknown): void;
   /** Ends every open connection. */
   close(): void;
+  /** How many connections are open. */
   readonly open: number;
 }
 
 /** An answer's status (the row's primary when absent) and extra headers. */
 export interface AnswerOptions {
+  /** The status to answer, one of the row's success statuses. */
   readonly status?: number;
+  /** Headers set on the answer, over the fake's own. */
   readonly headers?: Readonly<Record<string, string>>;
   /** Answer only a request whose path parameters hold these values. */
   readonly params?: Readonly<Record<string, string>>;
@@ -66,9 +77,13 @@ export interface AnswerOptions {
  * path parameters it is limited to.
  */
 export interface RefuseOptions {
+  /** The status to refuse with, from 400 to 599 and the catalog's when it names the code. */
   readonly status?: number;
+  /** The envelope's `reason`. */
   readonly reason?: string;
+  /** The envelope's `fields`. */
   readonly fields?: readonly FieldError[];
+  /** Refuse only a request whose path parameters hold these values. */
   readonly params?: Readonly<Record<string, string>>;
 }
 
@@ -77,10 +92,15 @@ export interface RefuseOptions {
  * hold, the newest registered answers; `calls` lists each routed request in order.
  */
 export interface FakeServer {
+  /** The `fetch` to hand the generated client. */
   readonly fetch: typeof fetch;
+  /** Registers `data` as `ep`'s answer, throwing when the row declares no such status or its decoder refuses the data. */
   answer<T>(ep: GeneratedEndpoint<T>, data: T, o?: AnswerOptions): void;
+  /** Registers a refusal of `ep` with `code`, throwing when the code is outside the row's union or its status is off the catalog. */
   refuse(ep: GeneratedEndpoint<unknown>, code: string, o?: RefuseOptions): void;
+  /** The `events.stream` row's connections, throwing when the fake has no such row. */
   stream(): FakeStream;
+  /** Each request routed to a row, in order. */
   readonly calls: readonly FakeCall[];
 }
 

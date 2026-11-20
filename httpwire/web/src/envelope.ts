@@ -1,7 +1,10 @@
 /** One refused field: its path in the request, its code and a sentence for the user. */
 export interface FieldError {
+  /** The field's path: a body's dotted members and `[i]` items (empty for the whole body), or a query key or header name. */
   path: string;
+  /** Why the field was refused: a `SCHEMA_FIELD_CODES` code or one the app's validators write. */
   code: string;
+  /** A sentence for the user, in the server's words. */
   message: string;
 }
 
@@ -22,12 +25,19 @@ Object.freeze(SCHEMA_FIELD_CODES);
 
 /** A refusal's body, as `decodeEnvelope` answers it. */
 export interface ErrorEnvelope {
+  /** The refusal's code, one of the row's error union. */
   code: string;
+  /** A sentence for the user, in the server's words. */
   message: string;
+  /** What the user can do next, the catalog's text for `code`. */
   remediation: string;
+  /** The id of the request that wrote this refusal, which a replay keeps from the first run. */
   request_id: string;
+  /** A finer machine reason under `code`, in the code grammar. */
   reason?: string;
+  /** Each refused field, when the refusal names fields. */
   fields?: readonly FieldError[];
+  /** How long to wait before a retry, in milliseconds. */
   retry_after_ms?: number;
   /** What another service said. Untrusted: show it only as quoted text under the app's own sentence. */
   upstream?: { service: string; status?: number; message: string };
