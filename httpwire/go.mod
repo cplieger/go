@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.13
-	github.com/cplieger/go/sealed v1.0.0-dev.1
+	github.com/cplieger/go/sealed v1.0.0-dev.4
 	github.com/cplieger/go/textsafe v1.1.0
 )
 
