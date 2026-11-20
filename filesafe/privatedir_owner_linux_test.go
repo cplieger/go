@@ -558,8 +558,8 @@ func assertNotOwned(t *testing.T, call string, err error, name string) {
 	if !ok {
 		t.Fatalf("%s = %v, want a *NotOwnedError", call, err)
 	}
-	if no.Name != name || no.Owner != 0 || no.EUID != int64(os.Geteuid()) {
-		t.Errorf("%s: NotOwnedError = %+v, want {Name: %s, Owner: 0, EUID: %d}", call, *no, name, os.Geteuid())
+	if no.Name != name || no.Owner != 0 || no.EUID != uidOf(os.Geteuid()) {
+		t.Errorf("%s: NotOwnedError = %+v, want {Name: %s, Owner: 0, EUID: %d}", call, *no, name, uidOf(os.Geteuid()))
 	}
 }
 

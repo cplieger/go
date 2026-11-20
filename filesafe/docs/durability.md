@@ -81,11 +81,11 @@ Each refusal that found something worth naming arrives as a typed error carrying
 | Sentinel | Typed error | Fields |
 | --- | --- | --- |
 | `ErrNotRegular` | `*NotRegularError` | `Name`, and `Mode`, whose `Type()` names what was there |
-| `ErrNotDirectory` | `*NotDirectoryError` | `Name`, and `Mode`, the full mode of what was there: `Type()` names a special file and is 0 for a regular file, which has no type bits; for `OpenParentInRoot`, `Name` is the ancestor component |
+| `ErrNotDirectory` | `*NotDirectoryError` | `Name`, and `Mode`, the full mode of what was there. `Type()` names a special file and is 0 for a regular file, which has no type bits. For `OpenParentInRoot`, `Name` is the ancestor component. |
 | `ErrNotOwned` | `*NotOwnedError` | `Name`, `Owner`, the uid that owns it or -1 when that could not be read, and `EUID`, the effective uid it was compared with |
 | `ErrModeTooOpen` | `*ModeTooOpenError` | `Name`, and `Mode`, the permission bits plus setuid, setgid and sticky the check read |
 | `ErrModeNotStored` | `*ModeNotStoredError` | `Name`, `Requested` and `Stored`, in the same bits |
-| `ErrFileTooLarge` | `*FileTooLargeError` | `Limit`, the cap, and `Size`, how large the content was found or would have grown: for a file read or committed, a lower bound on its full size; for a rejected write or truncate, the size it would have reached |
+| `ErrFileTooLarge` | `*FileTooLargeError` | `Limit`, the cap, and `Size`, how large the content was found or would have grown. For a file read or committed, `Size` is a lower bound on its full size. For a rejected write or truncate, it is the size the content would have reached. |
 
 A failure inside the write itself is a `*WriteError{Err, Phase}`. `Phase` is one of `PhaseTempCreate`, `PhaseTempWrite`, `PhaseTempChmod`, `PhaseTempSync`, `PhaseTempClose` or `PhaseRename`. `PhaseTempCreate` covers opening the target's directory, so a missing parent without `WithMkdirMode` or `WithMkdirAll(true)` surfaces there, as well as creating the temp file. `PhaseTempChmod` occurs only under `WithMode`. On Windows the temp stays open until after the rename, so `PhaseTempClose` does not occur there, and `PhaseRename` includes the retry of a busy target. A failed directory sync after the rename has no phase, because `Result.Durable` reports it, and neither has the flush that replaces it on Windows.
 

@@ -119,10 +119,26 @@ func TestEnforceModeNilFile(t *testing.T) {
 	}
 }
 
-// A failing fchmod/fstat is deliberately untested: it needs the
-// descriptor's ownership or mount taken away mid-call, which is not
-// stageable in a temp directory without an injection seam whose only
-// consumer would be this test.
+// A closed descriptor fails fchmod first, so EnforceMode returns that error
+// and stores nothing. An fstat failing after a successful fchmod on the same
+// descriptor is not stageable without an injection seam.
+func TestEnforceModeClosedFileReturnsItsError(t *testing.T) {
+	t.Parallel()
+	f, err := os.Create(filepath.Join(t.TempDir(), "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := EnforceMode(f, 0o600)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("EnforceMode(closed file, 0600) error = %v, want os.ErrClosed", err)
+	}
+	if got != 0 {
+		t.Errorf("EnforceMode(closed file, 0600) = %#o, want 0", got)
+	}
+}
 
 // TestEnsurePrivateDirCreatesWhenAbsent pins the ordinary path: the level
 // did not exist, this call made it, and what is on disk afterwards is
@@ -664,15 +680,16 @@ func TestNotOwnedError_UndeterminedOwnerIsMinusOne(t *testing.T) {
 	if !ok {
 		t.Fatalf("ownerErr = %v, want a *NotOwnedError", err)
 	}
-	if no.Name != "d" || no.Owner != -1 || no.EUID != int64(os.Geteuid()) {
-		t.Errorf("NotOwnedError = %+v, want {Name: d, Owner: -1, EUID: %d}", *no, os.Geteuid())
+	if no.Name != "d" || no.Owner != -1 || no.EUID != uidOf(os.Geteuid()) {
+		t.Errorf("NotOwnedError = %+v, want {Name: d, Owner: -1, EUID: %d}", *no, uidOf(os.Geteuid()))
 	}
 	if want := "filesafe: not owned by the effective uid: d: ownership could not be determined"; err.Error() != want {
 		t.Errorf("message = %q, want %q", err.Error(), want)
 	}
 }
 
-// ownedBy reports a FileInfo's owner as uid.
+// ownedBy's Sys returns a *syscall.Stat_t with only Uid set, the one field
+// ownerErr reads.
 type ownedBy struct {
 	os.FileInfo
 	uid uint32
