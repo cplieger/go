@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/httpwire"
@@ -51,12 +52,19 @@ func sources(s ...httpwire.SourceCheck[checkedItem]) httpwire.Checked[checkedIte
 	return httpwire.Checked[checkedItem]{Sources: s}
 }
 
+// storePos is a Feed-Position value as the change feed writes it (sse
+// docs/feed.md "Feed-Position"); posQ is it inside a JSON string.
+const (
+	storePos = `store=1234;epoch="9f2c4e1a7b3d5f60819a2b3c4d5e6f70"`
+	posQ     = `"position":"store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\""`
+)
+
 var (
 	episode     = &checkedItem{Name: "Frieren S01E01"}
 	sameSonarr  = httpwire.SourceCheck[checkedItem]{Source: "sonarr", Answer: httpwire.CheckSame}
 	held        = &httpwire.Upstream{Service: "sonarr", Status: http.StatusServiceUnavailable, Message: "Service Unavailable"}
-	updatedRow  = httpwire.SourceCheck[checkedItem]{Source: "sonarr", Answer: httpwire.CheckUpdated, Row: episode, Stored: true}
-	goneStored  = httpwire.SourceCheck[checkedItem]{Source: "sonarr", Answer: httpwire.CheckGone, Stored: true}
+	updatedRow  = httpwire.SourceCheck[checkedItem]{Source: "sonarr", Answer: httpwire.CheckUpdated, Row: episode, Stored: true, Position: storePos}
+	goneStored  = httpwire.SourceCheck[checkedItem]{Source: "sonarr", Answer: httpwire.CheckGone, Stored: true, Position: storePos}
 	errorSonarr = httpwire.SourceCheck[checkedItem]{Source: "sonarr", Answer: httpwire.CheckError, Code: "upstream_held", Upstream: held}
 )
 
@@ -69,12 +77,12 @@ func with(s httpwire.SourceCheck[checkedItem], edit func(*httpwire.SourceCheck[c
 // answer with the body its rules give.
 func checkCases() []checkCase {
 	notStored := func(r httpwire.NotStored) func(*httpwire.SourceCheck[checkedItem]) {
-		return func(s *httpwire.SourceCheck[checkedItem]) { s.Stored, s.NotStored = false, r }
+		return func(s *httpwire.SourceCheck[checkedItem]) { s.Stored, s.NotStored, s.Position = false, r, "" }
 	}
 	return []checkCase{
 		{name: "no-sources", value: httpwire.Checked[checkedItem]{}, want: `{"sources":[]}`},
 		{name: "same", value: sources(sameSonarr), want: `{"sources":[{"source":"sonarr","answer":"same","stored":false}]}`},
-		{name: "updated-stored", value: sources(updatedRow), want: `{"sources":[{"row":{"name":"Frieren S01E01"},"source":"sonarr","answer":"updated","stored":true}]}`},
+		{name: "updated-stored", value: sources(updatedRow), want: `{"sources":[{"row":{"name":"Frieren S01E01"},"source":"sonarr","answer":"updated",` + posQ + `,"stored":true}]}`},
 		{
 			name: "updated-superseded", value: sources(with(updatedRow, notStored(httpwire.NotStoredSuperseded))),
 			want: `{"sources":[{"row":{"name":"Frieren S01E01"},"source":"sonarr","answer":"updated","not_stored":"superseded","stored":false}]}`,
@@ -83,7 +91,7 @@ func checkCases() []checkCase {
 			name: "updated-store-unwritable", value: sources(with(updatedRow, notStored(httpwire.NotStoredUnwritable))),
 			want: `{"sources":[{"row":{"name":"Frieren S01E01"},"source":"sonarr","answer":"updated","not_stored":"store_unwritable","stored":false}]}`,
 		},
-		{name: "gone-stored", value: sources(goneStored), want: `{"sources":[{"source":"sonarr","answer":"gone","stored":true}]}`},
+		{name: "gone-stored", value: sources(goneStored), want: `{"sources":[{"source":"sonarr","answer":"gone",` + posQ + `,"stored":true}]}`},
 		{
 			name: "gone-superseded", value: sources(with(goneStored, notStored(httpwire.NotStoredSuperseded))),
 			want: `{"sources":[{"source":"sonarr","answer":"gone","not_stored":"superseded","stored":false}]}`,
@@ -117,7 +125,17 @@ func checkCases() []checkCase {
 				updatedRow,
 				with(errorSonarr, func(s *httpwire.SourceCheck[checkedItem]) { s.Source, s.Upstream = "anidb", nil }),
 			),
-			want: `{"sources":[{"source":"radarr","answer":"same","stored":false},{"row":{"name":"Frieren S01E01"},"source":"sonarr","answer":"updated","stored":true},{"source":"anidb","answer":"error","code":"upstream_held","stored":false}]}`,
+			want: `{"sources":[{"source":"radarr","answer":"same","stored":false},{"row":{"name":"Frieren S01E01"},"source":"sonarr","answer":"updated",` + posQ + `,"stored":true},{"source":"anidb","answer":"error","code":"upstream_held","stored":false}]}`,
+		},
+		{
+			name: "stored-two-sources-position", value: sources(with(goneStored, func(s *httpwire.SourceCheck[checkedItem]) {
+				s.Position = `store=12;epoch="9f2c4e1a7b3d5f60819a2b3c4d5e6f70", live=7;epoch="41ab0c9d8e7f6a5b4c3d2e1f00112233"`
+			})),
+			want: `{"sources":[{"source":"sonarr","answer":"gone","position":"store=12;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\", live=7;epoch=\"41ab0c9d8e7f6a5b4c3d2e1f00112233\"","stored":true}]}`,
+		},
+		{
+			name: "stored-position-at-bound", value: sources(with(goneStored, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = strings.Repeat("a", 4096) })),
+			want: `{"sources":[{"source":"sonarr","answer":"gone","position":"` + strings.Repeat("a", 4096) + `","stored":true}]}`,
 		},
 		{name: "embedded-no-sources", plus: true, want: `{"read_at":"2026-11-17T10:00:05.1Z","sources":[]}`},
 		{name: "embedded-source-twice", plus: true, value: sources(sameSonarr, goneStored)},
@@ -145,6 +163,15 @@ func checkCases() []checkCase {
 		{name: "error-code-outside-grammar", value: sources(with(errorSonarr, func(s *httpwire.SourceCheck[checkedItem]) { s.Code = "Upstream-Held" }))},
 		{name: "error-with-row", value: sources(with(errorSonarr, func(s *httpwire.SourceCheck[checkedItem]) { s.Row = episode }))},
 		{name: "error-stored", value: sources(with(errorSonarr, func(s *httpwire.SourceCheck[checkedItem]) { s.Stored = true }))},
+		{name: "updated-stored-without-position", value: sources(with(updatedRow, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = "" }))},
+		{name: "gone-stored-without-position", value: sources(with(goneStored, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = "" }))},
+		{name: "updated-not-stored-with-position", value: sources(with(with(updatedRow, notStored(httpwire.NotStoredSuperseded)), func(s *httpwire.SourceCheck[checkedItem]) { s.Position = storePos }))},
+		{name: "gone-not-stored-with-position", value: sources(with(with(goneStored, notStored(httpwire.NotStoredUnwritable)), func(s *httpwire.SourceCheck[checkedItem]) { s.Position = storePos }))},
+		{name: "same-with-position", value: sources(with(sameSonarr, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = storePos }))},
+		{name: "error-with-position", value: sources(with(errorSonarr, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = storePos }))},
+		{name: "stored-position-control-character", value: sources(with(goneStored, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = "store=1\n" }))},
+		{name: "stored-position-not-ascii", value: sources(with(goneStored, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = "store=1;epoch=\"é\"" }))},
+		{name: "stored-position-past-bound", value: sources(with(goneStored, func(s *httpwire.SourceCheck[checkedItem]) { s.Position = strings.Repeat("a", 4097) }))},
 		{name: "error-not-stored", value: sources(with(errorSonarr, notStored(httpwire.NotStoredUnwritable)))},
 	}
 }

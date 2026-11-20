@@ -11,7 +11,8 @@ const fixture = JSON.parse(checkedFile) as readonly {
 }[];
 
 const same = { source: "sonarr", answer: "same", stored: false };
-const updated = { source: "sonarr", answer: "updated", row: { name: "x" }, stored: true };
+const position = 'store=4;epoch="9f2c4e1a7b3d5f60819a2b3c4d5e6f70"';
+const updated = { source: "sonarr", answer: "updated", row: { name: "x" }, stored: true, position };
 const failed = { source: "sonarr", answer: "error", code: "upstream_held", stored: false };
 const upstream = { service: "sonarr", status: 503, message: "Service Unavailable" };
 
@@ -39,6 +40,11 @@ const broken: Record<string, unknown> = {
   "row null on same": one({ ...same, row: null }),
   "not_stored an inherited name": one({ ...updated, stored: false, not_stored: "constructor" }),
   "not_stored empty": one({ ...updated, stored: false, not_stored: "" }),
+  "position a number": one({ ...updated, position: 4 }),
+  "position null": one({ ...updated, position: null }),
+  "position empty on a stored answer": one({ ...updated, position: "" }),
+  "position empty on an answer not stored": one({ ...same, position: "" }),
+  "position past 4096 bytes": one({ ...updated, position: "a".repeat(4097) }),
   "code a number": one({ ...failed, code: 502 }),
   "code empty": one({ ...failed, code: "" }),
   "code null": one({ ...failed, code: null }),

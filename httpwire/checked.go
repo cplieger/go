@@ -50,8 +50,12 @@ type SourceCheck[T any] struct {
 	Answer    CheckAnswer `json:"answer"`
 	NotStored NotStored   `json:"not_stored,omitempty"`
 	// Code is the failure's code, in the code grammar.
-	Code   httpserver.ErrorCode `json:"code,omitempty"`
-	Stored bool                 `json:"stored"`
+	Code httpserver.ErrorCode `json:"code,omitempty"`
+	// Position is the change feed's Feed-Position value right after the
+	// write, set exactly when Stored, so a tab marks seen no further than
+	// the write it read.
+	Position string `json:"position,omitempty"`
+	Stored   bool   `json:"stored"`
 }
 
 // checkAnswer is implemented by every Checked[T], and by a type embedding

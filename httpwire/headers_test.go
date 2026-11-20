@@ -617,3 +617,64 @@ func fieldErrorCode(e *httpwire.FieldError) string {
 	}
 	return e.Code
 }
+
+// TestCheckHeaders holds the exported check to the reasons Derive gives for
+// a table row's Headers, one joined error per reason, each one Derive's.
+func TestCheckHeaders(t *testing.T) {
+	text := reflect.TypeFor[sessionToken]()
+	for name, h := range map[string]reflect.Type{
+		"a struct of every value type": reflect.TypeFor[agentHeaders](),
+		"None":                         reflect.TypeFor[httpwire.None](),
+	} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			if err := httpwire.CheckHeaders(h, "Fixture-Version"); err != nil {
+				t.Errorf("CheckHeaders = %v, want nil", err)
+			}
+		})
+	}
+	for name, tc := range map[string]struct {
+		h    reflect.Type
+		want []string
+	}{
+		"an owned header in any case": {oneHeader(text, `header:"cookie"`), []string{`Headers field "Cookie" names a header httpwire or the platform owns`}},
+		"the client header":           {oneHeader(text, `header:"fixture-version"`), []string{`Headers field "Fixture-Version" names the table's ClientHeader`}},
+		"a value type no header parses into": {
+			oneHeader(reflect.TypeFor[float64](), `header:"X-Thing"`),
+			[]string{`Headers field "X-Thing" is float64, outside the types a header value parses into`},
+		},
+		"a list":                             {oneHeader(reflect.TypeFor[heldPaths](), `header:"X-Thing"`), []string{`Headers field "X-Thing" is a list; a header takes one value`}},
+		"a Refusal outside the code grammar": {oneHeader(reflect.TypeFor[badRefusal](), `header:"X-Thing"`), []string{`Refusal "Not-A-Code"`}},
+		"not a struct":                       {reflect.TypeFor[string](), []string{`Headers string is not a struct`}},
+		"two reasons": {reflect.TypeFor[struct {
+			A sessionToken `header:"Host"`
+			B float64      `header:"X-B"`
+		}](), []string{`Headers field "Host" names a header httpwire or the platform owns`, `Headers field "X-B" is float64`}},
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			err := httpwire.CheckHeaders(tc.h, "Fixture-Version")
+			var errs []error
+			if j, ok := err.(interface{ Unwrap() []error }); ok {
+				errs = j.Unwrap()
+			}
+			if len(errs) != len(tc.want) {
+				t.Fatalf("CheckHeaders = %v, want %d joined errors", err, len(tc.want))
+			}
+			tb := fixtureTable(t)
+			headers(tc.h)(tb)
+			_, derr := httpwire.Derive(tb, guardCodes)
+			for i, w := range tc.want {
+				if !strings.Contains(errs[i].Error(), w) {
+					t.Errorf("error %d %q does not hold %q", i, errs[i], w)
+				}
+				if derr == nil || !strings.Contains(derr.Error(), `row "jobs.list": `+errs[i].Error()) {
+					t.Errorf("Derive = %v, which does not give %q", derr, errs[i])
+				}
+			}
+		})
+	}
+	t.Run("refuses a nil type", func(t *testing.T) {
+		if err := httpwire.CheckHeaders(nil, ""); err == nil {
+			t.Error("CheckHeaders(nil) = nil, want an error")
+		}
+	})
+}

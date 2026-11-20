@@ -31,6 +31,8 @@ export interface SourceCheck<T> {
   readonly stored: boolean;
   /** Why an `updated` or `gone` answer was not stored. */
   readonly not_stored?: NotStored;
+  /** The change feed's `Feed-Position` value right after the write, present exactly when `stored`. */
+  readonly position?: string;
   /** The failure's code, in the code grammar. */
   readonly code?: string;
   /** What the source said when it answered with a failure. Untrusted, as the envelope's is. */

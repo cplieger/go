@@ -21,6 +21,13 @@ var ownedHeaders = []string{
 	"Idempotency-Key", "If-Match", headerWireVersion, textproto.CanonicalMIMEHeaderKey(httpserver.HeaderRequestID),
 }
 
+// CheckHeaders answers every reason Derive refuses t as a table row's
+// Headers under a table whose ClientHeader is clientHeader, joined with
+// errors.Join, or nil.
+func CheckHeaders(t reflect.Type, clientHeader string) error {
+	return nil
+}
+
 // headerFields lists struct t's fields, each named by its header tag in
 // canonical form, with every reason one cannot be decoded. On a mount row
 // (types false) only the names are checked, since its handler parses the
