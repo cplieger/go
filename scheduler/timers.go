@@ -90,10 +90,8 @@ func (e *Executor[P]) Schedule(kind Kind, scope string, c Cadence, changed time.
 	}
 	set := false
 	defer func() {
-		// A panic out of Covers: unscheduled, the scope's next Schedule arms
-		// it, where a half-set one would answer that nothing changed.
 		if !set {
-			e.unscheduleLocked(key)
+			e.unsetLocked(key, again)
 		}
 	}()
 	t.cadence, t.lease, t.changed = c, lease, changed
@@ -135,6 +133,17 @@ func (e *Executor[P]) Unschedule(kind Kind, scope string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.unscheduleLocked(ScheduledScope{Kind: kind, Scope: scope})
+}
+
+// unsetLocked undoes a Schedule that a Covers panic cut short: unscheduled,
+// the scope's next Schedule arms it, where a half-set one would answer that
+// nothing changed. A first Schedule's seen mark goes too (again false), or
+// that next Schedule would count from itself instead of the last moving end.
+func (e *Executor[P]) unsetLocked(key ScheduledScope, again bool) {
+	e.unscheduleLocked(key)
+	if !again {
+		delete(e.seen, key)
+	}
 }
 
 func (e *Executor[P]) unscheduleLocked(key ScheduledScope) {

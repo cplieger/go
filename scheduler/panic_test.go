@@ -343,3 +343,46 @@ func TestProposeRecordPanicHoldsNoProposal(t *testing.T) {
 		r.wantEnd(t, again.Job, scheduler.ResultOK)
 	})
 }
+
+// TestSchedulePanicRetryCountsFromLastEnd pins that a first Schedule retried
+// after a recovered Covers panic counts from the scope's last moving end, as
+// one that never panicked does.
+func TestSchedulePanicRetryCountsFromLastEnd(t *testing.T) {
+	deadline := func(t *testing.T, boom bool) (after time.Duration) {
+		synctest.Test(t, func(t *testing.T) {
+			var armed atomic.Bool
+			full := spec("full", "")
+			full.Covers = func(_, other scheduler.Job[payload]) bool {
+				if armed.CompareAndSwap(true, false) {
+					panic("flaky Covers")
+				}
+				return other.Kind == "part"
+			}
+			r := newRig(t, scheduler.Config[payload]{Kinds: []scheduler.KindSpec[payload]{spec("part", ""), full}})
+			synctest.Wait()
+			r.start(t, api("part", "s", "a", payload{}))
+			r.start(t, api("full", "x", "a", payload{}))
+			synctest.Wait()
+			ended := time.Now()
+			time.Sleep(23 * time.Hour)
+			if boom {
+				armed.Store(true)
+				func() {
+					defer func() {
+						if recover() == nil {
+							t.Errorf("Schedule(part \"s\") did not panic, want the Covers panic")
+						}
+					}()
+					_ = r.ex.Schedule("part", "s", scheduler.Scheduled(24*time.Hour), time.Time{})
+				}()
+			}
+			r.schedule(t, "part", "s", scheduler.Scheduled(24*time.Hour))
+			after = r.ex.Deadline("part", "s").Sub(ended)
+		})
+		return after
+	}
+	want := deadline(t, false)
+	if got := deadline(t, true); got != want {
+		t.Errorf("Deadline(part \"s\") after a retried Schedule = end+%v, want end+%v as with no panic", got, want)
+	}
+}
