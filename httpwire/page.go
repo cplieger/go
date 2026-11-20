@@ -118,7 +118,7 @@ func form(m map[string][]string) string {
 }
 
 // cursorPurpose binds a cursor to its row, the hashes of its query (Page
-// aside) and headers as sent, its owner and the values of the row's path
+// aside) and declared headers as sent, its owner and the values of the row's path
 // wildcards in path order. Both purposes are named under httpwire/, as
 // sealed names a purpose by its owning module, so no app purpose on a
 // shared Sealer equals one, and they differ from their first distinct
