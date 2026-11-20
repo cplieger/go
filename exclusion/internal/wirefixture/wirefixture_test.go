@@ -9,6 +9,7 @@ import (
 
 	"github.com/cplieger/go/exclusion"
 	"github.com/cplieger/go/exclusion/internal/wirefixture"
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 )
 
@@ -18,7 +19,7 @@ func TestTableDerives(t *testing.T) {
 		t.Fatalf("Table() = %+v, want a table with its catalog", tab)
 	}
 	t.Run("the codes are in the catalog", func(t *testing.T) {
-		for code, status := range map[string]int{"exclusion_invalid": http.StatusUnprocessableEntity, "auth_required": http.StatusUnauthorized} {
+		for code, status := range map[httpserver.ErrorCode]int{"exclusion_invalid": http.StatusUnprocessableEntity, "auth_required": http.StatusUnauthorized} {
 			if s, ok := tab.Catalog.Lookup(code); !ok || s.Status != status {
 				t.Errorf("Lookup(%q) = %+v, %v; want status %d", code, s, ok, status)
 			}
@@ -32,7 +33,7 @@ func TestTableDerives(t *testing.T) {
 		if len(d.Endpoints) != 1 || d.Endpoints[0].Name != wirefixture.Row || d.Endpoints[0].Method != http.MethodPost {
 			t.Fatalf("Endpoints = %+v, want the one POST row %s", d.Endpoints, wirefixture.Row)
 		}
-		for _, code := range []string{"exclusion_invalid", "auth_required"} {
+		for _, code := range []httpserver.ErrorCode{"exclusion_invalid", "auth_required"} {
 			if !slices.Contains(d.Endpoints[0].Errors, code) {
 				t.Errorf("Errors = %v, lacks %s", d.Endpoints[0].Errors, code)
 			}

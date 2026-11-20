@@ -53,7 +53,7 @@ func Endpoint(name string, a httpwire.Access) httpwire.Endpoint {
 		Description: "Answers, for each rule of the list in order, how many of the stored items it matches. The list may be a draft; nothing is saved.",
 		Request:     reflect.TypeFor[MatchesRequest](),
 		Response:    reflect.TypeFor[MatchesResponse](),
-		Codes:       []string{string(codeInvalid)},
+		Codes:       []httpserver.ErrorCode{codeInvalid},
 		Access:      a,
 		MaxBody:     MaxBody,
 	}
@@ -66,11 +66,11 @@ func Binding(name string, fields []Field, count CountFunc) httpwire.Binding {
 	return httpwire.Bind(name, matches(fields, count))
 }
 
-func matches(fields []Field, count CountFunc) httpwire.Handler[httpwire.None, httpwire.None, MatchesRequest, MatchesResponse] {
-	return func(ctx context.Context, c httpwire.Call[httpwire.None, httpwire.None, MatchesRequest]) (MatchesResponse, error) {
+func matches(fields []Field, count CountFunc) httpwire.Handler[httpwire.None, httpwire.None, MatchesRequest, httpwire.None, MatchesResponse] {
+	return func(ctx context.Context, c httpwire.Call[httpwire.None, httpwire.None, MatchesRequest, httpwire.None]) (MatchesResponse, error) {
 		s, errs := Compile("rules", c.Body.Rules, fields)
 		if len(errs) != 0 {
-			return MatchesResponse{}, refuse(codeInvalid, errs)
+			return MatchesResponse{}, &httpwire.Error{Code: codeInvalid, Message: "the rule list is refused", Fields: errs}
 		}
 		counts, err := count(ctx, s)
 		switch {
@@ -84,12 +84,6 @@ func matches(fields []Field, count CountFunc) httpwire.Handler[httpwire.None, ht
 		}
 		return MatchesResponse{Counts: counts}, nil
 	}
-}
-
-// refuse is the refusal of code naming fields; CheckCodeSpecs sees the code
-// through its ErrorCode parameter.
-func refuse(code httpserver.ErrorCode, fields []httpwire.FieldError) error {
-	return &httpwire.Error{Code: string(code), Message: "the rule list is refused", Fields: fields}
 }
 
 // CodeSpecs returns the code the matches row answers, exclusion_invalid, with

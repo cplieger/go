@@ -40,7 +40,7 @@ func Table() *httpwire.Table {
 	return &httpwire.Table{Catalog: c, Prefix: "/api", Endpoints: []httpwire.Endpoint{exclusion.Endpoint(Row, access)}}
 }
 
-const codeAuthRequired = "auth_required"
+const codeAuthRequired httpserver.ErrorCode = "auth_required"
 
 // Guard admits a request whose Principal header is "session" on every row
 // that is not Public, and refuses any other with auth_required.
@@ -60,11 +60,11 @@ func (g Guard) Wrap(ep *httpwire.Endpoint, next http.Handler) http.Handler {
 }
 
 // Codes answers auth_required for every class but Public.
-func (Guard) Codes(a httpwire.Access) []string {
+func (Guard) Codes(a httpwire.Access) []httpserver.ErrorCode {
 	if a.Class == httpwire.Public {
 		return nil
 	}
-	return []string{codeAuthRequired}
+	return []httpserver.ErrorCode{codeAuthRequired}
 }
 
 // Shape reads the Principal header.

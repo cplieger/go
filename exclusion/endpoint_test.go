@@ -18,7 +18,7 @@ import (
 
 var settingsRead = httpwire.Access{Class: httpwire.Session, Passive: true}
 
-type call = httpwire.Call[httpwire.None, httpwire.None, exclusion.MatchesRequest]
+type call = httpwire.Call[httpwire.None, httpwire.None, exclusion.MatchesRequest, httpwire.None]
 
 func TestMatchesRowIsPost(t *testing.T) {
 	row := exclusion.Endpoint("exclusion.matches", settingsRead)
@@ -35,7 +35,7 @@ func TestMatchesRowIsPost(t *testing.T) {
 		if row.Request != reflect.TypeFor[exclusion.MatchesRequest]() || row.Response != reflect.TypeFor[exclusion.MatchesResponse]() {
 			t.Errorf("Request %v and Response %v, want MatchesRequest and MatchesResponse", row.Request, row.Response)
 		}
-		if !slices.Equal(row.Codes, []string{"exclusion_invalid"}) {
+		if !slices.Equal(row.Codes, []httpserver.ErrorCode{"exclusion_invalid"}) {
 			t.Errorf("Codes = %v, want [exclusion_invalid]", row.Codes)
 		}
 	})
