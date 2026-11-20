@@ -57,10 +57,9 @@ func WithSameShape(s SameShape) Option {
 // success status, a body that does not decode strictly into the status's
 // Response type or breaks its schema, a Raw answer of another media type,
 // an error that is not an envelope of a union code at the catalog's status
-// with the X-Request-Id, or on a Keyed row the id an earlier case with the
-// same credential and Idempotency-Key was answered with, as its request_id,
-// and no Wire-Version of this API or valid X-Request-Id.
-// A HEAD answer's body is not read.
+// with a valid request_id, and no Wire-Version of this API or X-Request-Id
+// of this request. A refusal's request_id may name an earlier request, as a
+// replay's does. A HEAD answer's body is not read.
 func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 	t.Helper()
 	if api == nil {
@@ -107,31 +106,14 @@ type checker struct {
 	catalog *httpwire.Catalog
 	rows    map[string]*httpwire.Endpoint
 	mux     *http.ServeMux
-	// answered holds the X-Request-Id of each answer per slot, the
-	// request_id a replay of that slot keeps.
-	answered map[slot][]string
-	version  string
-	order    []*httpwire.Endpoint
-}
-
-// slot is where the API keeps a Keyed row's answer: the request's
-// credential, the row and the parsed Idempotency-Key.
-type slot struct{ credential, row, key string }
-
-// slotOf asks the API for r's slot on ep, so the checker never re-derives
-// the server's rule; false when the API keeps no answer for r.
-func (c *checker) slotOf(ep *httpwire.Endpoint, r *http.Request) (slot, bool) {
-	credential, key, ok := wirelink.Slot(c.api, ep, r)
-	return slot{credential, ep.Name, key}, ok
+	version string
+	order   []*httpwire.Endpoint
 }
 
 func newChecker(t testing.TB, api *httpwire.API) *checker {
 	b := wirelink.Inspect(api)
 	tb := api.Table()
-	c := &checker{
-		t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{},
-		mux: http.NewServeMux(), answered: map[slot][]string{},
-	}
+	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}, mux: http.NewServeMux()}
 	c.schema, _ = b.Schema.(*httpwire.Schema)
 	c.guard, _ = b.Guard.(httpwire.Guard)
 	add := func(ep *httpwire.Endpoint) {
@@ -214,19 +196,29 @@ type answer struct {
 }
 
 func (c *checker) serve(ep *httpwire.Endpoint, r *http.Request) *httptest.ResponseRecorder {
+	r, id := withRequestID(r)
 	rec := httptest.NewRecorder()
 	c.api.ServeHTTP(rec, r)
 	a := answer{rec: rec, fail: func(format string, args ...any) {
 		c.t.Errorf("httpwiretest: row %q, %s %s answered %d: %s", ep.Name, r.Method, r.URL.RequestURI(), rec.Code, fmt.Sprintf(format, args...))
 	}}
-	c.check(ep, r, a)
-	if s, ok := c.slotOf(ep, r); ok {
-		c.answered[s] = append(c.answered[s], rec.Header().Get(httpserver.HeaderRequestID))
-	}
+	c.check(ep, r, id, a)
 	return rec
 }
 
-func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
+// withRequestID gives r the id the wire says the API answers it under: its
+// context's, else its valid inbound X-Request-Id, else a new one.
+func withRequestID(r *http.Request) (out *http.Request, id string) {
+	if id = httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
+		return r, id
+	}
+	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
+		id = httpserver.NewRequestID()
+	}
+	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
+}
+
+func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, id string, a answer) {
 	h := a.rec.Header()
 	switch v := h.Get("Wire-Version"); {
 	case v == "":
@@ -234,11 +226,11 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
 	case v != c.version:
 		a.fail("Wire-Version %q; the API's is %q", v, c.version)
 	}
-	switch id := h.Get(httpserver.HeaderRequestID); {
-	case id == "":
+	switch got := h.Get(httpserver.HeaderRequestID); {
+	case got == "":
 		a.fail("no X-Request-Id header")
-	case !httpserver.ValidRequestID(id):
-		a.fail("X-Request-Id %q is not a valid request id", id)
+	case got != id:
+		a.fail("X-Request-Id %q is not this request's id %q", got, id)
 	}
 	statuses := successes(ep)
 	st := a.rec.Code
@@ -250,7 +242,7 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, a answer) {
 	case st >= 200 && st < 300, ep.Kind == httpwire.Redirect && st >= 300 && st < 400:
 		a.fail("success status %d is not declared; the row declares %v", st, sortedKeys(statuses))
 	case r.Method != http.MethodHead:
-		c.refusal(ep, r, h.Get(httpserver.HeaderRequestID), a)
+		c.refusal(ep, a)
 	}
 }
 
@@ -321,7 +313,7 @@ func strict(a answer, body []byte, rt reflect.Type) {
 	}
 }
 
-func (c *checker) refusal(ep *httpwire.Endpoint, r *http.Request, id string, a answer) {
+func (c *checker) refusal(ep *httpwire.Endpoint, a answer) {
 	if !mediaIs(a, mediaJSON, "an error envelope is") {
 		return
 	}
@@ -336,14 +328,8 @@ func (c *checker) refusal(ep *httpwire.Endpoint, r *http.Request, id string, a a
 	if spec, ok := c.catalog.Lookup(env.Code); ok && spec.Status != a.rec.Code {
 		a.fail("code %q is answered at %d by the catalog", env.Code, spec.Status)
 	}
-	s, keyed := c.slotOf(ep, r)
-	switch {
-	case env.RequestID == id:
-	case keyed && slices.Contains(c.answered[s], env.RequestID):
-	case keyed:
-		a.fail("request_id %q is neither the X-Request-Id %q nor an earlier case's with this credential and Idempotency-Key", env.RequestID, id)
-	default:
-		a.fail("request_id %q is not the X-Request-Id %q", env.RequestID, id)
+	if !httpserver.ValidRequestID(env.RequestID) {
+		a.fail("request_id %q is not a valid request id", env.RequestID)
 	}
 }
 

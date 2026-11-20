@@ -134,6 +134,7 @@ type script struct {
 	body    string
 	drop    []string // headers removed
 	refuse  string   // a code the catalog writes as the answer
+	keptID  string   // the refusal's request_id in place of this request's, as a replay keeps
 	want    string   // the request body the script answers; another is a 418
 	status  int      // the status written; zero keeps the refusal's
 	noJSONC bool     // write no application/json Content-Type
@@ -168,11 +169,9 @@ func fixtureScripts() map[string]script {
 		"HEAD /api/probe":          {},
 		"HEAD /api/probe?missing":  {status: http.StatusNotFound},
 		"GET /api/probe?forbidden": {refuse: "auth_required"},
-		"POST /api/keyed/run":      {refuse: "probe_missing"},
-		// Imitates a mount's replay: the body carries the inbound id, as a kept
-		// body would, and the header is this request's.
-		"POST /api/keyed/run?replay": {refuse: "probe_missing", header: map[string]string{"X-Request-Id": "second-id"}},
-		"GET /api/probe?replay":      {refuse: "probe_missing", header: map[string]string{"X-Request-Id": "second-id"}},
+		// Imitates a mount's replay: the refusal keeps the first request's id
+		// while the header is this request's.
+		"POST /api/keyed/run?replay": {refuse: "probe_missing", keptID: "first-id"},
 	}
 }
 
@@ -350,8 +349,12 @@ func (f *fixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	body := []byte(s.body)
 	if s.refuse != "" {
-		rec := httptest.NewRecorder()
-		f.catalog.WriteError(rec, r, &httpwire.Error{Code: s.refuse, Message: "refused"})
+		rec, kept := httptest.NewRecorder(), r
+		if s.keptID != "" {
+			kept = r.WithContext(httpserver.WithRequestID(r.Context(), s.keptID))
+		}
+		f.catalog.WriteError(rec, kept, &httpwire.Error{Code: s.refuse, Message: "refused"})
+		rec.Header().Del(httpserver.HeaderRequestID)
 		maps.Copy(w.Header(), rec.Header())
 		status, body = rec.Code, rec.Body.Bytes()
 	} else if !s.noJSONC {
