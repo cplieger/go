@@ -102,14 +102,17 @@ func lengthPrefixed(fields ...string) string {
 	return string(b)
 }
 
-// cursorPurpose and handlePurpose start with different bytes, so a list
-// cursor never opens as a handle whatever purpose an app names.
-func cursorPurpose(row, queryHash, owner string) sealed.Purpose {
-	return sealed.Purpose("cursor:" + lengthPrefixed(row, queryHash, owner))
+// cursorPurpose binds a cursor to its row, query, owner and the values of
+// the row's path wildcards in path order. Both purposes are named under
+// httpwire/, as sealed names a purpose by its owning module, so no app
+// purpose on a shared Sealer equals one, and they differ from their first
+// distinct byte, so a list cursor never opens as a handle.
+func cursorPurpose(row, queryHash, owner string, path []string) sealed.Purpose {
+	return sealed.Purpose("httpwire/cursor:" + lengthPrefixed(append([]string{row, queryHash, owner}, path...)...))
 }
 
 func handlePurpose(purpose, credential string) sealed.Purpose {
-	return sealed.Purpose("seal:" + lengthPrefixed(purpose, credential))
+	return sealed.Purpose("httpwire/seal:" + lengthPrefixed(purpose, credential))
 }
 
 // openCursor answers the direction and position of a cursor sealed for p.
@@ -208,14 +211,15 @@ func Open(ctx context.Context, purpose, value string) ([]byte, error) {
 // WithSealer sets the sealer list cursors and Seal's handles are sealed
 // under, such as a sealed.KeyFile's Sealer, so they outlive a restart.
 // Without it, New uses sealed.NewEphemeral, so cursors stop opening at a
-// restart and a client reads the list again from its first page. New
-// refuses a nil Sealer and one holding no key.
+// restart. New refuses a nil Sealer and one holding no key: an app whose
+// key file is lost omits the option until it has one. A Sealer whose
+// KeyFile is closed answers internal_error, so close the API first.
 func WithSealer(s *sealed.Sealer) Option {
 	return func(o *options) { o.sealer, o.sealerSet = s, true }
 }
 
 // listCursor seals a List request's cursors, bound to its row, its query
-// without Page, and its owner.
+// without Page, its owner and its path values.
 type listCursor struct {
 	sealer  *sealed.Sealer
 	purpose sealed.Purpose
@@ -354,7 +358,12 @@ func (a *API) openPage(r *http.Request, ep *Endpoint, d *decoded) *Error {
 		return &Error{Code: codeInternal}
 	}
 	hash := sha256.Sum256(canonical)
-	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, string(hash[:]), CursorOwnerOf(r.Context()))}
+	wildcards, _ := pathWildcards(ep.Path)
+	path := make([]string, len(wildcards))
+	for i, w := range wildcards {
+		path[i] = r.PathValue(w)
+	}
+	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, string(hash[:]), CursorOwnerOf(r.Context()), path)}
 	d.limit = cmp.Or(int(p.Limit), defaultLimit)
 	if p.Cursor == "" {
 		return nil

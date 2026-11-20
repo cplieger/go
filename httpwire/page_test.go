@@ -41,6 +41,9 @@ type (
 	sealedHandle struct {
 		Value string `json:"value"`
 	}
+	groupParams struct {
+		Group entryKind `json:"group"`
+	}
 	listCall   = httpwire.Call[noP, entryQuery, noB, noH]
 	handleCall = httpwire.Call[noP, noQ, noB, noH]
 )
@@ -72,12 +75,15 @@ func pageTable(t testing.TB) *httpwire.Table {
 			Response: reflect.TypeFor[sealedHandle](), Access: access,
 		}
 	}
+	groupRow := listRow("groups.items", "/groups/{group}/items", "List a group's items", session, reflect.TypeFor[httpwire.List[entry]]())
+	groupRow.Params = reflect.TypeFor[groupParams]()
 	return &httpwire.Table{
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{
 			listRow("items.list", "/items", "List items", session, reflect.TypeFor[httpwire.List[entry]]()),
 			listRow("items.archived", "/items/archived", "List archived items", session, reflect.TypeFor[archivedPage]()),
 			listRow("items.public", "/public/items", "List public items", public, reflect.TypeFor[httpwire.List[entry]]()),
+			groupRow,
 			handleRow("handles.seal", "/handles", "Seal a handle", session),
 			handleRow("handles.public", "/public/handles", "Seal a public handle", public),
 		},
@@ -162,6 +168,11 @@ func (s *pageStore) bindings() []httpwire.Binding {
 			return archivedPage{List: l, State: "fresh"}, err
 		}),
 		httpwire.Bind("items.public", s.list),
+		httpwire.Bind("groups.items", func(_ context.Context, c httpwire.Call[groupParams, entryQuery, noB, noH]) (httpwire.List[entry], error) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return scanPage(s.sortedLocked(), c)
+		}),
 		httpwire.Bind("handles.seal", s.sealHandle),
 		httpwire.Bind("handles.public", s.sealHandle),
 	}
@@ -229,7 +240,7 @@ func position(k uint64) []byte { return binary.BigEndian.AppendUint64(nil, k) }
 // after Position, backward the Limit keys before it, and the first page
 // when a backward scan reaches the start. Offset counts the keys before
 // the page in the same read as Total.
-func scanPage(keys []uint64, c listCall) (httpwire.List[entry], error) {
+func scanPage[P any](keys []uint64, c httpwire.Call[P, entryQuery, noB, noH]) (httpwire.List[entry], error) {
 	start := 0
 	if c.Position != nil {
 		pos := binary.BigEndian.Uint64(c.Position)
@@ -551,6 +562,16 @@ func TestCursorRefusesAnotherOwner(t *testing.T) {
 			wantPage(t, pageOf(t, s.get(withCursor("/api/items", cursorOf(p), "limit", "4"), p)), span(5, 8), 4, 10)
 		})
 	}
+}
+
+// TestCursorRefusesAnotherPath pages one List row under two values of its
+// path wildcard: a cursor read on one opens only there.
+func TestCursorRefusesAnotherPath(t *testing.T) {
+	s := newPageStore(t, 10)
+	c := pageOf(t, s.get("/api/groups/a/items?limit=4", sessionA)).NextCursor
+	wantPage(t, pageOf(t, s.get(withCursor("/api/groups/a/items", c, "limit", "4"), sessionA)), span(5, 8), 4, 10)
+	n := s.ran()
+	wantCursorInvalid(t, s, s.get(withCursor("/api/groups/b/items", c, "limit", "4"), sessionA), n)
 }
 
 func TestCursorRefusals(t *testing.T) {
