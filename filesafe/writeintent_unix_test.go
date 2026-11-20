@@ -204,7 +204,7 @@ func TestWriteFile_WithMode_RefusedFinalModeFailsAtPhaseTempChmod(t *testing.T) 
 		if want == 0o600 {
 			return orig(f, want)
 		}
-		return want | 0o070, fmt.Errorf("%w: %s: asked for %#o", ErrModeNotStored, f.Name(), want)
+		return want | 0o070, &ModeNotStoredError{Name: f.Name(), Requested: want, Stored: want | 0o070}
 	}
 	dir := t.TempDir()
 	path := seedTarget(t, dir)

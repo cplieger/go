@@ -216,7 +216,8 @@ func (*ModeTooOpenError) Unwrap() error { return ErrModeTooOpen }
 type NotDirectoryError struct {
 	// Name is the path, root-relative name or path component checked, cleaned.
 	Name string
-	// Mode is the full FileMode of what was there; Type() names the kind.
+	// Mode is the full FileMode of what was there. Type() names a special
+	// file's kind and is 0 for a regular file, which has no type bits.
 	Mode os.FileMode
 }
 
@@ -242,13 +243,15 @@ func notDirectory(name string, mode os.FileMode) error {
 // effective uid, and carries both uids the check compared. It unwraps to
 // ErrNotOwned.
 type NotOwnedError struct {
-	// Name is the path or root-relative name checked, cleaned; for a root's
-	// own directory, the path the root was opened at.
+	// Name is the path or root-relative name checked, cleaned, as the caller
+	// supplied it. When a lookup of a root's own directory is refused, it is
+	// the path the root was opened at, the path its owner was read from.
 	Name string
 	// Owner is the uid that owns Name, or -1 when it could not be determined.
-	Owner int
+	// A uid is never negative, on 32-bit platforms too.
+	Owner int64
 	// EUID is the effective uid Owner was compared with.
-	EUID int
+	EUID int64
 }
 
 // Error renders the verdict, the name and both uids.
@@ -288,7 +291,8 @@ type FileTooLargeError struct {
 	// Size is how large the content was found or would have grown: the
 	// stat size of a file read or committed, the size a rejected write or
 	// truncate would have reached, or Limit+1 for a file that grew past
-	// Limit during a read. The content is at least Size bytes.
+	// Limit during a read. A file read or committed holds at least Size
+	// bytes; nothing holds the size a rejected write or truncate asked for.
 	Size int64
 	// Limit is the cap: ReadBounded's maxBytes or WithMaxBytes.
 	Limit int64
@@ -301,9 +305,3 @@ func (e *FileTooLargeError) Error() string {
 
 // Unwrap returns ErrFileTooLarge, so errors.Is matches the verdict.
 func (*FileTooLargeError) Unwrap() error { return ErrFileTooLarge }
-
-// tooLarge is the one producer, so the cap sites cannot drift in what they
-// report.
-func tooLarge(size, limit int64) error {
-	return &FileTooLargeError{Size: size, Limit: limit}
-}

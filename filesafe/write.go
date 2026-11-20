@@ -139,7 +139,7 @@ func finalizeTempFile(ctx context.Context, tmp *os.File, c *cfg) error {
 		}
 		if fi.Size() > c.maxBytes {
 			tmp.Close()
-			return tooLarge(fi.Size(), c.maxBytes)
+			return &FileTooLargeError{Size: fi.Size(), Limit: c.maxBytes}
 		}
 	}
 	if c.modeSet {
@@ -191,7 +191,7 @@ func WriteFile(ctx context.Context, path string, data []byte, opts ...WriteOptio
 // an over-cap write is rejected before any temp file is created.
 func checkWriteCap(size, maxBytes int64) error {
 	if maxBytes > 0 && size > maxBytes {
-		return tooLarge(size, maxBytes)
+		return &FileTooLargeError{Size: size, Limit: maxBytes}
 	}
 	return nil
 }
@@ -214,7 +214,7 @@ type capWriter struct {
 
 func (cw *capWriter) Write(p []byte) (int, error) {
 	if cw.written+int64(len(p)) > cw.limit {
-		return 0, tooLarge(cw.written+int64(len(p)), cw.limit)
+		return 0, &FileTooLargeError{Size: cw.written + int64(len(p)), Limit: cw.limit}
 	}
 	n, err := cw.w.Write(p)
 	cw.written += int64(n)
@@ -371,7 +371,7 @@ func NewPendingFile(ctx context.Context, path string, opts ...WriteOption) (*Pen
 // WithMaxBytes cap, before any byte lands.
 func (p *PendingFile) checkCap(n int) error {
 	if p.limit > 0 && p.written+int64(n) > p.limit {
-		return tooLarge(p.written+int64(n), p.limit)
+		return &FileTooLargeError{Size: p.written + int64(n), Limit: p.limit}
 	}
 	return nil
 }
@@ -419,7 +419,7 @@ func (p *PendingFile) ReadFrom(r io.Reader) (int64, error) {
 // error matching ErrFileTooLarge.
 func (p *PendingFile) Truncate(size int64) error {
 	if p.limit > 0 && size > p.limit {
-		return tooLarge(size, p.limit)
+		return &FileTooLargeError{Size: size, Limit: p.limit}
 	}
 	if err := p.File.Truncate(size); err != nil {
 		return err

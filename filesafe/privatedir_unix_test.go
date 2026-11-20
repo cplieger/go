@@ -119,9 +119,8 @@ func TestEnforceModeNilFile(t *testing.T) {
 	}
 }
 
-// Two error paths are deliberately untested: a failing fchmod/fstat needs
-// the descriptor's ownership or mount taken away mid-call, and
-// ErrModeNotStored is a property of the MOUNT itself. Neither is
+// A failing fchmod/fstat is deliberately untested: it needs the
+// descriptor's ownership or mount taken away mid-call, which is not
 // stageable in a temp directory without an injection seam whose only
 // consumer would be this test.
 
@@ -600,6 +599,7 @@ func TestNotDirectoryError_CarriesTheModeEachProducerRead(t *testing.T) {
 			return filepath.Base(path), RemoveFileInRoot(root, filepath.Base(path)+"/x")
 		},
 	}
+	context := map[string]string{"RemoveFileInRoot of a name under it": `filesafe: path component "f": `}
 	for call, refuse := range refuse {
 		t.Run(call, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "f")
@@ -609,7 +609,7 @@ func TestNotDirectoryError_CarriesTheModeEachProducerRead(t *testing.T) {
 			name, err := refuse(t, path)
 			assertNotDirectory(t, err, name, 0)
 			msg := err.Error()
-			if want := "filesafe: not a directory: " + name + " (type regular file)"; !strings.HasPrefix(msg, want) {
+			if want := context[call] + "filesafe: not a directory: " + name + " (type regular file)"; !strings.HasPrefix(msg, want) {
 				t.Errorf("message = %q, want it to start %q", msg, want)
 			}
 			if rerr := os.Remove(path); rerr != nil {
@@ -664,10 +664,46 @@ func TestNotOwnedError_UndeterminedOwnerIsMinusOne(t *testing.T) {
 	if !ok {
 		t.Fatalf("ownerErr = %v, want a *NotOwnedError", err)
 	}
-	if no.Name != "d" || no.Owner != -1 || no.EUID != os.Geteuid() {
+	if no.Name != "d" || no.Owner != -1 || no.EUID != int64(os.Geteuid()) {
 		t.Errorf("NotOwnedError = %+v, want {Name: d, Owner: -1, EUID: %d}", *no, os.Geteuid())
 	}
 	if want := "filesafe: not owned by the effective uid: d: ownership could not be determined"; err.Error() != want {
 		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+}
+
+// ownedBy reports a FileInfo's owner as uid.
+type ownedBy struct {
+	os.FileInfo
+	uid uint32
+}
+
+func (o ownedBy) Sys() any { return &syscall.Stat_t{Uid: o.uid} }
+
+// A uid at or above 2^31 stays positive on 32-bit platforms, where int is
+// 32 bits and -1 means undetermined.
+func TestNotOwnedError_AUidPastInt32StaysPositive(t *testing.T) {
+	fi, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ownerErr(ownedBy{fi, 1 << 31}, "d")
+	no, ok := errors.AsType[*NotOwnedError](err)
+	if !ok {
+		t.Fatalf("ownerErr = %v, want a *NotOwnedError", err)
+	}
+	if no.Owner != 1<<31 || no.EUID < 0 {
+		t.Errorf("NotOwnedError = %+v, want Owner 2147483648 and a non-negative EUID", *no)
+	}
+	if want := "filesafe: not owned by the effective uid: d: owned by uid 2147483648, want the effective uid "; !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("message = %q, want it to start %q", err.Error(), want)
+	}
+}
+
+func TestUidOf_UndoesTheInt32Wrap(t *testing.T) {
+	for in, want := range map[int]int64{0: 0, 65534: 65534, -2: 4294967294, -1 << 31: 1 << 31} {
+		if got := uidOf(in); got != want {
+			t.Errorf("uidOf(%d) = %d, want %d", in, got, want)
+		}
 	}
 }

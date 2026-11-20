@@ -300,13 +300,22 @@ func statOwnedDir(f *os.File, dir string) (os.FileInfo, error) {
 // ownerErr is the one producer of *NotOwnedError, returned unless fi is
 // owned by the effective uid.
 func ownerErr(fi os.FileInfo, name string) error {
-	euid := os.Geteuid()
+	euid := uidOf(os.Geteuid())
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return &NotOwnedError{Name: name, Owner: -1, EUID: euid}
 	}
-	if int(st.Uid) != euid {
-		return &NotOwnedError{Name: name, Owner: int(st.Uid), EUID: euid}
+	if int64(st.Uid) != euid {
+		return &NotOwnedError{Name: name, Owner: int64(st.Uid), EUID: euid}
 	}
 	return nil
+}
+
+// uidOf undoes the wrap os.Geteuid applies where int is 32 bits: uid_t is
+// an unsigned 32-bit value, so a uid of 2^31 or more arrives negative.
+func uidOf(id int) int64 {
+	if id < 0 {
+		return int64(id) + 1<<32
+	}
+	return int64(id)
 }

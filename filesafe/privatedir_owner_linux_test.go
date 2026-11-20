@@ -165,14 +165,9 @@ func closedForeign(t *testing.T, base string) (string, []string) {
 	return "/", []string{"root"}
 }
 
-func assertNotOwnedAtOpen(t *testing.T, call string, err error) {
+func assertNotOwnedAtOpen(t *testing.T, call string, err error, name string) {
 	t.Helper()
-	if !errors.Is(err, ErrNotOwned) {
-		t.Errorf("%s = %v, want ErrNotOwned", call, err)
-	}
-	if no, ok := errors.AsType[*NotOwnedError](err); !ok || no.Owner != 0 || no.EUID != os.Geteuid() {
-		t.Errorf("%s = %v, want a *NotOwnedError for owner 0 and the effective uid %d", call, err, os.Geteuid())
-	}
+	assertNotOwned(t, call, err, name)
 	if !errors.Is(err, syscall.EACCES) || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("%s = %v, want it to wrap the open's EACCES", call, err)
 	}
@@ -269,7 +264,7 @@ func TestEnsurePrivateDir_RefusesAClosedForeignDirAsNotOwned(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(parent, name)
 			_, err := EnsurePrivateDir(dir)
-			assertNotOwnedAtOpen(t, "EnsurePrivateDir("+dir+")", err)
+			assertNotOwnedAtOpen(t, "EnsurePrivateDir("+dir+")", err, dir)
 		})
 	}
 }
@@ -283,7 +278,7 @@ func TestCheckPrivateDir_RefusesAClosedForeignDirAsNotOwned(t *testing.T) {
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(parent, name)
-			assertNotOwnedAtOpen(t, "CheckPrivateDir("+dir+")", CheckPrivateDir(dir))
+			assertNotOwnedAtOpen(t, "CheckPrivateDir("+dir+")", CheckPrivateDir(dir), dir)
 		})
 	}
 }
@@ -297,7 +292,7 @@ func TestCheckPrivateDirInRoot_RefusesAClosedForeignDirAsNotOwned(t *testing.T) 
 	root := openRootAt(t, parent)
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+parent+", "+name+")", CheckPrivateDirInRoot(root, name))
+			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+parent+", "+name+")", CheckPrivateDirInRoot(root, name), name)
 		})
 	}
 }
@@ -344,10 +339,13 @@ func TestCheckPrivateDirInRoot_RefusesItsOwnDirectoryOnceAnotherUidOwnsIt(t *tes
 			t.Fatalf("CheckPrivateDirInRoot(%s, .) while nobody owns it = %v, want nil", name, err)
 		}
 	}
+	// A refused lookup is named by the root's path; at 0711 the lookup
+	// passes and the open of "." is what is refused.
+	wantName := map[string]string{"mine": filepath.Join(base, "mine"), "mine-711": "."}
 	awaitParent(t)
 	for name, root := range roots {
 		t.Run(name, func(t *testing.T) {
-			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+name+", .)", CheckPrivateDirInRoot(root, "."))
+			assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+name+", .)", CheckPrivateDirInRoot(root, "."), wantName[name])
 		})
 	}
 }
@@ -444,7 +442,7 @@ func TestCheckPrivateDirInRoot_ReadsAClosedRootsOwnerFromItsPath(t *testing.T) {
 	root, link := linkedRoot(t, dir)
 	closeDir(t, dir)
 	repoint(t, link, rootOwnedDir(base))
-	assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."))
+	assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."), link)
 }
 
 // A refused open is classified from a lookup taken after it, not from the
@@ -476,7 +474,7 @@ func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing
 			closeDir(t, dir)
 			repoint(t, link, rootOwnedDir(base))
 		})
-		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."))
+		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+link+", .)", CheckPrivateDirInRoot(root, "."), link)
 	})
 	if base == "" {
 		// Unprivileged, no directory can be handed to another uid.
@@ -485,7 +483,7 @@ func TestCheckPrivateDirInRoot_ClassifiesARefusedOpenByALookupAfterIt(t *testing
 	t.Run("a child another uid took over", func(t *testing.T) {
 		root := openRootAt(t, own)
 		withPinOpenHook(t, func(string) { awaitParent(t) })
-		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+own+", turned)", CheckPrivateDirInRoot(root, "turned"))
+		assertNotOwnedAtOpen(t, "CheckPrivateDirInRoot("+own+", turned)", CheckPrivateDirInRoot(root, "turned"), "turned")
 	})
 }
 
@@ -560,7 +558,7 @@ func assertNotOwned(t *testing.T, call string, err error, name string) {
 	if !ok {
 		t.Fatalf("%s = %v, want a *NotOwnedError", call, err)
 	}
-	if no.Name != name || no.Owner != 0 || no.EUID != os.Geteuid() {
+	if no.Name != name || no.Owner != 0 || no.EUID != int64(os.Geteuid()) {
 		t.Errorf("%s: NotOwnedError = %+v, want {Name: %s, Owner: 0, EUID: %d}", call, *no, name, os.Geteuid())
 	}
 }
