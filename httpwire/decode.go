@@ -131,18 +131,23 @@ func (a *API) decodePath(r *http.Request, ep *Endpoint) (any, bool) {
 	return pv.Interface(), true
 }
 
-// decodeQuery parses ep's Query from r's query string, answering one entry
-// per refused key: a key missing when required, given twice, unknown, or
-// whose value does not parse or fails its schema.
-func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
+// decodeQuery parses ep's Query from r's query string, and answers the
+// values given for its fields, or one entry per refused key: a key missing
+// when required, given twice, unknown, or whose value does not parse or
+// fails its schema.
+func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (value any, given map[string][]string, refused []FieldError) {
 	vals, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		return nil, []FieldError{{Path: "", Code: codeMalformed, Message: "the query string does not parse"}}
+		return nil, nil, []FieldError{{Path: "", Code: codeMalformed, Message: "the query string does not parse"}}
 	}
 	qv := reflect.New(ep.Query).Elem()
 	fields, _ := textFields(ep.Query)
 	var c checker
+	given = map[string][]string{}
 	for _, f := range fields {
+		if vs, ok := vals[f.name]; ok {
+			given[f.name] = vs
+		}
 		if f.list {
 			c.out = append(c.out, a.queryList(qv, ep, &f, vals[f.name])...)
 			continue
@@ -157,7 +162,7 @@ func (a *API) decodeQuery(r *http.Request, ep *Endpoint) (any, []FieldError) {
 			c.add(k, codeUnknown, "not a parameter of this request")
 		}
 	}
-	return qv.Interface(), c.out
+	return qv.Interface(), given, c.out
 }
 
 // textValue sets f in v from the values given for it in a query or the

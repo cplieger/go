@@ -622,10 +622,8 @@ func (c *tableChecker) keyed(ep *Endpoint, at string, names map[string]*Endpoint
 }
 
 func (c *tableChecker) fingerprinted(ep *Endpoint, at string) {
-	for _, part := range []reflect.Type{ep.Params, ep.Query, ep.Headers, ep.Request} {
-		if t, method := oneWay(part, map[reflect.Type]bool{}); t != nil {
-			c.fail("%s: a Keyed row's fingerprint marshals the decoded request, but %s decodes itself with no %s", at, t, method)
-		}
+	if t, method := oneWay(ep.Request, map[reflect.Type]bool{}); t != nil {
+		c.fail("%s: a Keyed row's fingerprint marshals the decoded body, but %s decodes itself with no %s", at, t, method)
 	}
 }
 
@@ -653,8 +651,8 @@ var (
 
 // oneWay answers the first type reachable from t that decodes through its
 // own UnmarshalJSON or UnmarshalText with no marshaler to match, and the
-// method it lacks: the json.Marshal under a fingerprint or a cursor purpose
-// would not see what it decoded, so two requests could share one.
+// method it lacks: the json.Marshal of a body under a fingerprint would not
+// see what it decoded, so two requests could share one.
 func oneWay(t reflect.Type, seen map[reflect.Type]bool) (found reflect.Type, missing string) {
 	if t == nil || seen[t] {
 		return nil, ""

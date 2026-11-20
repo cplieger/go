@@ -44,7 +44,7 @@ export interface ErrorEnvelope {
 }
 
 // The bounds the Go writer and DecodeEnvelope hold too; string lengths are UTF-8 bytes.
-/** @internal The bound on a free-text member, such as a message or remediation. */
+/** @internal The UTF-8 byte bound on every string member but reason and upstream.message, which have their own. */
 export const MAX_STRING = 4096;
 const MAX_REASON = 64;
 const MAX_FIELDS = 100;
@@ -69,7 +69,7 @@ function str(o: Members, name: string, limit: number): string | undefined {
   return typeof v === "string" && utf8.encode(v).length <= limit ? v : undefined;
 }
 
-/** @internal Answers o's member name when it is a code of at most limit bytes, else undefined. */
+/** @internal Answers the value of o's member name when it is a code of at most limit bytes, else undefined. */
 export function code(o: Members, name: string, limit: number): string | undefined {
   const v = str(o, name, limit);
   return v !== undefined && CODE.test(v) ? v : undefined;

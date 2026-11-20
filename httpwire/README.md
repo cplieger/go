@@ -69,7 +69,7 @@ A handler's error answers through the row's union: an `*Error` whose code the un
 
 ## The wire both halves agree on
 
-Every answer carries `Wire-Version`, the first 16 hex characters of the SHA-256 of the document's normal form, and the request's `X-Request-Id`. Refusals are one envelope (`code`, `message`, `remediation`, `request_id`, optional `reason`, `fields`, `retry_after_ms` and `upstream`), decoded by the same rules in Go and TypeScript. A List row's page carries `offset`, `total` and cursors sealed by [go/sealed](https://github.com/cplieger/go/tree/main/sealed) under `WithSealer`'s sealer, bound to the row, its path values, the query and the owner, that open for 24 hours. [The wire](docs/wire.md) lists the headers, the envelope bounds, the page rules, the open check's answer, the tag form and the schema keywords `ParseSchema` accepts.
+Every answer carries `Wire-Version`, the first 16 hex characters of the SHA-256 of the document's normal form, and the request's `X-Request-Id`. Refusals are one envelope (`code`, `message`, `remediation`, `request_id`, optional `reason`, `fields`, `retry_after_ms` and `upstream`), decoded by the same rules in Go and TypeScript. A List row's page carries `offset`, `total` and cursors sealed by [go/sealed](https://github.com/cplieger/go/tree/main/sealed) under `WithSealer`'s sealer, bound to the row, its path values, its query and request headers as sent, and the owner, that open for 24 hours. [The wire](docs/wire.md) lists the headers, the envelope bounds, the page rules, the open check's answer, the tag form and the schema keywords `ParseSchema` accepts.
 
 ## Documentation
 

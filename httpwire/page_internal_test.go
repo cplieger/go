@@ -2,6 +2,8 @@ package httpwire
 
 import (
 	"bytes"
+	"maps"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -77,6 +79,40 @@ func TestCursorPurposesNeverCollide(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFormsNeverCollide holds form to one string per map: a value moved
+// into a name, across values or into another name gives another string, and
+// the map's iteration order gives none.
+func TestFormsNeverCollide(t *testing.T) {
+	for name, pair := range map[string][2]map[string][]string{
+		"a value moved into its name":   {{"a": {"b"}}, {"ab": {""}}},
+		"two values joined":             {{"a": {"b", "c"}}, {"a": {"bc"}}},
+		"a value moved to another name": {{"a": {"b", "c"}}, {"a": {"b"}, "c": {}}},
+		"an empty value and none":       {{"a": {""}}, {"a": {}}},
+		"a name given and not":          {{"a": {""}}, {}},
+		"a value's count in the name":   {{"a1": {"b"}}, {"a": {"b"}}},
+		"the values' order":             {{"a": {"b", "c"}}, {"a": {"c", "b"}}},
+		"the values moved across names": {{"a": {"x"}, "b": {"y"}}, {"a": {"y"}, "b": {"x"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if form(pair[0]) == form(pair[1]) {
+				t.Errorf("%q and %q give one form", pair[0], pair[1])
+			}
+		})
+	}
+	t.Run("one map in any order", func(t *testing.T) {
+		m := map[string][]string{}
+		for i := range 64 {
+			m[strconv.Itoa(i)] = []string{strconv.Itoa(i * 7)}
+		}
+		want := form(m)
+		for range 16 {
+			if got := form(maps.Clone(m)); got != want {
+				t.Fatalf("form of one map changed between calls")
+			}
+		}
+	})
 }
 
 // TestOpenRefusesAValuePastTheBoundUnread measures allocations because a

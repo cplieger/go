@@ -598,12 +598,19 @@ func TestDeriveRefusesKeyedAndHeldRows(t *testing.T) {
 		"keyed JSON one way": {edit("jobs.start", func(e *httpwire.Endpoint) { e.Request = reflect.TypeFor[[]map[string]*oneWayJSON]() }), []string{
 			`row "jobs.start"`, "httpwire_test.oneWayJSON", "MarshalJSON",
 		}},
-		"keyed query one way": {edit("jobs.start", func(e *httpwire.Endpoint) { e.Query = reflect.TypeFor[oneWayQuery]() }), []string{
-			`row "jobs.start"`, "httpwire_test.oneWayText",
-		}},
 		"held raw":    {edit("archive.export", func(e *httpwire.Endpoint) { e.Held = true }), []string{`row "archive.export"`, "Held"}},
 		"held stream": {edit("live.stream", func(e *httpwire.Endpoint) { e.Held = true }), []string{`row "live.stream"`, "Held"}},
 	})
+}
+
+// A Keyed row's fingerprint takes its query as sent, so only its body,
+// which it marshals, needs a type that decodes itself to marshal too.
+func TestDeriveAcceptsAKeyedQueryThatDecodesItself(t *testing.T) {
+	tb := fixtureTable(t)
+	row(tb, "jobs.start").Query = reflect.TypeFor[oneWayQuery]()
+	if _, err := httpwire.Derive(tb, guardCodes); err != nil {
+		t.Errorf("Derive = %v, want nil", err)
+	}
 }
 
 // oneWayText and oneWayJSON decode into a field the fingerprint's

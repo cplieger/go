@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"reflect"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/cplieger/go/sealed"
@@ -17,7 +19,8 @@ import (
 
 // Cursor is a page cursor as the query carries it: opaque, at most 1,416
 // bytes, absent on the first page. Any cursor that does not open for this
-// row, query and owner answers cursor_invalid.
+// row, its path values, its query, its headers and its owner answers
+// cursor_invalid.
 type Cursor string
 
 // MaxBytes is the length go/sealed gives a direction byte and the longest
@@ -102,23 +105,31 @@ func lengthPrefixed(fields ...string) string {
 	return string(b)
 }
 
-// cursorPurpose binds a cursor to its row, query, decoded headers, owner
-// and the values of the row's path wildcards in path order. Both purposes
-// are named under httpwire/, as sealed names a purpose by its owning
-// module, so no app purpose on a shared Sealer equals one, and they differ
-// from their first distinct byte, so a list cursor never opens as a handle.
+// form is m in one byte string: its names sorted, each followed by its
+// count of values and the values in order, every field length-prefixed,
+// so no two maps give one string.
+func form(m map[string][]string) string {
+	var fields []string
+	for _, name := range slices.Sorted(maps.Keys(m)) {
+		fields = append(fields, name, strconv.Itoa(len(m[name])))
+		fields = append(fields, m[name]...)
+	}
+	return lengthPrefixed(fields...)
+}
+
+// cursorPurpose binds a cursor to its row, the hashes of its query (Page
+// aside) and headers as sent, its owner and the values of the row's path
+// wildcards in path order. Both purposes are named under httpwire/, as
+// sealed names a purpose by its owning module, so no app purpose on a
+// shared Sealer equals one, and they differ from their first distinct
+// byte, so a list cursor never opens as a handle.
 func cursorPurpose(row, queryHash, headersHash, owner string, path []string) sealed.Purpose {
 	return sealed.Purpose("httpwire/cursor:" + lengthPrefixed(append([]string{row, queryHash, headersHash, owner}, path...)...))
 }
 
-// jsonHash is the SHA-256 of v's json.Marshal.
-func jsonHash(v any) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.Sum256(b)
-	return string(h[:]), nil
+func formHash(m map[string][]string) string {
+	h := sha256.Sum256([]byte(form(m)))
+	return string(h[:])
 }
 
 func handlePurpose(purpose, credential string) sealed.Purpose {
@@ -228,8 +239,8 @@ func WithSealer(s *sealed.Sealer) Option {
 	return func(o *options) { o.sealer, o.sealerSet = s, true }
 }
 
-// listCursor seals a List request's cursors, bound to its row, its query
-// without Page, its owner and its path values.
+// listCursor seals a List request's cursors under cursorPurpose's
+// bindings.
 type listCursor struct {
 	sealer  *sealed.Sealer
 	purpose sealed.Purpose
@@ -251,8 +262,9 @@ func (l *listCursor) seal(dir direction, pos []byte) (string, error) {
 
 // SealNext answers the next_cursor resuming after pos, the page's last
 // item: a request with it has Position pos and Backward false. It is bound
-// to this row, this query (Page aside) and WithCursorOwner's owner, and
-// answers ErrPositionTooLong for a pos over 1,024 bytes.
+// to this row, its path values, its query (Page aside), its headers and
+// WithCursorOwner's owner, each as the request sent it, and answers
+// ErrPositionTooLong for a pos over 1,024 bytes.
 func (c Call[P, Q, B, H]) SealNext(pos []byte) (string, error) { return c.list.seal(forward, pos) }
 
 // SealPrev answers the prev_cursor ending before pos, the page's first
@@ -264,6 +276,16 @@ func (c Call[P, Q, B, H]) SealPrev(pos []byte) (string, error) { return c.list.s
 var (
 	pageType   = reflect.TypeFor[Page]()
 	cursorType = reflect.TypeFor[Cursor]()
+	// pageNames are Page's query parameters, which move between the pages
+	// one cursor reads, so its purpose leaves them out.
+	pageNames = func() []string {
+		fields, _ := textFields(pageType)
+		names := make([]string, len(fields))
+		for i, f := range fields {
+			names[i] = f.name
+		}
+		return names
+	}()
 )
 
 // pageIndex answers the index of struct t's embedded Page.
@@ -355,32 +377,15 @@ func checkedPage(body any) (page any, problem string) {
 }
 
 // openPage reads a List request's Page from d's query and opens its
-// cursor, bound to the row, the values of its path wildcards, the query
-// with Page zeroed, the decoded headers and the owner.
+// cursor for cursorPurpose's bindings.
 func (a *API) openPage(r *http.Request, ep *Endpoint, d *decoded) *Error {
 	idx, _ := pageIndex(ep.Query)
-	q := reflect.New(ep.Query).Elem()
-	q.Set(reflect.ValueOf(d.query))
-	p, _ := reflect.TypeAssert[Page](q.FieldByIndex(idx))
-	q.FieldByIndex(idx).SetZero()
-	queryHash, err := jsonHash(q.Interface())
-	if err != nil {
-		a.log().ErrorContext(r.Context(), "httpwire: a List row's query does not encode as JSON", "row", ep.Name, "error", err)
-		return &Error{Code: codeInternal}
+	p, _ := reflect.TypeAssert[Page](reflect.ValueOf(d.query).FieldByIndex(idx))
+	query := maps.Clone(d.sent.query)
+	for _, name := range pageNames {
+		delete(query, name)
 	}
-	var headersHash string
-	if d.headers != nil {
-		if headersHash, err = jsonHash(addressed(d.headers)); err != nil {
-			a.log().ErrorContext(r.Context(), "httpwire: a List row's headers do not encode as JSON", "row", ep.Name, "error", err)
-			return &Error{Code: codeInternal}
-		}
-	}
-	wildcards, _ := pathWildcards(ep.Path)
-	path := make([]string, len(wildcards))
-	for i, w := range wildcards {
-		path[i] = r.PathValue(w)
-	}
-	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, queryHash, headersHash, CursorOwnerOf(r.Context()), path)}
+	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, formHash(query), formHash(d.sent.headers), CursorOwnerOf(r.Context()), d.sent.path)}
 	d.limit = cmp.Or(int(p.Limit), defaultLimit)
 	if p.Cursor == "" {
 		return nil
@@ -421,11 +426,6 @@ func listProblems(ep *Endpoint) []string {
 	}
 	if ep.Method != http.MethodGet || ep.Kind != JSON {
 		p = append(p, fmt.Sprintf("a List row is a JSON GET, not a %s %s", kindNames[ep.Kind], ep.Method))
-	}
-	for _, part := range []reflect.Type{ep.Query, ep.Headers} {
-		if t, method := oneWay(part, map[reflect.Type]bool{}); t != nil {
-			p = append(p, fmt.Sprintf("a List row's cursor binds its marshalled Query and Headers, but %s decodes itself with no %s", t, method))
-		}
 	}
 	return p
 }

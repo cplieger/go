@@ -103,16 +103,28 @@ type Binding struct {
 }
 
 // decoded is a request's decoded parts, each a value of the binding's type
-// or nil for its zero value.
+// or nil for its zero value, and sent, what the request carried for them.
 type decoded struct {
 	params, query, body, headers any
 	list                         *listCursor
+	sent                         sent
 	key                          string
 	position                     []byte
 	rawBody                      []byte // a Keyed Raw row's body digest
 	ifMatch                      Tag
 	limit                        int
 	backward                     bool
+}
+
+// sent is what a request carried for its declared text parts, as the
+// binder parsed them: the path wildcards' values in path order, and each
+// declared query parameter and header it was given, by name, with its
+// values in request order. The cursor purpose and the fingerprint bind
+// these and never the decoded values, whose json.Marshal can drop a field
+// or miss what a type's own decoder read.
+type sent struct {
+	query, headers map[string][]string
+	path           []string
 }
 
 // Bind binds a JSON row: P, Q, B and H are its Params, Query, Request and

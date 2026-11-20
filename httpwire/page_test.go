@@ -257,7 +257,7 @@ func position(k uint64) []byte { return binary.BigEndian.AppendUint64(nil, k) }
 // after Position, backward the Limit keys before it, and the first page
 // when a backward scan reaches the start. Offset counts the keys before
 // the page in the same read as Total.
-func scanPage[P, H any](keys []uint64, c httpwire.Call[P, entryQuery, noB, H]) (httpwire.List[entry], error) {
+func scanPage[P, Q, H any](keys []uint64, c httpwire.Call[P, Q, noB, H]) (httpwire.List[entry], error) {
 	start := 0
 	if c.Position != nil {
 		pos := binary.BigEndian.Uint64(c.Position)
@@ -613,77 +613,115 @@ func TestCursorRefusesAnotherHeader(t *testing.T) {
 	}
 }
 
-// brokenKind decodes as a query or header value but never encodes, so a
-// List row cannot bind its cursor to the value.
+// brokenKind decodes as a query or header value but never encodes.
 type brokenKind string
 
 func (brokenKind) MaxBytes() int                   { return 16 }
 func (k *brokenKind) UnmarshalText(b []byte) error { *k = brokenKind(b); return nil }
 func (brokenKind) MarshalText() ([]byte, error)    { return nil, errors.New("no encoding") }
 
-func TestListRowWhosePartsDoNotEncodeAnswersInternalError(t *testing.T) {
+// heldKind keeps its value unexported behind pointer-receiver codecs, so
+// encoding/json writes a copy of it as {}.
+type heldKind struct{ v string }
+
+func (heldKind) MaxBytes() int                   { return 16 }
+func (k *heldKind) UnmarshalText(b []byte) error { k.v = string(b); return nil }
+func (k *heldKind) MarshalText() ([]byte, error) { return []byte(k.v), nil }
+
+// oneWayKind decodes into unexported state and has no marshaler.
+type oneWayKind struct{ v string }
+
+func (oneWayKind) MaxBytes() int                   { return 16 }
+func (k *oneWayKind) UnmarshalText(b []byte) error { k.v = string(b); return nil }
+
+// scopedWith serves pageTable with items.scoped taking Q and H, counting
+// its runs.
+func scopedWith[Q, H any](t *testing.T) (*httpwire.API, func() int) {
+	t.Helper()
+	tb := pageTable(t)
+	ep := row(tb, "items.scoped")
+	ep.Query, ep.Headers = reflect.TypeFor[Q](), reflect.TypeFor[H]()
+	if ep.Headers == reflect.TypeFor[noH]() {
+		ep.Headers = nil
+	}
+	var mu sync.Mutex
+	runs := 0
+	bs := (&pageStore{}).bindingsByRow()
+	bs["items.scoped"] = httpwire.Bind("items.scoped", func(_ context.Context, c httpwire.Call[noP, Q, noB, H]) (httpwire.List[entry], error) {
+		mu.Lock()
+		defer mu.Unlock()
+		runs++
+		return scanPage(span(1, 10), c)
+	})
+	api, err := httpwire.New(tb, slices.Collect(maps.Values(bs)), httpwire.WithSchema(pageDoc(t)), httpwire.WithGuard(fixtureGuard{}),
+		httpwire.WithCredential(func(r *http.Request) string { c, _ := principalOf(r); return c }),
+		httpwire.WithCursorOwner(func(r *http.Request) string { _, o := principalOf(r); return o }),
+		httpwire.WithSealer(pageSealer))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return api, func() int { mu.Lock(); defer mu.Unlock(); return runs }
+}
+
+// A List cursor is bound to each query and header value as the request
+// carried it, whatever the field's type or json tag: it opens under the
+// same values and answers cursor_invalid under another.
+func TestCursorBindsTheValuesAsSent(t *testing.T) {
 	type (
+		heldQuery struct {
+			httpwire.Page
+			Kind heldKind `json:"kind,omitzero"`
+		}
+		oneWayQuery struct {
+			httpwire.Page
+			Kind oneWayKind `json:"kind,omitzero"`
+		}
 		brokenQuery struct {
 			httpwire.Page
 			Kind brokenKind `json:"kind,omitempty"`
+		}
+		hiddenScope struct {
+			Scope entryKind `header:"X-Scope,omitempty" json:"-"`
+		}
+		takenName struct {
+			Scope entryKind `header:"X-Scope,omitempty" json:"Zone"`
+			Zone  entryKind `header:"X-Zone,omitempty"`
 		}
 		brokenScope struct {
 			Scope brokenKind `header:"X-Scope,omitempty"`
 		}
 	)
 	for name, tc := range map[string]struct {
-		edit    func(ep *httpwire.Endpoint)
-		bind    func(ran *bool) httpwire.Binding
-		target  string
-		scope   string
-		message string
+		build       func(*testing.T) (*httpwire.API, func() int)
+		same, other []string // query then header pairs, kind first
 	}{
-		"the query": {
-			func(ep *httpwire.Endpoint) { ep.Query, ep.Headers = reflect.TypeFor[brokenQuery](), nil },
-			func(ran *bool) httpwire.Binding {
-				return httpwire.Bind("items.scoped", func(context.Context, httpwire.Call[noP, brokenQuery, noB, noH]) (httpwire.List[entry], error) {
-					*ran = true
-					return httpwire.List[entry]{}, nil
-				})
-			},
-			"/api/items/scoped?kind=a", "", "query does not encode",
+		"a query type whose marshaler needs its address":     {scopedWith[heldQuery, noH], []string{"a", ""}, []string{"b", ""}},
+		"a query type that does not encode":                  {scopedWith[brokenQuery, noH], []string{"a", ""}, []string{"b", ""}},
+		"a query type that decodes itself with no marshaler": {scopedWith[oneWayQuery, noH], []string{"a", ""}, []string{"b", ""}},
+		"a header json leaves out":                           {scopedWith[entryQuery, hiddenScope], []string{"", "X-Scope", "a"}, []string{"", "X-Scope", "b"}},
+		"a header whose json name another takes": {
+			scopedWith[entryQuery, takenName], []string{"", "X-Scope", "s", "X-Zone", "a"}, []string{"", "X-Scope", "s", "X-Zone", "b"},
 		},
-		"the headers": {
-			func(ep *httpwire.Endpoint) { ep.Headers = reflect.TypeFor[brokenScope]() },
-			func(ran *bool) httpwire.Binding {
-				return httpwire.Bind("items.scoped", func(context.Context, httpwire.Call[noP, entryQuery, noB, brokenScope]) (httpwire.List[entry], error) {
-					*ran = true
-					return httpwire.List[entry]{}, nil
-				})
-			},
-			"/api/items/scoped", "a", "headers do not encode",
-		},
+		"a header type that does not encode": {scopedWith[entryQuery, brokenScope], []string{"", "X-Scope", "a"}, []string{"", "X-Scope", "b"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			tb := pageTable(t)
-			tc.edit(row(tb, "items.scoped"))
-			var ran bool
-			bs := (&pageStore{}).bindingsByRow()
-			bs["items.scoped"] = tc.bind(&ran)
-			sink := &logSink{}
-			api, err := httpwire.New(tb, slices.Collect(maps.Values(bs)), httpwire.WithSchema(pageDoc(t)), httpwire.WithGuard(fixtureGuard{}),
-				httpwire.WithCredential(func(r *http.Request) string { c, _ := principalOf(r); return c }),
-				httpwire.WithCursorOwner(func(r *http.Request) string { _, o := principalOf(r); return o }),
-				httpwire.WithSealer(pageSealer), httpwire.WithLogger(slog.New(sink)))
-			if err != nil {
-				t.Fatalf("New: %v", err)
+			api, runs := tc.build(t)
+			get := func(cursor string, sent []string) *httptest.ResponseRecorder {
+				q := url.Values{"limit": {"4"}}
+				if sent[0] != "" {
+					q.Set("kind", sent[0])
+				}
+				if cursor != "" {
+					q.Set("cursor", cursor)
+				}
+				return answer(api, request(http.MethodGet, "/api/items/scoped?"+q.Encode(), "", append([]string{"Principal", sessionA}, sent[1:]...)...))
 			}
-			r := httptest.NewRequest(http.MethodGet, tc.target, nil)
-			r.Header.Set("Principal", sessionA)
-			if tc.scope != "" {
-				r.Header.Set("X-Scope", tc.scope)
-			}
-			rec := answer(api, r)
-			if env := envelopeOf(t, rec); rec.Code != http.StatusInternalServerError || env.Code != "internal_error" || ran {
-				t.Errorf("answered %d %q, handler ran %v, want 500 internal_error and no run", rec.Code, env.Code, ran)
-			}
-			if !sink.has("ERROR", tc.message, "row=items.scoped") {
-				t.Errorf("no ERROR line naming the row: %q", sink.all())
+			c := pageOf(t, get("", tc.same)).NextCursor
+			wantPage(t, pageOf(t, get(c, tc.same)), span(5, 8), 4, 10)
+			n := runs()
+			rec := get(c, tc.other)
+			if env := envelopeOf(t, rec); rec.Code != http.StatusBadRequest || env.Code != "cursor_invalid" || runs() != n {
+				t.Errorf("another value answered %d %q after %d more runs, want 400 cursor_invalid and none", rec.Code, env.Code, runs()-n)
 			}
 		})
 	}
@@ -977,13 +1015,6 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 	type pageByPointer struct {
 		*httpwire.Page
 	}
-	type oneWayPageQuery struct {
-		httpwire.Page
-		Kind oneWayText `json:"kind"`
-	}
-	type oneWayScope struct {
-		Scope oneWayText `header:"X-Scope,omitempty"`
-	}
 	listRow := func(tb *httpwire.Table) *httpwire.Endpoint { return row(tb, "items.list") }
 	handles := func(tb *httpwire.Table) *httpwire.Endpoint { return row(tb, "handles.seal") }
 	for name, tc := range map[string]struct {
@@ -1031,12 +1062,6 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 			}}}}
 		}, []string{`row "auth.keys"`, "Page"}},
 		"a pointer to Page": {func(tb *httpwire.Table) { listRow(tb).Query = reflect.TypeFor[pageByPointer]() }, []string{`row "items.list"`, "Page"}},
-		"a one-way Query": {func(tb *httpwire.Table) { listRow(tb).Query = reflect.TypeFor[oneWayPageQuery]() }, []string{
-			`row "items.list"`, "cursor", "httpwire_test.oneWayText", "MarshalText",
-		}},
-		"a one-way header": {func(tb *httpwire.Table) { row(tb, "items.scoped").Headers = reflect.TypeFor[oneWayScope]() }, []string{
-			`row "items.scoped"`, "cursor", "httpwire_test.oneWayText", "MarshalText",
-		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tb := pageTable(t)

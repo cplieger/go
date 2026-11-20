@@ -376,6 +376,10 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 // query, then the headers.
 func (a *API) decodeText(r *http.Request, ep *Endpoint) (*decoded, *Error) {
 	d := &decoded{}
+	wildcards, _ := pathWildcards(ep.Path)
+	for _, w := range wildcards {
+		d.sent.path = append(d.sent.path, r.PathValue(w))
+	}
 	if ep.Params != nil {
 		v, ok := a.decodePath(r, ep)
 		if !ok {
@@ -384,18 +388,18 @@ func (a *API) decodeText(r *http.Request, ep *Endpoint) (*decoded, *Error) {
 		d.params = v
 	}
 	if ep.Query != nil {
-		v, fields := a.decodeQuery(r, ep)
+		v, given, fields := a.decodeQuery(r, ep)
 		if len(fields) > 0 {
 			return nil, &Error{Code: "bad_query", Message: "the query does not match this request", Fields: fields}
 		}
-		d.query = v
+		d.query, d.sent.query = v, given
 	}
 	if ep.Headers != nil {
-		v, fields := a.decodeHeaders(r, ep)
+		v, given, fields := a.decodeHeaders(r, ep)
 		if len(fields) > 0 {
 			return nil, &Error{Code: codeBadHeader, Message: "the request headers do not match this request", Fields: fields}
 		}
-		d.headers = v
+		d.headers, d.sent.headers = v, given
 	}
 	return d, nil
 }

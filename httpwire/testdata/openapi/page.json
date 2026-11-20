@@ -303,6 +303,15 @@
               "type": "string",
               "x-max-bytes": 16
             }
+          },
+          {
+            "in": "header",
+            "name": "X-Zone",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 16
+            }
           }
         ],
         "responses": {

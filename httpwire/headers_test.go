@@ -401,6 +401,83 @@ func TestHeadersInTheFingerprint(t *testing.T) {
 	})
 }
 
+type (
+	// heldAs keeps its value unexported behind pointer-receiver codecs, so
+	// encoding/json writes a copy of it as {}.
+	heldAs struct{ v string }
+	// oneWayAs decodes into unexported state and has no marshaler.
+	oneWayAs struct{ v string }
+)
+
+func (heldAs) MaxBytes() int                     { return 4 }
+func (a *heldAs) UnmarshalText(b []byte) error   { a.v = string(b); return nil }
+func (a *heldAs) MarshalText() ([]byte, error)   { return []byte(a.v), nil }
+func (oneWayAs) MaxBytes() int                   { return 4 }
+func (a *oneWayAs) UnmarshalText(b []byte) error { a.v = string(b); return nil }
+
+// actWith serves headerTable with agents.act taking H, counting its runs.
+func actWith[H any](t *testing.T) (*httpwire.API, func() int) {
+	t.Helper()
+	tb := headerTable(t)
+	row(tb, "agents.act").Headers = reflect.TypeFor[H]()
+	var mu sync.Mutex
+	runs := 0
+	h, err := buildHeaderAPI(tb, headerDoc(t), map[string]httpwire.Binding{
+		"agents.act": httpwire.Bind("agents.act", func(context.Context, httpwire.Call[noP, noQ, agentBody, H]) (agentAct, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			runs++
+			return agentAct{ID: strconv.Itoa(runs)}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h.api, func() int { mu.Lock(); defer mu.Unlock(); return runs }
+}
+
+// A Keyed row's fingerprint holds each header's value as the request sent
+// it, whatever the field's type or json tag, so a resend under another
+// value is not the request that ran and one under the same value replays.
+func TestFingerprintHoldsEachHeaderAsSent(t *testing.T) {
+	for name, build := range map[string]func(*testing.T) (*httpwire.API, func() int){
+		"a type whose marshaler needs its address": actWith[struct {
+			Session sessionToken `header:"Grelot-Session"`
+			As      *heldAs      `header:"Grelot-As"`
+		}],
+		"a type that decodes itself with no marshaler": actWith[struct {
+			Session sessionToken `header:"Grelot-Session"`
+			As      *oneWayAs    `header:"Grelot-As"`
+		}],
+		"a field json leaves out": actWith[struct {
+			Session sessionToken  `header:"Grelot-Session"`
+			As      *delegateName `header:"Grelot-As" json:"-"`
+		}],
+		"a field whose json name another takes": actWith[struct {
+			Session sessionToken  `header:"Grelot-Session"`
+			As      *delegateName `header:"Grelot-As"`
+			Env     envTag        `header:"X-Env,omitempty" json:"As"`
+		}],
+	} {
+		t.Run(name, func(t *testing.T) {
+			api, runs := build(t)
+			act := func(as string) *httptest.ResponseRecorder {
+				return answer(api, keyedRequest(http.MethodPost, "/api/agents/act", `{"name":"a"}`, `"k"`, "Grelot-Session", "abc", "Grelot-As", as, "X-Env", "prod"))
+			}
+			first := act("bot")
+			if first.Code != http.StatusOK || runs() != 1 {
+				t.Fatalf("first act %d %s", first.Code, first.Body)
+			}
+			if rec := act("bat"); codeOf(t, rec) != "idempotency_key_reused" || runs() != 1 {
+				t.Errorf("another value answered %d %s after %d runs, want idempotency_key_reused and one run", rec.Code, rec.Body, runs())
+			}
+			if rec := act("bot"); rec.Code != http.StatusOK || rec.Body.String() != first.Body.String() || runs() != 1 {
+				t.Errorf("the same value answered %d %s after %d runs, want the replay", rec.Code, rec.Body, runs())
+			}
+		})
+	}
+}
+
 func TestUnionOfARowWithHeaders(t *testing.T) {
 	t.Run("a table row", func(t *testing.T) {
 		tb := fixtureTable(t)
@@ -481,9 +558,6 @@ func TestDeriveRefusesHeaders(t *testing.T) {
 		},
 		"Headers not a struct": {headers(reflect.TypeFor[string]()), []string{`row "jobs.list": Headers string is not a struct`}},
 		"Headers is None":      {headers(reflect.TypeFor[httpwire.None]()), []string{`row "jobs.list": Headers is httpwire.None`}},
-		"a Keyed row's header that decodes itself one way": {edit("jobs.start", func(ep *httpwire.Endpoint) {
-			ep.Headers = oneHeader(reflect.TypeFor[keyList](), `header:"X-Thing"`)
-		}), []string{`row "jobs.start": a Keyed row's fingerprint marshals the decoded request, but httpwire_test.keyList decodes itself with no MarshalText`}},
 		"a mount row naming an owned header": {
 			edit("auth.keys", func(ep *httpwire.Endpoint) { ep.Headers = oneHeader(text, `header:"Authorization"`) }),
 			[]string{`row "auth.keys": Headers field "Authorization" names a header httpwire or the platform owns`},

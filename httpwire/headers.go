@@ -114,17 +114,23 @@ func headerTypeProblem(tf *textField, t reflect.Type) string {
 	return ""
 }
 
-// decodeHeaders parses ep's Headers from r's header, answering one entry
-// per refused header: missing when required, given twice, or whose value
-// does not parse or fails its schema. A header no field names is ignored.
-func (a *API) decodeHeaders(r *http.Request, ep *Endpoint) (any, []FieldError) {
+// decodeHeaders parses ep's Headers from r's header, and answers the
+// values given for its fields, or one entry per refused header: missing
+// when required, given twice, or whose value does not parse or fails its
+// schema. A header no field names is ignored.
+func (a *API) decodeHeaders(r *http.Request, ep *Endpoint) (value any, given map[string][]string, refused []FieldError) {
 	hv := reflect.New(ep.Headers).Elem()
 	fields, _ := headerFields(ep.Headers, a.table.ClientHeader, true)
 	var c checker
+	given = map[string][]string{}
 	for _, f := range fields {
-		if code, message := a.textValue(hv, ep, inHeader, &f, r.Header.Values(f.name)); code != "" {
+		vs := r.Header.Values(f.name)
+		if len(vs) > 0 {
+			given[f.name] = vs
+		}
+		if code, message := a.textValue(hv, ep, inHeader, &f, vs); code != "" {
 			c.add(f.name, refusalCode(f.typ, code), message)
 		}
 	}
-	return hv.Interface(), c.out
+	return hv.Interface(), given, c.out
 }
