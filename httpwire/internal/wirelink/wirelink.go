@@ -27,5 +27,5 @@ var (
 	Stub func(ep any) any
 	// RequestID answers the request id an *httpwire.API answers r under, and
 	// r carrying it, so serving the returned request answers that id.
-	RequestID func(r *http.Request) (*http.Request, string)
+	RequestID func(r *http.Request) (out *http.Request, id string)
 )

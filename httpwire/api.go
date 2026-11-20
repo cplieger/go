@@ -121,12 +121,11 @@ func withRequestID(w http.ResponseWriter, r *http.Request) *http.Request {
 
 // requestIDOf answers r's request id, the context's, else a valid inbound
 // X-Request-Id, else a fresh one, and r carrying it in its context.
-func requestIDOf(r *http.Request) (*http.Request, string) {
-	if id := httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
+func requestIDOf(r *http.Request) (out *http.Request, id string) {
+	if id = httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
 		return r, id
 	}
-	id := r.Header.Get(httpserver.HeaderRequestID)
-	if !httpserver.ValidRequestID(id) {
+	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
 		id = httpserver.NewRequestID()
 	}
 	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
