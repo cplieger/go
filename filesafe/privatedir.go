@@ -6,13 +6,11 @@ import (
 	"path/filepath"
 )
 
-// PrivateDirResult reports the outcome of one EnsurePrivateDir call.
-//
-// Only meaningful alongside a nil error: a non-nil error means no verdict
-// was reached, not "nothing happened", since the mkdir may have succeeded
-// before a later step refused the result. Treat a failure as fatal, except
-// ErrParentNotSynced, which a caller may retry: the directory, created or
-// found, was left in place, and a retry finds it and syncs again.
+// PrivateDirResult reports the outcome of one EnsurePrivateDir call, and only
+// beside a nil error: a non-nil error means no verdict, not "nothing
+// happened", since the mkdir may have succeeded before a later step refused
+// the result. Treat a failure as fatal, except ErrParentNotSynced: the
+// directory was left in place, and a retry finds it and syncs again.
 type PrivateDirResult struct {
 	// Mode is the mode the filesystem actually stored, read back from the
 	// open handle (permission bits plus setuid/setgid/sticky). Always 0700
@@ -31,13 +29,11 @@ type PrivateDirResult struct {
 }
 
 // EnforceMode sets want on the open file or directory f (fchmod), reads the
-// mode back from the same handle (fstat) and returns what the filesystem
-// stored: a mode given to mkdir or open is only a request, which the umask
-// narrows and an inheritable ACL can widen (docs/file-modes.md). Only the
-// permission, setuid, setgid and sticky bits are compared. A mismatch returns
-// ErrModeNotStored with the stored mode; other errors are the filesystem's.
-// A nil f returns ErrUnsafePath. On Windows it returns ErrModeUnsupported and
-// leaves f unchanged.
+// mode back from the handle (fstat) and returns what the filesystem stored,
+// since the umask narrows a requested mode and an inherited ACL can widen it
+// (docs/file-modes.md). A mismatch in the permission, setuid, setgid or sticky
+// bits returns ErrModeNotStored with the stored mode. A nil f returns
+// ErrUnsafePath; Windows returns ErrModeUnsupported and leaves f unchanged.
 func EnforceMode(f *os.File, want os.FileMode) (os.FileMode, error) {
 	if f == nil {
 		return 0, fmt.Errorf("%w: nil file", ErrUnsafePath)
@@ -65,9 +61,8 @@ func EnforceMode(f *os.File, want os.FileMode) (os.FileMode, error) {
 // can stand in for a filesystem that refuses a mode.
 var enforceMode = EnforceMode
 
-// chmodBits reduces a mode to the bits chmod(2) can set: permission bits
-// plus setuid, setgid and sticky. Strips the type bits so a file and a
-// directory compare meaningfully.
+// chmodBits reduces a mode to the bits chmod(2) can set, dropping the type
+// bits so a file and a directory compare.
 func chmodBits(m os.FileMode) os.FileMode {
 	return m.Perm() | m&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
 }
@@ -92,10 +87,10 @@ func EnsurePrivateDir(dir string, opts ...PrivateDirOption) (PrivateDirResult, e
 // CheckPrivateDir proves from an open handle that the absolute dir is a
 // directory, not a symlink, owned by the effective uid with no group or other
 // access: EnsurePrivateDir's verdict, reached without creating, changing or
-// syncing anything. A missing dir matches fs.ErrNotExist; refusals are
-// EnsurePrivateDir's (ErrEmptyPath, ErrUnsafePath, ErrSymlinkTarget,
-// ErrNotDirectory, ErrNotOwned, ErrModeTooOpen). On Windows a valid dir
-// returns ErrModeUnsupported.
+// syncing anything. A missing dir matches fs.ErrNotExist, an unsearchable
+// parent fs.ErrPermission; refusals are EnsurePrivateDir's (ErrEmptyPath,
+// ErrUnsafePath, ErrSymlinkTarget, ErrNotDirectory, ErrNotOwned,
+// ErrModeTooOpen). On Windows a valid dir returns ErrModeUnsupported.
 func CheckPrivateDir(dir string) error {
 	clean, err := validateAbsClean(dir)
 	if err != nil {
