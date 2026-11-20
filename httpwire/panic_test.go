@@ -26,7 +26,7 @@ func panicking(name string, v any) httpwire.Binding {
 	case "live.stream":
 		return httpwire.BindStream(name, h)
 	}
-	return httpwire.Bind(name, func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	return httpwire.Bind(name, func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		panic(v)
 	})
 }

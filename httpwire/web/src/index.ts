@@ -1,3 +1,5 @@
+export { CHECK_ANSWERS, checkChecked, NOT_STORED } from "./checked.js";
+export type { CheckAnswer, Checked, NotStored, SourceCheck } from "./checked.js";
 export { WIRE_CODES } from "./codes.js";
 export type { WireCode } from "./codes.js";
 export { decodeEnvelope, SCHEMA_FIELD_CODES } from "./envelope.js";

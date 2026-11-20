@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"reflect"
 	"time"
+
+	"github.com/cplieger/go/httpserver/v2"
 )
 
 // Endpoint is one route of an app's JSON API. The binder, the guard, the
@@ -11,22 +13,26 @@ import (
 // own beside it.
 type Endpoint struct {
 	Params, Query, Request, Response reflect.Type // nil is none
+	// Headers is a struct of the request headers the row takes, each field
+	// naming its header in a header tag; nil is none.
+	Headers reflect.Type
 
 	// Reasons maps a code of the row's union to the reasons it may carry.
-	Reasons map[string]ReasonSet
+	Reasons map[httpserver.ErrorCode]ReasonSet
 
 	// Name is "<area>.<verb>", unique in the table: the operation id and the
 	// generated client function's name.
 	Name string
 	// Method is GET, POST, PUT, PATCH or DELETE; a GET row also answers HEAD.
 	Method string
-	// Path is a ServeMux pattern under the table's Prefix: literal segments
-	// and whole-segment {name} wildcards.
+	// Path is relative to the table's Prefix, which New prepends: "/" then
+	// literal segments and whole-segment {name} wildcards.
 	Path        string
 	Summary     string
 	Description string
-	// ContentType is a Raw row's 2xx media type, required there and only there.
-	ContentType string
+	// ContentTypes are a Raw row's 2xx media types, one or more, required
+	// there and only there.
+	ContentTypes []string
 	// Result names the read row that returns a Keyed row's result, for an
 	// answer too large to replay.
 	Result string
@@ -37,7 +43,7 @@ type Endpoint struct {
 	// redirect statuses with none.
 	Successes []Success
 	// Codes are the codes the handler answers itself.
-	Codes []string
+	Codes []httpserver.ErrorCode
 	// Owners are the owner code sets mapError tries, in order.
 	Owners []*Owner
 	// Changes names the feed kinds this read serves; empty on a write.
@@ -48,7 +54,7 @@ type Endpoint struct {
 	PersonActions []string
 	// Errors is the row's error union, filled by Derive; a value set by hand
 	// is replaced.
-	Errors []string
+	Errors []httpserver.ErrorCode
 
 	Access Access
 	// Status is the primary success status. Zero is 200, 204 for a JSON row
@@ -67,7 +73,10 @@ type Endpoint struct {
 
 	Keyed   bool // takes an Idempotency-Key
 	IfMatch bool // takes If-Match naming the Tag it was read at
-	List    bool // a list read: takes Page, answers List[T]
+	// Conditional marks a Raw GET row whose 200 carries an ETag and whose
+	// handler answers 304 with no body to a matching If-None-Match.
+	Conditional bool
+	List        bool // a list read: takes Page, answers List[T]
 	// Personal marks a read whose rows differ per principal within one shape;
 	// it names a kind only in a OnePerson table.
 	Personal bool
@@ -138,7 +147,8 @@ type Kind uint8
 const (
 	// JSON answers Response as JSON, or nothing with no Response.
 	JSON Kind = iota
-	// Raw answers a body of the row's ContentType the handler writes itself.
+	// Raw answers a body of one of the row's ContentTypes the handler writes
+	// itself.
 	Raw
 	// Stream answers text/event-stream.
 	Stream
@@ -150,7 +160,7 @@ const (
 // Table is an app's API: its rows, owners, feed kinds and mounts.
 type Table struct {
 	Catalog *Catalog
-	// Prefix starts every row's path: "/api", "/v1".
+	// Prefix starts every row's full path, Prefix then Path: "/api", "/v1".
 	Prefix string
 	// ClientHeader is the header a client version floor reads; "" is no
 	// floor.

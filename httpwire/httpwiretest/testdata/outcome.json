@@ -1,0 +1,83 @@
+{
+  "info": {
+    "title": "outcome fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/act": {
+      "get": {
+        "description": "Read the act.",
+        "operationId": "act.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read the act"
+      },
+      "post": {
+        "description": "Act unkeyed.",
+        "operationId": "act.unkeyed",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Act unkeyed"
+      }
+    },
+    "/api/act/keyed": {
+      "post": {
+        "description": "Act keyed.",
+        "operationId": "act.keyed",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Act keyed",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    },
+    "/api/act/plain": {
+      "post": {
+        "description": "Act plainly.",
+        "operationId": "act.plain",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Act plainly"
+      }
+    },
+    "/api/mount/act": {
+      "put": {
+        "description": "Act through the mount.",
+        "operationId": "mount.act",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Act through the mount"
+      }
+    }
+  }
+}

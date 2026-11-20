@@ -1,10 +1,14 @@
 /** A `List` row's answer, or the list members of an answer that embeds one. */
 export interface ListAnswer<T> {
+  /** The page's rows, in the list's order. */
   readonly items: readonly T[];
+  /** The cursor of the next page, present exactly when rows remain after this one. */
   readonly next_cursor?: string;
+  /** The cursor of the previous page, present exactly when `offset` is above 0. */
   readonly prev_cursor?: string;
   /** How many matching rows come before the first item. */
   readonly offset: number;
+  /** How many rows match the query. */
   readonly total: number;
 }
 

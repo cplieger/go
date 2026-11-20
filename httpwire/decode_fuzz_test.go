@@ -43,7 +43,7 @@ func FuzzDecode_acceptedValuesInBounds(f *testing.F) {
 	f.Fuzz(func(t *testing.T, kind, n, query string, body []byte) {
 		d := newDecodeAPI(t, decodeDoc(t))
 		get := httptest.NewRequest(http.MethodGet, "/api/items", nil)
-		get.URL.Path, get.URL.RawPath = "/api/items/"+kind+"/"+n, ""
+		get.URL.Path, get.URL.RawPath = "/items/"+kind+"/"+n, ""
 		rec := httptest.NewRecorder()
 		d.api.ServeHTTP(rec, get)
 		clientAnswer(t, "the path", rec)

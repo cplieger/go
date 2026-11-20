@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/textproto"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +30,16 @@ type operation struct {
 	path        string
 }
 
+// paramKey names a parameter; a header's name is canonical, since header
+// names are case-insensitive (RFC 9110 section 5.1).
 type paramKey struct{ in, name string }
+
+func paramKeyOf(in, name string) paramKey {
+	if in == inHeader {
+		name = textproto.CanonicalMIMEHeaderKey(name)
+	}
+	return paramKey{in, name}
+}
 
 type param struct {
 	schema   *node
@@ -48,8 +58,9 @@ type requestBody struct {
 // response's schema is nil when it has no application/json media; content
 // reports whether it declares any media at all.
 type response struct {
-	schema  *node
-	content bool
+	schema *node
+	// media are the media types its content declares, lower case.
+	media []string
 }
 
 const mediaJSON = "application/json"
@@ -239,11 +250,11 @@ func (p *parser) parameters(op *operation, v any, at string) {
 			p.fail(pat, "parameter in %q is not path, query, header or cookie", m["in"])
 		case m["schema"] == nil:
 			p.fail(pat, "parameter has no schema")
-		case op.params[paramKey{in, name}] != nil:
+		case op.params[paramKeyOf(in, name)] != nil:
 			p.fail(pat, "parameter %s %q declared twice", in, name)
 		default:
 			required, _ := m["required"].(bool)
-			op.params[paramKey{in, name}] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required, form: p.form(m, pat)}
+			op.params[paramKeyOf(in, name)] = &param{schema: p.schema(m["schema"], pointer(pat, "schema")), required: required, form: p.form(m, pat)}
 		}
 	}
 }
@@ -292,7 +303,7 @@ func (p *parser) responses(op *operation, v any, at string) {
 		}
 		resp := &response{}
 		if c, ok := r["content"]; ok {
-			resp.schema, resp.content = p.content(c, pointer(rat, "content"))
+			resp.schema, resp.media = p.content(c, pointer(rat, "content"))
 		}
 		if h, ok := r["headers"]; ok {
 			p.headers(h, pointer(rat, "headers"))
@@ -302,23 +313,23 @@ func (p *parser) responses(op *operation, v any, at string) {
 }
 
 // content parses a media-type map, answering its application/json schema
-// and whether it declares any media type.
-func (p *parser) content(v any, at string) (*node, bool) {
+// and the media types it declares.
+func (p *parser) content(v any, at string) (jsonSchema *node, media []string) {
 	m, ok := v.(map[string]any)
 	if !ok {
 		p.fail(at, "not an object")
-		return nil, false
+		return nil, nil
 	}
-	var jsonSchema *node
-	for _, media := range sortedKeys(m) {
-		mat := pointer(at, media)
-		mm, ok := p.object(m[media], mat, false, "schema", "x-events")
+	for _, key := range sortedKeys(m) {
+		media = append(media, mediaOf(key))
+		mat := pointer(at, key)
+		mm, ok := p.object(m[key], mat, false, "schema", "x-events")
 		if !ok {
 			continue
 		}
 		if s, ok := mm["schema"]; ok {
 			n := p.schema(s, pointer(mat, "schema"))
-			if media == mediaJSON {
+			if key == mediaJSON {
 				jsonSchema = n
 			}
 		}
@@ -326,7 +337,7 @@ func (p *parser) content(v any, at string) (*node, bool) {
 			p.schemaMap(ev, pointer(mat, "x-events"))
 		}
 	}
-	return jsonSchema, len(m) > 0
+	return jsonSchema, media
 }
 
 func (p *parser) headers(v any, at string) {

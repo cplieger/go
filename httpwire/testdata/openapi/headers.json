@@ -1,0 +1,508 @@
+{
+  "info": {
+    "title": "headers fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/agents": {
+      "get": {
+        "description": "Reads the calling agent.",
+        "operationId": "agents.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Grelot-Session",
+            "required": true,
+            "schema": {
+              "minLength": 3,
+              "type": "string",
+              "x-max-bytes": 8
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-As",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "grelot-self",
+            "required": false,
+            "schema": {
+              "enum": ["1"],
+              "type": "string",
+              "x-max-bytes": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Slot",
+            "required": false,
+            "schema": {
+              "maximum": 9,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Env",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Count",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Fast",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read the agent"
+      }
+    },
+    "/api/agents/act": {
+      "post": {
+        "description": "Runs one action as the calling agent.",
+        "operationId": "agents.act",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-Session",
+            "required": true,
+            "schema": {
+              "minLength": 3,
+              "type": "string",
+              "x-max-bytes": 8
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-As",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "grelot-self",
+            "required": false,
+            "schema": {
+              "enum": ["1"],
+              "type": "string",
+              "x-max-bytes": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Slot",
+            "required": false,
+            "schema": {
+              "maximum": 9,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Env",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Count",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Fast",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "x-max-bytes": 8
+                  }
+                },
+                "required": ["name"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["id"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Act as the agent",
+        "x-idempotency": {
+          "concurrent": "join",
+          "kept": "success_and_effectful_refusals",
+          "scope": "credential,operation",
+          "window_s": 600
+        }
+      }
+    },
+    "/api/agents/file": {
+      "get": {
+        "description": "Downloads the calling agent's file.",
+        "operationId": "agents.file",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Grelot-Session",
+            "required": true,
+            "schema": {
+              "minLength": 3,
+              "type": "string",
+              "x-max-bytes": 8
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-As",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "grelot-self",
+            "required": false,
+            "schema": {
+              "enum": ["1"],
+              "type": "string",
+              "x-max-bytes": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Slot",
+            "required": false,
+            "schema": {
+              "maximum": 9,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Env",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Count",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Fast",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Download the agent's file"
+      }
+    },
+    "/api/agents/watch": {
+      "get": {
+        "description": "Streams the calling agent's events.",
+        "operationId": "agents.watch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Grelot-Session",
+            "required": true,
+            "schema": {
+              "minLength": 3,
+              "type": "string",
+              "x-max-bytes": 8
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-As",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "grelot-self",
+            "required": false,
+            "schema": {
+              "enum": ["1"],
+              "type": "string",
+              "x-max-bytes": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Slot",
+            "required": false,
+            "schema": {
+              "maximum": 9,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Env",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Count",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Fast",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-events": {
+                  "seen": {
+                    "properties": {
+                      "at": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["at"],
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Watch the agent"
+      }
+    },
+    "/api/agents/{kind}": {
+      "post": {
+        "description": "Posts one message to an agent.",
+        "operationId": "agents.post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": ["book", "disc"],
+              "type": "string",
+              "x-max-bytes": 16
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-Session",
+            "required": true,
+            "schema": {
+              "minLength": 3,
+              "type": "string",
+              "x-max-bytes": 8
+            }
+          },
+          {
+            "in": "header",
+            "name": "Grelot-As",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "grelot-self",
+            "required": false,
+            "schema": {
+              "enum": ["1"],
+              "type": "string",
+              "x-max-bytes": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Slot",
+            "required": false,
+            "schema": {
+              "maximum": 9,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Env",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-max-bytes": 4
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Count",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Fast",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "x-max-bytes": 8
+                  }
+                },
+                "required": ["name"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Post to an agent"
+      }
+    }
+  }
+}

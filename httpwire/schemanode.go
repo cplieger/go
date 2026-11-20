@@ -665,7 +665,7 @@ func (s *Schema) bodySchema(opID string, status int, body []byte) (n *node, requ
 		return nil, false, "the operation declares no status " + strconv.Itoa(status)
 	case r.schema != nil:
 		return r.schema, true, ""
-	case !r.content && len(bytes.TrimSpace(body)) == 0:
+	case len(r.media) == 0 && len(bytes.TrimSpace(body)) == 0:
 		return nil, false, ""
 	}
 	return nil, false, "status " + strconv.Itoa(status) + " declares no JSON body"
@@ -673,11 +673,12 @@ func (s *Schema) bodySchema(opID string, status int, body []byte) (n *node, requ
 
 // CheckParam validates one parameter value against its schema: in is
 // "query", "path" or "header", value a string, int64, uint64 or bool (the
-// number or boolean a query value parsed to). The entry's Path is name.
+// number or boolean a query value parsed to). A header's name matches in
+// any case. The entry's Path is name.
 func (s *Schema) CheckParam(operation, in, name string, value any) *FieldError {
 	var n *node
-	if s != nil && s.ops[operation] != nil && s.ops[operation].params[paramKey{in, name}] != nil {
-		n = s.ops[operation].params[paramKey{in, name}].schema
+	if s != nil && s.ops[operation] != nil && s.ops[operation].params[paramKeyOf(in, name)] != nil {
+		n = s.ops[operation].params[paramKeyOf(in, name)].schema
 	}
 	if n == nil {
 		return &FieldError{Path: name, Code: codeUnknown, Message: "not a declared " + in + " parameter"}

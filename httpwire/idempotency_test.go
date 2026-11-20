@@ -59,52 +59,52 @@ func keyedTable(t testing.TB) *httpwire.Table {
 	if err := c.Add("queue_full", httpserver.CodeSpec{Status: http.StatusServiceUnavailable, Remediation: "Retry later.", NoEffect: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add("outcome_unknown", httpserver.CodeSpec{Status: http.StatusBadGateway, Remediation: "Read the jobs first."}); err != nil {
+	if err := c.SetRemediation("outcome_unknown", "Read the jobs first."); err != nil {
 		t.Fatal(err)
 	}
-	jobCodes := []string{"queue_full", "outcome_unknown"}
+	jobCodes := []httpserver.ErrorCode{"queue_full", "outcome_unknown"}
 	return &httpwire.Table{
 		Prefix: "/api", Catalog: c,
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "users.read", Method: http.MethodGet, Path: "/api/users", Summary: "Read the users", Description: "Read the users.",
+				Name: "users.read", Method: http.MethodGet, Path: "/users", Summary: "Read the users", Description: "Read the users.",
 				Response: reflect.TypeFor[[]account](), Access: session,
 			},
 			{
-				Name: "users.register", Method: http.MethodPost, Path: "/api/users", Summary: "Register a user", Description: "Register a user.",
+				Name: "users.register", Method: http.MethodPost, Path: "/users", Summary: "Register a user", Description: "Register a user.",
 				Request: reflect.TypeFor[regBody](), Response: reflect.TypeFor[account](), Status: http.StatusCreated,
 				Successes: []httpwire.Success{{Status: http.StatusOK, Response: reflect.TypeFor[account]()}},
 				Access:    session, Keyed: true, Result: "users.read",
 			},
 			{
-				Name: "jobs.read", Method: http.MethodGet, Path: "/api/jobs", Summary: "Read the jobs", Description: "Read the jobs.",
+				Name: "jobs.read", Method: http.MethodGet, Path: "/jobs", Summary: "Read the jobs", Description: "Read the jobs.",
 				Response: reflect.TypeFor[[]jobAnswer](), Access: session,
 			},
 			{
-				Name: "jobs.start", Method: http.MethodPost, Path: "/api/jobs", Summary: "Start a job", Description: "Start a job.",
+				Name: "jobs.start", Method: http.MethodPost, Path: "/jobs", Summary: "Start a job", Description: "Start a job.",
 				Request: reflect.TypeFor[jobBody](), Response: reflect.TypeFor[jobAnswer](), Status: http.StatusAccepted,
 				Access: session, Keyed: true, Result: "jobs.read", Codes: jobCodes,
 			},
 			{
-				Name: "jobs.quick", Method: http.MethodPost, Path: "/api/jobs/quick", Summary: "Run a quick job", Description: "Run a quick job.",
+				Name: "jobs.quick", Method: http.MethodPost, Path: "/jobs/quick", Summary: "Run a quick job", Description: "Run a quick job.",
 				Request: reflect.TypeFor[jobBody](), Response: reflect.TypeFor[jobAnswer](), Access: session, Keyed: true, Codes: jobCodes,
 			},
 			{
-				Name: "jobs.retry", Method: http.MethodPost, Path: "/api/jobs/{id}/retry", Summary: "Retry a job", Description: "Retry a job.",
+				Name: "jobs.retry", Method: http.MethodPost, Path: "/jobs/{id}/retry", Summary: "Retry a job", Description: "Retry a job.",
 				Params: reflect.TypeFor[retryParams](), Query: reflect.TypeFor[retryQuery](), Request: reflect.TypeFor[jobBody](),
 				Response: reflect.TypeFor[jobAnswer](), Access: session, Keyed: true,
 			},
 			{
-				Name: "notes.save", Method: http.MethodPut, Path: "/api/notes", Summary: "Save the note", Description: "Save the note.",
+				Name: "notes.save", Method: http.MethodPut, Path: "/notes", Summary: "Save the note", Description: "Save the note.",
 				Request: reflect.TypeFor[noteText](), Access: session, Keyed: true, IfMatch: true,
 			},
 			{
-				Name: "notes.touch", Method: http.MethodPost, Path: "/api/notes/touch", Summary: "Touch the note", Description: "Touch the note.",
+				Name: "notes.touch", Method: http.MethodPost, Path: "/notes/touch", Summary: "Touch the note", Description: "Touch the note.",
 				Access: session,
 			},
 			{
-				Name: "files.get", Method: http.MethodGet, Path: "/api/files", Summary: "Read a file", Description: "Read a file.",
-				Kind: httpwire.Raw, ContentType: "text/plain", Access: session,
+				Name: "files.get", Method: http.MethodGet, Path: "/files", Summary: "Read a file", Description: "Read a file.",
+				Kind: httpwire.Raw, ContentTypes: []string{"text/plain"}, Access: session,
 			},
 		},
 	}
@@ -116,7 +116,8 @@ type keyedFixture struct {
 	api     *httpwire.API
 	catalog *httpwire.Catalog
 	log     *logSink
-	quick   func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error)
+	quick   func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error)
+	retry   *httpwire.Binding // serves jobs.retry when set
 	runs    map[string]int
 	users   map[string]bool
 	keys    []httpwire.IdempotencyKey
@@ -175,7 +176,7 @@ func (kf *keyedFixture) hold(next http.Handler) http.Handler {
 }
 
 func (kf *keyedFixture) jobs(row string) httpwire.Binding {
-	return httpwire.Bind(row, func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	return httpwire.Bind(row, func(ctx context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		kf.ran(row)
 		kf.mu.Lock()
 		if k, _, ok := httpwire.Idempotency(ctx); ok {
@@ -191,9 +192,16 @@ func (kf *keyedFixture) jobs(row string) httpwire.Binding {
 }
 
 func (kf *keyedFixture) bindings() []httpwire.Binding {
+	retry := httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody, noH]) (jobAnswer, error) {
+		kf.ran("jobs.retry")
+		return jobAnswer{ID: string(c.Params.ID) + "-" + string(c.Query.Mode)}, nil
+	})
+	if kf.retry != nil {
+		retry = *kf.retry
+	}
 	return []httpwire.Binding{
-		httpwire.Bind("users.read", func(context.Context, httpwire.Call[noP, noQ, noB]) ([]account, error) { return nil, nil }),
-		httpwire.Bind("users.register", func(_ context.Context, c httpwire.Call[noP, noQ, regBody]) (httpwire.Status[account], error) {
+		httpwire.Bind("users.read", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) ([]account, error) { return nil, nil }),
+		httpwire.Bind("users.register", func(_ context.Context, c httpwire.Call[noP, noQ, regBody, noH]) (httpwire.Status[account], error) {
 			kf.ran("users.register")
 			kf.mu.Lock()
 			defer kf.mu.Unlock()
@@ -203,18 +211,15 @@ func (kf *keyedFixture) bindings() []httpwire.Binding {
 			kf.users[c.Body.Name] = true
 			return httpwire.Answer(http.StatusCreated, account{Name: c.Body.Name, Created: true}), nil
 		}),
-		httpwire.Bind("jobs.read", func(context.Context, httpwire.Call[noP, noQ, noB]) ([]jobAnswer, error) { return nil, nil }),
+		httpwire.Bind("jobs.read", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) ([]jobAnswer, error) { return nil, nil }),
 		kf.jobs("jobs.start"),
 		kf.jobs("jobs.quick"),
-		httpwire.Bind("jobs.retry", func(_ context.Context, c httpwire.Call[retryParams, retryQuery, jobBody]) (jobAnswer, error) {
-			kf.ran("jobs.retry")
-			return jobAnswer{ID: string(c.Params.ID) + "-" + string(c.Query.Mode)}, nil
-		}),
-		httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noP, noQ, noteText]) (httpwire.None, error) {
+		retry,
+		httpwire.Bind("notes.save", func(context.Context, httpwire.Call[noP, noQ, noteText, noH]) (httpwire.None, error) {
 			kf.ran("notes.save")
 			return httpwire.None{}, nil
 		}),
-		httpwire.Bind("notes.touch", func(context.Context, httpwire.Call[noP, noQ, noB]) (httpwire.None, error) {
+		httpwire.Bind("notes.touch", func(context.Context, httpwire.Call[noP, noQ, noB, noH]) (httpwire.None, error) {
 			kf.ran("notes.touch")
 			return httpwire.None{}, nil
 		}),
@@ -303,7 +308,7 @@ func publishPolicies(t testing.TB, doc []byte, tb *httpwire.Table) []byte {
 		if ep.Result != "" {
 			extra["result"] = ep.Result
 		}
-		op := d["paths"].(map[string]any)[ep.Path].(map[string]any)[strings.ToLower(ep.Method)].(map[string]any)
+		op := d["paths"].(map[string]any)[tb.Prefix+ep.Path].(map[string]any)[strings.ToLower(ep.Method)].(map[string]any)
 		op["x-idempotency"] = policy(int(window/time.Second), extra)
 	}
 	b, err := json.Marshal(d)
@@ -386,7 +391,7 @@ func (kf *keyedFixture) quickJob(key string, header ...string) *httptest.Respons
 	return kf.do(http.MethodPost, "/api/jobs/quick", `{"kind":"a","size":1}`, key, header...)
 }
 
-func codeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+func codeOf(t *testing.T, rec *httptest.ResponseRecorder) httpserver.ErrorCode {
 	t.Helper()
 	if rec.Code < 400 {
 		return ""
@@ -529,7 +534,7 @@ func TestRegisterAnswers201Or200Replayed(t *testing.T) {
 
 func TestReplayWritesKeptHeadersAndFreshWireHeaders(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{}, &httpwire.Error{Code: "outcome_unknown", Message: "the queue did not answer", RetryAfter: 7 * time.Second}
 	}
 	id1, id2 := httpserver.NewRequestID(), httpserver.NewRequestID()
@@ -567,7 +572,7 @@ func TestReplayWritesKeptHeadersAndFreshWireHeaders(t *testing.T) {
 // key it was kept under.
 func TestReplayedRefusalKeepsTheFirstRequestID(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(context.Context, httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{}, &httpwire.Error{Code: "outcome_unknown", Message: "the queue did not answer"}
 	}
 	first := httpserver.NewRequestID()
@@ -604,7 +609,7 @@ func TestReplayedRefusalKeepsTheFirstRequestID(t *testing.T) {
 
 func TestWhatIsKept(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{}, nil)
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		switch c.Body.Kind {
 		case "full":
 			return jobAnswer{}, &httpwire.Error{Code: "queue_full", Message: "the queue is full"}
@@ -619,8 +624,9 @@ func TestWhatIsKept(t *testing.T) {
 		return kf.do(http.MethodPost, "/api/jobs/quick", `{"kind":"`+kind+`","size":1}`, key)
 	}
 	for _, tc := range []struct {
-		kind, code string
-		runs       int
+		kind string
+		code httpserver.ErrorCode
+		runs int
 	}{
 		{"full", "queue_full", 2},
 		{"lost", "outcome_unknown", 1},
@@ -646,19 +652,19 @@ func TestKeptRuleReadsTheCodePastMaxAnswer(t *testing.T) {
 	for i := range fields {
 		fields[i] = httpwire.FieldError{Path: "items[" + strconv.Itoa(i) + "]", Code: "invalid", Message: strings.Repeat("m", 200)}
 	}
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
-		return jobAnswer{}, &httpwire.Error{Code: c.Body.Kind, Message: "the queue refused the items", Fields: fields}
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
+		return jobAnswer{}, &httpwire.Error{Code: httpserver.ErrorCode(c.Body.Kind), Message: "the queue refused the items", Fields: fields}
 	}
 	for _, tc := range []struct {
-		code, resend string
+		code, resend httpserver.ErrorCode
 		runs         int
 	}{
 		{"queue_full", "queue_full", 2},
 		{"outcome_unknown", "idempotency_answer_too_large", 1},
 	} {
-		t.Run(tc.code, func(t *testing.T) {
+		t.Run(string(tc.code), func(t *testing.T) {
 			before := kf.runsOf("jobs.quick")
-			body, key := `{"kind":"`+tc.code+`","size":1}`, `"`+tc.code+`"`
+			body, key := `{"kind":"`+string(tc.code)+`","size":1}`, `"`+string(tc.code)+`"`
 			first := kf.do(http.MethodPost, "/api/jobs/quick", body, key)
 			if codeOf(t, first) != tc.code || first.Body.Len() <= kib {
 				t.Fatalf("first answer %q of %d bytes, want %s past %d bytes", codeOf(t, first), first.Body.Len(), tc.code, kib)
@@ -746,10 +752,65 @@ func TestFingerprint(t *testing.T) {
 	})
 }
 
+// retryWith serves keyedTable with jobs.retry taking Q.
+func retryWith[Q any](t *testing.T) *keyedFixture {
+	t.Helper()
+	doc, err := os.ReadFile("testdata/openapi/keyed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb := keyedTable(t)
+	row(tb, "jobs.retry").Query = reflect.TypeFor[Q]()
+	kf := &keyedFixture{catalog: tb.Catalog, log: &logSink{}, runs: map[string]int{}, users: map[string]bool{}}
+	retry := httpwire.Bind("jobs.retry", func(context.Context, httpwire.Call[retryParams, Q, jobBody, noH]) (jobAnswer, error) {
+		kf.ran("jobs.retry")
+		return jobAnswer{ID: strconv.Itoa(kf.runsOf("jobs.retry"))}, nil
+	})
+	kf.retry = &retry
+	kf.api, err = httpwire.New(tb, kf.bindings(), httpwire.WithSchema(doc),
+		httpwire.WithGuard(fixtureGuard{}), httpwire.WithCredential(func(*http.Request) string { return "s:a" }),
+		httpwire.WithCursorOwner(func(*http.Request) string { return "u:a" }), httpwire.WithHold(kf.hold))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return kf
+}
+
+// A Keyed row's fingerprint holds each query value as the request sent it,
+// whatever the field's type, so a resend under another value is not the
+// request that ran and one under the same value replays.
+func TestFingerprintHoldsEachQueryValueAsSent(t *testing.T) {
+	for name, build := range map[string]func(*testing.T) *keyedFixture{
+		"a type whose marshaler needs its address": retryWith[struct {
+			Mode heldKind `json:"mode,omitzero"`
+		}],
+		"a type that decodes itself with no marshaler": retryWith[struct {
+			Mode oneWayKind `json:"mode,omitzero"`
+		}],
+	} {
+		t.Run(name, func(t *testing.T) {
+			kf := build(t)
+			retry := func(mode string) *httptest.ResponseRecorder {
+				return kf.do(http.MethodPost, "/api/jobs/ab/retry?mode="+mode, `{"kind":"a","size":1}`, `"r"`)
+			}
+			first := retry("a")
+			if first.Code != http.StatusOK || kf.runsOf("jobs.retry") != 1 {
+				t.Fatalf("first retry %d %s", first.Code, first.Body)
+			}
+			if rec := retry("a"); rec.Code != http.StatusOK || rec.Body.String() != first.Body.String() || kf.runsOf("jobs.retry") != 1 {
+				t.Errorf("the same value answered %d %s after %d runs, want the replay", rec.Code, rec.Body, kf.runsOf("jobs.retry"))
+			}
+			if rec := retry("b"); codeOf(t, rec) != "idempotency_key_reused" || kf.runsOf("jobs.retry") != 1 {
+				t.Errorf("another value answered %d %s after %d runs, want idempotency_key_reused and one run", rec.Code, rec.Body, kf.runsOf("jobs.retry"))
+			}
+		})
+	}
+}
+
 func TestOversizeAnswerIsACompletion(t *testing.T) {
 	kf := newKeyed(t, httpwire.IdempotencyOptions{MaxAnswer: 1024}, nil)
 	pad := strings.Repeat("p", 2000)
-	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody]) (jobAnswer, error) {
+	kf.quick = func(_ context.Context, c httpwire.Call[noP, noQ, jobBody, noH]) (jobAnswer, error) {
 		return jobAnswer{ID: c.Body.Kind, Pad: pad}, nil
 	}
 	for _, tc := range []struct{ target, row, remediation string }{

@@ -62,7 +62,10 @@ func (t *Tag) UnmarshalText(b []byte) error {
 	return nil
 }
 
-const headerIfMatch = "If-Match"
+const (
+	headerIfMatch     = "If-Match"
+	headerIfNoneMatch = "If-None-Match"
+)
 
 // ifMatch reads an IfMatch row's If-Match: one strong entity tag holding a
 // Tag (RFC 9110 section 13.1.1). A missing header is if_match_required

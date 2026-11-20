@@ -110,31 +110,31 @@ func decodeTable() *httpwire.Table {
 		Prefix: "/api", Catalog: httpwire.NewCatalog(), MaxBody: 512,
 		Endpoints: []httpwire.Endpoint{
 			{
-				Name: "items.get", Method: http.MethodGet, Path: "/api/items/{kind}/{n}", Summary: "Read an item", Description: "Reads one item.",
+				Name: "items.get", Method: http.MethodGet, Path: "/items/{kind}/{n}", Summary: "Read an item", Description: "Reads one item.",
 				Params: reflect.TypeFor[itemParams](), Response: reflect.TypeFor[itemOut](), Access: public,
 			},
 			{
-				Name: "items.file", Method: http.MethodGet, Path: "/api/items/{kind}/{n}/file", Summary: "Download an item",
-				Description: "Downloads one item's file.", Params: reflect.TypeFor[itemParams](), Kind: httpwire.Raw, ContentType: "text/plain",
+				Name: "items.file", Method: http.MethodGet, Path: "/items/{kind}/{n}/file", Summary: "Download an item",
+				Description: "Downloads one item's file.", Params: reflect.TypeFor[itemParams](), Kind: httpwire.Raw, ContentTypes: []string{"text/plain"},
 				Access: public,
 			},
 			{
-				Name: "items.list", Method: http.MethodGet, Path: "/api/items", Summary: "List items", Description: "Lists the items.",
+				Name: "items.list", Method: http.MethodGet, Path: "/items", Summary: "List items", Description: "Lists the items.",
 				Query: reflect.TypeFor[itemQuery](), Response: reflect.TypeFor[[]itemOut](), Access: public,
 			},
 			{
-				Name: "items.holders", Method: http.MethodGet, Path: "/api/holders", Summary: "Read the holders",
+				Name: "items.holders", Method: http.MethodGet, Path: "/holders", Summary: "Read the holders",
 				Description: "Reads who holds each path.", Query: reflect.TypeFor[holdersQuery](), Response: reflect.TypeFor[[]string](),
 				Access: public,
 			},
 			{
-				Name: "items.put", Method: http.MethodPost, Path: "/api/items", Summary: "Store an item", Description: "Stores one item.",
+				Name: "items.put", Method: http.MethodPost, Path: "/items", Summary: "Store an item", Description: "Stores one item.",
 				Request: reflect.TypeFor[itemBody](), Access: public,
 			},
 			{
-				Name: "items.import", Method: http.MethodPost, Path: "/api/items/import", Summary: "Import an item",
+				Name: "items.import", Method: http.MethodPost, Path: "/items/import", Summary: "Import an item",
 				Description: "Imports one item, answering its receipt.", Request: reflect.TypeFor[itemBody](), Kind: httpwire.Raw,
-				ContentType: "text/plain", Access: public,
+				ContentTypes: []string{"text/plain"}, Access: public,
 			},
 		},
 	}
@@ -155,7 +155,7 @@ func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI 
 	t.Helper()
 	d := &decodeAPI{}
 	api, err := httpwire.New(decodeTable(), []httpwire.Binding{
-		httpwire.Bind("items.get", func(_ context.Context, c httpwire.Call[itemParams, noQ, noB]) (itemOut, error) {
+		httpwire.Bind("items.get", func(_ context.Context, c httpwire.Call[itemParams, noQ, noB, noH]) (itemOut, error) {
 			d.params = &c.Params
 			return itemOut{Name: "x"}, nil
 		}),
@@ -163,15 +163,15 @@ func newDecodeAPI(t *testing.T, doc []byte, opts ...httpwire.Option) *decodeAPI 
 			d.file = true
 			w.Header().Set("Content-Type", "text/plain")
 		})),
-		httpwire.Bind("items.list", func(_ context.Context, c httpwire.Call[noP, itemQuery, noB]) ([]itemOut, error) {
+		httpwire.Bind("items.list", func(_ context.Context, c httpwire.Call[noP, itemQuery, noB, noH]) ([]itemOut, error) {
 			d.query = &c.Query
 			return nil, nil
 		}),
-		httpwire.Bind("items.holders", func(_ context.Context, c httpwire.Call[noP, holdersQuery, noB]) ([]string, error) {
+		httpwire.Bind("items.holders", func(_ context.Context, c httpwire.Call[noP, holdersQuery, noB, noH]) ([]string, error) {
 			d.held = &c.Query
 			return nil, nil
 		}),
-		httpwire.Bind("items.put", func(_ context.Context, c httpwire.Call[noP, noQ, itemBody]) (httpwire.None, error) {
+		httpwire.Bind("items.put", func(_ context.Context, c httpwire.Call[noP, noQ, itemBody, noH]) (httpwire.None, error) {
 			d.body = &c.Body
 			return httpwire.None{}, nil
 		}),
@@ -406,6 +406,44 @@ func TestDecodeBody(t *testing.T) {
 			}
 			if got := fieldCodes(httpwire.Envelope{Fields: s.CheckBody("items.put", 0, []byte(tc.body))}); !slices.Equal(got, tc.want) {
 				t.Errorf("CheckBody on the same bytes = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// encoding/json matches member names without case, so under a document whose
+// body admits other members the Go type's exact names alone keep a member in
+// another letter case from reaching a field.
+func TestDecodeBodyRefusesAMemberTheTypeLacksUnderAnOpenSchema(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(decodeDoc(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["components"].(map[string]any)["schemas"].(map[string]any)["ItemBody"].(map[string]any)["additionalProperties"] = true
+	open, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := httpwire.ParseSchema(open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ body, want string }{
+		"a name in another letter case": {strings.TrimSuffix(validItem, "}") + `,"NAME":"b"}`, "NAME=unknown"},
+		"a member the type lacks":       {withItem(t, "zz", "1"), "zz=unknown"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := s.CheckBody("items.put", 0, []byte(tc.body)); len(got) != 0 {
+				t.Fatalf("the open document refuses the body itself: %v", got)
+			}
+			d := newDecodeAPI(t, open)
+			rec := serve(d.api, http.MethodPost, "/api/items", tc.body)
+			env := envelopeOf(t, rec)
+			if rec.Code != http.StatusBadRequest || env.Code != "bad_body" || !slices.Equal(fieldCodes(env), []string{tc.want}) {
+				t.Errorf("answer %d %s %v, want 400 bad_body [%s]", rec.Code, env.Code, fieldCodes(env), tc.want)
+			}
+			if d.ran() {
+				t.Errorf("the handler ran with %+v", *d.body)
 			}
 		})
 	}

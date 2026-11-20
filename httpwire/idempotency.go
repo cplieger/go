@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -107,6 +106,35 @@ func Idempotency(ctx context.Context) (k IdempotencyKey, fingerprint [32]byte, o
 	return c.key, c.fp, true
 }
 
+// IdempotencyPolicy is a Keyed row's published policy, its OpenAPI
+// operation's x-idempotency member.
+type IdempotencyPolicy struct {
+	Scope      string `json:"scope"`
+	Concurrent string `json:"concurrent"`
+	Kept       string `json:"kept"`
+	Result     string `json:"result,omitempty"`
+	// WindowS is the row's Window in whole seconds, rounded down.
+	WindowS int64 `json:"window_s"`
+	MaxKept int   `json:"max_kept,omitempty"`
+}
+
+// PolicyOf answers a Keyed row's published policy, read from the row as
+// Derive leaves it (its Window set); ok is false for a row that is not
+// Keyed.
+func PolicyOf(ep *Endpoint) (p IdempotencyPolicy, ok bool) {
+	if !ep.Keyed {
+		return IdempotencyPolicy{}, false
+	}
+	return IdempotencyPolicy{
+		WindowS:    int64(ep.Window / time.Second),
+		Scope:      "credential,operation",
+		Concurrent: "join",
+		Kept:       "success_and_effectful_refusals",
+		MaxKept:    ep.MaxKept,
+		Result:     ep.Result,
+	}, true
+}
+
 type idemCallKey struct{}
 
 type idemCall struct {
@@ -206,25 +234,19 @@ func parseSFString(v string) (string, bool) {
 	return b.String(), true
 }
 
-// fingerprint is SHA-256 over the row name and the json.Marshal of the
-// decoded request, each after its 4-byte big-endian length, so a body's
-// spelling changes nothing. Each part is marshalled through a pointer, so
-// a pointer-receiver MarshalJSON or MarshalText is used.
+// fingerprint is SHA-256 over the row name and the request: its path
+// values, query and declared headers as sent, its If-Match tag, a Raw
+// body's digest, and the json.Marshal of its decoded body, so a body's
+// spelling changes nothing. Each part is length-prefixed. The body is
+// marshalled through a pointer, so a pointer-receiver MarshalJSON or
+// MarshalText is used.
 func fingerprint(row string, d *decoded) ([32]byte, error) {
-	part, err := json.Marshal(struct {
-		Params, Query, Body any
-		IfMatch             string
-		RawBody             []byte `json:",omitempty"`
-	}{addressed(d.params), addressed(d.query), addressed(d.body), d.ifMatch.String(), d.rawBody})
+	body, err := json.Marshal(addressed(d.body))
 	if err != nil {
 		return [32]byte{}, err
 	}
-	h := sha256.New()
-	for _, f := range [][]byte{[]byte(row), part} {
-		_, _ = h.Write(binary.BigEndian.AppendUint32(nil, uint32(len(f)))) //nolint:gosec // a row name and a decoded request are far below 4 GiB.
-		_, _ = h.Write(f)
-	}
-	return [32]byte(h.Sum(nil)), nil
+	parts := append([]string{row, form(d.sent.query), form(d.sent.headers), string(body), d.ifMatch.String(), string(d.rawBody)}, d.sent.path...)
+	return sha256.Sum256([]byte(lengthPrefixed(parts...))), nil
 }
 
 func addressed(v any) any {

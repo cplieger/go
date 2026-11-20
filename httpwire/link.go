@@ -17,4 +17,9 @@ func init() {
 		c.owner(o)
 		return c.errs
 	}
+	wirelink.Stub = func(v any) any {
+		ep, _ := v.(*Endpoint)
+		return stubBinding(ep)
+	}
+	wirelink.RequestID = requestIDOf
 }

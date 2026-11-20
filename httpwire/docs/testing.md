@@ -8,7 +8,8 @@ This page covers the `httpwiretest` package and the TypeScript fixtures, for any
 
 - a success status the row does not declare;
 - a body that does not decode strictly into the status's `Response` type, or breaks its schema;
-- a `Raw` answer of another media type;
+- a `Raw` answer of a media type outside the row's `ContentTypes`;
+- on a `Conditional` row, a 200 with no `ETag` or one that is no entity-tag, and a resend of the case naming that `ETag` in `If-None-Match` that does not answer 304; on any row, a 304 with a body, a 304 to a request with no `If-None-Match`, and a 304 on a row that is not `Conditional`;
 - an error that is not an envelope of a code in the row's union, at the catalog's status;
 - a refusal whose `request_id` is missing or not a valid request id;
 - an answer without this API's `Wire-Version`, or whose `X-Request-Id` is not this request's id: the id in the request's context, else its valid inbound `X-Request-Id`, else one Contract gives it.
@@ -17,7 +18,28 @@ Contract never compares a refusal's `request_id` with its `X-Request-Id`, becaus
 
 Each case's request carries its own principal, built by the test. A HEAD answer's body is not read. A case naming no row, a `Stream` row, or a request the API routes to another row fails, so a case always tests the row it names. Mount rows are routed and checked the same way.
 
+It also fails every write row, mount rows included, whose union holds `outcome_unknown` and that is not `Keyed`: that code says the write may have run, and only a kept answer stops a resend from running it twice.
+
 `WithSameShape(SameShape{A, B})` serves every case of a read row with `Changes` and no `Personal` mark as both principals, two of one shape that own different records in the fixture store. It fails the row when the guard gives them two shapes or their answers differ as JSON values, cursors left out. Every such row then needs a case. A read whose rows differ per principal is marked `Personal`, and this check finds the one that is not.
+
+## AccessMatrix
+
+`httpwiretest.AccessMatrix(t, table, guard, creds, options...)` holds an app's guard to every row's `Access`. It builds an API of the table with the guard and options, every row bound to a stub, and serves each row once per `Credential` over HTTPS, with each path wildcard filled. Each credential is a `Kind` and an `Apply` that adds it to a request: `None`, `Session` (a session past its recent-authentication window, with the `Scopes` its role grants), `SessionRecent` (a session authenticated recently, with its role's `Scopes`), `Key` (with the `Scopes` it passes) or `KeyInvalid` (a revoked or expired key). It fails the test, naming the row and the credential, wherever the answer is not the one the row's `Access` gives:
+
+| Credential | Answer |
+| --- | --- |
+| any, on a `Public` row | the row runs, as an anonymous principal |
+| `None` | `auth_required` |
+| `KeyInvalid` | `auth_key_invalid` |
+| `Key` on a `PersonOnly` row | `person_required` |
+| `Key` on a `Session` row | `auth_session_required` |
+| `Key` without the row's `Scope` | `auth_scope_required`, with `error="insufficient_scope"` in `WWW-Authenticate` |
+| `Session` or `SessionRecent` on a `Key` row | `auth_key_required` |
+| `Session` or `SessionRecent` without the `Scope` of a `Scoped` row or a `PersonOnly` `Session` row | `auth_forbidden` |
+| `Session` on a `RecentAuth` row | `auth_recent_auth_required` |
+| any other | the row runs, as the credential's principal: a session or a key holding exactly its scopes |
+
+Each refusal must come at the catalog's status, and a 401 must carry `WWW-Authenticate`. A row's `Scope` is checked only where the row names one, a session's before its step-up, and `RecentAuth` steps up sessions only. A row the guard answers without running it fails as not served, and a table `New` refuses fails at once. The package's own test serves nine: no credential, a session and a recently authenticated session whose role grants every scope, a session whose role grants none, keys holding `read`, `read` and `operate`, and every scope, a key of a scope no row names, and a revoked key. A credential's `Scopes` list every scope it passes, those its scopes imply included.
 
 ## Sentinels
 

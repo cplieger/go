@@ -52,6 +52,7 @@ for await (const page of pages(readItems, { signal })) {
 - `ifMatchHeader(tag)` writes the `If-Match` value for a tag a read answered, `<16 lowercase hex>.<revision>`, and answers `undefined` for anything else, so a tag that was never a server's is never sent.
 - `parseInstant(text)` reads an RFC 3339 `date-time` as a Go server writes it (uppercase `T`, 0 to 9 fraction digits, `Z` or a `±hh:mm` offset) as Unix milliseconds, truncating past the third fraction digit; any other text throws a `SyntaxError` naming it. `Date.parse` is specified only for exactly three fraction digits, so compare instants through `parseInstant`, never as text, and give a `<time datetime>` `new Date(parseInstant(text)).toISOString()`.
 - `WIRE_VERSION_HEADER`, `IDEMPOTENCY_HEADER` and `REQUEST_ID_HEADER` are the header names both halves use.
+- `checkChecked(a)` holds an open check's answer (`Checked<T>`, one `SourceCheck<T>` per source) to the rules the server checks before it writes one: each source named once, the members each answer carries, and `position` exactly when `stored` (`CHECK_ANSWERS` lists the answers, `NOT_STORED` the reasons an answer was not stored). An answer that breaks them throws a `TypeError`. [The wire](https://github.com/cplieger/go/blob/main/httpwire/docs/wire.md#open-checks) lists the rules.
 
 The package calls no member a non-secure context lacks (`crypto.randomUUID`, `crypto.subtle`, `navigator.locks`, `navigator.clipboard`), and a test over its published sources fails on one.
 

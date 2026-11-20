@@ -77,7 +77,7 @@ func TestEveryAnswerCarriesWireVersionAndRequestID(t *testing.T) {
 func TestRequestIDIsTheRequestsOwn(t *testing.T) {
 	var seen string
 	c := newCase(t)
-	c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB]) ([]job, error) {
+	c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB, noH]) ([]job, error) {
 		seen = httpserver.RequestIDFromContext(ctx)
 		return nil, nil
 	})
@@ -219,7 +219,7 @@ func newFeedCase(t *testing.T) (*orderCase, *[]string) {
 	o := newOrderCase(t)
 	var kinds []string
 	o.opts["feed"] = httpwire.WithFeed(orderFeed{ran: &o.handled, kinds: &kinds})
-	o.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	o.binds["jobs.get"] = httpwire.Bind("jobs.get", func(context.Context, httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		return job{}, errJobMissing
 	})
 	return o, &kinds

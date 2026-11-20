@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cplieger/go/httpserver/v2"
+	"github.com/cplieger/go/sealed"
 )
 
 // API serves one checked table under its Prefix. It is safe for concurrent
@@ -29,7 +29,7 @@ type API struct {
 	mux     *http.ServeMux
 	logger  *slog.Logger
 	schema  *Schema
-	sealer  *sealer
+	sealer  *sealed.Sealer
 	idem    *keyedRuns
 	version string
 	quiet   quietState
@@ -49,7 +49,7 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 			opt(&o)
 		}
 	}
-	var guardCodes func(Access) []string
+	var guardCodes func(Access) []httpserver.ErrorCode
 	if o.guard != nil {
 		guardCodes = o.guard.Codes
 	}
@@ -77,11 +77,11 @@ func New(t *Table, bs []Binding, opts ...Option) (*API, error) {
 	}
 	for i := range d.Endpoints {
 		ep := &d.Endpoints[i]
-		a.mux.Handle(ep.Method+" "+ep.Path, &route{a.rowHandler(ep, bound[ep.Name])})
+		a.mux.Handle(pattern(d.Prefix, ep), &route{a.rowHandler(ep, bound[ep.Name])})
 	}
 	for _, m := range d.Mounts {
 		for i := range m.Rows {
-			a.mux.Handle(m.Rows[i].Method+" "+m.Rows[i].Path, &route{a.mountHandler(&m.Rows[i], m.Handler)})
+			a.mux.Handle(pattern(d.Prefix, &m.Rows[i]), &route{a.mountHandler(&m.Rows[i], m.Handler)})
 		}
 	}
 	return a, nil
@@ -112,19 +112,23 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.table.Catalog.WriteError(w, r, &Error{Code: codeNotFound, Message: "no route matches the path"})
 }
 
-// withRequestID gives the answer and r's context one request id: the
-// context's, else a valid inbound X-Request-Id, else a fresh one.
+// withRequestID gives the answer and r's context r's request id.
 func withRequestID(w http.ResponseWriter, r *http.Request) *http.Request {
-	id := httpserver.RequestIDFromContext(r.Context())
-	if httpserver.ValidRequestID(id) {
-		w.Header().Set(httpserver.HeaderRequestID, id)
-		return r
+	r, id := requestIDOf(r)
+	w.Header().Set(httpserver.HeaderRequestID, id)
+	return r
+}
+
+// requestIDOf answers r's request id, the context's, else a valid inbound
+// X-Request-Id, else a fresh one, and r carrying it in its context.
+func requestIDOf(r *http.Request) (out *http.Request, id string) {
+	if id = httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
+		return r, id
 	}
 	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
 		id = httpserver.NewRequestID()
 	}
-	w.Header().Set(httpserver.HeaderRequestID, id)
-	return r.WithContext(httpserver.WithRequestID(r.Context(), id))
+	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
 }
 
 func isRoute(h http.Handler) bool {
@@ -343,29 +347,17 @@ func (a *API) outage(mount bool, next http.Handler) http.Handler {
 	})
 }
 
-// decode answers r's Params, Query and Request as ep declares them, and the
+// decode answers r's Params, Query, Headers and Request as ep declares them, and the
 // body bytes it read.
 func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
-	d := &decoded{}
-	if ep.Params != nil {
-		v, ok := a.decodePath(r, ep)
-		if !ok {
-			return nil, nil, &Error{Code: codeNotFound, Message: "no resource matches the path"}
-		}
-		d.params = v
-	}
-	if ep.Query != nil {
-		v, fields := a.decodeQuery(r, ep)
-		if len(fields) > 0 {
-			return nil, nil, &Error{Code: "bad_query", Message: "the query does not match this request", Fields: fields}
-		}
-		d.query = v
+	d, e := a.decodeText(r, ep)
+	if e != nil {
+		return nil, nil, e
 	}
 	var b []byte
 	if ep.Request != nil {
-		e := jsonMediaType(r)
-		if e != nil {
-			return nil, nil, e
+		if me := jsonMediaType(r); me != nil {
+			return nil, nil, me
 		}
 		if b, e = readBody(r, cmp.Or(ep.MaxBody, a.table.MaxBody)); e != nil {
 			return nil, nil, e
@@ -378,6 +370,38 @@ func (a *API) decode(r *http.Request, ep *Endpoint) (*decoded, []byte, *Error) {
 		return nil, nil, e
 	}
 	return d, b, nil
+}
+
+// decodeText reads the parts that come before the body: the path, the
+// query, then the headers.
+func (a *API) decodeText(r *http.Request, ep *Endpoint) (*decoded, *Error) {
+	d := &decoded{}
+	wildcards, _ := pathWildcards(ep.Path)
+	for _, w := range wildcards {
+		d.sent.path = append(d.sent.path, r.PathValue(w))
+	}
+	if ep.Params != nil {
+		v, ok := a.decodePath(r, ep)
+		if !ok {
+			return nil, &Error{Code: codeNotFound, Message: "no resource matches the path"}
+		}
+		d.params = v
+	}
+	if ep.Query != nil {
+		v, given, fields := a.decodeQuery(r, ep)
+		if len(fields) > 0 {
+			return nil, &Error{Code: "bad_query", Message: "the query does not match this request", Fields: fields}
+		}
+		d.query, d.sent.query = v, given
+	}
+	if ep.Headers != nil {
+		v, given, fields := a.decodeHeaders(r, ep)
+		if len(fields) > 0 {
+			return nil, &Error{Code: codeBadHeader, Message: "the request headers do not match this request", Fields: fields}
+		}
+		d.headers, d.sent.headers = v, given
+	}
+	return d, nil
 }
 
 // decodeLast reads what follows the body: If-Match, the Idempotency-Key,
@@ -472,7 +496,8 @@ func (c *newChecker) bindings(bs []Binding) map[string]*Binding {
 		rows[c.t.Endpoints[i].Name] = &c.t.Endpoints[i]
 	}
 	bound := map[string]*Binding{}
-	for _, b := range bs {
+	for i := range bs {
+		b := &bs[i]
 		switch {
 		case isMountRow(c.t, b.name):
 			c.fail("binding %q names a mount row, which its mount's Handler serves", b.name)
@@ -483,7 +508,8 @@ func (c *newChecker) bindings(bs []Binding) map[string]*Binding {
 		case b.nilHandler:
 			c.fail("binding %q has a nil handler", b.name)
 		default:
-			bound[b.name] = &b
+			own := *b // the caller's slice may change after New returns
+			bound[b.name] = &own
 		}
 	}
 	for i := range c.t.Endpoints {
@@ -577,20 +603,15 @@ func (c *newChecker) floor() {
 	}
 }
 
-// sealer builds the cursor sealer under WithCursorKey's key, else a random
-// one.
-func (c *newChecker) sealer() *sealer {
-	var key [32]byte
-	if c.o.cursorKey != nil {
-		key = *c.o.cursorKey
-	} else {
-		_, _ = rand.Read(key[:])
+// sealer answers WithSealer's sealer, else an ephemeral one.
+func (c *newChecker) sealer() *sealed.Sealer {
+	if !c.o.sealerSet {
+		return sealed.NewEphemeral()
 	}
-	s, err := newSealer(key)
-	if err != nil {
-		c.fail("the cursor key: %w", err)
+	if c.o.sealer.KeyIDs().Current == "" {
+		c.fail("WithSealer: the sealer holds no key")
 	}
-	return s
+	return c.o.sealer
 }
 
 // document parses WithSchema's document and matches its operations with
@@ -613,10 +634,12 @@ func (c *newChecker) document() *Schema {
 		switch {
 		case op == nil:
 			c.fail("row %q has no operation of that operationId in the document", ep.Name)
-		case op.method != ep.Method || op.path != ep.Path:
-			c.fail("row %q is %s %s, but the document's operation is %s %s", ep.Name, ep.Method, ep.Path, op.method, op.path)
+		case op.method != ep.Method || op.path != c.t.Prefix+ep.Path:
+			c.fail("row %q is %s, but the document's operation is %s %s", ep.Name, pattern(c.t.Prefix, ep), op.method, op.path)
 		default:
 			c.idempotencyPolicy(ep, op)
+			c.rawContent(ep, op)
+			c.conditionalParts(ep, op)
 			if !r.mount {
 				c.decodedParts(ep, op)
 			}
@@ -628,6 +651,63 @@ func (c *newChecker) document() *Schema {
 		}
 	}
 	return s
+}
+
+// rawContent matches a Raw row's ContentTypes with the media types its
+// primary response declares, one to one.
+func (c *newChecker) rawContent(ep *Endpoint, op *operation) {
+	if ep.Kind != Raw {
+		return
+	}
+	status := primaryStatus(ep)
+	declared := map[string]bool{}
+	if r := op.responses[status]; r != nil {
+		for _, m := range r.media {
+			declared[m] = true
+		}
+	}
+	want := map[string]bool{}
+	for _, t := range ep.ContentTypes {
+		m := mediaOf(t)
+		want[m] = true
+		if !declared[m] {
+			c.fail("row %q answers %s, but the document's %d does not declare it", ep.Name, m, status)
+		}
+	}
+	for _, m := range slices.Sorted(maps.Keys(declared)) {
+		if !want[m] {
+			c.fail("row %q: the document's %d declares %s, which is not one of the row's ContentTypes", ep.Name, status, m)
+		}
+	}
+}
+
+// conditionalParts matches a Conditional row with a bodiless 304 and an
+// optional If-None-Match header parameter in op, and any other row with
+// neither.
+func (c *newChecker) conditionalParts(ep *Endpoint, op *operation) {
+	notModified := op.responses[http.StatusNotModified]
+	inm := op.params[paramKeyOf(inHeader, headerIfNoneMatch)]
+	if !ep.Conditional {
+		if notModified != nil {
+			c.fail("row %q is not Conditional, but the document's operation declares a 304", ep.Name)
+		}
+		if inm != nil {
+			c.fail("row %q is not Conditional, but the document's operation takes an If-None-Match header", ep.Name)
+		}
+		return
+	}
+	switch {
+	case notModified == nil:
+		c.fail("row %q is Conditional, but the document's operation declares no 304", ep.Name)
+	case len(notModified.media) > 0:
+		c.fail("row %q: the document's 304 declares a body, which a 304 never has", ep.Name)
+	}
+	switch {
+	case inm == nil:
+		c.fail("row %q is Conditional, but the document's operation takes no If-None-Match header", ep.Name)
+	case inm.required:
+		c.fail("row %q: the document's If-None-Match header parameter is required, but a client sends one only with an ETag it holds", ep.Name)
+	}
 }
 
 // idempotencyPolicy holds a Keyed row's x-idempotency to the policy the
@@ -645,36 +725,42 @@ func (c *newChecker) idempotencyPolicy(ep *Endpoint, op *operation) {
 	}
 }
 
-// publishedPolicy is a Keyed row's x-idempotency as a decoded JSON value,
-// its window in whole seconds rounded down; nil on any other row.
+// publishedPolicy is PolicyOf's answer as the decoded JSON value New
+// compares a document's x-idempotency with; nil on a row that is not Keyed.
 func publishedPolicy(ep *Endpoint) map[string]any {
-	if !ep.Keyed {
+	p, ok := PolicyOf(ep)
+	if !ok {
 		return nil
 	}
-	p := map[string]any{
-		"window_s":   json.Number(strconv.FormatInt(int64(ep.Window/time.Second), 10)),
-		"scope":      "credential,operation",
-		"concurrent": "join",
-		"kept":       "success_and_effectful_refusals",
+	v := map[string]any{
+		"window_s":   json.Number(strconv.FormatInt(p.WindowS, 10)),
+		"scope":      p.Scope,
+		"concurrent": p.Concurrent,
+		"kept":       p.Kept,
 	}
-	if ep.MaxKept > 0 {
-		p["max_kept"] = json.Number(strconv.Itoa(ep.MaxKept))
+	if p.MaxKept > 0 {
+		v["max_kept"] = json.Number(strconv.Itoa(p.MaxKept))
 	}
-	if ep.Result != "" {
-		p["result"] = ep.Result
+	if p.Result != "" {
+		v["result"] = p.Result
 	}
-	return p
+	return v
 }
 
 // decodedParts matches what the binder decodes on ep with what op declares:
-// each Params and Query field a parameter, required as the field is, no
-// other path or query parameter, and a JSON request body exactly when ep
-// has a Request. A mismatch would refuse every request at run time.
+// each Params, Query and Headers field a parameter, required as the field
+// is, no other path or query parameter, and a JSON request body exactly
+// when ep has a Request. Other header parameters stay, since the document
+// declares the ones the binder reads itself (Idempotency-Key, Wire-Version). A mismatch would refuse every request at run time.
 func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
 	at := fmt.Sprintf("row %q", ep.Name)
 	declared := map[paramKey]bool{}
 	c.fieldParams(at, ep.Params, inPath, op, declared)
 	c.fieldParams(at, ep.Query, inQuery, op, declared)
+	if ep.Headers != nil {
+		fields, _ := headerFields(ep.Headers, c.t.ClientHeader, true)
+		c.paramsOf(at, fields, inHeader, op, declared)
+	}
 	for _, key := range slices.SortedFunc(maps.Keys(op.params), func(x, y paramKey) int {
 		return cmp.Or(cmp.Compare(x.in, y.in), cmp.Compare(x.name, y.name))
 	}) {
@@ -694,7 +780,7 @@ func (c *newChecker) decodedParts(ep *Endpoint, op *operation) {
 	}
 }
 
-var partOf = map[string]string{inPath: partParams, inQuery: partQuery}
+var partOf = map[string]string{inPath: partParams, inQuery: partQuery, inHeader: partHeaders}
 
 // ifMatchParam matches an IfMatch row with a required If-Match header
 // parameter in op, and any other row with none; header names are
@@ -748,8 +834,14 @@ func (c *newChecker) fieldParams(at string, t reflect.Type, in string, op *opera
 		return
 	}
 	fields, _ := textFields(t)
+	c.paramsOf(at, fields, in, op, declared)
+}
+
+// paramsOf matches each field, decoded from the in parameters, with op's
+// parameter of its name, marking it in declared.
+func (c *newChecker) paramsOf(at string, fields []textField, in string, op *operation, declared map[paramKey]bool) {
 	for _, f := range fields {
-		key := paramKey{in, f.name}
+		key := paramKeyOf(in, f.name)
 		declared[key] = true
 		switch p := op.params[key]; {
 		case p == nil:

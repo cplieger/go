@@ -23,8 +23,8 @@ func spoolTable(t testing.TB) *httpwire.Table {
 	return &httpwire.Table{
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{{
-			Name: "archive.import", Method: http.MethodPost, Path: "/api/import", Summary: "Import an archive", Description: "Import an archive.",
-			Kind: httpwire.Raw, ContentType: "text/plain", Access: session, Keyed: true, MaxBody: spoolMax,
+			Name: "archive.import", Method: http.MethodPost, Path: "/import", Summary: "Import an archive", Description: "Import an archive.",
+			Kind: httpwire.Raw, ContentTypes: []string{"text/plain"}, Access: session, Keyed: true, MaxBody: spoolMax,
 		}},
 	}
 }

@@ -5,6 +5,7 @@
 export const WIRE_CODES = [
   "accounts_unavailable",
   "bad_body",
+  "bad_header",
   "bad_query",
   "bad_request",
   "body_too_large",
@@ -26,6 +27,7 @@ export const WIRE_CODES = [
   "maintenance",
   "method_not_allowed",
   "not_found",
+  "outcome_unknown",
   "person_required",
   "precondition_failed",
   "rate_limited",

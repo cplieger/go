@@ -34,7 +34,7 @@ const (
 )
 
 // reasonOf is the reason a scripted refusal carries, from its row's set.
-var reasonOf = map[string]string{"job_busy": "running", "auth_bad_request": "name"}
+var reasonOf = map[httpserver.ErrorCode]string{"job_busy": "running", "auth_bad_request": "name"}
 
 // driveFixture serves fixtureTable with every collaborator scripted.
 type driveFixture struct {
@@ -45,11 +45,11 @@ type driveFixture struct {
 	mu      sync.Mutex
 }
 
-func (f *driveFixture) refuse(w http.ResponseWriter, r *http.Request, code string) {
+func (f *driveFixture) refuse(w http.ResponseWriter, r *http.Request, code httpserver.ErrorCode) {
 	f.catalog.WriteError(w, r, &httpwire.Error{Code: code, Reason: reasonOf[code], RetryAfter: retryOf(code)})
 }
 
-func retryOf(code string) time.Duration {
+func retryOf(code httpserver.ErrorCode) time.Duration {
 	if code == "held_limit" || code == "rate_limited" {
 		return 5 * time.Second
 	}
@@ -61,14 +61,14 @@ type driveGuard struct{ f *driveFixture }
 func (g driveGuard) Wrap(_ *httpwire.Endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if code := r.Header.Get(hGuard); code != "" {
-			g.f.refuse(w, r, code)
+			g.f.refuse(w, r, httpserver.ErrorCode(code))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (driveGuard) Codes(a httpwire.Access) []string { return guardCodes(a) }
+func (driveGuard) Codes(a httpwire.Access) []httpserver.ErrorCode { return guardCodes(a) }
 func (driveGuard) Shape(*http.Request) httpwire.Shape {
 	return httpwire.Shape{Principal: httpwire.ShapeSession}
 }
@@ -80,7 +80,7 @@ func (driveGuard) Admits(httpwire.Shape, httpwire.Access) bool { return true }
 
 func (driveGuard) Person(ctx context.Context) error {
 	if code, _ := ctx.Value(personAnswer{}).(string); code != "" {
-		return &httpwire.Error{Code: code}
+		return &httpwire.Error{Code: httpserver.ErrorCode(code)}
 	}
 	return nil
 }
@@ -102,7 +102,7 @@ func (f *driveFixture) handlerError(r string) error {
 	case "ErrRunMissing":
 		return errRunMissing
 	}
-	return &httpwire.Error{Code: r, Reason: reasonOf[r]}
+	return &httpwire.Error{Code: httpserver.ErrorCode(r), Reason: reasonOf[httpserver.ErrorCode(r)]}
 }
 
 type handlerAnswer struct{}
@@ -116,25 +116,25 @@ func newDrive(t *testing.T) *driveFixture {
 	f.catalog = c.tb.Catalog
 	c.tb.Mounts[0].Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if code := r.Header.Get(hMount); code != "" {
-			f.refuse(w, r, code)
+			f.refuse(w, r, httpserver.ErrorCode(code))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	big := strings.Repeat("x", 2<<10)
-	c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB]) ([]job, error) {
+	c.binds["jobs.list"] = httpwire.Bind("jobs.list", func(ctx context.Context, _ httpwire.Call[noP, jobQuery, noB, noH]) ([]job, error) {
 		return []job{}, f.handlerError(answerOf(ctx))
 	})
-	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB]) (job, error) {
+	c.binds["jobs.get"] = httpwire.Bind("jobs.get", func(ctx context.Context, _ httpwire.Call[jobParams, noQ, noB, noH]) (job, error) {
 		return job{ID: "one"}, f.handlerError(answerOf(ctx))
 	})
-	c.binds["jobs.start"] = httpwire.Bind("jobs.start", func(ctx context.Context, c httpwire.Call[noP, noQ, startRequest]) (job, error) {
+	c.binds["jobs.start"] = httpwire.Bind("jobs.start", func(ctx context.Context, c httpwire.Call[noP, noQ, startRequest, noH]) (job, error) {
 		if c.Body.Kind == "big" {
 			return job{ID: big}, nil
 		}
 		return job{ID: "new"}, f.handlerError(answerOf(ctx))
 	})
-	c.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody]) (httpwire.None, error) {
+	c.binds["settings.save"] = httpwire.Bind("settings.save", func(ctx context.Context, _ httpwire.Call[noP, noQ, otherBody, noH]) (httpwire.None, error) {
 		return httpwire.None{}, f.handlerError(answerOf(ctx))
 	})
 	c.binds["archive.export"] = httpwire.BindRaw("archive.export", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +146,7 @@ func newDrive(t *testing.T) *driveFixture {
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = w.Write([]byte("PK"))
 	}))
-	c.binds["events.wait"] = httpwire.Bind("events.wait", func(ctx context.Context, _ httpwire.Call[noP, noQ, noB]) (httpwire.Status[nudge], error) {
+	c.binds["events.wait"] = httpwire.Bind("events.wait", func(ctx context.Context, _ httpwire.Call[noP, noQ, noB, noH]) (httpwire.Status[nudge], error) {
 		return httpwire.Answer(http.StatusNoContent, nudge{}), f.handlerError(answerOf(ctx))
 	})
 	limiter, err := httpserver.NewKeyedRateLimiter(httpserver.KeyedRate{Burst: 1, Interval: time.Hour})
@@ -171,7 +171,7 @@ func newDrive(t *testing.T) *driveFixture {
 	c.opts["hold"] = httpwire.WithHold(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if code := r.Header.Get(hHold); code != "" {
-				f.refuse(w, r, code)
+				f.refuse(w, r, httpserver.ErrorCode(code))
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -229,7 +229,7 @@ var driveTargets = map[string]rowTarget{
 
 // notDriven are the codes of a row's union no request to the binder can
 // draw, each with why the union still holds it.
-var notDriven = map[string]map[string]string{
+var notDriven = map[string]map[httpserver.ErrorCode]string{
 	"*": {"host_not_allowed": "httpserver's host check answers it in front of the API"},
 	"auth.sso": {
 		"accounts_unavailable": "a DuringOutage Public row passes the outage and asks for no account; the code is every row's",
@@ -241,14 +241,14 @@ var notDriven = map[string]map[string]string{
 type drove struct {
 	t     *testing.T
 	f     *driveFixture
-	union map[string][]string
-	seen  map[string]map[string]bool
+	union map[string][]httpserver.ErrorCode
+	seen  map[string]map[httpserver.ErrorCode]bool
 }
 
 // send answers one request to row and checks the refusal is want, that
 // want is in the row's union and that the envelope carries the catalog's
 // status for it.
-func (d *drove) send(row, want string, edit func(*rowTarget)) {
+func (d *drove) send(row string, want httpserver.ErrorCode, edit func(*rowTarget)) {
 	d.t.Helper()
 	tg := driveTargets[row]
 	tg.header = slices.Clone(tg.header)
@@ -259,7 +259,7 @@ func (d *drove) send(row, want string, edit func(*rowTarget)) {
 	d.check(row, want, rec)
 }
 
-func (d *drove) check(row, want string, rec *httptest.ResponseRecorder) {
+func (d *drove) check(row string, want httpserver.ErrorCode, rec *httptest.ResponseRecorder) {
 	d.t.Helper()
 	env, err := httpwire.DecodeEnvelope(rec.Body.Bytes())
 	if err != nil {
@@ -274,7 +274,7 @@ func (d *drove) check(row, want string, rec *httptest.ResponseRecorder) {
 		d.t.Errorf("%s answered %s, which is not in its union %v", row, env.Code, d.union[row])
 	}
 	if d.seen[row] == nil {
-		d.seen[row] = map[string]bool{}
+		d.seen[row] = map[httpserver.ErrorCode]bool{}
 	}
 	d.seen[row][env.Code] = true
 }
@@ -287,7 +287,7 @@ func TestEveryRefusalPathAnswersInsideTheRowsUnion(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDrive(t)
 		tb := f.api.Table()
-		d := &drove{t: t, f: f, union: map[string][]string{}, seen: map[string]map[string]bool{}}
+		d := &drove{t: t, f: f, union: map[string][]httpserver.ErrorCode{}, seen: map[string]map[httpserver.ErrorCode]bool{}}
 		var rows []httpwire.Endpoint
 		rows = append(rows, tb.Endpoints...)
 		mount := map[string]bool{}
@@ -338,7 +338,7 @@ func driveEveryRow(d *drove, ep httpwire.Endpoint, mount bool) {
 	d.send(ep.Name, "upgrade_required", header("Fixture-Version", "0"))
 	driveQuiet(d, ep.Name, write, tg.method == http.MethodGet && ep.Kind == httpwire.Stream)
 	if !ep.DuringOutage {
-		for file, code := range map[string]string{"accounts": "accounts_unavailable", "store": "store_unavailable", "bogus": "internal_error"} {
+		for file, code := range map[string]httpserver.ErrorCode{"accounts": "accounts_unavailable", "store": "store_unavailable", "bogus": "internal_error"} {
 			if mount && file == "store" {
 				continue
 			}
@@ -352,7 +352,7 @@ func driveEveryRow(d *drove, ep httpwire.Endpoint, mount bool) {
 	}
 	if mount {
 		for _, code := range ep.Codes {
-			d.send(ep.Name, code, header(hMount, code))
+			d.send(ep.Name, code, header(hMount, string(code)))
 		}
 		if ep.Access.Class == httpwire.Key || ep.Access.Class == httpwire.Scoped {
 			d.send(ep.Name, "rate_limited", header(hMount, "rate_limited"))
@@ -366,7 +366,7 @@ func driveEveryRow(d *drove, ep httpwire.Endpoint, mount bool) {
 		d.send(ep.Name, "cross_origin_refused", header("Sec-Fetch-Site", "cross-site"))
 	}
 	for _, code := range guardCodes(ep.Access) {
-		d.send(ep.Name, code, header(hGuard, code))
+		d.send(ep.Name, code, header(hGuard, string(code)))
 	}
 	if !ep.Keyed {
 		d.send(ep.Name, "idempotency_key_unsupported", header("Idempotency-Key", `"k"`))
@@ -468,13 +468,13 @@ func driveKeyed(d *drove) {
 
 func TestListRowRefusalsAreInItsUnion(t *testing.T) {
 	s := newPageStore(t, 3)
-	var union []string
+	var union []httpserver.ErrorCode
 	for _, ep := range s.api.Table().Endpoints {
 		if ep.Name == "items.list" {
 			union = ep.Errors
 		}
 	}
-	for target, want := range map[string]string{
+	for target, want := range map[string]httpserver.ErrorCode{
 		withCursor("/api/items", "AAAA"):             "cursor_invalid",
 		"/api/items?kind=" + strings.Repeat("k", 17): "bad_query",
 		"/api/items?limit=0":                         "bad_query",

@@ -1,0 +1,212 @@
+{
+  "components": {
+    "schemas": {
+      "Tick": {
+        "additionalProperties": false,
+        "properties": {
+          "n": {
+            "type": "integer"
+          }
+        },
+        "required": ["n"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "access matrix fixture",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/exports": {
+      "get": {
+        "description": "Read the exports.",
+        "operationId": "exports.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read the exports"
+      }
+    },
+    "/api/feed": {
+      "get": {
+        "description": "Read the feed.",
+        "operationId": "feed.read",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {}
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Read the feed"
+      }
+    },
+    "/api/items": {
+      "delete": {
+        "description": "Drop the items.",
+        "operationId": "items.drop",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Drop the items"
+      },
+      "get": {
+        "description": "List the items.",
+        "operationId": "items.list",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "List the items"
+      }
+    },
+    "/api/items/{id}": {
+      "get": {
+        "description": "Read an item.",
+        "operationId": "items.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read an item"
+      }
+    },
+    "/api/keys/permit": {
+      "post": {
+        "description": "Permit a key.",
+        "operationId": "keys.permit",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Permit a key"
+      }
+    },
+    "/api/live": {
+      "get": {
+        "description": "Stream the live events.",
+        "operationId": "live.stream",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-events": {
+                  "tick": {
+                    "$ref": "#/components/schemas/Tick"
+                  }
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Stream the live events"
+      }
+    },
+    "/api/me": {
+      "get": {
+        "description": "Read me.",
+        "operationId": "me.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read me"
+      },
+      "post": {
+        "description": "Save me.",
+        "operationId": "me.save",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Save me"
+      }
+    },
+    "/api/open": {
+      "get": {
+        "description": "Read the open page.",
+        "operationId": "open.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read the open page"
+      }
+    },
+    "/api/roles": {
+      "get": {
+        "description": "Read the roles.",
+        "operationId": "roles.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read the roles"
+      }
+    },
+    "/api/secure": {
+      "get": {
+        "description": "Read over HTTPS.",
+        "operationId": "secure.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read over HTTPS"
+      }
+    },
+    "/api/security": {
+      "get": {
+        "description": "Read the security settings.",
+        "operationId": "security.read",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Read the security settings"
+      },
+      "post": {
+        "description": "Save the security settings.",
+        "operationId": "security.save",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Save the security settings"
+      }
+    }
+  }
+}

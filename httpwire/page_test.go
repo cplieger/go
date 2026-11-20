@@ -2,11 +2,11 @@ package httpwire_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +21,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
+	"github.com/cplieger/go/sealed"
 )
 
 type (
@@ -40,8 +42,14 @@ type (
 	sealedHandle struct {
 		Value string `json:"value"`
 	}
-	listCall   = httpwire.Call[noP, entryQuery, noB]
-	handleCall = httpwire.Call[noP, noQ, noB]
+	groupParams struct {
+		Group entryKind `json:"group"`
+	}
+	scopeHeaders struct {
+		Scope entryKind `header:"X-Scope,omitempty"`
+	}
+	listCall   = httpwire.Call[noP, entryQuery, noB, noH]
+	handleCall = httpwire.Call[noP, noQ, noB, noH]
 )
 
 func (entryKind) MaxBytes() int { return 16 }
@@ -56,7 +64,8 @@ func pageDoc(t testing.TB) []byte {
 }
 
 // pageTable holds a session List row, one whose answer embeds List, a
-// Public List row, and a session and a Public row that seal handles.
+// Public List row, a List row under a path wildcard and one taking a
+// header, and a session and a Public row that seal handles.
 func pageTable(t testing.TB) *httpwire.Table {
 	t.Helper()
 	listRow := func(name, path, summary string, access httpwire.Access, resp reflect.Type) httpwire.Endpoint {
@@ -71,14 +80,20 @@ func pageTable(t testing.TB) *httpwire.Table {
 			Response: reflect.TypeFor[sealedHandle](), Access: access,
 		}
 	}
+	groupRow := listRow("groups.items", "/groups/{group}/items", "List a group's items", session, reflect.TypeFor[httpwire.List[entry]]())
+	groupRow.Params = reflect.TypeFor[groupParams]()
+	scopedRow := listRow("items.scoped", "/items/scoped", "List a scope's items", session, reflect.TypeFor[httpwire.List[entry]]())
+	scopedRow.Headers = reflect.TypeFor[scopeHeaders]()
 	return &httpwire.Table{
 		Prefix: "/api", Catalog: fixtureCatalog(t),
 		Endpoints: []httpwire.Endpoint{
-			listRow("items.list", "/api/items", "List items", session, reflect.TypeFor[httpwire.List[entry]]()),
-			listRow("items.archived", "/api/items/archived", "List archived items", session, reflect.TypeFor[archivedPage]()),
-			listRow("items.public", "/api/public/items", "List public items", public, reflect.TypeFor[httpwire.List[entry]]()),
-			handleRow("handles.seal", "/api/handles", "Seal a handle", session),
-			handleRow("handles.public", "/api/public/handles", "Seal a public handle", public),
+			listRow("items.list", "/items", "List items", session, reflect.TypeFor[httpwire.List[entry]]()),
+			listRow("items.archived", "/items/archived", "List archived items", session, reflect.TypeFor[archivedPage]()),
+			listRow("items.public", "/public/items", "List public items", public, reflect.TypeFor[httpwire.List[entry]]()),
+			groupRow,
+			scopedRow,
+			handleRow("handles.seal", "/handles", "Seal a handle", session),
+			handleRow("handles.public", "/public/handles", "Seal a public handle", public),
 		},
 	}
 }
@@ -108,7 +123,9 @@ const (
 	socket   = "socket"
 )
 
-var pageKey = [32]byte{1, 2, 3}
+// pageSealer is the app's sealer, which every pageStore build shares, as
+// a key file's Sealer outlives a restart.
+var pageSealer = sealed.New([32]byte{1, 2, 3})
 
 // pageStore is a set of keys listed in ascending order, its List handlers
 // paging it both ways with the reference keyset scan.
@@ -121,41 +138,60 @@ type pageStore struct {
 	mu     sync.Mutex
 }
 
-// newPageStore holds keys 1 to n under an API with a fixed cursor key.
+// newPageStore holds keys 1 to n under an API with pageSealer.
 func newPageStore(t testing.TB, n int, opts ...httpwire.Option) *pageStore {
 	t.Helper()
 	s := &pageStore{keys: map[uint64]bool{}}
 	for k := range n {
 		s.keys[uint64(k+1)] = true
 	}
-	s.api = s.build(t, append([]httpwire.Option{httpwire.WithCursorKey(pageKey)}, opts...)...)
+	s.api = s.build(t, append([]httpwire.Option{httpwire.WithSealer(pageSealer)}, opts...)...)
 	return s
 }
 
 func (s *pageStore) build(t testing.TB, opts ...httpwire.Option) *httpwire.API {
 	t.Helper()
-	api, err := httpwire.New(pageTable(t), s.bindings(), append([]httpwire.Option{
-		httpwire.WithSchema(pageDoc(t)),
-		httpwire.WithGuard(fixtureGuard{}),
-		httpwire.WithCredential(func(r *http.Request) string { c, _ := principalOf(r); return c }),
-		httpwire.WithCursorOwner(func(r *http.Request) string { _, o := principalOf(r); return o }),
-	}, opts...)...)
+	api, err := s.newAPI(t, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return api
 }
 
+func (s *pageStore) newAPI(t testing.TB, opts ...httpwire.Option) (*httpwire.API, error) {
+	t.Helper()
+	return httpwire.New(pageTable(t), s.bindings(), append([]httpwire.Option{
+		httpwire.WithSchema(pageDoc(t)),
+		httpwire.WithGuard(fixtureGuard{}),
+		httpwire.WithCredential(func(r *http.Request) string { c, _ := principalOf(r); return c }),
+		httpwire.WithCursorOwner(func(r *http.Request) string { _, o := principalOf(r); return o }),
+	}, opts...)...)
+}
+
 func (s *pageStore) bindings() []httpwire.Binding {
-	return []httpwire.Binding{
-		httpwire.Bind("items.list", s.list),
-		httpwire.Bind("items.archived", func(ctx context.Context, c listCall) (archivedPage, error) {
+	return slices.Collect(maps.Values(s.bindingsByRow()))
+}
+
+func (s *pageStore) bindingsByRow() map[string]httpwire.Binding {
+	return map[string]httpwire.Binding{
+		"items.list": httpwire.Bind("items.list", s.list),
+		"items.archived": httpwire.Bind("items.archived", func(ctx context.Context, c listCall) (archivedPage, error) {
 			l, err := s.list(ctx, c)
 			return archivedPage{List: l, State: "fresh"}, err
 		}),
-		httpwire.Bind("items.public", s.list),
-		httpwire.Bind("handles.seal", s.sealHandle),
-		httpwire.Bind("handles.public", s.sealHandle),
+		"items.public": httpwire.Bind("items.public", s.list),
+		"groups.items": httpwire.Bind("groups.items", func(_ context.Context, c httpwire.Call[groupParams, entryQuery, noB, noH]) (httpwire.List[entry], error) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return scanPage(s.sortedLocked(), c)
+		}),
+		"items.scoped": httpwire.Bind("items.scoped", func(_ context.Context, c httpwire.Call[noP, entryQuery, noB, scopeHeaders]) (httpwire.List[entry], error) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return scanPage(s.sortedLocked(), c)
+		}),
+		"handles.seal":   httpwire.Bind("handles.seal", s.sealHandle),
+		"handles.public": httpwire.Bind("handles.public", s.sealHandle),
 	}
 }
 
@@ -221,7 +257,7 @@ func position(k uint64) []byte { return binary.BigEndian.AppendUint64(nil, k) }
 // after Position, backward the Limit keys before it, and the first page
 // when a backward scan reaches the start. Offset counts the keys before
 // the page in the same read as Total.
-func scanPage(keys []uint64, c listCall) (httpwire.List[entry], error) {
+func scanPage[P, Q, H any](keys []uint64, c httpwire.Call[P, Q, noB, H]) (httpwire.List[entry], error) {
 	start := 0
 	if c.Position != nil {
 		pos := binary.BigEndian.Uint64(c.Position)
@@ -545,6 +581,152 @@ func TestCursorRefusesAnotherOwner(t *testing.T) {
 	}
 }
 
+// TestCursorRefusesAnotherPath pages one List row under two values of its
+// path wildcard: a cursor read on one opens only there.
+func TestCursorRefusesAnotherPath(t *testing.T) {
+	s := newPageStore(t, 10)
+	c := pageOf(t, s.get("/api/groups/a/items?limit=4", sessionA)).NextCursor
+	wantPage(t, pageOf(t, s.get(withCursor("/api/groups/a/items", c, "limit", "4"), sessionA)), span(5, 8), 4, 10)
+	n := s.ran()
+	wantCursorInvalid(t, s, s.get(withCursor("/api/groups/b/items", c, "limit", "4"), sessionA), n)
+}
+
+// TestCursorRefusesAnotherHeader pages one List row under two values of
+// its header: a cursor read under one opens only under that value.
+func TestCursorRefusesAnotherHeader(t *testing.T) {
+	s := newPageStore(t, 10)
+	get := func(target, scope string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.Header.Set("Principal", sessionA)
+		if scope != "" {
+			r.Header.Set("X-Scope", scope)
+		}
+		return answer(s.api, r)
+	}
+	c := pageOf(t, get("/api/items/scoped?limit=4", "a")).NextCursor
+	wantPage(t, pageOf(t, get(withCursor("/api/items/scoped", c, "limit", "4"), "a")), span(5, 8), 4, 10)
+	for name, scope := range map[string]string{"another value": "b", "no value": ""} {
+		t.Run(name, func(t *testing.T) {
+			n := s.ran()
+			wantCursorInvalid(t, s, get(withCursor("/api/items/scoped", c, "limit", "4"), scope), n)
+		})
+	}
+}
+
+// brokenKind decodes as a query or header value but never encodes.
+type brokenKind string
+
+func (brokenKind) MaxBytes() int                   { return 16 }
+func (k *brokenKind) UnmarshalText(b []byte) error { *k = brokenKind(b); return nil }
+func (brokenKind) MarshalText() ([]byte, error)    { return nil, errors.New("no encoding") }
+
+// heldKind keeps its value unexported behind pointer-receiver codecs, so
+// encoding/json writes a copy of it as {}.
+type heldKind struct{ v string }
+
+func (heldKind) MaxBytes() int                   { return 16 }
+func (k *heldKind) UnmarshalText(b []byte) error { k.v = string(b); return nil }
+func (k *heldKind) MarshalText() ([]byte, error) { return []byte(k.v), nil }
+
+// oneWayKind decodes into unexported state and has no marshaler.
+type oneWayKind struct{ v string }
+
+func (oneWayKind) MaxBytes() int                   { return 16 }
+func (k *oneWayKind) UnmarshalText(b []byte) error { k.v = string(b); return nil }
+
+// scopedWith serves pageTable with items.scoped taking Q and H, counting
+// its runs.
+func scopedWith[Q, H any](t *testing.T) (*httpwire.API, func() int) {
+	t.Helper()
+	tb := pageTable(t)
+	ep := row(tb, "items.scoped")
+	ep.Query, ep.Headers = reflect.TypeFor[Q](), reflect.TypeFor[H]()
+	if ep.Headers == reflect.TypeFor[noH]() {
+		ep.Headers = nil
+	}
+	var mu sync.Mutex
+	runs := 0
+	bs := (&pageStore{}).bindingsByRow()
+	bs["items.scoped"] = httpwire.Bind("items.scoped", func(_ context.Context, c httpwire.Call[noP, Q, noB, H]) (httpwire.List[entry], error) {
+		mu.Lock()
+		defer mu.Unlock()
+		runs++
+		return scanPage(span(1, 10), c)
+	})
+	api, err := httpwire.New(tb, slices.Collect(maps.Values(bs)), httpwire.WithSchema(pageDoc(t)), httpwire.WithGuard(fixtureGuard{}),
+		httpwire.WithCredential(func(r *http.Request) string { c, _ := principalOf(r); return c }),
+		httpwire.WithCursorOwner(func(r *http.Request) string { _, o := principalOf(r); return o }),
+		httpwire.WithSealer(pageSealer))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return api, func() int { mu.Lock(); defer mu.Unlock(); return runs }
+}
+
+// A List cursor is bound to each query and header value as the request
+// carried it, whatever the field's type or json tag: it opens under the
+// same values and answers cursor_invalid under another.
+func TestCursorBindsTheValuesAsSent(t *testing.T) {
+	type (
+		heldQuery struct {
+			httpwire.Page
+			Kind heldKind `json:"kind,omitzero"`
+		}
+		oneWayQuery struct {
+			httpwire.Page
+			Kind oneWayKind `json:"kind,omitzero"`
+		}
+		brokenQuery struct {
+			httpwire.Page
+			Kind brokenKind `json:"kind,omitempty"`
+		}
+		hiddenScope struct {
+			Scope entryKind `header:"X-Scope,omitempty" json:"-"`
+		}
+		takenName struct {
+			Scope entryKind `header:"X-Scope,omitempty" json:"Zone"`
+			Zone  entryKind `header:"X-Zone,omitempty"`
+		}
+		brokenScope struct {
+			Scope brokenKind `header:"X-Scope,omitempty"`
+		}
+	)
+	for name, tc := range map[string]struct {
+		build       func(*testing.T) (*httpwire.API, func() int)
+		same, other []string // query then header pairs, kind first
+	}{
+		"a query type whose marshaler needs its address":     {scopedWith[heldQuery, noH], []string{"a", ""}, []string{"b", ""}},
+		"a query type that does not encode":                  {scopedWith[brokenQuery, noH], []string{"a", ""}, []string{"b", ""}},
+		"a query type that decodes itself with no marshaler": {scopedWith[oneWayQuery, noH], []string{"a", ""}, []string{"b", ""}},
+		"a header json leaves out":                           {scopedWith[entryQuery, hiddenScope], []string{"", "X-Scope", "a"}, []string{"", "X-Scope", "b"}},
+		"a header whose json name another takes": {
+			scopedWith[entryQuery, takenName], []string{"", "X-Scope", "s", "X-Zone", "a"}, []string{"", "X-Scope", "s", "X-Zone", "b"},
+		},
+		"a header type that does not encode": {scopedWith[entryQuery, brokenScope], []string{"", "X-Scope", "a"}, []string{"", "X-Scope", "b"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api, runs := tc.build(t)
+			get := func(cursor string, sent []string) *httptest.ResponseRecorder {
+				q := url.Values{"limit": {"4"}}
+				if sent[0] != "" {
+					q.Set("kind", sent[0])
+				}
+				if cursor != "" {
+					q.Set("cursor", cursor)
+				}
+				return answer(api, request(http.MethodGet, "/api/items/scoped?"+q.Encode(), "", append([]string{"Principal", sessionA}, sent[1:]...)...))
+			}
+			c := pageOf(t, get("", tc.same)).NextCursor
+			wantPage(t, pageOf(t, get(c, tc.same)), span(5, 8), 4, 10)
+			n := runs()
+			rec := get(c, tc.other)
+			if env := envelopeOf(t, rec); rec.Code != http.StatusBadRequest || env.Code != "cursor_invalid" || runs() != n {
+				t.Errorf("another value answered %d %q after %d more runs, want 400 cursor_invalid and none", rec.Code, env.Code, runs()-n)
+			}
+		})
+	}
+}
+
 func TestCursorRefusals(t *testing.T) {
 	s := newPageStore(t, 10)
 	good := pageOf(t, s.get("/api/items?limit=3", sessionA)).NextCursor
@@ -575,8 +757,8 @@ func TestCursorRefusals(t *testing.T) {
 			wantCursorInvalid(t, s, s.get(target, sessionA), n)
 		})
 	}
-	t.Run("another key", func(t *testing.T) {
-		s.api = s.build(t, httpwire.WithCursorKey([32]byte{9}))
+	t.Run("another sealer", func(t *testing.T) {
+		s.api = s.build(t, httpwire.WithSealer(sealed.New([32]byte{9})))
 		n := s.ran()
 		wantCursorInvalid(t, s, s.get(withCursor("/api/items", good, "limit", "3"), sessionA), n)
 	})
@@ -588,8 +770,8 @@ func TestCursorRefusals(t *testing.T) {
 		n := s.ran()
 		wantCursorInvalid(t, s, s.get(withCursor("/api/items", c, "limit", "3"), sessionA), n)
 	})
-	t.Run("a changed limit keeps the cursor", func(t *testing.T) {
-		s.api = s.build(t, httpwire.WithCursorKey(pageKey))
+	t.Run("the same sealer after a restart, a changed limit", func(t *testing.T) {
+		s.api = s.build(t, httpwire.WithSealer(pageSealer))
 		wantPage(t, pageOf(t, s.get(withCursor("/api/items", good, "limit", "2"), sessionA)), span(4, 5), 3, 10)
 	})
 }
@@ -598,7 +780,7 @@ func TestCursorRefusedPastADay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := newPageStore(t, 10)
 		c := pageOf(t, s.get("/api/items?limit=3", sessionA)).NextCursor
-		time.Sleep(24 * time.Hour)
+		time.Sleep(24*time.Hour - time.Second)
 		wantPage(t, pageOf(t, s.get(withCursor("/api/items", c, "limit", "3"), sessionA)), span(4, 6), 3, 10)
 		time.Sleep(time.Second)
 		n := s.ran()
@@ -609,25 +791,15 @@ func TestCursorRefusedPastADay(t *testing.T) {
 func TestCursorSealBounds(t *testing.T) {
 	sink := &logSink{}
 	s := newPageStore(t, 0, httpwire.WithLogger(slog.New(sink)))
-	nonces := map[string]bool{}
 	var longest int
 	var tooLong []error
 	s.answer = func(c listCall) (httpwire.List[entry], error) {
-		pos := position(7)
-		for range 100_000 {
-			sealed, err := c.SealNext(pos)
-			raw, derr := base64.RawURLEncoding.DecodeString(sealed)
-			if err != nil || derr != nil || len(raw) < 12 {
-				t.Fatalf("SealNext = %q, %v (%v)", sealed, err, derr)
-			}
-			nonces[string(raw[:12])] = true
-		}
 		for _, seal := range []func([]byte) (string, error){c.SealNext, c.SealPrev} {
-			sealed, err := seal(make([]byte, 1024))
+			v, err := seal(make([]byte, 1024))
 			if err != nil {
 				t.Fatalf("a 1,024-byte position: %v", err)
 			}
-			longest = max(longest, len(sealed))
+			longest = max(longest, len(v))
 			_, err = seal(make([]byte, 1025))
 			tooLong = append(tooLong, err)
 		}
@@ -637,11 +809,8 @@ func TestCursorSealBounds(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answered %d %q", rec.Code, rec.Body.String())
 	}
-	if len(nonces) != 100_000 {
-		t.Errorf("100,000 cursors over one position carry %d distinct nonces", len(nonces))
-	}
-	if longest == 0 || longest > 1416 {
-		t.Errorf("a 1,024-byte position sealed to %d bytes, want at most 1,416", longest)
+	if longest != 1416 {
+		t.Errorf("a 1,024-byte position sealed to %d bytes, want 1,416", longest)
 	}
 	for _, err := range tooLong {
 		if !errors.Is(err, httpwire.ErrPositionTooLong) {
@@ -729,16 +898,16 @@ func describe(b []byte, err error) string {
 func TestSealBindsAHandleToItsCredential(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := newPageStore(t, 0)
-		sealed := sealOn(t, s, "/api/handles", sessionA, func(ctx context.Context) string {
-			v, err := httpwire.Seal(ctx, "state", []byte("payload"))
+		handle := sealOn(t, s, "/api/handles", sessionA, func(ctx context.Context) string {
+			v, err := httpwire.Seal(ctx, "state", []byte("payload"), time.Hour)
 			if err != nil {
 				return "error " + err.Error()
 			}
 			return v
 		})
-		openAs := func(principal, path, purpose string, maxAge time.Duration) string {
+		openOn := func(s *pageStore, principal, path, purpose string) string {
 			return sealOn(t, s, path, principal, func(ctx context.Context) string {
-				return describe(httpwire.Open(ctx, purpose, sealed, maxAge))
+				return describe(httpwire.Open(ctx, purpose, handle))
 			})
 		}
 		for name, tc := range map[string]struct {
@@ -749,52 +918,75 @@ func TestSealBindsAHandleToItsCredential(t *testing.T) {
 			"another purpose":                {sessionA, "/api/handles", "other", "ErrSealed"},
 			"a Public row":                   {sessionA, "/api/public/handles", "state", "ErrSealed"},
 		} {
-			if got := openAs(tc.principal, tc.path, tc.purpose, time.Hour); got != tc.want {
+			if got := openOn(s, tc.principal, tc.path, tc.purpose); got != tc.want {
 				t.Errorf("%s: Open = %s, want %s", name, got, tc.want)
 			}
 		}
-		time.Sleep(time.Hour)
-		if got := openAs(sessionA, "/api/handles", "state", time.Hour); got != "opened payload" {
-			t.Errorf("Open at maxAge = %s, want it opened", got)
+		if got := openOn(newPageStore(t, 0, httpwire.WithSealer(sealed.New([32]byte{9}))), sessionA, "/api/handles", "state"); got != "ErrSealed" {
+			t.Errorf("Open under another sealer = %s, want ErrSealed", got)
+		}
+		if got := openOn(newPageStore(t, 0), sessionA, "/api/handles", "state"); got != "opened payload" {
+			t.Errorf("Open under the same sealer after a restart = %s, want it opened", got)
+		}
+		time.Sleep(time.Hour - time.Second)
+		if got := openOn(s, sessionA, "/api/handles", "state"); got != "opened payload" {
+			t.Errorf("Open a second before its ttl = %s, want it opened", got)
 		}
 		time.Sleep(time.Second)
-		if got := openAs(sessionA, "/api/handles", "state", time.Hour); got != "ErrSealed" {
-			t.Errorf("Open past maxAge = %s, want ErrSealed", got)
+		if got := openOn(s, sessionA, "/api/handles", "state"); got != "ErrSealed" {
+			t.Errorf("Open at its ttl = %s, want ErrSealed", got)
 		}
 		l := newPageStore(t, 10)
-		sealed = pageOf(t, l.get("/api/items?limit=3", sessionA)).NextCursor
-		if got := openAs(sessionA, "/api/handles", "cursor:items.list", 24*time.Hour); got != "ErrSealed" {
+		handle = pageOf(t, l.get("/api/items?limit=3", sessionA)).NextCursor
+		if got := openOn(s, sessionA, "/api/handles", "cursor:items.list"); got != "ErrSealed" {
 			t.Errorf("Open of a list cursor = %s, want ErrSealed", got)
 		}
 	})
-	t.Run("a payload over 1,024 bytes", func(t *testing.T) {
+	sealAs := func(t *testing.T, path string, payload []byte, ttl time.Duration, want func(string, error) bool) {
+		t.Helper()
 		s := newPageStore(t, 0)
-		got := sealOn(t, s, "/api/handles", sessionA, func(ctx context.Context) string {
-			_, err := httpwire.Seal(ctx, "state", make([]byte, 1025))
-			return strconv.FormatBool(errors.Is(err, httpwire.ErrPositionTooLong))
+		got := sealOn(t, s, path, sessionA, func(ctx context.Context) string {
+			v, err := httpwire.Seal(ctx, "state", payload, ttl)
+			return strconv.FormatBool(want(v, err))
 		})
 		if got != "true" {
-			t.Error("Seal of 1,025 bytes did not answer ErrPositionTooLong")
+			t.Error("Seal did not answer the error")
 		}
+	}
+	t.Run("a payload over 1,024 bytes", func(t *testing.T) {
+		sealAs(t, "/api/handles", make([]byte, 1025), time.Hour, func(_ string, err error) bool {
+			return errors.Is(err, httpwire.ErrPositionTooLong)
+		})
+	})
+	t.Run("a ttl under one second", func(t *testing.T) {
+		sealAs(t, "/api/handles", []byte("p"), time.Second-1, func(_ string, err error) bool {
+			return errors.Is(err, sealed.ErrShortTTL)
+		})
 	})
 	t.Run("Seal refuses a Public row", func(t *testing.T) {
-		s := newPageStore(t, 0)
-		got := sealOn(t, s, "/api/public/handles", sessionA, func(ctx context.Context) string {
-			v, err := httpwire.Seal(ctx, "state", []byte("p"))
-			return strconv.FormatBool(err != nil && v == "")
+		sealAs(t, "/api/public/handles", []byte("p"), time.Hour, func(v string, err error) bool {
+			return err != nil && v == ""
 		})
-		if got != "true" {
-			t.Error("Seal on a Public row did not answer an error")
-		}
 	})
 	t.Run("outside a request", func(t *testing.T) {
-		if v, err := httpwire.Seal(t.Context(), "state", []byte("p")); err == nil || v != "" {
+		if v, err := httpwire.Seal(t.Context(), "state", []byte("p"), time.Hour); err == nil || v != "" {
 			t.Errorf("Seal outside a request = %q, %v", v, err)
 		}
-		if _, err := httpwire.Open(t.Context(), "state", "AAAA", time.Hour); !errors.Is(err, httpwire.ErrSealed) {
+		if _, err := httpwire.Open(t.Context(), "state", "AAAA"); !errors.Is(err, httpwire.ErrSealed) {
 			t.Errorf("Open outside a request = %v, want ErrSealed", err)
 		}
 	})
+}
+
+func TestNewRefusesASealerWithNoKey(t *testing.T) {
+	s := &pageStore{keys: map[uint64]bool{}}
+	for name, sl := range map[string]*sealed.Sealer{"nil": nil, "the zero Sealer": {}} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s.newAPI(t, httpwire.WithSealer(sl)); err == nil || !strings.Contains(err.Error(), "WithSealer") {
+				t.Errorf("New = %v, want an error naming WithSealer", err)
+			}
+		})
+	}
 }
 
 func TestCredentialAndOwnerOfARequest(t *testing.T) {
@@ -861,12 +1053,12 @@ func TestDeriveRefusesListMisuse(t *testing.T) {
 		"a List write": {func(tb *httpwire.Table) { listRow(tb).Method = http.MethodPost }, []string{`row "items.list"`, "GET"}},
 		"a Raw List row": {func(tb *httpwire.Table) {
 			ep := listRow(tb)
-			ep.Kind, ep.ContentType, ep.Response = httpwire.Raw, "text/csv", nil
+			ep.Kind, ep.ContentTypes, ep.Response = httpwire.Raw, []string{"text/csv"}, nil
 		}, []string{`row "items.list"`, "JSON"}},
 		"a mount List row with no Page": {func(tb *httpwire.Table) {
 			tb.Mounts = []httpwire.Mount{{Handler: http.NotFoundHandler(), Rows: []httpwire.Endpoint{{
-				Name: "auth.keys", Method: http.MethodGet, Path: "/api/auth/keys", Summary: "List keys", Description: "Lists keys.",
-				Response: reflect.TypeFor[httpwire.List[entry]](), Access: session, List: true, Codes: []string{"auth_required"},
+				Name: "auth.keys", Method: http.MethodGet, Path: "/auth/keys", Summary: "List keys", Description: "Lists keys.",
+				Response: reflect.TypeFor[httpwire.List[entry]](), Access: session, List: true, Codes: []httpserver.ErrorCode{"auth_required"},
 			}}}}
 		}, []string{`row "auth.keys"`, "Page"}},
 		"a pointer to Page": {func(tb *httpwire.Table) { listRow(tb).Query = reflect.TypeFor[pageByPointer]() }, []string{`row "items.list"`, "Page"}},

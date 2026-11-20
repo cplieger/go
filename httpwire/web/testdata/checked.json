@@ -1,0 +1,785 @@
+[
+  {
+    "name": "no-sources",
+    "body": {
+      "sources": []
+    },
+    "valid": true
+  },
+  {
+    "name": "same",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "updated-stored",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "updated-superseded",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "not_stored": "superseded",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "updated-store-unwritable",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "not_stored": "store_unwritable",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "gone-stored",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "gone-superseded",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "not_stored": "superseded",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "error",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "error-no-upstream",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_timeout",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "error-upstream-cleaned",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "message": "Bad [31m key retry "
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "error-upstream-service-outside-grammar",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "several-sources",
+    "body": {
+      "sources": [
+        {
+          "source": "radarr",
+          "answer": "same",
+          "stored": false
+        },
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        },
+        {
+          "source": "anidb",
+          "answer": "error",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "stored-two-sources-position",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=12;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\", live=7;epoch=\"41ab0c9d8e7f6a5b4c3d2e1f00112233\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "stored-position-at-bound",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "stored": true
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "embedded-no-sources",
+    "body": {
+      "read_at": "2026-11-17T10:00:05.1Z",
+      "sources": []
+    },
+    "valid": true
+  },
+  {
+    "name": "embedded-source-twice",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "stored": false
+        },
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "source-empty",
+    "body": {
+      "sources": [
+        {
+          "source": "",
+          "answer": "same",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "source-twice",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "stored": false
+        },
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "answer-unknown",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "maybe",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "answer-empty",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "same-with-row",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "same",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "same-stored",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "same-not-stored",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "not_stored": "superseded",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "same-code",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "same-upstream",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "same",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-without-row",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "updated",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-neither-stored-nor-not-stored",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-stored-and-not-stored",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "not_stored": "superseded",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-not-stored-unknown",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "not_stored": "lost",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-code",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "code": "upstream_held",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-upstream",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "gone-with-row",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "gone-neither-stored-nor-not-stored",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "gone-stored-and-not-stored",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "not_stored": "store_unwritable",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "gone-code",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "code": "upstream_held",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "error-without-code",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "error-code-outside-grammar",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "code": "Upstream-Held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "error-with-row",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "error-stored",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_held",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-stored-without-position",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "gone-stored-without-position",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "updated-not-stored-with-position",
+    "body": {
+      "sources": [
+        {
+          "row": {
+            "name": "Frieren S01E01"
+          },
+          "source": "sonarr",
+          "answer": "updated",
+          "not_stored": "superseded",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "gone-not-stored-with-position",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "not_stored": "store_unwritable",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "same-with-position",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "same",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "error-with-position",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "code": "upstream_held",
+          "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\"",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "stored-position-control-character",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1\n",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "stored-position-not-ascii",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "store=1;epoch=\"é\"",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "stored-position-past-bound",
+    "body": {
+      "sources": [
+        {
+          "source": "sonarr",
+          "answer": "gone",
+          "position": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "stored": true
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "error-not-stored",
+    "body": {
+      "sources": [
+        {
+          "upstream": {
+            "service": "sonarr",
+            "status": 503,
+            "message": "Service Unavailable"
+          },
+          "source": "sonarr",
+          "answer": "error",
+          "not_stored": "store_unwritable",
+          "code": "upstream_held",
+          "stored": false
+        }
+      ]
+    },
+    "valid": false
+  }
+]

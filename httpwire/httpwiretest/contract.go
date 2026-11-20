@@ -13,12 +13,15 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cplieger/go/httpserver/v2"
 	"github.com/cplieger/go/httpwire"
 	"github.com/cplieger/go/httpwire/internal/wirelink"
 )
+
+const codeOutcomeUnknown = "outcome_unknown"
 
 // Case is one request Contract serves. A case naming no row, a Stream row,
 // or a request the API routes to another row fails.
@@ -52,14 +55,13 @@ func WithSameShape(s SameShape) Option {
 	return func(o *options) { o.pairs = append(o.pairs, s) }
 }
 
-// Contract serves each case through api and fails t, naming the row, on an
-// answer outside the row's shapes in api's OpenAPI document: an undeclared
-// success status, a body that does not decode strictly into the status's
-// Response type or breaks its schema, a Raw answer of another media type,
-// an error that is not an envelope of a union code at the catalog's status
-// with a valid request_id, and no Wire-Version of this API or X-Request-Id
-// of this request. A refusal's request_id may name an earlier request, as a
-// replay's does. A HEAD answer's body is not read.
+// Contract serves each case through api and fails t, naming the row, on any
+// answer outside the row's shapes in the document api was built with (a
+// status, body, media type, envelope, Wire-Version or this request's
+// X-Request-Id; a refusal's request_id may name an earlier request, as a
+// replay's does, and a HEAD answer's body is not read), and fails every
+// write row, mount rows included, whose union holds outcome_unknown and that
+// is not Keyed. docs/testing.md lists each check.
 func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 	t.Helper()
 	if api == nil {
@@ -73,6 +75,7 @@ func Contract(t testing.TB, api *httpwire.API, cases []Case, opts ...Option) {
 		}
 	}
 	c := newChecker(t, api)
+	c.unkeyedOutcomes()
 	covered := map[string]bool{}
 	for _, cs := range cases {
 		ep, body, ok := c.admit(cs)
@@ -107,19 +110,20 @@ type checker struct {
 	rows    map[string]*httpwire.Endpoint
 	mux     *http.ServeMux
 	version string
+	prefix  string
 	order   []*httpwire.Endpoint
 }
 
 func newChecker(t testing.TB, api *httpwire.API) *checker {
 	b := wirelink.Inspect(api)
 	tb := api.Table()
-	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}, mux: http.NewServeMux()}
+	c := &checker{t: t, api: api, version: b.Version, catalog: tb.Catalog, rows: map[string]*httpwire.Endpoint{}, mux: http.NewServeMux(), prefix: tb.Prefix}
 	c.schema, _ = b.Schema.(*httpwire.Schema)
 	c.guard, _ = b.Guard.(httpwire.Guard)
 	add := func(ep *httpwire.Endpoint) {
 		c.rows[ep.Name] = ep
 		c.order = append(c.order, ep)
-		c.mux.Handle(pattern(ep), http.NotFoundHandler())
+		c.mux.Handle(pattern(tb.Prefix, ep), http.NotFoundHandler())
 	}
 	for i := range tb.Endpoints {
 		add(&tb.Endpoints[i])
@@ -130,6 +134,16 @@ func newChecker(t testing.TB, api *httpwire.API) *checker {
 		}
 	}
 	return c
+}
+
+// unkeyedOutcomes fails every write row that can answer outcome_unknown
+// and is not Keyed.
+func (c *checker) unkeyedOutcomes() {
+	for _, ep := range c.order {
+		if ep.Method != http.MethodGet && ep.Method != http.MethodHead && !ep.Keyed && slices.Contains(ep.Errors, codeOutcomeUnknown) {
+			c.t.Errorf("httpwiretest: row %q is a write whose union holds %s, so a resend may run it twice; make the row Keyed", ep.Name, codeOutcomeUnknown)
+		}
+	}
 }
 
 // uncovered fails every row WithSameShape covers that no case served.
@@ -174,10 +188,10 @@ func (c *checker) admit(cs Case) (ep *httpwire.Endpoint, body []byte, ok bool) {
 // row's path never reaches a parameter row beside it.
 func (c *checker) reaches(ep *httpwire.Endpoint, r *http.Request) bool {
 	_, got := c.mux.Handler(r)
-	return got == pattern(ep)
+	return got == pattern(c.prefix, ep)
 }
 
-func pattern(ep *httpwire.Endpoint) string { return ep.Method + " " + ep.Path }
+func pattern(prefix string, ep *httpwire.Endpoint) string { return ep.Method + " " + prefix + ep.Path }
 
 // withBody is a copy of r reading body.
 func withBody(r *http.Request, body []byte) *http.Request {
@@ -196,7 +210,7 @@ type answer struct {
 }
 
 func (c *checker) serve(ep *httpwire.Endpoint, r *http.Request) *httptest.ResponseRecorder {
-	r, id := withRequestID(r)
+	r, id := wirelink.RequestID(r)
 	rec := httptest.NewRecorder()
 	c.api.ServeHTTP(rec, r)
 	a := answer{rec: rec, fail: func(format string, args ...any) {
@@ -204,18 +218,6 @@ func (c *checker) serve(ep *httpwire.Endpoint, r *http.Request) *httptest.Respon
 	}}
 	c.check(ep, r, id, a)
 	return rec
-}
-
-// withRequestID gives r the id the wire says the API answers it under: its
-// context's, else its valid inbound X-Request-Id, else a new one.
-func withRequestID(r *http.Request) (out *http.Request, id string) {
-	if id = httpserver.RequestIDFromContext(r.Context()); httpserver.ValidRequestID(id) {
-		return r, id
-	}
-	if id = r.Header.Get(httpserver.HeaderRequestID); !httpserver.ValidRequestID(id) {
-		id = httpserver.NewRequestID()
-	}
-	return r.WithContext(httpserver.WithRequestID(r.Context(), id)), id
 }
 
 func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, id string, a answer) {
@@ -232,8 +234,11 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, id string, a ans
 	case got != id:
 		a.fail("X-Request-Id %q is not this request's id %q", got, id)
 	}
-	statuses := successes(ep)
 	st := a.rec.Code
+	if c.conditionalAnswer(ep, r, a) {
+		return
+	}
+	statuses := successes(ep)
 	resp, declared := statuses[st]
 	switch {
 	case declared && r.Method != http.MethodHead:
@@ -244,6 +249,76 @@ func (c *checker) check(ep *httpwire.Endpoint, r *http.Request, id string, a ans
 	case r.Method != http.MethodHead:
 		c.refusal(ep, a)
 	}
+}
+
+// conditionalAnswer checks the conditional rule on a 304 or a Conditional
+// row's 200, reporting whether the answer was a 304, which nothing else
+// declares.
+func (c *checker) conditionalAnswer(ep *httpwire.Endpoint, r *http.Request, a answer) bool {
+	switch {
+	case a.rec.Code == http.StatusNotModified:
+		notModified(ep, r, a)
+		return true
+	case ep.Conditional && a.rec.Code == http.StatusOK:
+		c.conditional(ep, r, a)
+	}
+	return false
+}
+
+// notModified checks a 304: only a Conditional row answers one, only to a
+// request carrying If-None-Match, and with no body (RFC 9110 section
+// 15.4.5).
+func notModified(ep *httpwire.Endpoint, r *http.Request, a answer) {
+	switch {
+	case !ep.Conditional:
+		a.fail("a 304 on a row that is not Conditional")
+	case r.Header.Get(headerIfNoneMatch) == "":
+		a.fail("a 304 to a request with no If-None-Match")
+	}
+	if n := a.rec.Body.Len(); n > 0 && r.Method != http.MethodHead {
+		a.fail("a 304 with a body of %d bytes", n)
+	}
+}
+
+// conditional checks that a Conditional row's 200 carries an entity-tag and,
+// on a request with no If-None-Match, sends it again naming that tag and
+// expects a 304.
+func (c *checker) conditional(ep *httpwire.Endpoint, r *http.Request, a answer) {
+	etag := a.rec.Header().Get("ETag")
+	switch {
+	case etag == "":
+		a.fail("a 200 with no ETag on a Conditional row")
+		return
+	case !isEntityTag(etag):
+		a.fail("ETag %q is not an entity-tag (RFC 9110 section 8.8.3)", etag)
+		return
+	case r.Header.Get(headerIfNoneMatch) != "":
+		return
+	}
+	again := r.Clone(r.Context())
+	again.Header.Set(headerIfNoneMatch, etag)
+	if again.Body != nil {
+		again.Body = http.NoBody
+	}
+	if rec := c.serve(ep, again); rec.Code != http.StatusNotModified {
+		c.t.Errorf("httpwiretest: row %q, %s %s sent again with If-None-Match %s answered %d, want 304", ep.Name, r.Method, r.URL.RequestURI(), etag, rec.Code)
+	}
+}
+
+const headerIfNoneMatch = "If-None-Match"
+
+// isEntityTag reports whether s is [W/] DQUOTE *etagc DQUOTE.
+func isEntityTag(s string) bool {
+	s = strings.TrimPrefix(s, "W/")
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return false
+	}
+	for _, ch := range []byte(s[1 : len(s)-1]) {
+		if ch == '"' || ch < 0x21 || ch == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // successes are ep's success statuses, each to its Response type (nil for
@@ -273,7 +348,7 @@ func (c *checker) success(ep *httpwire.Endpoint, status int, resp reflect.Type, 
 			a.fail("a redirect with no Location")
 		}
 	case ep.Kind == httpwire.Raw && status == wirelink.Primary(ep):
-		mediaIs(a, ep.ContentType, "the row declares")
+		mediaIn(a, ep.ContentTypes)
 	case ep.Kind == httpwire.Raw || resp == nil:
 		if len(body) != 0 {
 			a.fail("a body of %d bytes on a status the row declares none for", len(body))
@@ -289,6 +364,19 @@ func (c *checker) success(ep *httpwire.Endpoint, status int, resp reflect.Type, 
 }
 
 const mediaJSON = "application/json"
+
+// mediaIn fails an answer whose media type is none of types.
+func mediaIn(a answer, types []string) {
+	ct := a.rec.Header().Get("Content-Type")
+	media, _, err := mime.ParseMediaType(ct)
+	if err == nil && slices.ContainsFunc(types, func(t string) bool {
+		m, _, _ := mime.ParseMediaType(t)
+		return m == media
+	}) {
+		return
+	}
+	a.fail("Content-Type %q; the row declares %s", ct, strings.Join(types, ", "))
+}
 
 // mediaIs reports whether the answer's media type is want, failing it when
 // not.

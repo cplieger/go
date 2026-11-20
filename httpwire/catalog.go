@@ -38,14 +38,17 @@ const (
 	codeInFlight    = "idempotency_in_flight"
 	codeStoreFull   = "idempotency_store_full"
 	codeTooLarge    = "idempotency_answer_too_large"
+	codeBadHeader   = "bad_header"
+	codeOutcome     = "outcome_unknown"
 	internalMessage = "internal error"
 )
 
 // libraryCodes are the codes httpwire's own layers answer, each with its
 // default remediation.
-var libraryCodes = map[string]httpserver.CodeSpec{
+var libraryCodes = map[httpserver.ErrorCode]httpserver.CodeSpec{
 	codeBadBody:                   {Status: http.StatusBadRequest, Remediation: "Fix the request body as the fields describe, then resend it."},
 	"bad_query":                   {Status: http.StatusBadRequest, Remediation: "Fix the query parameters as the fields describe, then resend the request."},
+	codeBadHeader:                 {Status: http.StatusBadRequest, Remediation: "Fix the request headers as the fields describe, then resend the request."},
 	"body_too_large":              {Status: http.StatusRequestEntityTooLarge, Remediation: "Send a smaller request body."},
 	codeMediaType:                 {Status: http.StatusUnsupportedMediaType, Remediation: "Send the body as JSON, with Content-Type: application/json.", NoEffect: true},
 	codeCursor:                    {Status: http.StatusBadRequest, Remediation: "Read the list again from its first page, without a cursor."},
@@ -66,30 +69,29 @@ var libraryCodes = map[string]httpserver.CodeSpec{
 	"store_unavailable":           {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's data store to open, then retry.", NoEffect: true},
 	codeAccounts:                  {Status: http.StatusServiceUnavailable, Remediation: "Wait for the server's account store to open, then retry.", NoEffect: true},
 	codeMaintenance:               {Status: http.StatusServiceUnavailable, Remediation: "Wait for the Retry-After delay, then retry.", NoEffect: true},
+	codeOutcome:                   {Status: http.StatusBadGateway, Remediation: "Check the result before sending it again; the action may have run."},
 }
 
 // Catalog is the one code table of an app's listeners: every code any layer
 // answers, with its status and remediation. It is safe for concurrent use.
 type Catalog struct {
-	specs map[string]httpserver.CodeSpec // each code as it was added
-	words map[string]string              // the app's remediation, replacing the added one
+	specs map[httpserver.ErrorCode]httpserver.CodeSpec // each code as it was added
+	words map[httpserver.ErrorCode]string              // the app's remediation, replacing the added one
 	mu    sync.RWMutex
 }
 
 // NewCatalog returns a catalog holding httpwire's own codes and every code of
 // httpserver.CodeSpecs.
 func NewCatalog() *Catalog {
-	c := &Catalog{specs: maps.Clone(libraryCodes), words: map[string]string{}}
-	for code, s := range httpserver.CodeSpecs() {
-		c.specs[string(code)] = s
-	}
+	c := &Catalog{specs: maps.Clone(libraryCodes), words: map[httpserver.ErrorCode]string{}}
+	maps.Copy(c.specs, httpserver.CodeSpecs())
 	return c
 }
 
 // Add adds an app's own code. It refuses a code already in the catalog, a
 // code outside the grammar, a status outside 400 to 599, and a remediation
 // that is empty, over 4 KiB or more than one line of valid UTF-8.
-func (c *Catalog) Add(code string, s httpserver.CodeSpec) error {
+func (c *Catalog) Add(code httpserver.ErrorCode, s httpserver.CodeSpec) error {
 	if err := checkSpec(code, s); err != nil {
 		return err
 	}
@@ -110,20 +112,20 @@ func (c *Catalog) AddOwned(specs map[httpserver.ErrorCode]httpserver.CodeSpec) e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var errs []error
-	add := map[string]httpserver.CodeSpec{}
+	add := map[httpserver.ErrorCode]httpserver.CodeSpec{}
 	for _, code := range slices.Sorted(maps.Keys(specs)) {
 		s := specs[code]
-		if err := checkSpec(string(code), s); err != nil {
+		if err := checkSpec(code, s); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if have, ok := c.specs[string(code)]; ok {
+		if have, ok := c.specs[code]; ok {
 			if have != s {
 				errs = append(errs, fmt.Errorf("httpwire: code %q is in the catalog as %+v, not %+v", code, have, s))
 			}
 			continue
 		}
-		add[string(code)] = s
+		add[code] = s
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -135,7 +137,7 @@ func (c *Catalog) AddOwned(specs map[httpserver.ErrorCode]httpserver.CodeSpec) e
 // SetRemediation replaces the remediation of a code already in the catalog,
 // keeping its status: the app's words for a library's code. It refuses an
 // unknown code and a remediation Add would refuse.
-func (c *Catalog) SetRemediation(code, remediation string) error {
+func (c *Catalog) SetRemediation(code httpserver.ErrorCode, remediation string) error {
 	if err := checkLine(remediation); err != nil {
 		return fmt.Errorf("httpwire: code %q: %w", code, err)
 	}
@@ -149,7 +151,7 @@ func (c *Catalog) SetRemediation(code, remediation string) error {
 }
 
 // Lookup returns code's status and remediation.
-func (c *Catalog) Lookup(code string) (httpserver.CodeSpec, bool) {
+func (c *Catalog) Lookup(code httpserver.ErrorCode) (httpserver.CodeSpec, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	s, ok := c.specs[code]
@@ -159,11 +161,11 @@ func (c *Catalog) Lookup(code string) (httpserver.CodeSpec, bool) {
 	return s, ok
 }
 
-func checkSpec(code string, s httpserver.CodeSpec) error {
-	if !isCode(code) || len(code) > maxEnvelopeString {
-		return fmt.Errorf("httpwire: %q is not a code: one or more of a-z, 0-9 and _", textsafe.SanitizeSingleLineBounded(code, maxReason))
+func checkSpec(code httpserver.ErrorCode, s httpserver.CodeSpec) error {
+	if !isCode(string(code)) || len(code) > maxEnvelopeString {
+		return fmt.Errorf("httpwire: %q is not a code: one or more of a-z, 0-9 and _", textsafe.SanitizeSingleLineBounded(string(code), maxReason))
 	}
-	if code == string(httpserver.InvalidErrorCode) {
+	if code == httpserver.InvalidErrorCode {
 		return fmt.Errorf("httpwire: %q is httpserver's substitute for a malformed code", code)
 	}
 	if s.Status < 400 || s.Status > 599 {
@@ -218,7 +220,7 @@ func (c *Catalog) envelope(r *http.Request, e *Error) (env Envelope, status int)
 	}
 	spec, ok := c.Lookup(e.Code)
 	if !ok {
-		logError(r, "httpwire: error code with no catalog row", "code", textsafe.SanitizeSingleLineBounded(e.Code, maxReason))
+		logError(r, "httpwire: error code with no catalog row", "code", textsafe.SanitizeSingleLineBounded(string(e.Code), maxReason))
 		spec, _ = c.Lookup(codeInternal)
 		e = &Error{Code: codeInternal}
 	}
@@ -258,20 +260,29 @@ func boundFields(fields []FieldError) []FieldError {
 }
 
 func upstreamOf(r *http.Request, e *Error) *Upstream {
-	u := e.Upstream
+	out, ok := boundUpstream(e.Upstream)
+	if !ok {
+		logError(r, "httpwire: upstream service outside the code grammar, left out", "code", e.Code, "service", textsafe.SanitizeSingleLineBounded(e.Upstream.Service, maxReason))
+	}
+	return out
+}
+
+// boundUpstream holds u to the envelope's rules: a status outside 100 to
+// 599 left out, the message one line of at most 512 bytes. ok is false,
+// and out nil, for a service outside the code grammar.
+func boundUpstream(u *Upstream) (out *Upstream, ok bool) {
 	if u == nil {
-		return nil
+		return nil, true
 	}
 	if !isCode(u.Service) || len(u.Service) > maxEnvelopeString {
-		logError(r, "httpwire: upstream service outside the code grammar, left out", "code", e.Code, "service", textsafe.SanitizeSingleLineBounded(u.Service, maxReason))
-		return nil
+		return nil, false
 	}
-	out := &Upstream{Service: u.Service}
+	out = &Upstream{Service: u.Service}
 	if u.Status >= 100 && u.Status <= 599 {
 		out.Status = u.Status
 	}
 	out.Message, _ = textsafe.SanitizeSingleLineCapped(u.Message, maxUpstreamMessage, "…")
-	return out
+	return out, true
 }
 
 // Responder adapts WriteError to httpserver's ErrorResponder, for the
@@ -280,7 +291,7 @@ func upstreamOf(r *http.Request, e *Error) *Upstream {
 // answers internal_error.
 func (c *Catalog) Responder() httpserver.ErrorResponder {
 	return func(w http.ResponseWriter, r *http.Request, _ int, code httpserver.ErrorCode, msg string) {
-		c.WriteError(w, r, &Error{Code: string(code), Message: msg})
+		c.WriteError(w, r, &Error{Code: code, Message: msg})
 	}
 }
 

@@ -2,6 +2,7 @@ package httpwire_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
@@ -141,4 +142,36 @@ func TestOpenToken(t *testing.T) {
 			t.Error("two epochs gave one token")
 		}
 	})
+}
+
+// TestTagCarriesFileHash builds a shared file's tag, its Open the first 8
+// bytes of the file's SHA-256 and its Rev the file's generation, and holds
+// it to the one tag grammar. The prefixes were computed outside Go.
+func TestTagCarriesFileHash(t *testing.T) {
+	const generation = 4
+	files := []struct {
+		content, want string
+	}{
+		{"1\n00:00:01,000 --> 00:00:02,000\nHello\n", "f3dbec9985e9a5ad.4"},
+		{"1\n00:00:01,000 --> 00:00:02,000\nHello.\n", "446de4924fc173b0.4"},
+	}
+	tags := make([]httpwire.Tag, len(files))
+	for i, f := range files {
+		sum := sha256.Sum256([]byte(f.content))
+		tags[i] = httpwire.Tag{Rev: generation}
+		copy(tags[i].Open[:], sum[:8])
+		if got := tags[i].String(); got != f.want {
+			t.Errorf("file %d: String = %q, want %q", i, got, f.want)
+		}
+		var back httpwire.Tag
+		if err := back.UnmarshalText([]byte(f.want)); err != nil || back != tags[i] {
+			t.Errorf("file %d: UnmarshalText(%q) = %+v, %v; want %+v", i, f.want, back, err, tags[i])
+		}
+		if got, ok := httpwire.ParseIfMatch(`"` + f.want + `"`); !ok || got != tags[i] {
+			t.Errorf("file %d: If-Match %q = %+v, %v; want %+v", i, f.want, got, ok, tags[i])
+		}
+	}
+	if tags[0] == tags[1] || tags[0].String() == tags[1].String() {
+		t.Errorf("two contents of one generation gave one tag %s", tags[0])
+	}
 }
