@@ -3,7 +3,9 @@ package sealed
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +19,8 @@ import (
 // Root passes every permission check, so a root suite runs
 // TestForeignKeyDir again in a copy of the test binary as nobody, with
 // nobodyChild set, in the tree it built as the working directory. Linux
-// only: an unprivileged suite uses /root, which every Linux keeps at 0700
-// for root.
+// only: an unprivileged suite uses /root, another uid's directory it
+// cannot enter.
 const (
 	nobodyUID   = 65534
 	nobodyChild = "SEALED_TEST_NOBODY_CHILD"
@@ -28,9 +30,10 @@ const (
 // TestForeignKeyDir checks the refusal of a key directory another user
 // owns at 0700, which this user cannot enter (the filesafe.ErrNotOwned
 // contract: a directory whose owner's mode refused the open is ErrNotOwned
-// too): OpenKeyFile on a key file there, and the Create of a KeyFile opened
-// before the directory was made, answer ErrUnsafeKeyFile matching
-// filesafe.ErrNotOwned, and the Create holds no key and no lease.
+// too, wrapping the EACCES): OpenKeyFile on a key file there and a keyless
+// KeyFile's Create answer ErrUnsafeKeyFile matching filesafe.ErrNotOwned
+// and fs.ErrPermission, holding no key and no lease. A key directory this
+// user owns and cannot search stays a plain permission error.
 func TestForeignKeyDir(t *testing.T) {
 	child := os.Getenv(nobodyChild) != ""
 	if !child && os.Geteuid() == 0 {
@@ -49,28 +52,51 @@ func TestForeignKeyDir(t *testing.T) {
 	} else {
 		checkForeignClosed(t, closed)
 	}
+	refused := []error{ErrUnsafeKeyFile, filesafe.ErrNotOwned, fs.ErrPermission}
 	t.Run("OpenKeyFile", func(t *testing.T) {
 		path := filepath.Join(closed, "sealing.key")
 		f, err := OpenKeyFile(t.Context(), path)
-		checkRefusal(t, f, err, path, []error{ErrUnsafeKeyFile, filesafe.ErrNotOwned}, nil)
+		checkRefusal(t, f, err, path, refused, nil)
 	})
 	t.Run("Create", func(t *testing.T) {
-		if !child {
-			t.Skip("unprivileged: no directory can become another user's after this process's OpenKeyFile")
-		}
 		dir := filepath.Join(base, "later")
-		f := openKeyless(t, filepath.Join(dir, "sealing.key"))
-		awaitParent(t)
-		checkErr(t, f.Create(t.Context()), dir, []error{ErrUnsafeKeyFile, filesafe.ErrNotOwned}, []error{ErrKeyExists})
+		var f *KeyFile
+		if child {
+			f = openKeyless(t, filepath.Join(dir, "sealing.key"))
+			awaitParent(t)
+		} else {
+			// No directory can turn another user's after an unprivileged
+			// OpenKeyFile, so this is the keyless KeyFile it answers where
+			// nothing is at the path.
+			dir = closed
+			f = &KeyFile{path: filepath.Join(dir, "sealing.key"), src: &keySource{}, closing: make(chan struct{})}
+			t.Cleanup(func() { _ = f.Close() })
+		}
+		checkErr(t, f.Create(t.Context()), dir, refused, []error{ErrKeyExists})
 		if f.src.lease != nil {
 			t.Error("the KeyFile holds the lease")
 		}
 		checkNoKey(t, f.Sealer())
 	})
+	t.Run("own directory it cannot search", func(t *testing.T) {
+		// Under /tmp: the child inherits root's TMPDIR, which may be closed
+		// to it, and cannot write its root-owned working directory.
+		dir, err := os.MkdirTemp("/tmp", "sealed-own-")
+		if err != nil {
+			t.Fatalf("MkdirTemp: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700); _ = os.RemoveAll(dir) })
+		path := writeKeyFile(t, dir, "sealed-key/v1\n", 0o600)
+		if err := os.Chmod(dir, 0o600); err != nil {
+			t.Fatalf("chmod %s: %v", dir, err)
+		}
+		f, err := OpenKeyFile(t.Context(), path)
+		checkRefusal(t, f, err, path, []error{fs.ErrPermission}, []error{ErrUnsafeKeyFile, filesafe.ErrNotOwned})
+	})
 }
 
-// checkForeignClosed fails unless dir is a directory another uid owns with
-// no group or other access.
+// checkForeignClosed fails unless dir is a directory another uid owns
+// that this uid cannot enter.
 func checkForeignClosed(t *testing.T, dir string) {
 	t.Helper()
 	fi, err := os.Lstat(dir)
@@ -78,8 +104,11 @@ func checkForeignClosed(t *testing.T, dir string) {
 		t.Fatalf("Lstat(%s): %v", dir, err)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 || !ok || st.Uid == uint32(os.Geteuid()) {
-		t.Fatalf("%s is %v, want another uid's directory closed to group and other", dir, fi.Mode())
+	if !fi.IsDir() || !ok || st.Uid == uint32(os.Geteuid()) {
+		t.Fatalf("%s is %v, want another uid's directory", dir, fi.Mode())
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "sealing.key")); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Lstat in %s = %v, want a permission error: a directory this uid cannot enter", dir, err)
 	}
 }
 

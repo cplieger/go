@@ -509,7 +509,7 @@ func TestUnsafeKeyFile(t *testing.T) {
 		stubGeteuid(t, os.Geteuid()+1)
 		f, err := OpenKeyFile(t.Context(), path)
 		checkRefusal(t, f, err, path, []error{ErrUnsafeKeyFile}, nil)
-		if want := fmt.Sprintf("owned by uid %d", os.Geteuid()); err != nil && !strings.Contains(err.Error(), want) {
+		if want := fmt.Sprintf("owned by uid %d", uint32(os.Geteuid())); err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("%q does not say %q", err, want)
 		}
 		checkNoLease(t, path)
