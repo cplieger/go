@@ -493,6 +493,7 @@ func TestDeriveRefusesHeaders(t *testing.T) {
 	// headers the binder reads itself.
 	for tag, canonical := range map[string]string{
 		"Content-Type": "Content-Type", "content-length": "Content-Length", "Idempotency-Key": "Idempotency-Key", "If-Match": "If-Match",
+		"if-none-match": "If-None-Match",
 		"Authorization": "Authorization", "Cookie": "Cookie", "Host": "Host", "Connection": "Connection", "Keep-Alive": "Keep-Alive",
 		"Proxy-Connection": "Proxy-Connection", "Proxy-Authenticate": "Proxy-Authenticate", "Proxy-Authorization": "Proxy-Authorization",
 		"TE": "Te", "Trailer": "Trailer", "Transfer-Encoding": "Transfer-Encoding", "Upgrade": "Upgrade", "Wire-Version": "Wire-Version",
@@ -641,6 +642,9 @@ func TestCheckHeaders(t *testing.T) {
 		"a value type no header parses into": {
 			oneHeader(reflect.TypeFor[float64](), `header:"X-Thing"`),
 			[]string{`Headers field "X-Thing" is float64, outside the types a header value parses into`},
+		},
+		"If-None-Match in any case": {
+			oneHeader(text, `header:"if-NONE-match"`), []string{`Headers field "If-None-Match" names a header httpwire or the platform owns`},
 		},
 		"a list":                             {oneHeader(reflect.TypeFor[heldPaths](), `header:"X-Thing"`), []string{`Headers field "X-Thing" is a list; a header takes one value`}},
 		"a Refusal outside the code grammar": {oneHeader(reflect.TypeFor[badRefusal](), `header:"X-Thing"`), []string{`Refusal "Not-A-Code"`}},

@@ -97,8 +97,8 @@ type matrix struct {
 	t       testing.TB
 	api     *httpwire.API
 	catalog *httpwire.Catalog
-	ran     *ranRow
-	prefix  string // set by the stub under the guard, reset before each request
+	ran     *ranRow // set by the stub under the guard, reset before each request
+	prefix  string
 }
 
 type ranRow struct {
@@ -125,12 +125,7 @@ var wildcard = regexp.MustCompile(`\{[^}]*\}`)
 // cell serves ep once as c and checks the answer.
 func (m *matrix) cell(ep *httpwire.Endpoint, c Credential) {
 	m.t.Helper()
-	path := wildcard.ReplaceAllStringFunc(m.prefix+ep.Path, func(w string) string {
-		if w == "{$}" {
-			return ""
-		}
-		return "x"
-	})
+	path := wildcard.ReplaceAllString(m.prefix+ep.Path, "x")
 	r := c.Apply(httptest.NewRequestWithContext(m.t.Context(), ep.Method, "https://example.com"+path, nil))
 	m.ran = nil
 	rec := httptest.NewRecorder()

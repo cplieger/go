@@ -653,8 +653,8 @@ var (
 
 // oneWay answers the first type reachable from t that decodes through its
 // own UnmarshalJSON or UnmarshalText with no marshaler to match, and the
-// method it lacks: the fingerprint's json.Marshal would not see what it
-// decoded, so two requests could share one fingerprint.
+// method it lacks: the json.Marshal under a fingerprint or a cursor purpose
+// would not see what it decoded, so two requests could share one.
 func oneWay(t reflect.Type, seen map[reflect.Type]bool) (found reflect.Type, missing string) {
 	if t == nil || seen[t] {
 		return nil, ""

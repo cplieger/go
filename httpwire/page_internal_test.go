@@ -13,7 +13,7 @@ import (
 // can refuse them.
 func TestOpenRefusesAPayloadOffTheLayout(t *testing.T) {
 	s := sealed.New([32]byte{7})
-	p := cursorPurpose("items.list", "hash", "u:acct1", nil)
+	p := cursorPurpose("items.list", "hash", "", "u:acct1", nil)
 	for name, tc := range map[string]struct {
 		payload []byte
 		dir     direction
@@ -45,7 +45,7 @@ func TestOpenRefusesAPayloadOffTheLayout(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := openCursor(s, cursorPurpose("items.list", "hash", "u:acct2", nil), v); err == nil {
+		if _, _, err := openCursor(s, cursorPurpose("items.list", "hash", "", "u:acct2", nil), v); err == nil {
 			t.Error("a cursor opened for another owner")
 		}
 	})
@@ -55,22 +55,24 @@ func TestOpenRefusesAPayloadOffTheLayout(t *testing.T) {
 // equal, so only the length before each field keeps them apart.
 func TestCursorPurposesNeverCollide(t *testing.T) {
 	type parts struct {
-		row, hash, owner string
-		path             []string
+		row, hash, headers, owner string
+		path                      []string
 	}
 	for name, pair := range map[string][2]parts{
-		"a colon moved across the row":    {{"a:b", "c", "d", nil}, {"a", "b:c", "d", nil}},
-		"a colon moved across the owner":  {{"a", "b", "c:d", nil}, {"a", "b:c", "d", nil}},
-		"a field moved into the row":      {{"ab", "", "", nil}, {"a", "b", "", nil}},
-		"a field moved into the owner":    {{"", "", "ab", nil}, {"", "a", "b", nil}},
-		"two path values joined":          {{"r", "h", "o", []string{"a", "b"}}, {"r", "h", "o", []string{"ab"}}},
-		"an empty path value":             {{"r", "h", "o", []string{""}}, {"r", "h", "o", nil}},
-		"the owner moved into the path":   {{"r", "h", "ox", nil}, {"r", "h", "o", []string{"x"}}},
-		"a path value moved across a cut": {{"r", "h", "o", []string{"a/", "b"}}, {"r", "h", "o", []string{"a", "/b"}}},
+		"a colon moved across the row":     {{"a:b", "c", "", "d", nil}, {"a", "b:c", "", "d", nil}},
+		"a colon moved across the owner":   {{"a", "b", "", "c:d", nil}, {"a", "b:c", "", "d", nil}},
+		"a field moved into the row":       {{"ab", "", "", "", nil}, {"a", "b", "", "", nil}},
+		"a field moved into the owner":     {{"", "", "", "ab", nil}, {"", "a", "", "b", nil}},
+		"the query moved into the headers": {{"r", "", "h", "o", nil}, {"r", "h", "", "o", nil}},
+		"the headers moved into the owner": {{"r", "q", "h", "o", nil}, {"r", "q", "", "ho", nil}},
+		"two path values joined":           {{"r", "h", "", "o", []string{"a", "b"}}, {"r", "h", "", "o", []string{"ab"}}},
+		"an empty path value":              {{"r", "h", "", "o", []string{""}}, {"r", "h", "", "o", nil}},
+		"the owner moved into the path":    {{"r", "h", "", "ox", nil}, {"r", "h", "", "o", []string{"x"}}},
+		"a path value moved across a cut":  {{"r", "h", "", "o", []string{"a/", "b"}}, {"r", "h", "", "o", []string{"a", "/b"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			x, y := pair[0], pair[1]
-			if cursorPurpose(x.row, x.hash, x.owner, x.path) == cursorPurpose(y.row, y.hash, y.owner, y.path) {
+			if cursorPurpose(x.row, x.hash, x.headers, x.owner, x.path) == cursorPurpose(y.row, y.hash, y.headers, y.owner, y.path) {
 				t.Errorf("%q and %q give one purpose", x, y)
 			}
 		})
@@ -85,7 +87,7 @@ func TestOpenRefusesAValuePastTheBoundUnread(t *testing.T) {
 		t.Fatalf("maxSealed = %d, want sealed.ExpiringLen(1 + %d) = %d, which the URI-length sentence of docs/wire.md reads as 1,416", maxSealed, maxPosition, want)
 	}
 	s := sealed.New([32]byte{7})
-	p := cursorPurpose("items.list", "", "", nil)
+	p := cursorPurpose("items.list", "", "", "", nil)
 	longest, err := s.Seal(p, append([]byte{0}, make([]byte, maxPosition)...), cursorAge)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +112,7 @@ func TestOpenRefusesAValuePastTheBoundUnread(t *testing.T) {
 // shared Sealer named under its own module never equals one.
 func TestPurposesAreHttpwiresOwn(t *testing.T) {
 	for name, p := range map[string]sealed.Purpose{
-		"a cursor": cursorPurpose("items.list", "hash", "u:acct1", nil),
+		"a cursor": cursorPurpose("items.list", "hash", "", "u:acct1", nil),
 		"a handle": handlePurpose("state", "s:a"),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -119,7 +121,7 @@ func TestPurposesAreHttpwiresOwn(t *testing.T) {
 			}
 		})
 	}
-	if c, h := cursorPurpose("", "", "", nil), handlePurpose("", ""); strings.HasPrefix(string(h), string(c)) || strings.HasPrefix(string(c), string(h)) {
+	if c, h := cursorPurpose("", "", "", "", nil), handlePurpose("", ""); strings.HasPrefix(string(h), string(c)) || strings.HasPrefix(string(c), string(h)) {
 		t.Errorf("cursor purpose %q and handle purpose %q share a prefix", c, h)
 	}
 }

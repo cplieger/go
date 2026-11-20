@@ -102,13 +102,23 @@ func lengthPrefixed(fields ...string) string {
 	return string(b)
 }
 
-// cursorPurpose binds a cursor to its row, query, owner and the values of
-// the row's path wildcards in path order. Both purposes are named under
-// httpwire/, as sealed names a purpose by its owning module, so no app
-// purpose on a shared Sealer equals one, and they differ from their first
-// distinct byte, so a list cursor never opens as a handle.
-func cursorPurpose(row, queryHash, owner string, path []string) sealed.Purpose {
-	return sealed.Purpose("httpwire/cursor:" + lengthPrefixed(append([]string{row, queryHash, owner}, path...)...))
+// cursorPurpose binds a cursor to its row, query, decoded headers, owner
+// and the values of the row's path wildcards in path order. Both purposes
+// are named under httpwire/, as sealed names a purpose by its owning
+// module, so no app purpose on a shared Sealer equals one, and they differ
+// from their first distinct byte, so a list cursor never opens as a handle.
+func cursorPurpose(row, queryHash, headersHash, owner string, path []string) sealed.Purpose {
+	return sealed.Purpose("httpwire/cursor:" + lengthPrefixed(append([]string{row, queryHash, headersHash, owner}, path...)...))
+}
+
+// jsonHash is the SHA-256 of v's json.Marshal.
+func jsonHash(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256(b)
+	return string(h[:]), nil
 }
 
 func handlePurpose(purpose, credential string) sealed.Purpose {
@@ -345,25 +355,32 @@ func checkedPage(body any) (page any, problem string) {
 }
 
 // openPage reads a List request's Page from d's query and opens its
-// cursor, bound to the row, the query with Page zeroed, and the owner.
+// cursor, bound to the row, the values of its path wildcards, the query
+// with Page zeroed, the decoded headers and the owner.
 func (a *API) openPage(r *http.Request, ep *Endpoint, d *decoded) *Error {
 	idx, _ := pageIndex(ep.Query)
 	q := reflect.New(ep.Query).Elem()
 	q.Set(reflect.ValueOf(d.query))
 	p, _ := reflect.TypeAssert[Page](q.FieldByIndex(idx))
 	q.FieldByIndex(idx).SetZero()
-	canonical, err := json.Marshal(q.Interface())
+	queryHash, err := jsonHash(q.Interface())
 	if err != nil {
 		a.log().ErrorContext(r.Context(), "httpwire: a List row's query does not encode as JSON", "row", ep.Name, "error", err)
 		return &Error{Code: codeInternal}
 	}
-	hash := sha256.Sum256(canonical)
+	var headersHash string
+	if d.headers != nil {
+		if headersHash, err = jsonHash(addressed(d.headers)); err != nil {
+			a.log().ErrorContext(r.Context(), "httpwire: a List row's headers do not encode as JSON", "row", ep.Name, "error", err)
+			return &Error{Code: codeInternal}
+		}
+	}
 	wildcards, _ := pathWildcards(ep.Path)
 	path := make([]string, len(wildcards))
 	for i, w := range wildcards {
 		path[i] = r.PathValue(w)
 	}
-	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, string(hash[:]), CursorOwnerOf(r.Context()), path)}
+	d.list = &listCursor{sealer: a.sealer, purpose: cursorPurpose(ep.Name, queryHash, headersHash, CursorOwnerOf(r.Context()), path)}
 	d.limit = cmp.Or(int(p.Limit), defaultLimit)
 	if p.Cursor == "" {
 		return nil
@@ -404,6 +421,11 @@ func listProblems(ep *Endpoint) []string {
 	}
 	if ep.Method != http.MethodGet || ep.Kind != JSON {
 		p = append(p, fmt.Sprintf("a List row is a JSON GET, not a %s %s", kindNames[ep.Kind], ep.Method))
+	}
+	for _, part := range []reflect.Type{ep.Query, ep.Headers} {
+		if t, method := oneWay(part, map[reflect.Type]bool{}); t != nil {
+			p = append(p, fmt.Sprintf("a List row's cursor binds its marshalled Query and Headers, but %s decodes itself with no %s", t, method))
+		}
 	}
 	return p
 }

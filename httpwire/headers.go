@@ -19,7 +19,7 @@ import (
 var ownedHeaders = []string{
 	"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer",
 	"Transfer-Encoding", "Upgrade", "Content-Type", "Content-Length", "Host", "Authorization", "Cookie",
-	"Idempotency-Key", "If-Match", headerWireVersion, textproto.CanonicalMIMEHeaderKey(httpserver.HeaderRequestID),
+	"Idempotency-Key", "If-Match", "If-None-Match", headerWireVersion, textproto.CanonicalMIMEHeaderKey(httpserver.HeaderRequestID),
 }
 
 // CheckHeaders answers every reason Derive refuses t as a table row's
