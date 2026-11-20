@@ -62,9 +62,7 @@ func TestWriteFileMaxBytes(t *testing.T) {
 			}
 			_, err := WriteFile(t.Context(), path, []byte(tc.data), WithMaxBytes(tc.maxBytes))
 			if tc.wantErr {
-				if !errors.Is(err, ErrFileTooLarge) {
-					t.Fatalf("err = %v, want ErrFileTooLarge", err)
-				}
+				assertTooLarge(t, err, int64(len(tc.data)), tc.maxBytes)
 				requireIntactTarget(t, path, previous)
 				requireNoTemps(t, dir)
 				return
@@ -90,9 +88,7 @@ func TestWriteReaderMaxBytes(t *testing.T) {
 	// through the capping writer.
 	over := io.LimitReader(neverEnding('x'), 100)
 	_, err := WriteReader(t.Context(), path, over, WithMaxBytes(64))
-	if !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("err = %v, want ErrFileTooLarge through the WriteError wrap", err)
-	}
+	assertTooLarge(t, err, 100, 64)
 	wErr, ok := errors.AsType[*WriteError](err)
 	if !ok || wErr.Phase != PhaseTempWrite {
 		t.Errorf("err = %v, want a *WriteError in PhaseTempWrite", err)
@@ -102,9 +98,8 @@ func TestWriteReaderMaxBytes(t *testing.T) {
 
 	// A WriterTo source exercises the fast path; the cap must hold there too.
 	overWriterTo := bytes.NewReader(bytes.Repeat([]byte("y"), 100))
-	if _, err := WriteReader(t.Context(), path, overWriterTo, WithMaxBytes(64)); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("WriterTo path err = %v, want ErrFileTooLarge", err)
-	}
+	_, err = WriteReader(t.Context(), path, overWriterTo, WithMaxBytes(64))
+	assertTooLarge(t, err, 100, 64)
 	requireIntactTarget(t, path, previous)
 
 	if _, err := WriteReader(t.Context(), path, strings.NewReader("abcd"), WithMaxBytes(4)); err != nil {
@@ -125,12 +120,7 @@ func TestWriteReaderMaxBytesReportsTheProjectedSize(t *testing.T) {
 	chunked := io.MultiReader(strings.NewReader("abcd"), strings.NewReader("efgh"))
 
 	_, err := WriteReader(t.Context(), path, chunked, WithMaxBytes(6))
-	if !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("WriteReader(two 4-byte chunks, cap 6) = %v, want ErrFileTooLarge", err)
-	}
-	if want := "would grow the file to 8 bytes (max 6)"; !strings.Contains(err.Error(), want) {
-		t.Errorf("WriteReader(two 4-byte chunks, cap 6) error = %q, want it to contain %q", err, want)
-	}
+	assertTooLarge(t, err, 8, 6)
 }
 
 // neverEnding is an infinite reader of one repeated byte, chunked at the
@@ -182,12 +172,10 @@ func TestPendingFileMaxBytesRejectsWholeWrite(t *testing.T) {
 	}
 	// This write would cross the cap: rejected WHOLE, nothing lands.
 	n, err := pf.Write([]byte("6789X"))
-	if n != 0 || !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("crossing write = (%d, %v), want (0, ErrFileTooLarge)", n, err)
+	if n != 0 {
+		t.Fatalf("crossing write = (%d, %v), want 0 bytes written", n, err)
 	}
-	if want := "would grow the staged file to 10 bytes (max 8)"; !strings.Contains(err.Error(), want) {
-		t.Errorf("crossing write error = %q, want it to contain %q", err, want)
-	}
+	assertTooLarge(t, err, 10, 8)
 	if got := pf.BytesWritten(); got != 5 {
 		t.Errorf("BytesWritten = %d, want 5 (rejected write must not advance the count)", got)
 	}
@@ -201,9 +189,8 @@ func TestPendingFileMaxBytesRejectsWholeWrite(t *testing.T) {
 	if _, err := pf.Write([]byte("678")); err != nil {
 		t.Fatalf("write up to cap: %v", err)
 	}
-	if _, err := pf.Write([]byte("9")); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("write past cap = %v, want ErrFileTooLarge", err)
-	}
+	_, err = pf.Write([]byte("9"))
+	assertTooLarge(t, err, 9, 8)
 }
 
 func TestPendingFileMaxBytesStreamSurface(t *testing.T) {
@@ -284,9 +271,7 @@ func TestPendingFileTruncateBeyondCapRejected(t *testing.T) {
 		t.Fatalf("NewPendingFile: %v", err)
 	}
 	defer func() { _ = pf.Cleanup() }()
-	if err := pf.Truncate(5); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("Truncate beyond cap = %v, want ErrFileTooLarge", err)
-	}
+	assertTooLarge(t, pf.Truncate(5), 5, 4)
 	if err := pf.Truncate(4); err != nil {
 		t.Fatalf("Truncate at cap: %v", err)
 	}
@@ -333,10 +318,10 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 	t.Parallel()
 	const capBytes = 4
 	cases := []struct {
-		name    string
-		stage   func(t *testing.T, pf *PendingFile)
-		want    string // committed content for the success case
-		wantErr bool
+		name     string
+		stage    func(t *testing.T, pf *PendingFile)
+		want     string // committed content for the success case
+		wantSize int64  // the staged size Commit refuses; 0 for success
 	}{
 		{
 			name: "WriteAt past cap",
@@ -346,7 +331,7 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 					t.Fatalf("WriteAt: %v", err)
 				}
 			},
-			wantErr: true,
+			wantSize: 10,
 		},
 		{
 			name: "sparse WriteAt far past cap",
@@ -356,7 +341,7 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 					t.Fatalf("WriteAt: %v", err)
 				}
 			},
-			wantErr: true,
+			wantSize: 64,
 		},
 		{
 			name: "Write after Seek",
@@ -373,7 +358,7 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 					t.Fatalf("embedded Write: %v", err)
 				}
 			},
-			wantErr: true,
+			wantSize: 10,
 		},
 		{
 			name: "reopen staged temp by path",
@@ -391,7 +376,7 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 					t.Fatalf("close reopened handle: %v", err)
 				}
 			},
-			wantErr: true,
+			wantSize: 10,
 		},
 		{
 			name: "exactly at cap through WriteAt",
@@ -424,7 +409,7 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 			}()
 			tc.stage(t, pf)
 			_, err = pf.Commit(t.Context())
-			if !tc.wantErr {
+			if tc.wantSize == 0 {
 				if err != nil {
 					t.Fatalf("Commit = %v, want success at cap", err)
 				}
@@ -432,9 +417,7 @@ func TestPendingFileMaxBytesCommitBarrier(t *testing.T) {
 				requireNoTemps(t, dir)
 				return
 			}
-			if !errors.Is(err, ErrFileTooLarge) {
-				t.Fatalf("Commit = %v, want ErrFileTooLarge", err)
-			}
+			assertTooLarge(t, err, tc.wantSize, capBytes)
 			if _, again := pf.Commit(t.Context()); !errors.Is(again, ErrFileTooLarge) {
 				t.Errorf("repeated Commit = %v, want the cached ErrFileTooLarge", again)
 			}
@@ -462,9 +445,8 @@ func TestPendingFileInRootMaxBytesCommitBarrier(t *testing.T) {
 	if _, err := pf.WriteAt([]byte("0123456789"), 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
-	if _, err := pf.Commit(t.Context()); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("Commit = %v, want ErrFileTooLarge", err)
-	}
+	_, err = pf.Commit(t.Context())
+	assertTooLarge(t, err, 10, 4)
 	if _, statErr := root.Stat("f.txt"); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("target exists after rejected commit (stat err = %v), want absent", statErr)
 	}

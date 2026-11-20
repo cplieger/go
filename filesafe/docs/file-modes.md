@@ -16,7 +16,7 @@ Omit `WithMode` for a file in a shared tree whose permissions an operator manage
 
 A mode passed to `mkdir(2)` or `open(2)` is a request, not a result. The umask narrows it, and a filesystem with an inheritable ACL can widen it whatever was asked. Measured on a ZFS `nfs4acl` dataset, an inheritable `group@:rwx` entry stores 0770 for a 0700 `mkdir`. A child of a parent that is already 0700 comes back 0770 too, so a narrower parent does not cover it.
 
-`EnforceMode(f, want)` sets the mode on the open handle and then reads the mode back from the same handle. It returns the mode the filesystem stored. A mismatch is `ErrModeNotStored`, naming both modes, with the stored mode returned beside the error. Both calls use the descriptor, not the pathname, so a rename in between cannot make it check one file and certify another. It works for a file or a directory, since both are an `*os.File`. It compares only the bits `chmod(2)` can set, the permission bits plus setuid, setgid and sticky.
+`EnforceMode(f, want)` sets the mode on the open handle and then reads the mode back from the same handle. It returns the mode the filesystem stored. A mismatch is `ErrModeNotStored`, a `*ModeNotStoredError` carrying both modes, with the stored mode returned beside the error. Both calls use the descriptor, not the pathname, so a rename in between cannot make it check one file and certify another. It works for a file or a directory, since both are an `*os.File`. It compares only the bits `chmod(2)` can set, the permission bits plus setuid, setgid and sticky.
 
 ## Private directories
 

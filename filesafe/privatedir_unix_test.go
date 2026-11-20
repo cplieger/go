@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -552,5 +553,121 @@ func TestOccupantRefusal_TheOccupantDecides(t *testing.T) {
 		if !errors.Is(got, tc.want) || !errors.Is(got, tc.errno) {
 			t.Errorf("%s: occupantRefusal = %v, want %v wrapping %v", name, got, tc.want, tc.errno)
 		}
+	}
+}
+
+// assertNotDirectory requires err to be a *NotDirectoryError naming name with
+// a mode of kind wantType.
+func assertNotDirectory(t *testing.T, err error, name string, wantType os.FileMode) {
+	t.Helper()
+	if !errors.Is(err, ErrNotDirectory) {
+		t.Errorf("err = %v, want it to match ErrNotDirectory", err)
+	}
+	nd, ok := errors.AsType[*NotDirectoryError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *NotDirectoryError", err)
+	}
+	if nd.Name != name || nd.Mode.Type() != wantType {
+		t.Errorf("NotDirectoryError = {Name: %q, Mode: %v}, want {Name: %q, type %v}", nd.Name, nd.Mode, name, wantType)
+	}
+}
+
+// Each producer reports the kind of file it found, and keeps reporting it
+// after a directory takes the name.
+func TestNotDirectoryError_CarriesTheModeEachProducerRead(t *testing.T) {
+	refuse := map[string]func(t *testing.T, path string) (string, error){
+		"EnsurePrivateDir": func(_ *testing.T, path string) (string, error) {
+			_, err := EnsurePrivateDir(path)
+			return path, err
+		},
+		"CheckPrivateDir": func(_ *testing.T, path string) (string, error) {
+			return path, CheckPrivateDir(path)
+		},
+		"CheckPrivateDirInRoot": func(t *testing.T, path string) (string, error) {
+			root, err := os.OpenRoot(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			return filepath.Base(path), CheckPrivateDirInRoot(root, filepath.Base(path))
+		},
+		"RemoveFileInRoot of a name under it": func(t *testing.T, path string) (string, error) {
+			root, err := os.OpenRoot(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			return filepath.Base(path), RemoveFileInRoot(root, filepath.Base(path)+"/x")
+		},
+	}
+	for call, refuse := range refuse {
+		t.Run(call, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "f")
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			name, err := refuse(t, path)
+			assertNotDirectory(t, err, name, 0)
+			msg := err.Error()
+			if want := "filesafe: not a directory: " + name + " (type regular file)"; !strings.HasPrefix(msg, want) {
+				t.Errorf("message = %q, want it to start %q", msg, want)
+			}
+			if rerr := os.Remove(path); rerr != nil {
+				t.Fatal(rerr)
+			}
+			mkdirExact(t, path, 0o700)
+			assertNotDirectory(t, err, name, 0)
+			if err.Error() != msg {
+				t.Errorf("message after a directory took the name = %q, want %q unchanged", err.Error(), msg)
+			}
+		})
+	}
+	t.Run("statOwnedDir on an open file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "f")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		_, err = statOwnedDir(f, "f")
+		assertNotDirectory(t, err, "f", 0)
+	})
+	t.Run("occupantRefusal of a socket", func(t *testing.T) {
+		occ := lstatOccupants(t)
+		openErr := &fs.PathError{Op: "open", Path: "s", Err: syscall.EOPNOTSUPP}
+		err := occupantRefusal(openErr, "s", found(occ.socket))
+		assertNotDirectory(t, err, "s", os.ModeSocket)
+		if !errors.Is(err, syscall.EOPNOTSUPP) {
+			t.Errorf("occupantRefusal = %v, want it to wrap the open's EOPNOTSUPP", err)
+		}
+	})
+}
+
+// sysless hides a FileInfo's Sys, the case where ownership cannot be read.
+type sysless struct{ os.FileInfo }
+
+func (sysless) Sys() any { return nil }
+
+func TestNotOwnedError_UndeterminedOwnerIsMinusOne(t *testing.T) {
+	fi, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ownerErr(sysless{fi}, "d")
+	if !errors.Is(err, ErrNotOwned) {
+		t.Errorf("ownerErr = %v, want it to match ErrNotOwned", err)
+	}
+	no, ok := errors.AsType[*NotOwnedError](err)
+	if !ok {
+		t.Fatalf("ownerErr = %v, want a *NotOwnedError", err)
+	}
+	if no.Name != "d" || no.Owner != -1 || no.EUID != os.Geteuid() {
+		t.Errorf("NotOwnedError = %+v, want {Name: d, Owner: -1, EUID: %d}", *no, os.Geteuid())
+	}
+	if want := "filesafe: not owned by the effective uid: d: ownership could not be determined"; err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
 	}
 }

@@ -39,9 +39,11 @@ func TestReadBounded(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 		_, err := ReadBounded(t.Context(), path, 50)
-		if !errors.Is(err, ErrFileTooLarge) {
-			t.Fatalf("ReadBounded(over) = %v, want ErrFileTooLarge", err)
+		assertTooLarge(t, err, 100, 50)
+		if werr := os.WriteFile(path, make([]byte, 200), 0o644); werr != nil {
+			t.Fatalf("grow: %v", werr)
 		}
+		assertTooLarge(t, err, 100, 50)
 	})
 
 	t.Run("returns_error_for_missing_file", func(t *testing.T) {
@@ -213,9 +215,8 @@ func TestReadBoundedFile_GrowsPastLimitDuringRead(t *testing.T) {
 		t.Fatalf("open fifo: %v", err)
 	}
 	defer f.Close()
-	if _, err := ReadBoundedFile(t.Context(), f, limit); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("ReadBoundedFile(fifo overflow) = %v, want ErrFileTooLarge", err)
-	}
+	_, err = ReadBoundedFile(t.Context(), f, limit)
+	assertTooLarge(t, err, limit+1, limit)
 }
 
 // TestReadBounded_RefusesNonRegular pins that ReadBounded reads only regular
