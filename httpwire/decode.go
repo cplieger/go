@@ -409,8 +409,8 @@ func (w *boundWalk) list(t reflect.Type, v any, path string) {
 }
 
 // object walks a map's members, or struct t's by their exact JSON name, an
-// embedded struct's as t's own; a member the type lacks is the schema's to
-// refuse.
+// embedded struct's as t's own, refusing a member the struct lacks even
+// where the schema admits it, since encoding/json would match it without case.
 func (w *boundWalk) object(t reflect.Type, m map[string]any, path string) {
 	if t.Kind() == reflect.Map {
 		for _, k := range sortedKeys(m) {

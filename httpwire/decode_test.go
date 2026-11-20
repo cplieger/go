@@ -411,6 +411,44 @@ func TestDecodeBody(t *testing.T) {
 	}
 }
 
+// encoding/json matches member names without case, so under a document whose
+// body admits other members the Go type's exact names alone keep a member in
+// another letter case from reaching a field.
+func TestDecodeBodyRefusesAMemberTheTypeLacksUnderAnOpenSchema(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(decodeDoc(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["components"].(map[string]any)["schemas"].(map[string]any)["ItemBody"].(map[string]any)["additionalProperties"] = true
+	open, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := httpwire.ParseSchema(open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ body, want string }{
+		"a name in another letter case": {strings.TrimSuffix(validItem, "}") + `,"NAME":"b"}`, "NAME=unknown"},
+		"a member the type lacks":       {withItem(t, "zz", "1"), "zz=unknown"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := s.CheckBody("items.put", 0, []byte(tc.body)); len(got) != 0 {
+				t.Fatalf("the open document refuses the body itself: %v", got)
+			}
+			d := newDecodeAPI(t, open)
+			rec := serve(d.api, http.MethodPost, "/api/items", tc.body)
+			env := envelopeOf(t, rec)
+			if rec.Code != http.StatusBadRequest || env.Code != "bad_body" || !slices.Equal(fieldCodes(env), []string{tc.want}) {
+				t.Errorf("answer %d %s %v, want 400 bad_body [%s]", rec.Code, env.Code, fieldCodes(env), tc.want)
+			}
+			if d.ran() {
+				t.Errorf("the handler ran with %+v", *d.body)
+			}
+		})
+	}
+}
+
 func TestDecodeHandsARawRowItsCheckedBody(t *testing.T) {
 	t.Run("a valid body reaches the handler whole", func(t *testing.T) {
 		d := newDecodeAPI(t, decodeDoc(t))

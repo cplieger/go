@@ -2,6 +2,7 @@ package httpwire_test
 
 import (
 	"net/http"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -40,6 +41,7 @@ type transportCase struct {
 	Answer *struct {
 		Kind string `json:"kind"`
 		Code string `json:"code"`
+		Body string `json:"body"`
 	} `json:"answer"`
 	Want struct {
 		OK      bool   `json:"ok"`
@@ -148,5 +150,47 @@ func TestTransportFixtureCodesAreTheCatalogs(t *testing.T) {
 	}
 	if len(f.ErrorCodes) == 0 {
 		t.Fatalf("%s holds no errorCodes", transportFile)
+	}
+}
+
+// A generated client takes its rows' codes from Derive, so a case refusing
+// with a code outside its row's union names one the derived row lacks too;
+// a code every row may answer would leave the case untested.
+func TestTransportFixtureOffUnionCodesAreOffTheDerivedUnion(t *testing.T) {
+	var f transportFixture
+	readCorpus(t, transportFile, &f)
+	table := &httpwire.Table{Prefix: "/api", Catalog: httpwire.NewCatalog()}
+	derived := map[string]*httpwire.Endpoint{
+		"users.register": {
+			Name: "users.register", Method: http.MethodPost, Path: "/users", Summary: "Register a user", Description: "Register a user.",
+			Request: reflect.TypeFor[regBody](), Response: reflect.TypeFor[account](), Status: http.StatusCreated,
+			Successes: []httpwire.Success{{Status: http.StatusOK, Response: reflect.TypeFor[account]()}},
+			Access:    session, Keyed: true,
+		},
+	}
+	checked := 0
+	for _, c := range f.Cases {
+		if c.Answer == nil || c.Answer.Kind != "raw" || c.Want.Failure != "decode" {
+			continue
+		}
+		env, err := httpwire.DecodeEnvelope([]byte(c.Answer.Body))
+		if err != nil {
+			continue
+		}
+		if _, known := f.ErrorCodes[string(env.Code)]; !known {
+			continue
+		}
+		checked++
+		ep, ok := derived[c.Row]
+		if !ok {
+			t.Errorf("%s: row %q has no derived counterpart here", c.Name, c.Row)
+			continue
+		}
+		if union := httpwire.Union(table, ep, nil); slices.Contains(union, env.Code) {
+			t.Errorf("%s: %q is in the derived union %q, so a generated client answers it as http", c.Name, env.Code, union)
+		}
+	}
+	if checked == 0 {
+		t.Errorf("%s holds no case refusing with a code outside its row's union", transportFile)
 	}
 }
