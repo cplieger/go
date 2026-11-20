@@ -373,9 +373,9 @@ func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 	if ep.Params != nil && ep.Params != noneType {
 		c.pathParams(ep, at, mount)
 	}
+	seen := map[reflect.Type]bool{}
 	if ep.Headers != nil && ep.Headers != noneType {
-		_, problems := headerFields(ep.Headers, c.t.ClientHeader, !mount)
-		c.failEach(at+": ", problems)
+		c.failEach(at+": ", headerProblems(ep.Headers, c.t.ClientHeader, !mount, seen))
 	}
 	if mount {
 		return
@@ -384,8 +384,7 @@ func (c *tableChecker) textParts(ep *Endpoint, at string, mount bool) {
 		_, problems := textFields(ep.Query)
 		c.failEach(at+": Query ", problems)
 	}
-	seen := map[reflect.Type]bool{}
-	for _, t := range []reflect.Type{ep.Params, ep.Query, ep.Headers, ep.Request} {
+	for _, t := range []reflect.Type{ep.Params, ep.Query, ep.Request} {
 		if t != nil {
 			c.failEach(at+": ", refusalProblems(t, seen))
 		}

@@ -1,6 +1,7 @@
 package httpwire
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/textproto"
@@ -25,7 +26,25 @@ var ownedHeaders = []string{
 // Headers under a table whose ClientHeader is clientHeader, joined with
 // errors.Join, or nil.
 func CheckHeaders(t reflect.Type, clientHeader string) error {
-	return nil
+	if t == nil {
+		return errors.New("httpwire: CheckHeaders of a nil type")
+	}
+	var errs []error
+	for _, p := range headerProblems(t, clientHeader, true, map[reflect.Type]bool{}) {
+		errs = append(errs, errors.New(p))
+	}
+	return errors.Join(errs...)
+}
+
+// headerProblems is every reason t cannot be a row's Headers: its names,
+// and on a table row (types) its value types and their Refusals, seen
+// shared with the row's other parts so a type is named once.
+func headerProblems(t reflect.Type, clientHeader string, types bool, seen map[reflect.Type]bool) []string {
+	_, problems := headerFields(t, clientHeader, types)
+	if types {
+		problems = append(problems, refusalProblems(t, seen)...)
+	}
+	return problems
 }
 
 // headerFields lists struct t's fields, each named by its header tag in

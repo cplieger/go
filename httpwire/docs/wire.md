@@ -63,7 +63,7 @@ A tag is `<16 lowercase hex>.<decimal>`, the decimal with no sign or leading zer
 An open check reads one item again at each source it came from, and answers `Checked[T]`, generic over the item:
 
 ```json
-{"sources": [{"source": "upstream_a", "answer": "updated", "row": {}, "stored": true}]}
+{"sources": [{"source": "upstream_a", "answer": "updated", "row": {}, "stored": true, "position": "store=1234;epoch=\"9f2c4e1a7b3d5f60819a2b3c4d5e6f70\""}]}
 ```
 
 Each entry names its `source` once, and its `answer` decides which other members it carries:
@@ -75,7 +75,7 @@ Each entry names its `source` once, and its `answer` decides which other members
 | `gone` | the source no longer has the item | exactly one of `stored: true` and `not_stored`, and no `row` |
 | `error` | the read failed | `code` in the envelope's code grammar, `upstream` when the source answered (held to the envelope's `upstream` rules), `stored: false`, and no `row` or `not_stored` |
 
-`not_stored` is `superseded` when the stored item moved while the check read, and `store_unwritable` when the store refused the write. Only `error` carries `code` or `upstream`. The server never writes an answer that breaks these rules (it answers `internal_error` instead), and the TypeScript `checkChecked` refuses one.
+`not_stored` is `superseded` when the stored item moved while the check read, and `store_unwritable` when the store refused the write. Only `error` carries `code` or `upstream`. A stored answer, and only a stored one, carries `position`: the change feed's `Feed-Position` value right after the write, in printable ASCII of at most 4,096 bytes, so a tab marks seen no further than the write it read, a `gone` answer included. The server never writes an answer that breaks these rules (it answers `internal_error` instead), and the TypeScript `checkChecked` refuses one.
 
 ## The document
 

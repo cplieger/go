@@ -21,7 +21,7 @@ It also fails every write row, mount rows included, whose union holds `outcome_u
 
 ## AccessMatrix
 
-`httpwiretest.AccessMatrix(t, table, guard, creds, options...)` holds an app's guard to every row's `Access`. It builds an API of the table with the guard and options, every row bound to a stub, and serves each row once per `Credential` over HTTPS, with each path wildcard filled. Each credential is a `Kind` and an `Apply` that adds it to a request: `None`, `Session` (a session whose role grants every scope, past its recent-authentication window), `SessionRecent`, `Key` (with the `Scopes` it passes) or `KeyInvalid` (a revoked or expired key). It fails the test, naming the row and the credential, wherever the answer is not the one the row's `Access` gives:
+`httpwiretest.AccessMatrix(t, table, guard, creds, options...)` holds an app's guard to every row's `Access`. It builds an API of the table with the guard and options, every row bound to a stub, and serves each row once per `Credential` over HTTPS, with each path wildcard filled. Each credential is a `Kind` and an `Apply` that adds it to a request: `None`, `Session` (a session past its recent-authentication window, with the `Scopes` its role grants), `SessionRecent` (a session authenticated recently, with its role's `Scopes`), `Key` (with the `Scopes` it passes) or `KeyInvalid` (a revoked or expired key). It fails the test, naming the row and the credential, wherever the answer is not the one the row's `Access` gives:
 
 | Credential | Answer |
 | --- | --- |
@@ -32,10 +32,11 @@ It also fails every write row, mount rows included, whose union holds `outcome_u
 | `Key` on a `Session` row | `auth_session_required` |
 | `Key` without the row's `Scope` | `auth_scope_required`, with `error="insufficient_scope"` in `WWW-Authenticate` |
 | `Session` or `SessionRecent` on a `Key` row | `auth_key_required` |
+| `Session` or `SessionRecent` without the `Scope` of a `Scoped` row or a `PersonOnly` `Session` row | `auth_forbidden` |
 | `Session` on a `RecentAuth` row | `auth_recent_auth_required` |
-| any other | the row runs, as the credential's principal: a session, or a key holding exactly its scopes |
+| any other | the row runs, as the credential's principal: a session or a key holding exactly its scopes |
 
-Each refusal must come at the catalog's status, and a 401 must carry `WWW-Authenticate`. A row's `Scope` is checked only where the row names one, and `RecentAuth` steps up sessions only. A row the guard answers without running it fails as not served, and a table `New` refuses fails at once. The package's own test serves eight: no credential, a session, a recently authenticated session, keys holding `read`, `read` and `operate`, and every scope, a key of a scope no row names, and a revoked key. A key's `Scopes` list every scope it passes, those its scopes imply included.
+Each refusal must come at the catalog's status, and a 401 must carry `WWW-Authenticate`. A row's `Scope` is checked only where the row names one, a session's before its step-up, and `RecentAuth` steps up sessions only. A row the guard answers without running it fails as not served, and a table `New` refuses fails at once. The package's own test serves nine: no credential, a session and a recently authenticated session whose role grants every scope, a session whose role grants none, keys holding `read`, `read` and `operate`, and every scope, a key of a scope no row names, and a revoked key. A credential's `Scopes` list every scope it passes, those its scopes imply included.
 
 ## Sentinels
 

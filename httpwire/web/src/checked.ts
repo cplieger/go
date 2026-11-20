@@ -18,7 +18,7 @@ export type NotStored = (typeof NOT_STORED)[number];
  * One source's answer. Which members are present follows `answer`: `same` carries none of `row`,
  * `not_stored`, `code` and `upstream` and is not stored; `updated` carries `row`, and `gone` none,
  * each either stored or carrying `not_stored`; `error` carries `code`, and `upstream` when the
- * source answered, and is not stored.
+ * source answered, and is not stored. `position` is present exactly when `stored`.
  */
 export interface SourceCheck<T> {
   /** The app's name for the source, unique in its Checked. */
@@ -53,6 +53,24 @@ function oneOf(list: readonly string[], v: unknown): boolean {
 
 // The first rule of SourceCheck's doc `s` breaks, or "".
 function problem(s: Members): string {
+  const p = answerProblem(s);
+  if (p !== "" || !Object.hasOwn(s, "position")) {
+    return p === "" && s["stored"] === true ? "a stored answer carries no position" : p;
+  }
+  if (s["stored"] !== true) {
+    return "an answer that is not stored carries a position";
+  }
+  return isPosition(s["position"])
+    ? ""
+    : "a stored answer's position is not a Feed-Position value of printable ASCII, 1 to 4096 bytes";
+}
+
+// An RFC 9651 serialization is printable ASCII (section 4.1); its grammar is the feed's.
+function isPosition(v: unknown): boolean {
+  return typeof v === "string" && v.length <= MAX_STRING && /^[\x20-\x7e]+$/.test(v);
+}
+
+function answerProblem(s: Members): string {
   const has = (name: string): boolean => Object.hasOwn(s, name);
   if (typeof s["source"] !== "string" || s["source"] === "") {
     return "source is not a non-empty string";

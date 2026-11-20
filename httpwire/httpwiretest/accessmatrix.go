@@ -20,8 +20,8 @@ type CredentialKind uint8
 // The credential kinds.
 const (
 	None          CredentialKind = iota + 1 // no credential
-	Session                                 // a session whose role grants every scope, past its recent-authentication window
-	SessionRecent                           // the same session, authenticated recently
+	Session                                 // a session past its recent-authentication window
+	SessionRecent                           // a session authenticated recently
 	Key                                     // a valid API key
 	KeyInvalid                              // a revoked or expired key
 )
@@ -31,7 +31,8 @@ type Credential struct {
 	// Apply answers a copy of the request carrying the credential.
 	Apply func(*http.Request) *http.Request
 	Name  string
-	// Scopes are every scope a Key passes, those it implies included.
+	// Scopes are every scope a Key passes, or a session's role grants,
+	// those it implies included.
 	Scopes []string
 	Kind   CredentialKind
 }
@@ -46,6 +47,7 @@ const (
 	codeScopeRequired   httpserver.ErrorCode = "auth_scope_required"
 	codeRecentRequired  httpserver.ErrorCode = "auth_recent_auth_required"
 	codePersonRequired  httpserver.ErrorCode = "person_required"
+	codeForbidden       httpserver.ErrorCode = "auth_forbidden"
 )
 
 // AccessMatrix builds an API of table with guard and opts, every row of
@@ -200,6 +202,8 @@ func expected(a httpwire.Access, c Credential) httpserver.ErrorCode {
 		switch {
 		case a.Class == httpwire.Key:
 			return codeKeyRequired
+		case a.Scope != "" && !slices.Contains(c.Scopes, a.Scope):
+			return codeForbidden
 		case a.RecentAuth && c.Kind == Session:
 			return codeRecentRequired
 		}
@@ -208,13 +212,14 @@ func expected(a httpwire.Access, c Credential) httpserver.ErrorCode {
 }
 
 // sameShape reports whether s is c's principal: anonymous with no valid
-// credential, a session, or a key holding exactly c's scopes.
+// credential, else a session or a key holding exactly c's scopes.
 func sameShape(s httpwire.Shape, c Credential) bool {
+	scoped := slices.Equal(s.Scopes, slices.Sorted(slices.Values(c.Scopes)))
 	switch c.Kind {
 	case Session, SessionRecent:
-		return s.Principal == httpwire.ShapeSession
+		return s.Principal == httpwire.ShapeSession && scoped
 	case Key:
-		return s.Principal == httpwire.ShapeKey && slices.Equal(s.Scopes, slices.Sorted(slices.Values(c.Scopes)))
+		return s.Principal == httpwire.ShapeKey && scoped
 	}
 	return s.Principal == httpwire.ShapeAnonymous
 }

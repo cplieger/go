@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/cplieger/go/httpserver/v2"
 )
@@ -41,7 +42,8 @@ type Checked[T any] struct {
 //     and exactly one of Stored and NotStored;
 //   - gone: exactly one of Stored and NotStored, and no Row;
 //   - error: Code, and Upstream when the source answered; no Row, Stored
-//     or NotStored.
+//     or NotStored;
+//   - Position exactly when Stored.
 type SourceCheck[T any] struct {
 	Row      *T        `json:"row,omitempty"`
 	Upstream *Upstream `json:"upstream,omitempty"`
@@ -93,6 +95,25 @@ func (c Checked[T]) bound(dropped func(source, service string)) (out any, proble
 
 // problem names the first rule of SourceCheck's doc s breaks, or "".
 func (s *SourceCheck[T]) problem() string {
+	if p := s.answerProblem(); p != "" {
+		return p
+	}
+	switch {
+	case !s.Stored && s.Position != "":
+		return "an answer that is not stored carries a position"
+	case s.Stored && !isPosition(s.Position):
+		return "a stored answer's position is not a Feed-Position value of printable ASCII, 1 to 4096 bytes"
+	}
+	return ""
+}
+
+// isPosition reports whether v can be a Feed-Position value: an RFC 9651
+// serialization is printable ASCII (section 4.1); its grammar is the feed's.
+func isPosition(v string) bool {
+	return v != "" && len(v) <= maxEnvelopeString && !strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e })
+}
+
+func (s *SourceCheck[T]) answerProblem() string {
 	switch {
 	case s.Source == "":
 		return "source is empty"
