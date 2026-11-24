@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794960051482,
+  "lastUpdate": 1795561891836,
   "repoUrl": "https://github.com/cplieger/ci",
   "entries": {
     "Benchmark": [
@@ -146,6 +146,154 @@ window.BENCHMARK_DATA = {
             "name": "BenchmarkRegistryHandler",
             "value": 119916.5,
             "range": "± 3036.0",
+            "unit": "ns/op",
+            "extra": "10 samples, median"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "tribble-trouble[bot]",
+            "username": "tribble-trouble[bot]",
+            "email": "338123824+tribble-trouble[bot]@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e1240fbce166e4e35c5bcfec8003c2e615e40deb",
+          "message": "chore(deps): update cplieger/ci digest to f266d61 (#1243)\n\nCo-authored-by: tribble-trouble[bot] <338123824+tribble-trouble[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-24T19:22:54Z",
+          "url": "https://github.com/cplieger/ci/commit/e1240fbce166e4e35c5bcfec8003c2e615e40deb"
+        },
+        "date": 1795561888228,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkHistogramObserve - B/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "B/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkHistogramObserve - allocs/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "allocs/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkHistogramObserve",
+            "value": 46.365,
+            "range": "± 0.215",
+            "unit": "ns/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkHistogramObserve_Parallel - B/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "B/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkHistogramObserve_Parallel - allocs/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "allocs/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkHistogramObserve_Parallel",
+            "value": 73.145,
+            "range": "± 0.19",
+            "unit": "ns/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc - B/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "B/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc - allocs/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "allocs/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc",
+            "value": 73.755,
+            "range": "± 1.41",
+            "unit": "ns/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc_DynamicLabel - B/op",
+            "value": 17,
+            "range": "± 0",
+            "unit": "B/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc_DynamicLabel - allocs/op",
+            "value": 1,
+            "range": "± 0",
+            "unit": "allocs/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc_DynamicLabel",
+            "value": 99.11,
+            "range": "± 0.965",
+            "unit": "ns/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc_Parallel - B/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "B/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc_Parallel - allocs/op",
+            "value": 0,
+            "range": "± 0",
+            "unit": "allocs/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkLabeledCounterInc_Parallel",
+            "value": 31.165,
+            "range": "± 0.765",
+            "unit": "ns/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkRegistryHandler - B/op",
+            "value": 116972.5,
+            "range": "± 7",
+            "unit": "B/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkRegistryHandler - allocs/op",
+            "value": 294,
+            "range": "± 0",
+            "unit": "allocs/op",
+            "extra": "10 samples, median"
+          },
+          {
+            "name": "BenchmarkRegistryHandler",
+            "value": 122077,
+            "range": "± 1160.5",
             "unit": "ns/op",
             "extra": "10 samples, median"
           }
