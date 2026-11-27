@@ -48,7 +48,7 @@
     "@stryker-mutator/core": "10.1.1",
     "@stryker-mutator/typescript-checker": "10.1.1",
     "@stryker-mutator/vitest-runner": "10.1.1",
-    "@types/node": "26.6.6",
+    "@types/node": "26.6.7",
     "@typescript/native": "npm:typescript@7.0.2",
     "eslint": "10.15.0",
     "fast-check": "4.11.0",
