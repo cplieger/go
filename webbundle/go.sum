@@ -8,10 +8,10 @@ github.com/cplieger/go/urlform v1.2.0 h1:AQkwiRasHq1e57dzpFyrSRZWgp503XNPJ0DikXQ
 github.com/cplieger/go/urlform v1.2.0/go.mod h1:o7cRPRmslS3o05jpTJHqGKebD4eawAV7rIOB4AdGLao=
 github.com/evanw/esbuild v0.28.2 h1:A2uETn4jrQTcXaT/shwTDTYBxDjl7fV7nXmUrJxfA2w=
 github.com/evanw/esbuild v0.28.2/go.mod h1:D2vIQZqV/vIf/VRHtViaUtViZmG7o+kKmlBfVQuRi48=
-github.com/srwiley/oksvg v0.0.0-20261128043900-a50166531e72 h1:5+dcSIDYXXQS4ZbeimuOp6/WAWDAKsxmXQw4+p+eAZM=
-github.com/srwiley/oksvg v0.0.0-20261128043900-a50166531e72/go.mod h1:UEglC5tfLW80R6tYSt0krInbClc+ti00abZFyKuO2hc=
-github.com/srwiley/rasterx v0.0.0-20261128041338-3ef3aeed05cd h1:qtTnFHvzN4Jrsd80VskcgMhelsMHSUO6xTV+6FYl5AM=
-github.com/srwiley/rasterx v0.0.0-20261128041338-3ef3aeed05cd/go.mod h1:nXTWP6+gD5+LUJ8krVhhoeHjvHTutPxMYl5SvkcnJNE=
+github.com/srwiley/oksvg v0.0.0-20261128051108-63f39d1445ed h1:awtUeug9ZX/wNdQGY0jsGI8czait5k0AsKaJ5hJbaxM=
+github.com/srwiley/oksvg v0.0.0-20261128051108-63f39d1445ed/go.mod h1:UEglC5tfLW80R6tYSt0krInbClc+ti00abZFyKuO2hc=
+github.com/srwiley/rasterx v0.0.0-20261128054241-78f2104be592 h1:pd3VnNYlvepO3o7LMQI4wWkGfRO3ENSaVl6nR3gi0CM=
+github.com/srwiley/rasterx v0.0.0-20261128054241-78f2104be592/go.mod h1:nXTWP6+gD5+LUJ8krVhhoeHjvHTutPxMYl5SvkcnJNE=
 golang.org/x/image v0.48.0 h1:1AvuPcuoOTJpA7s4VZ5umrb90T3So0rkB/bSGmxkxik=
 golang.org/x/image v0.48.0/go.mod h1:mmtg64iqJKGqEgy+r13dfybl85tmxUd2lMnmaiSdWYY=
 golang.org/x/net v0.63.0 h1:HCoTmNh9EpD1PpK8gBNFY4gcTY4N+KQEO8ylfIKqFJ0=
