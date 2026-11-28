@@ -5,8 +5,8 @@ go 1.27.4
 require (
 	github.com/cplieger/go/httpserver/v2 v2.0.0-dev.13
 	github.com/evanw/esbuild v0.28.2
-	github.com/srwiley/oksvg v0.0.0-20261126071609-7c888656762b
-	github.com/srwiley/rasterx v0.0.0-20261128034701-528a8f58067f
+	github.com/srwiley/oksvg v0.0.0-20261128043900-a50166531e72
+	github.com/srwiley/rasterx v0.0.0-20261128041338-3ef3aeed05cd
 	golang.org/x/net v0.63.0
 )
 
